@@ -110,6 +110,16 @@ class LogosBridgeClient:
         self._active_calibration_session: _CalibrationSession | None = None
         # Sequence counter for calibration event_id (independent of lane events).
         self._calibration_event_seq: int = 0
+        # Lazily built by _get_hf_info_cache(); lives for the client's whole
+        # lifetime so repeated compatibility-precheck calls (calibration
+        # session, run_compatibility_precheck RPC) share the on-disk cache
+        # instance instead of re-reading it from disk every time.
+        self._hf_info_cache: Any | None = None
+        # Cached result of query_vllm_quantization_methods (see
+        # _get_vllm_quant_methods) — only changes on a vLLM upgrade, which
+        # restarts this process anyway, so caching for its lifetime is
+        # exact, not an approximation. None means "not fetched yet".
+        self._vllm_quant_methods: list[str] | None = None
 
     @property
     def worker_id(self) -> str:
@@ -733,6 +743,8 @@ class LogosBridgeClient:
             return await self._handle_start_calibration_session(params)
         if action == "stop_calibration_session":
             return await self._handle_stop_calibration_session()
+        if action == "run_compatibility_precheck":
+            return await self._handle_run_compatibility_precheck(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
@@ -756,6 +768,379 @@ class LogosBridgeClient:
             return False
         task = session.task
         return task is None or not task.done()
+
+    def _get_hf_info_cache(self) -> Any:
+        if self._hf_info_cache is None:
+            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+            from logos_worker_node.hf_model_info import HfModelInfoCache  # noqa: PLC0415
+
+            self._hf_info_cache = HfModelInfoCache(get_state_dir())
+        return self._hf_info_cache
+
+    async def _get_vllm_quant_methods(self, model_name: str) -> list[str] | None:
+        """Cached wrapper around query_vllm_quantization_methods — a
+        success is cached for this process's lifetime; a failure never
+        is, so a broken install gets to retry and recover without a
+        restart. Returns None (and warns) on failure."""
+        if self._vllm_quant_methods is not None:
+            return self._vllm_quant_methods
+        from logos_worker_node.calibration import _DEFAULT_VLLM, query_vllm_quantization_methods  # noqa: PLC0415
+
+        try:
+            self._vllm_quant_methods = await asyncio.to_thread(query_vllm_quantization_methods, _DEFAULT_VLLM)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "[Precheck] vLLM quantization registry query failed for %s — quantization check skipped",
+                model_name,
+                exc_info=True,
+            )
+            return None
+        return self._vllm_quant_methods
+
+    async def _persist_precheck(self, model_name: str, func: Any, *args: Any, **kwargs: Any) -> None:
+        """Runs a model_profiles write off the event loop, catching any
+        failure so a broken profile store degrades only this precheck's
+        persistence — never the whole calibration session. Must itself
+        never raise (see _run_hf_compatibility_precheck's docstring)."""
+        try:
+            await asyncio.to_thread(func, *args, **kwargs)
+        except Exception:  # noqa: BLE001
+            logger.warning("[Precheck] failed to persist result for %s", model_name, exc_info=True)
+
+    async def _persist_permanent_unsupported(self, model_name: str, reason_code: str, description: str) -> None:
+        """Writes calibration_unsupported_models.txt first, then mirrors
+        the flag onto the profile. Skipping the file write lets the next
+        heartbeat's reconciliation (runtime.build_runtime_status) silently
+        clear the profile flag again — see calibration.py's own fatal-error path."""
+        from logos_worker_node.calibration import (  # noqa: PLC0415
+            _UNSUPPORTED_MODELS_FILE,
+            UnsupportedModelEntry,
+            _record_unsupported_model,
+        )
+        from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+        path = get_state_dir() / "calibration_logs" / _UNSUPPORTED_MODELS_FILE
+        entry = UnsupportedModelEntry(
+            model=model_name,
+            reason_code=reason_code,
+            recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            description=description,
+        )
+        await self._persist_precheck(model_name, _record_unsupported_model, path, entry)
+        await self._persist_precheck(
+            model_name, self._app.state.model_profiles.mark_calibration_unsupported, model_name, True, reason_code
+        )
+
+    async def _run_hf_compatibility_precheck(
+        self,
+        model_name: str,
+        *,
+        persist: bool = True,
+        gpu_devices: str = "",
+        kv_cache_dtype: str = "",
+        revision: str = "",
+        tensor_parallel_size: int = 1,
+    ) -> dict[str, Any]:
+        """Best-effort HF compatibility check for one model on this node.
+
+        Shared by the calibration session's per-model loop and the standalone
+        ``run_compatibility_precheck`` RPC — the latter can run any time, not
+        just during the maintenance window, because this never touches vLLM
+        or lanes (only an HF fetch and a read-only nvidia-smi query).
+
+        Returns two tp answers because they mean different things to a
+        daytime caller with live lanes running:
+          - ``fit_tp_idle`` (against total VRAM): would this fit on an empty
+            node — the only one that persists calibration_unsupported, since
+            daytime load isn't a permanent property of the node.
+          - ``fit_tp_current`` (against free VRAM): fits right now without
+            evicting anything — informational only.
+
+        ``gpu_devices`` is the calibration plan's own selection (blank/"all"
+        for the auto-pinned slice, matching pin_plan_gpu_devices). On a
+        heterogeneous node, an irrelevant GPU outside that selection must
+        never sink the estimate — see calibration_gpu_slice.
+
+        ``kv_cache_dtype`` is the plan's ``--kv-cache-dtype`` override, if
+        any — the HF-derived KV estimate otherwise uses the model's own
+        torch_dtype, which can be double a configured fp8 KV cache's real
+        footprint and falsely fail the min-KV check near the VRAM edge.
+
+        ``revision`` is the plan's ``--revision`` pin, if any (see
+        calibration.extract_revision_arg). The Hub calls otherwise default
+        to the repo's main branch — a plan pinned to a smaller/older commit
+        would then be judged on an unrelated revision's weights and config,
+        and could be permanently marked unsupported on a false basis.
+
+        ``tensor_parallel_size`` is the plan's configured tp. The feasibility
+        search otherwise only tries the power-of-2 ladder up to the
+        rounded-down hardware max (e.g. 3 GPUs → only tp=1,2 tried, never
+        3) — same as calibrate_with_tp_escalation's own hardware_max_tp,
+        which is why that function separately widens to ``max(hw_max,
+        original_tp)`` before probing. A model that only fits at a pinned,
+        non-power-of-2 tp must be checked at that exact tp too, or it gets
+        permanently excluded before its valid configuration is ever tried.
+
+        ``persist=False`` skips the model_profiles write. Never raises.
+        """
+        from logos_worker_node.calibration import (  # noqa: PLC0415
+            _max_tp_for_plan,
+            calibration_gpu_slice,
+            parse_gpu_indices,
+            query_gpu_vram,
+        )
+        from logos_worker_node.hf_model_info import (  # noqa: PLC0415
+            MIN_VIABLE_CONTEXT_TOKENS,
+            REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+            REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+            REASON_MODEL_GATED,
+            REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
+            fetch_hf_model_metadata,
+            kv_bytes_for_dtype,
+            min_feasible_tp,
+        )
+
+        model_profiles = self._app.state.model_profiles
+
+        try:
+            # fetch_hf_model_metadata does blocking network I/O (HF Hub HTTP
+            # calls) — off the event loop, or a slow/hung Hub request stalls
+            # every other bridge RPC and the live vLLM proxy on this node.
+            hf_meta = await asyncio.to_thread(
+                fetch_hf_model_metadata,
+                model_name,
+                token=os.environ.get("HF_TOKEN") or None,
+                cache=self._get_hf_info_cache(),
+                revision=revision.strip() or None,
+            )
+        except Exception:  # noqa: BLE001
+            hf_meta = None
+            logger.debug("[Precheck] HF fetch raised unexpectedly for %s", model_name, exc_info=True)
+
+        # Not-found/gated already warn via the calibration loop's skip
+        # event. Anything else (network trouble, bad HF_TOKEN, missing
+        # huggingface_hub) has no such signal and stays silent at debug
+        # level forever — warn here so a persistent failure is visible.
+        if hf_meta is None or hf_meta.source not in (
+            "hf",
+            "error:model-not-found-or-unauthorized",
+            "error:model-gated",
+        ):
+            logger.warning(
+                "[Precheck] HF metadata unavailable for %s (source=%s) — precheck skipped this run",
+                model_name,
+                hf_meta.source if hf_meta is not None else "error:precheck-failed",
+            )
+
+        result: dict[str, Any] = {
+            "model": model_name,
+            "hf_source": hf_meta.source if hf_meta is not None else "error:precheck-failed",
+            "weight_bytes": hf_meta.weight_bytes if hf_meta is not None else None,
+            "kv_per_token_bytes": hf_meta.kv_per_token_bytes if hf_meta is not None else None,
+            "max_context_length": hf_meta.max_context_length if hf_meta is not None else None,
+            "quantization_method": hf_meta.quantization_method if hf_meta is not None else None,
+            "per_gpu_total_mb": None,
+            "per_gpu_free_mb": None,
+            "hardware_max_tp": None,
+            "fit_tp_idle": None,
+            "fit_tp_current": None,
+            "unsupported_reason": None,
+        }
+
+        # A repo that doesn't exist and a private one this token can't see
+        # produce the identical Hub response (see fetch_hf_model_metadata)
+        # — never a confirmed permanent verdict. Treated like gating: skip
+        # this attempt only, stays a candidate, rechecked every session.
+        if hf_meta is not None and hf_meta.source == "error:model-not-found-or-unauthorized":
+            result["unsupported_reason"] = REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+            return result
+
+        # Gating is temporary (a token can be added later), so this is
+        # NOT persisted via mark_calibration_unsupported — that flag drops
+        # the model from _list_uncalibrated_models's candidates for good.
+        # Skip this attempt only; stays a candidate, rechecked every session.
+        if hf_meta is not None and hf_meta.source == "error:model-gated":
+            result["unsupported_reason"] = REASON_MODEL_GATED
+            return result
+
+        # Informational only — never blocks or persists. A registry miss
+        # can mean "unsupported" or "a plugin didn't register it here"
+        # (see query_vllm_quantization_methods) — can't tell those apart,
+        # so the real load attempt is left to decide authoritatively.
+        if hf_meta is not None and hf_meta.quantization_method:
+            supported_methods = await self._get_vllm_quant_methods(model_name)
+            if supported_methods:
+                canonical_method = hf_meta.quantization_method.strip().lower()
+                canonical_supported = {m.strip().lower() for m in supported_methods}
+                if canonical_method not in canonical_supported:
+                    logger.warning(
+                        "[Precheck] %s declares quantization method %r, not found "
+                        "in the installed vLLM's registry — proceeding anyway; "
+                        "a genuine incompatibility will surface at the real load "
+                        "attempt instead.",
+                        model_name,
+                        hf_meta.quantization_method,
+                    )
+
+        if hf_meta is None or not hf_meta.weight_bytes:
+            return result
+
+        try:
+            # nvidia-smi subprocess with a 30s timeout — off the event loop,
+            # or a slow/hung GPU query stalls live serving on this node too.
+            gpu_snap = await asyncio.to_thread(query_gpu_vram)
+        except Exception:  # noqa: BLE001
+            gpu_snap = {}
+            logger.debug("[Precheck] live VRAM query failed for %s", model_name, exc_info=True)
+
+        if not gpu_snap:
+            return result
+
+        # Scope to the GPUs the plan will use: an explicit pin, or (for
+        # "all"/blank — the standalone no-plan caller too) the same
+        # index-ordered auto slice pin_plan_gpu_devices commits to. A GPU
+        # outside that never sinks an estimate it was never part of.
+        explicit_indices = parse_gpu_indices(gpu_devices)
+        if explicit_indices is not None:
+            relevant_indices = explicit_indices
+        else:
+            relevant_indices = calibration_gpu_slice(len(gpu_snap))
+        relevant_snap = {i: gpu_snap[i] for i in relevant_indices if i in gpu_snap}
+        if not relevant_snap:
+            return result
+
+        per_gpu_total_mb = min(v["total_mb"] for v in relevant_snap.values())
+        per_gpu_free_mb = min(v["free_mb"] for v in relevant_snap.values())
+        hardware_max_tp = _max_tp_for_plan({"model": model_name, "gpu_devices": gpu_devices}, len(gpu_snap))
+
+        # calibrate_with_tp_escalation probes a pinned tp directly even when
+        # it isn't a power of 2 (max(hw_max, original_tp)) — the search here
+        # must consider the same candidate, or a model that only fits at
+        # that pinned tp gets excluded before it's ever actually tried.
+        # Bounded to the GPUs this plan actually uses: a stale/impossible
+        # pin (more GPUs configured than are in the relevant selection)
+        # must never widen the search beyond what's physically available.
+        configured_tp = tensor_parallel_size if 1 <= tensor_parallel_size <= len(relevant_snap) else None
+
+        # kv_per_token_bytes is cached under the model's own dtype; a plan's
+        # --kv-cache-dtype override must be applied here, or the min-KV
+        # check uses double the real footprint. "auto" means "use the
+        # model's dtype" though — not a concrete one, so it must skip.
+        is_explicit_override = bool(kv_cache_dtype) and kv_cache_dtype.strip().lower() != "auto"
+        kv_per_token_bytes = hf_meta.kv_per_token_bytes
+        if is_explicit_override and hf_meta.num_hidden_layers and hf_meta.num_key_value_heads and hf_meta.kv_head_dim:
+            kv_per_token_bytes = kv_bytes_for_dtype(
+                hf_meta.num_hidden_layers, hf_meta.num_key_value_heads, hf_meta.kv_head_dim, kv_cache_dtype
+            )
+
+        min_kv_mb = 0.0
+        if kv_per_token_bytes:
+            min_kv_mb = (kv_per_token_bytes * MIN_VIABLE_CONTEXT_TOKENS) / (1024 * 1024)
+
+        unsupported_reason: str | None = None
+        weights_only_tp_idle = min_feasible_tp(
+            hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp, configured_tp=configured_tp
+        )
+        fit_tp_idle: int | None = None
+        if weights_only_tp_idle is None:
+            unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+        else:
+            fit_tp_idle = min_feasible_tp(
+                hf_meta.weight_bytes,
+                per_gpu_total_mb,
+                hardware_max_tp,
+                min_kv_mb=min_kv_mb,
+                num_key_value_heads=hf_meta.num_key_value_heads,
+                configured_tp=configured_tp,
+            )
+            if fit_tp_idle is None:
+                unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+        fit_tp_current = min_feasible_tp(
+            hf_meta.weight_bytes,
+            per_gpu_free_mb,
+            hardware_max_tp,
+            min_kv_mb=min_kv_mb,
+            num_key_value_heads=hf_meta.num_key_value_heads,
+            configured_tp=configured_tp,
+        )
+
+        result.update(
+            per_gpu_total_mb=per_gpu_total_mb,
+            per_gpu_free_mb=per_gpu_free_mb,
+            hardware_max_tp=hardware_max_tp,
+            fit_tp_idle=fit_tp_idle,
+            fit_tp_current=fit_tp_current,
+            unsupported_reason=unsupported_reason,
+        )
+
+        if persist:
+            await self._persist_precheck(
+                model_name,
+                model_profiles.apply_hf_precheck,
+                model_name,
+                disk_size_bytes=hf_meta.weight_bytes,
+                base_residency_mb=hf_meta.weight_bytes / (1024 * 1024),
+                kv_per_token_bytes=kv_per_token_bytes,  # effective (dtype-adjusted), not hf_meta's raw value
+                num_key_value_heads=hf_meta.num_key_value_heads,
+                max_context_length=hf_meta.max_context_length,
+            )
+            if unsupported_reason is not None:
+                if unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS:
+                    description = "HF compatibility precheck: weights alone exceed per-GPU VRAM at every TP size."
+                else:
+                    description = "HF compatibility precheck: no VRAM left for a min KV cache at every TP size."
+                await self._persist_permanent_unsupported(model_name, unsupported_reason, description)
+
+        return result
+
+    @staticmethod
+    def _resolve_config_path() -> Path:
+        """The worker's config.yml — same resolution the calibration
+        session loop uses (LOGOS_WORKER_NODE_CONFIG env, then /app or CWD)."""
+        config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+        if config_path_str:
+            return Path(config_path_str)
+        for candidate in (Path("/app/config.yml"), Path("config.yml")):
+            if candidate.resolve().is_file():
+                return candidate
+        return Path("config.yml")
+
+    def _resolve_configured_plan(self, model_name: str) -> dict[str, Any]:
+        """The model's plan from config.yml (gpu_devices, kv_cache_dtype,
+        ...), or {} if unconfigured/unreadable. The standalone RPC has no
+        session plan to read these from, unlike the session loop — without
+        it, a model pinned or given a --kv-cache-dtype gets the defaults."""
+        try:
+            from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
+
+            config_path = self._resolve_config_path()
+            if not config_path.exists():
+                return {}
+            plan = next((p for p in plans_from_config(config_path) if p.get("model") == model_name), None)
+            return plan or {}
+        except Exception:  # noqa: BLE001
+            logger.debug("[Precheck] config.yml plan lookup failed for %s", model_name, exc_info=True)
+            return {}
+
+    async def _handle_run_compatibility_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
+        """RPC handler for an on-demand compatibility check, callable any
+        time — including outside the nightly maintenance window — since it
+        never touches vLLM or lanes."""
+        from logos_worker_node.calibration import extract_revision_arg  # noqa: PLC0415
+
+        model_name = str(params.get("model", "")).strip()
+        if not model_name:
+            return {"ok": False, "error": "'model' is required"}
+        plan = self._resolve_configured_plan(model_name)
+        result = await self._run_hf_compatibility_precheck(
+            model_name,
+            gpu_devices=str(plan.get("gpu_devices") or ""),
+            kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+            revision=extract_revision_arg(plan.get("extra_args")) or "",
+            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+        )
+        return {"ok": True, **result}
 
     async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Start a worker-driven calibration session.
@@ -1024,6 +1409,10 @@ class LogosBridgeClient:
                     and not profile.kv_cache_to_max_model_len_pairs
                 )
                 or collapsed_envelope
+                # An HF precheck estimate is not a live measurement — keep
+                # the model a candidate until a real calibration/measurement
+                # replaces it, or it never gets probed once a precheck runs.
+                or (profile is not None and profile.residency_source == "hf")
             )
             if needs_calib:
                 ordered.append(model_name)
@@ -1064,6 +1453,7 @@ class LogosBridgeClient:
                 _READY_TIMEOUT_S,
                 ProfileStoreUnreadableError,
                 calibrate_with_tp_escalation,
+                extract_revision_arg,
                 is_model_unsupported,
                 load_existing_profiles,
                 merge_profile,
@@ -1178,6 +1568,42 @@ class LogosBridgeClient:
                     model_profiles.mark_sleep_mode_disabled(model_name, False)
 
                 plan = plan_by_model.get(model_name) or {"model": model_name}
+
+                # Pre-flight: HF compatibility precheck (see
+                # _run_hf_compatibility_precheck's docstring for the rules).
+                precheck = await self._run_hf_compatibility_precheck(
+                    model_name,
+                    gpu_devices=str(plan.get("gpu_devices") or ""),
+                    kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+                    revision=extract_revision_arg(plan.get("extra_args")) or "",
+                    tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+                )
+                if precheck["unsupported_reason"] is not None:
+                    logger.warning(
+                        "[Calibration] Skipping %s — %s",
+                        model_name,
+                        precheck["unsupported_reason"],
+                    )
+                    self._record_calibration_event(
+                        "calibration_model_skipped",
+                        model=model_name,
+                        details=f"unsupported reason={precheck['unsupported_reason']}",
+                    )
+                    continue
+                if precheck["fit_tp_idle"] is not None:
+                    plan = {
+                        **plan,
+                        "_hf_weight_bytes": precheck["weight_bytes"],
+                        "_hf_max_tp_ceiling": precheck["fit_tp_idle"],
+                    }
+                    logger.info(
+                        "[Calibration] HF precheck for %s: weights=%.0f MB, tp_ceiling=%d (hardware_max=%s)",
+                        model_name,
+                        precheck["weight_bytes"] / (1024 * 1024),
+                        precheck["fit_tp_idle"],
+                        precheck["hardware_max_tp"],
+                    )
+
                 self._record_calibration_event(
                     "calibration_model_started",
                     model=model_name,

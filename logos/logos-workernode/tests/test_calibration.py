@@ -11,6 +11,8 @@ Covers:
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -41,7 +43,9 @@ from logos_worker_node.calibration import (
     _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
+    calibrate_with_tp_escalation,
     calibration_gpu_slice,
+    extract_revision_arg,
     is_model_unsupported,
     load_existing_profiles,
     merge_profile,
@@ -324,6 +328,30 @@ def test_parse_gpu_indices_all():
 
 def test_parse_gpu_indices_empty():
     assert parse_gpu_indices("") is None
+
+
+def test_extract_revision_arg_space_separated():
+    assert extract_revision_arg(["--dtype", "auto", "--revision", "abc123"]) == "abc123"
+
+
+def test_extract_revision_arg_equals_form():
+    assert extract_revision_arg(["--revision=abc123"]) == "abc123"
+
+
+def test_extract_revision_arg_last_occurrence_wins():
+    # Matches argparse: a repeated store-action flag keeps the last value.
+    assert extract_revision_arg(["--revision", "old", "--revision=new"]) == "new"
+
+
+def test_extract_revision_arg_absent():
+    assert extract_revision_arg(["--dtype", "auto"]) is None
+    assert extract_revision_arg([]) is None
+    assert extract_revision_arg(None) is None
+
+
+def test_extract_revision_arg_dangling_flag_ignored():
+    # No value follows --revision — nothing to extract, not a crash.
+    assert extract_revision_arg(["--revision"]) is None
 
 
 def test_result_to_profile_dict_sets_calibrated_source():
@@ -802,6 +830,188 @@ def test_calibration_baseline_ignores_leftover_gpu_lane(monkeypatch):
     assert sample_vram_mb(gpu_indices) == 300.0  # 100 + 200, never the 9999 on GPU 2
 
 
+def test_max_tp_for_plan_with_weight_derived_ceiling():
+    # A tighter HF-derived ceiling wins over the hardware max.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=8, weight_derived_max_tp=2) == 2
+    # A looser HF-derived ceiling never raises above the hardware max.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=16) == 4
+    # No ceiling supplied — unchanged from before this kwarg existed.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=None) == 4
+    # Ceiling below 1 is clamped up to 1, never returns 0.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=0) == 4
+
+
+def test_calibrate_with_tp_escalation_honors_hf_max_tp_ceiling(tmp_path):
+    """_hf_max_tp_ceiling bounds where the max-first escalation starts — it
+    must not probe at hardware-max tp when the HF precheck already knows a
+    lower tp is sufficient, but a ceiling below the operator's pinned tp
+    must be ignored (never search below what was explicitly pinned)."""
+
+    def _seen_tps(plan_overrides: dict) -> list[int]:
+        seen: list[int] = []
+
+        def side_effect(plan, **kw):
+            tp = plan.get("tensor_parallel_size", 1)
+            seen.append(tp)
+            return _success_result("big-model", tensor_parallel_size=tp)
+
+        with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+            result = calibrate_with_tp_escalation(
+                {"model": "big-model", **plan_overrides},
+                vllm_binary="vllm",
+                port=11499,
+                log_dir=tmp_path,
+                sleep_level=0,
+                ready_timeout_s=60.0,
+                available_gpus=8,
+            )
+        assert result.success
+        return seen
+
+    seen_tps = _seen_tps({"_hf_max_tp_ceiling": 2})
+    assert seen_tps[0] == 2  # HF ceiling, not hardware max (8)
+    assert 8 not in seen_tps
+
+    seen_tps = _seen_tps({"tensor_parallel_size": 4, "_hf_max_tp_ceiling": 1})
+    assert seen_tps[0] == 4  # ceiling below the pinned tp is ignored
+
+
+def test_calibrate_with_tp_escalation_widens_to_hardware_max_on_ceiling_failure(tmp_path):
+    """A weight-derived ceiling is an optimization, not a guarantee — if
+    the real load fails at that tp, escalation must still try the true
+    hardware max before giving up, instead of treating the ceiling as a
+    hard cap that forecloses every wider tp that could have worked."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    assert seen_tps[0] == 2  # started at the HF ceiling, not hardware max
+    assert 8 in seen_tps  # widened to hardware max once the ceiling failed
+    assert result.success
+    assert result.tensor_parallel_size == 8
+
+
+def test_calibrate_with_tp_escalation_retries_remote_code_after_widening(tmp_path):
+    """The trust_remote_code requirement can be invisible at a low tp (OOM
+    hits before vLLM ever reaches the custom-code check) and only surface
+    once a wider tp gets far enough — must be re-checked after the
+    hardware-max widen attempt too, not just the very first probe."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        has_flag = "--trust-remote-code" in (plan.get("extra_args") or [])
+        seen.append((tp, has_flag))
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        if not has_flag:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="The repository for big-model contains custom code which must be executed.",
+            )
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    seen: list[tuple[int, bool]] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    # 2 (ceiling, OOM) -> 8 (widened, needs remote-code) -> 8 (retried,
+    # succeeds) -> 4 (binary-search probe, still OOM below 8 either way).
+    assert seen == [(2, False), (8, False), (8, True), (4, True)]
+    assert result.success
+    assert result.tensor_parallel_size == 8
+
+
+def test_calibrate_with_tp_escalation_stops_on_fatal_error_surfaced_after_widening(tmp_path):
+    """A fatal error (unsupported architecture) can be invisible at the
+    HF-derived ceiling (OOM hits first) and only surface once the widened
+    hardware-max probe gets far enough to reach vLLM's model-loading code.
+    Once that happens, escalation must stop immediately instead of wasting
+    another spawn on the configured tp fallback — re-checking fatal-ness
+    only against the very first probe let a later, real fatal failure slip
+    through the "not _fatal" guard."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="ValueError: vLLM does not recognize this architecture: FooNet",
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2, "tensor_parallel_size": 1},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    # 2 (ceiling, OOM — not yet fatal) -> 8 (widened, genuinely fatal).
+    # Must NOT also try tp=1 (the configured/original tp fallback).
+    assert seen_tps == [2, 8]
+    assert not result.success
+    assert result.tensor_parallel_size == 8
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Group 6 — _format_kv_mb helper
 # ═══════════════════════════════════════════════════════════════════════
@@ -1230,6 +1440,120 @@ def test_vram_cap_uses_per_gpu_times_tp():
 
     assert result.success
     # The important thing: it didn't try to use 48000*0.8=38400 as cap
+
+
+def test_hf_weight_bytes_narrows_kv_cache_ceiling(caplog):
+    """_hf_weight_bytes narrows the KV search ceiling by the weights'
+    footprint at this tp. When the HF estimate alone would already exceed
+    the existing cap, max_kv_mb is left as-is instead of going negative —
+    the precheck's hard-skip already ruled out "no tp works at all"."""
+    import logging
+
+    def _narrowing_logs(hf_weight_bytes: int) -> list[str]:
+        patches = _patch_calibration_infra(wait_ready_side_effect=[None])
+        plan = _make_plan(_hf_weight_bytes=hf_weight_bytes)
+        with caplog.at_level(logging.INFO):
+            result, _ = _run_calibrate(patches, plan=plan)
+        assert result.success
+        return [r.message for r in caplog.records if "narrowing KV search ceiling" in r.message]
+
+    # Single GPU, 24000 MB total → cap = 24000 * 0.8 = 19200 MB before HF
+    # narrowing. 10 GB of HF-reported weights at tp=1 → 10240 MB/GPU →
+    # ceiling narrows to 8960 MB.
+    logs = _narrowing_logs(10 * 1024 * 1024 * 1024)
+    assert len(logs) == 1
+    assert "19200" in logs[0] and "8960" in logs[0]
+    caplog.clear()
+
+    # 30 GB of weights at tp=1 → 30720 MB/GPU, past the 19200 MB cap —
+    # no narrowing.
+    assert _narrowing_logs(30 * 1024 * 1024 * 1024) == []
+
+
+def test_hf_weight_bytes_narrowing_clamps_to_min_kv_step(caplog):
+    """A raw ceiling below _KV_CACHE_MIN_STEP_MB (1024) must be clamped up
+    to it, not passed through — the sweep's floor(.../1024)*1024 rounding
+    would otherwise collapse a small positive ceiling to a 0 MB search,
+    disabling the KV sweep instead of running the required 1 GiB probe."""
+    import logging
+
+    from logos_worker_node.calibration import _KV_CACHE_MIN_STEP_MB
+
+    patches = _patch_calibration_infra(wait_ready_side_effect=[None])
+    # Single GPU, 24000 MB total → cap = 19200 MB. 19100 MB/GPU of
+    # HF-reported weights at tp=1 leaves a raw ceiling of only 100 MB.
+    plan = _make_plan(_hf_weight_bytes=19100 * 1024 * 1024)
+    with caplog.at_level(logging.INFO):
+        result, _ = _run_calibrate(patches, plan=plan)
+    assert result.success
+
+    logs = [r.message for r in caplog.records if "narrowing KV search ceiling" in r.message]
+    assert len(logs) == 1
+    assert logs[0].endswith(f"{_KV_CACHE_MIN_STEP_MB:.0f} MB")
+
+
+def test_query_vllm_quantization_methods_reads_baked_file(tmp_path):
+    """The build-time-baked file (see the Dockerfile's 'Bake vLLM's
+    quantization-method registry' step) is the only source — no
+    subprocess, no torch/transformers import at runtime."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "vllm_quantization_methods.json").write_text(json.dumps(["awq", "gptq"]))
+
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+
+    assert result == ["awq", "gptq"]
+
+
+def test_query_vllm_quantization_methods_resolves_bare_command_via_path(tmp_path, monkeypatch):
+    """_DEFAULT_VLLM in production is bare "vllm", not a full path —
+    resolving it against the CWD instead of a real PATH search would
+    silently break the baked-file lookup."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    vllm_exe = bin_dir / "vllm"
+    vllm_exe.write_text("#!/bin/sh\n")
+    vllm_exe.chmod(0o755)
+    (bin_dir / "vllm_quantization_methods.json").write_text(json.dumps(["awq"]))
+
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.chdir(tmp_path.parent)  # a CWD that must NOT be where it looks
+
+    result = query_vllm_quantization_methods("vllm")
+
+    assert result == ["awq"]
+
+
+def test_query_vllm_quantization_methods_returns_empty_without_baked_file(tmp_path):
+    """No baked file (e.g. a dev environment outside the Docker GPU
+    image) — nothing to compare against, so it stays silent rather
+    than raising; the check is informational-only anyway."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+
+    assert result == []
+
+
+def test_query_vllm_quantization_methods_returns_empty_on_corrupt_baked_file(tmp_path):
+    """A corrupted baked file (shouldn't normally happen — build-time-only,
+    no concurrent writers) must not crash the precheck."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "vllm_quantization_methods.json").write_text("not valid json")
+
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+
+    assert result == []
 
 
 @pytest.mark.asyncio

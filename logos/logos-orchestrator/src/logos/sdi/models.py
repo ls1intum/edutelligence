@@ -380,6 +380,11 @@ class ModelProfile:
     # successfully at this tensor_parallel_size on this provider's GPUs.
     enforce_eager_at_calibration: Optional[bool] = None
     kv_per_token_bytes: Optional[int] = None
+    # KV heads in the whole model — kv_per_token_bytes above is the WHOLE-MODEL
+    # footprint (every head), but vLLM shards KV heads across TP ranks
+    # (max(1, heads // tp)), so deriving a per-rank budget needs this. None on
+    # workers that predate the field, or when HF config.json didn't expose it.
+    num_key_value_heads: Optional[int] = None
     max_context_length: Optional[int] = None
     # Smallest share of the model's own context length a lane may be placed
     # with, as a fraction in [0, 1]. Set per model by the operator under
@@ -482,6 +487,7 @@ class ModelProfile:
             "tensor_parallel_size": self.tensor_parallel_size,
             "enforce_eager_at_calibration": self.enforce_eager_at_calibration,
             "kv_per_token_bytes": self.kv_per_token_bytes,
+            "num_key_value_heads": self.num_key_value_heads,
             "max_context_length": self.max_context_length,
             "min_context_fraction": self.min_context_fraction,
             "measurement_count": self.measurement_count,

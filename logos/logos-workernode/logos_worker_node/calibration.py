@@ -36,6 +36,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -768,6 +769,59 @@ def parse_gpu_indices(gpu_devices: str) -> list[int] | None:
     if not gd or gd == "all":
         return None
     return [int(x.strip()) for x in gd.split(",") if x.strip().isdigit()]
+
+
+def extract_revision_arg(extra_args: list[str] | None) -> str | None:
+    """The ``--revision`` vLLM will actually load, if pinned via
+    ``extra_args`` (``--revision X`` or ``--revision=X``) — HF metadata
+    must be fetched from this same revision, or a precheck against the
+    unrelated default branch can use weights/config from a checkpoint the
+    plan never serves, permanently misclassifying a model pinned to an
+    older or smaller commit. Last occurrence wins, matching argparse."""
+    if not extra_args:
+        return None
+    revision: str | None = None
+    args = [str(a) for a in extra_args]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--revision" and i + 1 < len(args):
+            revision = args[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--revision="):
+            revision = arg.split("=", 1)[1]
+        i += 1
+    return revision or None
+
+
+# ---------------------------------------------------------------------------
+# vLLM registry introspection
+# ---------------------------------------------------------------------------
+
+
+_BAKED_QUANT_METHODS_FILENAME = "vllm_quantization_methods.json"
+
+
+def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:
+    """Quantization method names this vLLM install recognizes — name
+    only, not a platform/hardware check. Doesn't see plugin-registered
+    methods (see the caller: a miss is informational, never blocking).
+    Build-time-baked file only; [] if it isn't there (see Dockerfile)."""
+    # A bare command (no path separator, e.g. the "vllm" default) needs a
+    # real PATH search, like the OS does when spawning it — Path(...).
+    # resolve() alone silently resolves it against the CWD instead.
+    resolved = vllm_binary
+    if "/" not in vllm_binary and "\\" not in vllm_binary:
+        resolved = shutil.which(vllm_binary) or vllm_binary
+    venv_bin = Path(resolved).resolve().parent
+    baked = venv_bin / _BAKED_QUANT_METHODS_FILENAME
+    if not baked.exists():
+        return []
+    try:
+        return json.loads(baked.read_text())
+    except (OSError, ValueError):
+        return []  # corrupt/unreadable — nothing to compare against
 
 
 # ---------------------------------------------------------------------------
@@ -1551,6 +1605,29 @@ def calibrate_model(
             "  Could not query GPU VRAM for KV cache cap: %s — no cap applied",
             exc,
         )
+
+    # HF precheck weight estimate narrows the KV ceiling, recomputed per
+    # tp. Non-positive means weights alone exceed the cap — leave max_kv_mb
+    # as-is; the sweep's OOM handling takes it from there (the hard-skip
+    # in logos_bridge.py already ruled out "no tp works at all").
+    hf_weight_bytes = plan.get("_hf_weight_bytes")
+    if hf_weight_bytes and max_kv_mb < float("inf"):
+        weight_per_gpu_mb = (float(hf_weight_bytes) / (1024 * 1024)) / max(tp, 1)
+        hf_kv_ceiling_mb = max_kv_mb - weight_per_gpu_mb
+        if hf_kv_ceiling_mb > 0:
+            # Below the min step, the sweep's floor(.../1024)*1024 rounding
+            # would collapse this to a 0 MB ceiling — clamp to the floor so
+            # the required 1 GiB probe survives instead of disabling the
+            # search entirely.
+            hf_kv_ceiling_mb = max(hf_kv_ceiling_mb, _KV_CACHE_MIN_STEP_MB)
+            logger.info(
+                "  HF-derived weights ≈%.0f MB/GPU at tp=%d — narrowing KV search ceiling %.0f → %.0f MB",
+                weight_per_gpu_mb,
+                tp,
+                max_kv_mb,
+                hf_kv_ceiling_mb,
+            )
+            max_kv_mb = hf_kv_ceiling_mb
 
     # Phase 2 — Sweep KV cache sizes and derive the reachable max_model_len
     # curve on this hardware.
@@ -2987,12 +3064,22 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
+def _max_tp_for_plan(
+    plan: dict[str, Any],
+    available_gpus: int,
+    *,
+    weight_derived_max_tp: int | None = None,
+) -> int:
     """Return the maximum tensor_parallel_size allowed for *plan*.
 
     TP must be a power of 2 for most model architectures (attention heads
     must be evenly divisible).  Round down to the largest power of 2 that
     fits within the available GPUs.
+
+    ``weight_derived_max_tp``, when given, tightens this further: the HF
+    compatibility precheck's estimate of the smallest TP the model's weights
+    actually fit at, so the search doesn't start at hardware-max TP for a
+    model that never needed it.
     """
     gpu_devices = str(plan.get("gpu_devices") or "").strip().lower()
     if not gpu_devices or gpu_devices == "all":
@@ -3001,8 +3088,13 @@ def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
         n = len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
     # Largest power of 2 ≤ n  (e.g. 3 → 2, 5 → 4, 7 → 4, 8 → 8)
     if n < 1:
-        return 1
-    return 1 << (n.bit_length() - 1)
+        hw_max = 1
+    else:
+        hw_max = 1 << (n.bit_length() - 1)
+
+    if weight_derived_max_tp is not None and weight_derived_max_tp >= 1:
+        return max(1, min(hw_max, weight_derived_max_tp))
+    return hw_max
 
 
 def calibration_gpu_slice(available_gpus: int) -> list[int]:
@@ -3145,7 +3237,9 @@ def calibrate_with_tp_escalation(
     plan = pin_plan_gpu_devices(plan, available_gpus)
 
     original_tp = int(plan.get("tensor_parallel_size", 1))
-    max_tp = _max_tp_for_plan(plan, available_gpus)
+    hardware_max_tp = _max_tp_for_plan(plan, available_gpus)
+    max_tp = _max_tp_for_plan(plan, available_gpus, weight_derived_max_tp=plan.get("_hf_max_tp_ceiling"))
+    max_tp = max(max_tp, original_tp)  # never search below what the operator pinned
 
     # RAM caching is deferred: calibrate_model triggers it on the first
     # actual vLLM spawn so we don't waste time copying when all probes are
@@ -3163,33 +3257,54 @@ def calibrate_with_tp_escalation(
         cancel_event=cancel_event,
     )
 
-    tp = max_tp
-    current_plan = {**plan, "tensor_parallel_size": tp}
-    result = _try_calibrate(current_plan, **cal_kwargs)
-
-    # Auto-retry with --trust-remote-code when vLLM demands it.
-    # vLLM phrasings seen in the wild:
-    #   "Please pass the argument `trust_remote_code=True`..."
-    #   "The repository ... contains custom code which must be executed..."
-    _err = result.error or ""
-    if not result.success and ("trust_remote_code=True" in _err or "contains custom code" in _err):
-        logger.info(
-            "  %s requires trust_remote_code — adding flag and retrying",
-            model_name,
-        )
+    def _retry_with_trust_remote_code_if_needed(
+        plan: dict[str, Any], tp: int, result: CalibrationResult
+    ) -> tuple[dict[str, Any], CalibrationResult]:
+        """Auto-retry *this* tp with --trust-remote-code when vLLM demands
+        it. Must run after every probe, not just the first — a low tp can
+        OOM before vLLM ever reaches the custom-code check, so the
+        requirement only surfaces once a wider tp gets far enough."""
+        _err = result.error or ""
+        if result.success or ("trust_remote_code=True" not in _err and "contains custom code" not in _err):
+            return plan, result
+        logger.info("  %s requires trust_remote_code — adding flag and retrying", model_name)
         extra = list(plan.get("extra_args") or [])
         if "--trust-remote-code" not in extra:
             extra.append("--trust-remote-code")
         plan = {**plan, "extra_args": extra}
+        retried_plan = {**plan, "tensor_parallel_size": tp}
+        return plan, _try_calibrate(retried_plan, **cal_kwargs)
+
+    def _is_fatal(result: CalibrationResult) -> bool:
+        _err = result.error or ""
+        return "does not recognize this architecture" in _err or "Cannot access gated repo" in _err
+
+    tp = max_tp
+    current_plan = {**plan, "tensor_parallel_size": tp}
+    result = _try_calibrate(current_plan, **cal_kwargs)
+    plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+    _fatal = _is_fatal(result)
+
+    # _hf_max_tp_ceiling is only the smallest TP the HF byte-count estimate
+    # expects to fit — an optimization to skip needlessly high probes, not
+    # a guarantee. On failure, widen to the true hardware max before
+    # falling back to the pinned tp, same as an unconstrained failure did.
+    if not result.success and not _fatal and tp < hardware_max_tp:
+        logger.info(
+            "  %s failed at HF-derived ceiling tp=%d — retrying at hardware max tp=%d",
+            model_name,
+            tp,
+            hardware_max_tp,
+        )
+        tp = hardware_max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
+        plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+        _fatal = _is_fatal(result)
 
     # If max tp fails, try the configured (original) tp before giving up.
     # Models may have attention-head counts that aren't divisible by max_tp
     # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-    _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
-        result.error or ""
-    )
     if not result.success and not _fatal and tp > original_tp:
         logger.info(
             "  %s failed at max tp=%d — falling back to configured tp=%d",
@@ -3200,6 +3315,8 @@ def calibrate_with_tp_escalation(
         tp = original_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
+        plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+        _fatal = _is_fatal(result)
 
     if not result.success or _fatal:
         return result

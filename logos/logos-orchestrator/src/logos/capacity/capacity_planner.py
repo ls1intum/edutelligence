@@ -5333,7 +5333,7 @@ class CapacityPlanner:
             kv_share = max(kv_share, self.KV_CACHE_MIN_MB)
 
             # Determine current KV budget
-            current_kv_mb = self._current_lane_kv_mb(profile)
+            current_kv_mb = self._current_lane_kv_mb(profile, lane_gpu_count)
             if current_kv_mb <= 0:
                 continue
 
@@ -5406,9 +5406,9 @@ class CapacityPlanner:
 
         return actions
 
-    def _current_lane_kv_mb(self, profile: ModelProfile) -> float:
+    def _current_lane_kv_mb(self, profile: ModelProfile, tp: int = 1) -> float:
         """KV cache budget in MB for an active lane — delegates to the shared estimation chain."""
-        return self._estimate_kv_mb(profile)
+        return self._estimate_kv_mb(profile, tp)
 
     def _flush_deferred_kv_reconfigs(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
@@ -5541,18 +5541,9 @@ class CapacityPlanner:
                     )
                     return False
         else:
-            if kv_cache_bytes_str:
-                kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
-            elif profile is not None:
-                kv_mb = self._estimate_kv_mb(profile)
-            else:
-                kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
-
-            # Apply estimation slack to the disk → memory size estimate so
-            # the gate matches what _estimate_model_loaded_vram returns.
-            minimum_needed = (base_mb + kv_mb) * self.ESTIMATION_SLACK_RATIO
-
-            # Determine TP size for this model
+            # Determine TP size for this model first — the KV estimate below
+            # needs it to shard a whole-model kv_per_token_bytes figure down
+            # to the per-rank budget vLLM's --kv-cache-memory-bytes expects.
             tp = 1
             if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
                 tp = int(profile.tensor_parallel_size)
@@ -5560,6 +5551,22 @@ class CapacityPlanner:
                 inferred = self._infer_tensor_parallel(profile, capacity, provider_id) if profile else None
                 if inferred and inferred > 1:
                     tp = inferred
+
+            if kv_cache_bytes_str:
+                kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
+            elif profile is not None:
+                kv_mb = self._estimate_kv_mb(profile, tp)
+            else:
+                kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
+
+            # kv_mb above is a PER-RANK budget (vLLM applies it on each of
+            # the tp GPUs); multiply by tp to get the whole-lane total that
+            # is comparable to available_mb (summed across the node's GPUs).
+            kv_total_mb = kv_mb * tp
+
+            # Apply estimation slack to the disk → memory size estimate so
+            # the gate matches what _estimate_model_loaded_vram returns.
+            minimum_needed = (base_mb + kv_total_mb) * self.ESTIMATION_SLACK_RATIO
 
             if tp > 1:
                 # Add TP overhead: NCCL buffers, duplicated embedding/output layers
@@ -5572,7 +5579,11 @@ class CapacityPlanner:
                 "Feasibility FAILED for %s: need %.0fMB%s × %.2f margin, have %.0fMB",
                 model_name,
                 minimum_needed,
-                (" (calibrated, KV+TP included)" if is_calibrated else f" (base={base_mb:.0f}MB + kv={kv_mb:.0f}MB)"),
+                (
+                    " (calibrated, KV+TP included)"
+                    if is_calibrated
+                    else f" (base={base_mb:.0f}MB + kv={kv_total_mb:.0f}MB)"
+                ),
                 self.VRAM_SAFETY_MARGIN,
                 available_mb,
             )
@@ -6004,7 +6015,7 @@ class CapacityPlanner:
                 kv_mb, selected_max_model_len = min(viable_pairs, key=lambda p: p[0])
                 kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
             else:
-                kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
+                kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb, tp=tp)
         else:
             kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
         if kv:
@@ -6098,6 +6109,7 @@ class CapacityPlanner:
         self,
         profile: Optional[ModelProfile],
         available_for_kv_mb: Optional[float] = None,
+        tp: int = 1,
     ) -> Optional[str]:
         """Compute the --kv-cache-memory-bytes string to pass to vLLM on startup.
 
@@ -6110,14 +6122,16 @@ class CapacityPlanner:
         already passed a feasibility check.
 
         Falls back to ``_estimate_kv_mb`` for legacy profiles written before
-        the envelope existed. Returns None only when neither path produces a
-        positive value.
+        the envelope existed — ``tp`` (the selected tensor-parallel size)
+        must be passed through to it so a whole-model estimate is sharded
+        down to the per-rank budget this function's return value is spent
+        as. Returns None only when neither path produces a positive value.
         """
         if profile is None:
             return None
         kv_mb = self._select_kv_mb_from_envelope(profile, available_for_kv_mb)
         if kv_mb is None:
-            kv_mb = self._estimate_kv_mb(profile)
+            kv_mb = self._estimate_kv_mb(profile, tp)
         if kv_mb <= 0:
             return None
         return self._format_bytes_human(int(kv_mb * 1024 * 1024))
@@ -6415,13 +6429,27 @@ class CapacityPlanner:
         per_gpu_for_kv = per_gpu_total - per_gpu_base - headroom_per_gpu_mb
         return max(per_gpu_for_kv, 0.0)
 
-    def _estimate_kv_mb(self, profile: ModelProfile) -> float:
-        """KV cache allocation in MB, using the same priority chain as _compute_kv_cache_bytes.
+    def _estimate_kv_mb(self, profile: ModelProfile, tp: int = 1) -> float:
+        """KV cache allocation in MB — a PER-RANK budget (the same units
+        kv_cache_memory_bytes / kv_budget_mb are spent in, applied on each
+        of the ``tp`` GPUs a lane occupies) — using the same priority chain
+        as _compute_kv_cache_bytes.
 
-        1. Observed kv_budget_mb from a previous load on this provider (most accurate).
-        2. Architecture-exact: kv_per_token_bytes × context_cap × concurrency.
-        3. Last-resort fallback: base_residency × KV_CACHE_HEADROOM_RATIO (used only
-           when the HF model config has not been fetched yet).
+        1. Observed kv_budget_mb from a previous load on this provider —
+           already per-rank, it's the exact kv_cache_memory_bytes that lane
+           ran with.
+        2. Architecture-exact: kv_per_token_bytes × context_cap × concurrency
+           is the WHOLE-MODEL footprint (every KV head), sharded down to one
+           rank's share via the same rule vLLM/the worker's precheck use —
+           heads_per_rank = max(1, num_key_value_heads // tp). Skipping this
+           at tp=4 hands each of the 4 ranks ~4x the intended budget, since
+           the un-sharded figure gets applied on every rank. Left un-sharded
+           when num_key_value_heads is unknown (profile predates the field)
+           — no geometry to shard by.
+        3. Last-resort fallback: base_residency × KV_CACHE_HEADROOM_RATIO,
+           divided by tp — base_residency is a whole-lane total split evenly
+           across ranks here as a rough approximation (used only when the HF
+           model config has not been fetched yet).
         """
         if profile.kv_budget_mb and profile.kv_budget_mb > 0:
             return float(profile.kv_budget_mb)
@@ -6430,10 +6458,15 @@ class CapacityPlanner:
                 profile.max_context_length or self.DEFAULT_CONTEXT_CAP,
                 self.DEFAULT_CONTEXT_CAP,
             )
-            return (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+            whole_model_kv_mb = (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+            heads = profile.num_key_value_heads
+            if heads and heads > 0 and tp > 1:
+                heads_per_rank = max(1, heads // tp)
+                return whole_model_kv_mb * heads_per_rank / heads
+            return whole_model_kv_mb
         base = profile.estimate_base_residency_mb()
         if base and base > 0:
-            return base * self.KV_CACHE_HEADROOM_RATIO
+            return (base * self.KV_CACHE_HEADROOM_RATIO) / max(tp, 1)
         return 0.0
 
     def _estimate_model_loaded_vram(self, profile: ModelProfile) -> float:
@@ -6466,9 +6499,22 @@ class CapacityPlanner:
                 if observed > 0.0:
                     return min(base, observed) if base > 0.0 else observed
                 return base  # no live observation yet — fall back to calibrated value
-            kv = self._estimate_kv_mb(profile)
-            return (base + kv) * self.ESTIMATION_SLACK_RATIO
+            tp = self._profile_tp(profile)
+            # _estimate_kv_mb is per-rank; multiply by tp for the whole-lane
+            # total this function's callers compare against a node-wide
+            # available_vram_mb (see _passes_minimum_load_feasibility).
+            kv_total = self._estimate_kv_mb(profile, tp) * tp
+            return (base + kv_total) * self.ESTIMATION_SLACK_RATIO
         return profile.estimate_vram_mb()
+
+    @staticmethod
+    def _profile_tp(profile: Optional[ModelProfile]) -> int:
+        """The tensor-parallel size a profile's lane was calibrated/configured
+        at, or 1 when unknown — the per-rank KV estimate needs this to shard
+        a whole-model kv_per_token_bytes figure down correctly."""
+        if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+            return int(profile.tensor_parallel_size)
+        return 1
 
     def _estimate_action_vram(
         self,
@@ -6501,15 +6547,17 @@ class CapacityPlanner:
                 # and apply ESTIMATION_SLACK_RATIO for disk → memory spread.
                 params = action.params or {}
                 vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
+                tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
+                if tp <= 0:
+                    tp = self._profile_tp(profile)
                 kv_str = vllm_config.get("kv_cache_memory_bytes", "")
                 kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
                 if kv_mb <= 0:
-                    kv_mb = self._estimate_kv_mb(profile)
-                loaded_vram = (base_residency + kv_mb) * self.ESTIMATION_SLACK_RATIO
+                    kv_mb = self._estimate_kv_mb(profile, tp)
+                # kv_mb is per-rank; multiply by tp for the whole-lane total.
+                kv_total_mb = kv_mb * tp
+                loaded_vram = (base_residency + kv_total_mb) * self.ESTIMATION_SLACK_RATIO
 
-                tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
-                if tp <= 0 and profile.tensor_parallel_size:
-                    tp = int(profile.tensor_parallel_size)
                 if tp > 1:
                     loaded_vram *= 1.0 + self.TP_OVERHEAD_RATIO
 

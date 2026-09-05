@@ -5,3 +5,4 @@ pyyaml>=6.0,<7.0
 pydantic>=2.0,<3.0
 websockets>=12.0,<15.0
 prometheus-client>=0.21.0,<1.0
+huggingface-hub>=0.24,<2.0

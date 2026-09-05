@@ -1,5 +1,6 @@
 """Tests for ModelProfileRegistry — observation-only, no estimation."""
 
+import threading
 import time
 
 import pytest
@@ -75,6 +76,22 @@ def test_record_loaded_vram_subsequent_uses_ema():
     # EMA base: first=6000, second EMA(6000, 7000)=6300
     assert abs(profile.base_residency_mb - 6300.0) < 1.0
     assert profile.measurement_count == 2
+
+
+def test_record_loaded_vram_after_hf_precheck_uses_measurement_exactly():
+    """residency_source="hf" is a best-effort guess, not a prior real
+    measurement — the first live load must replace it exactly, not blend
+    through _ema() and keep 70% weight on a guess that could be badly off."""
+    registry = ModelProfileRegistry()
+    registry.apply_hf_precheck("org/model", disk_size_bytes=4_000_000_000, base_residency_mb=4200.0)
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "hf"
+
+    registry.record_loaded_vram("org/model", 9000.0, engine="vllm", kv_cache_sent_mb=2000.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "measured"
+    assert profile.base_residency_mb == pytest.approx(9000.0 - 2000.0)
 
 
 def test_record_loaded_vram_ignores_zero():
@@ -494,6 +511,123 @@ def test_manual_override_base_residency():
     profile = registry.get_profile("org/model")
     assert profile.base_residency_mb == pytest.approx(7500.0)
     assert profile.residency_source == "override"
+
+
+# ---------------------------------------------------------------------------
+# HF compatibility precheck
+# ---------------------------------------------------------------------------
+
+
+def test_apply_hf_precheck_sets_fields_on_fresh_profile():
+    registry = ModelProfileRegistry()
+    changed = registry.apply_hf_precheck(
+        "org/model",
+        disk_size_bytes=4_000_000_000,
+        base_residency_mb=4200.0,
+        kv_per_token_bytes=1024,
+        max_context_length=8192,
+    )
+
+    assert changed is True
+    profile = registry.get_profile("org/model")
+    assert profile.disk_size_bytes == 4_000_000_000
+    assert profile.base_residency_mb == pytest.approx(4200.0)
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+    assert profile.residency_source == "hf"
+
+
+def test_apply_hf_precheck_does_not_downgrade_a_real_measurement():
+    """A calibrated/measured base_residency_mb must survive an HF precheck
+    run afterward (e.g. a later session re-checking an already-calibrated
+    model) — only kv_per_token_bytes/max_context_length/disk_size_bytes,
+    which calibration never measures, should still update."""
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model", 9000.0, engine="vllm", kv_cache_sent_mb=2000.0)
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "measured"
+
+    changed = registry.apply_hf_precheck(
+        "org/model",
+        disk_size_bytes=4_000_000_000,
+        base_residency_mb=1234.0,
+        kv_per_token_bytes=1024,
+        max_context_length=8192,
+    )
+
+    assert changed is True
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "measured"
+    assert profile.base_residency_mb == pytest.approx(9000.0 - 2000.0)
+    assert profile.disk_size_bytes == 4_000_000_000
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+
+
+def test_apply_hf_precheck_respects_manual_override():
+    registry = ModelProfileRegistry(
+        model_profile_overrides={
+            "org/model": {"base_residency_mb": 7500.0},
+        }
+    )
+    registry.seed_capabilities(["org/model"])
+
+    registry.apply_hf_precheck("org/model", base_residency_mb=1234.0, kv_per_token_bytes=1024)
+
+    profile = registry.get_profile("org/model")
+    assert profile.base_residency_mb == pytest.approx(7500.0)
+    assert profile.residency_source == "override"
+    # kv_per_token_bytes has no override, so the HF value still lands.
+    assert profile.kv_per_token_bytes == 1024
+
+
+def test_apply_hf_precheck_does_not_overwrite_an_override_added_mid_call():
+    """Regression: the manual-overrides lookup must happen inside the
+    same lock add_overrides uses. Simulates the model's first override
+    landing in the window between an unlocked lookup and the lock —
+    whichever order the two calls serialize in, the override must win."""
+    registry = ModelProfileRegistry()
+    registry.seed_capabilities(["org/model"])
+    override_applied = threading.Event()
+
+    def _add_override_from_another_thread():
+        registry.add_overrides({"org/model": {"kv_per_token_bytes": 999}})
+        override_applied.set()
+
+    class _RacyOverrides(dict):
+        def get(self, key, default=None):
+            stale = dict.get(self, key, default)
+            if key == "org/model" and "org/model" not in self:
+                threading.Thread(target=_add_override_from_another_thread).start()
+                override_applied.wait(timeout=0.2)
+            return stale
+
+    registry._manual_overrides = _RacyOverrides(registry._manual_overrides)  # noqa: SLF001
+
+    registry.apply_hf_precheck("org/model", kv_per_token_bytes=1024)
+    override_applied.wait(timeout=1.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.kv_per_token_bytes == 999
+
+
+def test_apply_hf_precheck_persists_across_restart(tmp_path):
+    registry = ModelProfileRegistry(state_dir=tmp_path)
+    registry.apply_hf_precheck(
+        "org/model",
+        disk_size_bytes=4_000_000_000,
+        base_residency_mb=4200.0,
+        kv_per_token_bytes=1024,
+        max_context_length=8192,
+    )
+
+    reloaded = ModelProfileRegistry(state_dir=tmp_path)
+    profile = reloaded.get_profile("org/model")
+    assert profile is not None
+    assert profile.base_residency_mb == pytest.approx(4200.0)
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+    assert profile.residency_source == "hf"
 
 
 def test_kv_per_token_in_to_dict():
