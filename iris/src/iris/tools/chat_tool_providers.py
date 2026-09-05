@@ -17,6 +17,8 @@ from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
 from iris.retrieval.faq_retrieval import FaqRetrieval
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
 from iris.tools import (
+    create_tool_combined_view_point_out,
+    create_tool_current_view_content,
     create_tool_faq_content_retrieval,
     create_tool_file_lookup,
     create_tool_generate_mcq_questions,
@@ -30,6 +32,8 @@ from iris.tools import (
     create_tool_lecture_content_retrieval,
     create_tool_repository_files,
 )
+from iris.tools.combined_view_point_out import get_combined_view_context
+from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 
 logger = get_logger(__name__)
 
@@ -132,6 +136,48 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
     )
 
 
+def provide_combined_view_point_out(state: State) -> Optional[Callable]:
+    """Provide the combined-view point-out tool when the student is in the combined view.
+
+    Offered only when the lecture tool is allowed and the chat was opened from the lecture
+    combined view (the context carries a ``combinedView`` entry). The tool itself does not
+    search; it points the student to a page/timestamp the agent chose from the content it
+    retrieved earlier (which the lecture retrieval tool stores in ``lecture_content_storage``).
+    """
+    if not state.allow_lecture_tool:
+        return None
+    combined = get_combined_view_context(getattr(state, "lecture_contexts", None))
+    if combined is None:
+        return None
+
+    return create_tool_combined_view_point_out(
+        state.callback,
+        state.lecture_content_storage,
+        combined,
+        getattr(state, "current_view_storage", None),
+    )
+
+
+def provide_current_view_content(state: State) -> Optional[Callable]:
+    """Provide the current-position content tool when the student is viewing lecture material.
+
+    The material itself is deliberately kept out of the system prompt (see
+    ``ChatPipeline._build_current_view``); this tool is how the agent gets at it.
+
+    Gated on the lecture tool like every other lecture provider: this hands out lecture material,
+    so a variant that may not retrieve lectures must not reach it through the viewing context
+    either.
+    """
+    if not state.allow_lecture_tool:
+        return None
+    current_view_storage = getattr(state, "current_view_storage", None)
+    if not current_view_storage or not current_view_storage.get(CONTENT_BLOCKS_KEY):
+        return None
+    # The storage itself is handed over, not the blocks it currently holds: the point-out tool
+    # writes into it when it moves the student, and the tool has to see that.
+    return create_tool_current_view_content(current_view_storage)
+
+
 def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not state.dto.course.name:
         return None
@@ -220,6 +266,8 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
 
 CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_lecture_retrieval,
+    provide_combined_view_point_out,
+    provide_current_view_content,
     provide_faq_retrieval,
     provide_course_details,
     provide_exercise_list,

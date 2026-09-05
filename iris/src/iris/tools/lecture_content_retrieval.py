@@ -1,9 +1,42 @@
 """Tool for retrieving lecture content using RAG."""
 
+import math
 from typing import Any, Callable, Dict, List, Optional
 
+from ..domain.retrieval.lecture.lecture_retrieval_dto import printed_page_number
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
 from ..web.status.status_update import StatusCallback
+
+
+def _format_page_reference(
+    display_page_number: Optional[int], point_out_id: Optional[int] = None
+) -> str:
+    """Render the page reference of a retrieved result as plain ``key: value`` fields.
+
+    The number printed on the slide is what the student sees and what the agent should name when
+    talking about it. Results that can also be navigated to pass their ``point_out_id`` — the slide's
+    index in the deck, the only number the point-out tool accepts. Transcription segments know the
+    printed number of the slide that was on screen but no deck index, so they omit it.
+    """
+    printed = printed_page_number(display_page_number)
+    page = "Page: unnumbered" if printed is None else f"Page: {printed}"
+    return page if point_out_id is None else f"{page}, point-out id: {point_out_id}"
+
+
+def _format_video_timestamp(start_time: float, end_time: float) -> str:
+    """Render a transcription segment's start as a timestamp that still points back at it.
+
+    The agent passes a displayed timestamp to the point-out tool exactly as shown, and that tool
+    matches segments half-open (``start <= t < end``). Rounding a fractional start to the nearest
+    whole second can move it before its own segment — 42.4 shown as 42 lands in the preceding one,
+    or nowhere — so it is rounded up instead: never earlier than the start, and a round number the
+    agent can also name to the student. A segment too short to contain the next whole second falls
+    back to its exact start, which ``repr`` round-trips and is inside the segment by construction.
+    """
+    whole_second = math.ceil(start_time)
+    if whole_second < end_time:
+        return str(whole_second)
+    return repr(start_time)
 
 
 def create_tool_lecture_content_retrieval(
@@ -64,22 +97,38 @@ def create_tool_lecture_content_retrieval(
         for paragraph in lecture_content.lecture_unit_page_chunks:
             result += (
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number}"
+                + _format_page_reference(
+                    paragraph.display_page_number, paragraph.page_number
+                )
                 + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
             )
 
         result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
             result += (
+                # A transcription segment's page_number is the slide number read off the video frame
+                # during ingestion — the number printed on the slide, not its index in the deck. So it
+                # is rendered as the printed page, which the agent may name to the student, and never
+                # as a point-out id: passing it as one would navigate to the wrong slide wherever the
+                # two numberings diverge. What this segment can be pointed at by is its timestamp.
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
+                + _format_page_reference(paragraph.page_number)
+                + ", Video timestamp: "
+                + _format_video_timestamp(
+                    paragraph.segment_start_time, paragraph.segment_end_time
+                )
+                + "s"
+                f"\nContent:\n---{paragraph.segment_text}---\n\n"
             )
 
         result += "Lecture segment content:\n"
         for paragraph in lecture_content.lecture_unit_segments:
             result += (
+                # No point-out id: a summary of a whole slide plus what was said over it is
+                # orientation, not a position. Pointing runs off the page chunks and the
+                # transcriptions, which name one of their own.
                 f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
-                f"Page: {paragraph.display_page_number}"
+                + _format_page_reference(paragraph.display_page_number)
                 + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
             )
 
