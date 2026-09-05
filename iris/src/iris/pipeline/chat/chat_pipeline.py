@@ -364,6 +364,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     accessed_memories=state.accessed_memory_storage,
                     activities=activities,
                     activity_seq=activity_seq,
+                    suggested_context=state.pending_context_switch,
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",

@@ -16,6 +16,7 @@ def create_tool_lecture_content_retrieval(
     lecture_content_storage: Dict[str, Any],
     lecture_id: Optional[int] = None,
     lecture_unit_id: Optional[int] = None,
+    scope_supplier: Optional[Callable[[], tuple[Optional[int], Optional[int]]]] = None,
 ) -> Callable[[], str]:
     """
     Create a tool that retrieves lecture content using RAG.
@@ -28,6 +29,11 @@ def create_tool_lecture_content_retrieval(
         query_text: The student's query text.
         history: Chat history messages.
         lecture_content_storage: Storage for retrieved content.
+        lecture_id: Lecture the retrieval is scoped to, if any.
+        lecture_unit_id: Lecture unit the retrieval is scoped to, if any.
+        scope_supplier: Resolves the scope at call time instead of at creation
+            time, so a context switch during the same run redirects retrieval
+            to the new lecture. Overrides lecture_id and lecture_unit_id.
 
     Returns:
         Callable[[], str]: Function that returns lecture content string.
@@ -43,17 +49,27 @@ def create_tool_lecture_content_retrieval(
         nd return the most relevant paragraphs.
         Use this if you think it can be useful to answer the student's question, or if the student explicitly asks
         a question about the lecture content or slides.
-        Only use this once.
+        In a lecture chat this returns content of the active lecture only, and it
+        never returns lecture IDs. Use the lecture list tool to find another
+        lecture and its ID.
+        Only use this once, unless you switched the chat context in between: after
+        a switch, call it again to retrieve content of the new lecture.
 
         Returns:
             str: Concatenated lecture slide, transcription, and segment content.
         """
+        scoped_lecture_id, scoped_lecture_unit_id = (
+            scope_supplier()
+            if scope_supplier is not None
+            else (lecture_id, lecture_unit_id)
+        )
+
         lecture_content = lecture_retriever(
             query=query_text,
             course_id=course_id,
             chat_history=history,
-            lecture_id=lecture_id,
-            lecture_unit_id=lecture_unit_id,
+            lecture_id=scoped_lecture_id,
+            lecture_unit_id=scoped_lecture_unit_id,
             base_url=base_url,
         )
 
@@ -63,7 +79,8 @@ def create_tool_lecture_content_retrieval(
         result = "Lecture slide content:\n"
         for paragraph in lecture_content.lecture_unit_page_chunks:
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                f"Lecture: {paragraph.lecture_name} (lecture ID {paragraph.lecture_id}), "
+                f"Unit: {paragraph.lecture_unit_name}, "
                 f"Page: {paragraph.display_page_number}"
                 + f"\nContent:\n---{paragraph.page_text_content}---\n\n"
             )
@@ -71,14 +88,16 @@ def create_tool_lecture_content_retrieval(
         result += "Lecture transcription content:\n"
         for paragraph in lecture_content.lecture_transcriptions:
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                f"Lecture: {paragraph.lecture_name} (lecture ID {paragraph.lecture_id}), "
+                f"Unit: {paragraph.lecture_unit_name}, "
                 f"Page: {paragraph.page_number}\nContent:\n---{paragraph.segment_text}---\n\n"
             )
 
         result += "Lecture segment content:\n"
         for paragraph in lecture_content.lecture_unit_segments:
             result += (
-                f"Lecture: {paragraph.lecture_name}, Unit: {paragraph.lecture_unit_name}, "
+                f"Lecture: {paragraph.lecture_name} (lecture ID {paragraph.lecture_id}), "
+                f"Unit: {paragraph.lecture_unit_name}, "
                 f"Page: {paragraph.display_page_number}"
                 + f"\nContent:\n---{paragraph.segment_summary}---\n\n"
             )

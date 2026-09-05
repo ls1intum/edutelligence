@@ -20,6 +20,7 @@ from .last_artifact import create_tool_get_last_artifact
 
 # Retrieval tools
 from .lecture_content_retrieval import create_tool_lecture_content_retrieval
+from .lecture_list import create_tool_get_lecture_list
 
 # MCQ generation tool
 from .mcq_generation import create_tool_generate_mcq_questions
@@ -28,6 +29,9 @@ from .single_exercise_problem_statement import create_tool_get_problem_statement
 
 # Exercise chat tools
 from .submission_details import create_tool_get_submission_details
+
+# Context switching tool
+from .switch_chat_context import create_tool_switch_chat_context
 
 __all__ = [
     # Course-related tools
@@ -43,6 +47,7 @@ __all__ = [
     "create_tool_file_lookup",
     # Retrieval tools
     "create_tool_lecture_content_retrieval",
+    "create_tool_get_lecture_list",
     "create_tool_faq_content_retrieval",
     # Tutor Suggestion tools
     "create_tool_get_example_solution",
@@ -51,4 +56,6 @@ __all__ = [
     "create_tool_get_simple_course_details",
     # MCQ generation tool
     "create_tool_generate_mcq_questions",
+    # Context switching tool
+    "create_tool_switch_chat_context",
 ]
