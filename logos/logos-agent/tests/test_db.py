@@ -373,3 +373,370 @@ class TestMovingWhenAgeAndIdDisagree:
         # which is the thing the move is overruling.
         with pytest.raises(ValueError, match="cannot be ordered"):
             await db.move_in_queue(119, "first", by="tobias")
+
+
+class TestClaimingOnOneBranch:
+    """Two sessions that commit to one branch must not both be admitted.
+
+    The row lock each claim takes covers only its own row: two claims in
+    different workspaces lock different rows, and each sees the other still
+    queued. What keeps them apart is the branch's advisory lock, held to
+    the claim's commit — so the fake below models what Postgres models:
+    row locks that skip, an advisory lock per branch, and writes that stay
+    invisible to other transactions until their commit.
+    """
+
+    OCCUPYING = ("starting", "running", "paused", "finalizing")
+
+    @staticmethod
+    def _row(**fields):
+        row = {"trigger_ref": None, "model": "gpt", "task": "work", "created_at": ""}
+        row.update(fields)
+        return row
+
+    class _Model:
+        def __init__(self, rows):
+            self.sessions = {row["id"]: dict(row) for row in rows}
+            self.admission_lock = asyncio.Lock()
+            self.locked_rows: set[int] = set()
+            self._branch_locks: dict[str, asyncio.Lock] = {}
+
+        def branch_lock(self, branch):
+            lock = self._branch_locks.get(branch)
+            if lock is None:
+                lock = self._branch_locks[branch] = asyncio.Lock()
+            return lock
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalar_one_or_none(self):
+            return self._rows[0] if self._rows else None
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    class _Transaction:
+        def __init__(self, model):
+            self.model = model
+            self.pending: dict[int, str] = {}
+            self.held_rows: list[int] = []
+            self.held_advisory: list[asyncio.Lock] = []
+            self.done = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, *_):
+            if not self.done:
+                await self.rollback()
+            return False
+
+        def status_of(self, session_id):
+            return self.pending.get(session_id, self.model.sessions[session_id]["status"])
+
+        def _startable(self, row, include_triggered):
+            if self.status_of(row["id"]) != "queued":
+                return False
+            if not include_triggered and row.get("trigger_ref") is not None:
+                return False
+            branch = row.get("branch_name")
+            for other in self.model.sessions.values():
+                if other["id"] == row["id"] or self.status_of(other["id"]) not in TestClaimingOnOneBranch.OCCUPYING:
+                    continue
+                if other["workspace_id"] == row["workspace_id"]:
+                    return False
+                if branch is not None and other.get("branch_name") == branch:
+                    return False
+            return True
+
+        def _best_of_workspace(self, row, include_triggered):
+            peers = [
+                peer
+                for peer in self.model.sessions.values()
+                if peer["workspace_id"] == row["workspace_id"]
+                and self.status_of(peer["id"]) == "queued"
+                and (include_triggered or peer.get("trigger_ref") is None)
+            ]
+            if not peers:
+                return False
+            best = min(peers, key=lambda peer: (-peer["priority"], peer.get("created_at", ""), peer["id"]))
+            return best["id"] == row["id"]
+
+        def _candidates(self, include_triggered):
+            rows = sorted(
+                self.model.sessions.values(),
+                key=lambda row: (-row["priority"], row.get("created_at", ""), row["id"]),
+            )
+            return [
+                row
+                for row in rows
+                if self._startable(row, include_triggered) and self._best_of_workspace(row, include_triggered)
+            ]
+
+        def _lock_row(self, row):
+            # A set of ids, not an asyncio.Lock: nothing suspends while the
+            # lock is held, so the lock object would only add a coroutine
+            # to await — and an acquire nobody awaited would leave the row
+            # unlocked, the SKIP LOCKED branch dead, and the fake claiming
+            # what the database it models would refuse.
+            if row["id"] in self.model.locked_rows:
+                return False  # SKIP LOCKED
+            self.model.locked_rows.add(row["id"])
+            self.held_rows.append(row["id"])
+            return True
+
+        async def execute(self, sql, params=None):
+            params = params or {}
+            sql = " ".join(str(sql).split())
+            # Every statement is a round trip: a yield so a concurrent
+            # transaction runs in between, as the network gives it the
+            # chance. Without the branch lock this is where the race lives.
+            await asyncio.sleep(0)
+            if sql.startswith("SELECT pg_advisory_xact_lock"):
+                if "logos-agent-branch" in sql:
+                    lock = self.model.branch_lock(params["branch"])
+                else:
+                    lock = self.model.admission_lock
+                await lock.acquire()
+                self.held_advisory.append(lock)
+                return TestClaimingOnOneBranch._Result([1])
+            if sql.startswith("SELECT s.branch_name FROM agent_sessions"):
+                row = self.model.sessions.get(params["session_id"])
+                return TestClaimingOnOneBranch._Result([row["branch_name"]] if row else [])
+            if sql.startswith("SELECT s.id, s.branch_name FROM agent_sessions"):
+                rows = self._candidates(params.get("include_triggered", True))
+                if "FOR UPDATE" in sql:
+                    rows = [row for row in rows if self._lock_row(row)]
+                return TestClaimingOnOneBranch._Result(
+                    [{"id": row["id"], "branch_name": row.get("branch_name")} for row in rows]
+                )
+            if sql.startswith("SELECT s.id FROM agent_sessions"):
+                row = self.model.sessions.get(params["session_id"])
+                if row is None or not self._lock_row(row) or not self._startable(row, True):
+                    return TestClaimingOnOneBranch._Result([])
+                quota = params.get("trigger_quota")
+                if quota is not None and row.get("trigger_ref") is not None:
+                    active = sum(
+                        1
+                        for other in self.model.sessions.values()
+                        if other.get("trigger_ref") is not None
+                        and self.status_of(other["id"]) in TestClaimingOnOneBranch.OCCUPYING
+                    )
+                    if active >= quota:
+                        return TestClaimingOnOneBranch._Result([])
+                return TestClaimingOnOneBranch._Result([row["id"]])
+            if sql.startswith("UPDATE agent_sessions SET status"):
+                if "ANY(:ids)" in sql:
+                    for session_id in params["ids"]:
+                        self.pending[session_id] = "starting"
+                else:
+                    self.pending[params["session_id"]] = "starting"
+                return TestClaimingOnOneBranch._Result([1])
+            if sql.startswith("SELECT s.id, s.workspace_id"):
+                ids = params["ids"] if "ids" in params else [params["session_id"]]
+                rows = []
+                for session_id in ids:
+                    row = dict(self.model.sessions[session_id])
+                    row["status"] = self.status_of(session_id)
+                    rows.append(row)
+                return TestClaimingOnOneBranch._Result(rows)
+            raise AssertionError(f"unexpected statement in test: {sql}")
+
+        async def commit(self):
+            # The window first: other transactions still read the old
+            # state, as until the commit is durable. Then the writes
+            # become visible and the locks go.
+            await asyncio.sleep(0)
+            for session_id, status in self.pending.items():
+                self.model.sessions[session_id]["status"] = status
+            self.pending.clear()
+            self._release()
+            await asyncio.sleep(0)
+
+        async def rollback(self):
+            self.pending.clear()
+            self._release()
+            await asyncio.sleep(0)
+
+        def _release(self):
+            self.done = True
+            for session_id in self.held_rows:
+                self.model.locked_rows.discard(session_id)
+            self.held_rows.clear()
+            for lock in self.held_advisory:
+                if lock.locked():
+                    lock.release()
+            self.held_advisory.clear()
+
+    @classmethod
+    def _patch(cls, monkeypatch, model):
+        monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: cls._Transaction(model)))
+
+    @classmethod
+    def _branch_model(cls):
+        # Two workspaces queuing on one branch, one on none: the pair is
+        # what the branch rule is about, the null branch is what must keep
+        # working while the pair is resolved.
+        return cls._Model(
+            [
+                cls._row(
+                    id=1,
+                    workspace_id=1,
+                    branch_name="feature/x",
+                    status="queued",
+                    priority=80,
+                    created_at="2026-09-04T10:00:00",
+                ),
+                cls._row(
+                    id=2,
+                    workspace_id=2,
+                    branch_name="feature/x",
+                    status="queued",
+                    priority=60,
+                    created_at="2026-09-04T10:00:00",
+                ),
+                cls._row(
+                    id=3,
+                    workspace_id=3,
+                    branch_name=None,
+                    status="queued",
+                    priority=50,
+                    created_at="2026-09-04T10:00:00",
+                ),
+            ]
+        )
+
+    async def test_two_single_claims_on_one_branch_admit_exactly_one(self, monkeypatch):
+        model = self._branch_model()
+        self._patch(monkeypatch, model)
+
+        results = await asyncio.gather(db.claim_session(1), db.claim_session(2))
+
+        claimed = [row for row in results if row is not None]
+        assert len(claimed) == 1
+        assert claimed[0]["status"] == "starting"
+        # The loser stays queued for the next pass: it refused, it was not
+        # deleted.
+        statuses = {model.sessions[session_id]["status"] for session_id in (1, 2)}
+        assert statuses == {"queued", "starting"}
+
+    async def test_a_batch_claim_takes_at_most_one_session_per_branch(self, monkeypatch):
+        model = self._branch_model()
+        self._patch(monkeypatch, model)
+
+        claimed = await db.claim_queued_sessions(2)
+
+        # Session 2 lost to session 1 on the branch — not to the limit,
+        # which the pass filled with the branch-free session instead.
+        assert {row["id"] for row in claimed} == {1, 3}
+        assert model.sessions[2]["status"] == "queued"
+
+    async def test_a_single_claim_and_a_batch_claim_on_one_branch_admit_one(self, monkeypatch):
+        model = self._branch_model()
+        self._patch(monkeypatch, model)
+
+        batch, single = await asyncio.gather(db.claim_queued_sessions(2), db.claim_session(2))
+
+        on_branch = [session_id for session_id in (1, 2) if model.sessions[session_id]["status"] == "starting"]
+        assert len(on_branch) == 1
+        # Whoever won the branch, nothing was claimed twice.
+        taken = [row["id"] for row in batch] + ([single["id"]] if single else [])
+        assert len(taken) == len(set(taken))
+
+    async def test_two_batch_claims_on_one_branch_admit_one(self, monkeypatch):
+        model = self._branch_model()
+        self._patch(monkeypatch, model)
+
+        first, second = await asyncio.gather(db.claim_queued_sessions(1), db.claim_queued_sessions(1))
+
+        on_branch = [session_id for session_id in (1, 2) if model.sessions[session_id]["status"] == "starting"]
+        assert len(on_branch) == 1
+        taken = [row["id"] for row in first + second]
+        assert len(taken) == len(set(taken))
+
+    @classmethod
+    def _triggered_then_manual_model(cls):
+        # One workspace, one triggered row ahead of one manual one. The
+        # triggered row is the workspace's most urgent queued session,
+        # which is exactly what makes the comparison dangerous for the
+        # manual one.
+        return cls._Model(
+            [
+                cls._row(
+                    id=1,
+                    workspace_id=1,
+                    branch_name=None,
+                    status="queued",
+                    priority=80,
+                    created_at="2026-09-04T10:00:00",
+                    trigger_ref="pr-1-review-1",
+                ),
+                cls._row(
+                    id=2,
+                    workspace_id=1,
+                    branch_name=None,
+                    status="queued",
+                    priority=50,
+                    created_at="2026-09-04T10:05:00",
+                ),
+            ]
+        )
+
+    async def test_a_manual_row_behind_a_triggered_one_is_still_claimed(self, monkeypatch):
+        # A pass that may not take triggered rows must not let the
+        # triggered row stand in as the workspace's best candidate either:
+        # it would fail the outer predicate, every manual row behind it
+        # would fail the comparison, and the workspace would go unclaimed
+        # while the quota is full.
+        model = self._triggered_then_manual_model()
+        self._patch(monkeypatch, model)
+
+        claimed = await db.claim_queued_sessions(2, include_triggered=False)
+
+        assert [row["id"] for row in claimed] == [2]
+        assert model.sessions[1]["status"] == "queued"
+
+    async def test_the_triggered_row_leads_its_workspace_when_it_may(self, monkeypatch):
+        # The control for the test above: with triggered rows in play the
+        # most urgent one of the workspace is the one claimed, and the
+        # manual one waits its turn.
+        model = self._triggered_then_manual_model()
+        self._patch(monkeypatch, model)
+
+        claimed = await db.claim_queued_sessions(2)
+
+        assert [row["id"] for row in claimed] == [1]
+        assert model.sessions[2]["status"] == "queued"
+
+    async def test_two_single_claims_on_one_row_admit_exactly_one(self, monkeypatch):
+        # Two transactions locking one row: the first claim takes the row
+        # lock, the second must see it locked and skip — not walk through
+        # to a second UPDATE of the same session.
+        model = self._Model(
+            [
+                self._row(
+                    id=7,
+                    workspace_id=1,
+                    branch_name=None,
+                    status="queued",
+                    priority=50,
+                    created_at="2026-09-04T10:00:00",
+                )
+            ]
+        )
+        self._patch(monkeypatch, model)
+
+        results = await asyncio.gather(db.claim_session(7), db.claim_session(7))
+
+        claimed = [row for row in results if row is not None]
+        assert len(claimed) == 1
+        assert claimed[0]["id"] == 7
+        assert model.sessions[7]["status"] == "starting"

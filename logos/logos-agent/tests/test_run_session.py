@@ -36,6 +36,7 @@ from run_session import (  # noqa: E402
     _reset_agent_home,
     commit_and_push,
     finalize_checkout,
+    prepare_checkout,
     run_finalize,
 )
 
@@ -233,6 +234,35 @@ def _make_origin(workspace: Path) -> Path:
     return origin
 
 
+def _remote_with_a_feature(tmp_path: Path) -> tuple[Path, Path]:
+    """A bare repository standing in for the remote, with work in it.
+
+    The default branch ``main`` has one commit, the branch ``feature`` one
+    commit on top of it, and ``refs/pull/1/head`` points at the feature's
+    tip — the ref a pull request is read from.
+
+    Returns (bare, feature_tip), the tip as a commit id.
+    """
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--quiet", "--bare", "--initial-branch=main", str(bare)], check=True)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _git("init", "--quiet", "--initial-branch=main", cwd=seed)
+    _git("config", "user.name", "seed", cwd=seed)
+    _git("config", "user.email", "seed@example.com", cwd=seed)
+    (seed / "file.txt").write_text("base\n")
+    _git("add", "file.txt", cwd=seed)
+    _git("commit", "--quiet", "-m", "base", cwd=seed)
+    _git("push", "--quiet", str(bare), "main", cwd=seed)
+    _git("checkout", "--quiet", "-b", "feature", cwd=seed)
+    (seed / "file.txt").write_text("base\nfeature\n")
+    _git("commit", "--quiet", "-am", "feature", cwd=seed)
+    _git("push", "--quiet", str(bare), "feature", cwd=seed)
+    tip = _git("rev-parse", "HEAD", cwd=seed).stdout.strip()
+    _git("update-ref", "refs/pull/1/head", tip, cwd=bare)
+    return bare, tip
+
+
 def _plant_agent_phase(workspace: Path, origin: Path, branch: str) -> tuple[Path, Path, Path]:
     """A checkout plus home as a hostile agent phase leaves them.
 
@@ -272,6 +302,61 @@ def _plant_agent_phase(workspace: Path, origin: Path, branch: str) -> tuple[Path
 
     (home / ".gitconfig").write_text("[core]\n\thooksPath = /tmp/evil-finalize-hooks\n")
     return checkout, home, marker
+
+
+class TestPreparingTheRefTheTaskPointsAt:
+    """The default branch as a ref the prepared checkout actually has.
+
+    The task a reviewing agent is given tells it to run
+    `git diff origin/<default>...HEAD`. That ref is not in every checkout
+    the preparation builds: a clone of a feature branch materialises only
+    that branch, and a fetch of a pull request's ref writes only
+    FETCH_HEAD. Without the default branch the agent is told to diff
+    against a ref the checkout does not have.
+    """
+
+    def test_a_fresh_clone_of_a_feature_branch_carries_the_default_branch(self, tmp_path, monkeypatch):
+        bare, _ = _remote_with_a_feature(tmp_path)
+        workspace = tmp_path / "ws"
+        _patch_workspace(monkeypatch, workspace)
+
+        prepare_checkout(str(bare), "feature", "agent/review-1", "a-token")
+
+        checkout = workspace / "repo"
+        assert _git("rev-parse", "--abbrev-ref", "HEAD", cwd=checkout).stdout.strip() == "agent/review-1"
+        # The default branch is a ref of the checkout, at the remote's tip:
+        # the diff the task tells the agent to run works.
+        main = _git("rev-parse", "main", cwd=bare).stdout.strip()
+        assert _git("rev-parse", "refs/remotes/origin/main", cwd=checkout).stdout.strip() == main
+        diff = _git("diff", "--stat", "origin/main...HEAD", cwd=checkout)
+        assert "file.txt" in diff.stdout
+
+    def test_a_reused_checkout_reading_a_pull_ref_carries_the_default_branch(self, tmp_path, monkeypatch):
+        # A question on a pull request is answered from `refs/pull/<n>/head`.
+        # The checkout a previous session leaves behind is a clone of the
+        # work it did, so its only remote-tracking ref is the branch it
+        # worked on — and the preparation's fetch of the pull ref writes
+        # only FETCH_HEAD. The default branch must come from the
+        # preparation itself.
+        bare, tip = _remote_with_a_feature(tmp_path)
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        checkout = workspace / "repo"
+        _git("clone", "--quiet", "--branch", "feature", str(bare), str(checkout), cwd=workspace)
+        assert not (checkout / ".git" / "refs" / "remotes" / "origin" / "main").exists()
+        _patch_workspace(monkeypatch, workspace)
+
+        prepare_checkout(str(bare), "refs/pull/1/head", "agent/review-2", "a-token")
+
+        checkout = workspace / "repo"
+        assert _git("rev-parse", "--abbrev-ref", "HEAD", cwd=checkout).stdout.strip() == "agent/review-2"
+        # The working copy is the pull request's code...
+        assert _git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == tip
+        # ...and the default branch is a ref the checkout actually has.
+        main = _git("rev-parse", "main", cwd=bare).stdout.strip()
+        assert _git("rev-parse", "refs/remotes/origin/main", cwd=checkout).stdout.strip() == main
+        diff = _git("diff", "--stat", "origin/main...HEAD", cwd=checkout)
+        assert "file.txt" in diff.stdout
 
 
 class TestFinalizer:
@@ -424,6 +509,27 @@ class TestFinalizer:
         tip = _git("--git-dir", str(origin), "rev-parse", self.BRANCH, cwd=workspace).stdout.strip()
         assert tip != base
         assert second.data["pushed_sha"] == tip
+
+    def test_a_retried_finalizer_tracks_the_remote_branch_tip(self, tmp_path, monkeypatch):
+        # The rebuild removes every ref the checkout had, tracking refs
+        # among them. When a previous run left a branch on the remote, the
+        # re-finalize must bring it back as a ref of this checkout — not
+        # only as FETCH_HEAD: the run that changes nothing reads the tip the
+        # branch carries from exactly this ref, and the lease push verifies
+        # against it.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+        commit_and_push(self.BRANCH, "a long enough task description")
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+
+        tip = _git("--git-dir", str(origin), "rev-parse", self.BRANCH, cwd=workspace).stdout.strip()
+        assert _git("rev-parse", f"refs/remotes/origin/{self.BRANCH}", cwd=checkout).stdout.strip() == tip
 
     def test_a_checkout_replaced_by_a_link_has_no_work_to_finalize(self, tmp_path, monkeypatch):
         # The agent may have turned the checkout itself into a link: the
@@ -605,7 +711,9 @@ class TestSurvivingAPause:
                 if any(marker in line.lower() for marker in run_session._INTERRUPTIONS):
                     interrupted = True
             reported = (usage or [])[len(seen) - 1] if usage else {"usage": {"output_tokens": 1}}
-            return code, reported, interrupted
+            # Interrupted, but not by us: these are the CLI's own words,
+            # which is the case with the smaller allowance.
+            return code, reported, interrupted, False
 
         monkeypatch.setattr(run_session, "_drive_agent", fake_drive)
         return seen
@@ -859,11 +967,12 @@ class TestTranscriptLines:
 
 
 class TestHowAPullRequestIsOpened:
-    """A title, and nothing else.
+    """A title, and a body that names nothing but the closed issues.
 
-    The description belongs to whoever writes it. A pull request opened with
-    a generated wall — a summary nobody wrote, the task pasted back, a
-    checklist — buries the diff under boilerplate and tells the reviewer
+    Merging the pull request closes what its body says `closes` — so the
+    body is the list of issues the work is about and nothing else. A
+    generated wall — a summary nobody wrote, the task pasted back, a
+    checklist — would bury the diff under boilerplate and tell the reviewer
     things they already know.
     """
 
@@ -892,13 +1001,28 @@ class TestHowAPullRequestIsOpened:
 
         assert "--draft" not in calls[0]
 
-    def test_the_body_is_empty(self, monkeypatch, tmp_path):
+    def test_a_task_naming_no_issue_leaves_the_body_empty(self, monkeypatch, tmp_path):
         calls = self.capture(monkeypatch, tmp_path)
 
         run_session.open_pull_request("logos/agent/x", "main", "a long task with all its house rules")
 
         body = calls[0][calls[0].index("--body") + 1]
         assert body == ""
+
+    def test_the_body_names_the_issues_the_task_closes(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+        task = (
+            "You have been assigned issue #493. Work on it.\n\n"
+            "Issue #493: The card sparkline overflows its slot\n\n"
+            "The same bug was filed on the mobile view as #948.\n"
+        )
+
+        run_session.open_pull_request("logos/agent/x", "main", task)
+
+        body = calls[0][calls[0].index("--body") + 1]
+        # The list, in order, without the duplicates the task repeats —
+        # and nothing else in the body.
+        assert body == "closes #493, #948"
 
     def test_the_title_still_describes_the_change(self, monkeypatch, tmp_path):
         calls = self.capture(monkeypatch, tmp_path)
@@ -1042,3 +1166,249 @@ class TestWhatASessionReportsSpending:
         run_session._account_for({"usage": {"input_tokens": 10, "output_tokens": 10}})
 
         assert capsys.readouterr().out.strip() == "[usage] in=9000 out=5000"
+
+
+class TestKnowingItWasFrozen:
+    """Being frozen by the platform is not a failed session.
+
+    A pause cuts the container off the model network on purpose, so the
+    answer the agent was reading ends under it. That has to be picked up
+    where it left off — and telling it apart from a real failure used to
+    mean matching the CLI's own prose. The CLI changed the sentence:
+    production printed "The response stopped arriving", which was in no
+    list, and two sessions were failed after an hour of work each, each
+    burning one of the three attempts its request had.
+    """
+
+    def test_the_wording_production_actually_printed_is_recognised(self):
+        line = "API Error: The response stopped arriving. The response above may be incomplete."
+
+        assert any(marker in line.lower() for marker in run_session._INTERRUPTIONS)
+
+    def test_a_pause_during_the_run_is_an_interruption_whatever_was_printed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_STATE_DIR", str(tmp_path))
+        marker = tmp_path / run_session.INTERRUPTION_FILE
+
+        class FakeProcess:
+            stdout = iter([])
+
+            def wait(self):
+                # The runner froze the session while this run was in flight.
+                marker.write_text("paused\n")
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+
+        code, _usage, interrupted, frozen = run_session._drive_agent(["claude"])
+
+        assert code == 1
+        assert interrupted and frozen
+
+    def test_a_pause_from_an_earlier_run_is_not_this_run_s(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_STATE_DIR", str(tmp_path))
+        (tmp_path / run_session.INTERRUPTION_FILE).write_text("paused\n")
+
+        class FakeProcess:
+            stdout = iter([])
+
+            def wait(self):
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+
+        _code, _usage, interrupted, frozen = run_session._drive_agent(["claude"])
+
+        # Otherwise every later failure in a session that was ever paused
+        # would read as an interruption and be retried three times over.
+        assert not interrupted and not frozen
+
+    def test_an_ordinary_failure_is_still_a_failure(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_STATE_DIR", str(tmp_path))
+
+        class FakeProcess:
+            stdout = iter([])
+
+            def wait(self):
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+
+        _code, _usage, interrupted, frozen = run_session._drive_agent(["claude"])
+
+        assert not interrupted and not frozen
+
+    def test_no_state_directory_costs_only_the_stronger_signal(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOGOS_STATE_DIR", str(tmp_path / "not-there"))
+
+        assert run_session._pauses_so_far() == 0
+
+    def test_a_mark_the_agent_writes_to_its_own_artefacts_is_not_a_pause(self, tmp_path, monkeypatch):
+        # The mark's old home was the artefact directory — the agent's to
+        # write. A line it appended between its own invocations used to read
+        # as a platform pause, and with it sixty continuations where an
+        # unexplained failure is owed three. The mark now lives in the
+        # runner's state, mounted read-only, so the same forgery must count
+        # as nothing.
+        state_dir = tmp_path / "state"
+        artefact_dir = tmp_path / "artefacts"
+        state_dir.mkdir()
+        artefact_dir.mkdir()
+        monkeypatch.setenv("LOGOS_STATE_DIR", str(state_dir))
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(artefact_dir))
+        forged = artefact_dir / run_session.INTERRUPTION_FILE
+
+        class FakeProcess:
+            stdout = iter([])
+
+            def wait(self):
+                # The agent writes the line the runner once wrote, into the
+                # directory it can reach.
+                forged.write_text("paused\n")
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+
+        code, _usage, interrupted, frozen = run_session._drive_agent(["claude"])
+
+        assert code == 1
+        assert not interrupted and not frozen
+
+
+class TestHowOftenASessionMayComeBack:
+    """Two kinds of interruption, two numbers.
+
+    Production froze one session twenty-one times in eighty minutes, and
+    every one of those was the platform working as designed: a user wanted a
+    slot and got it. Against a single bound of three, a busy afternoon threw
+    the work away just short of finishing. An interruption nobody claimed is
+    a different thing — that one is a gateway that may be broken, and it
+    stops being retried quickly.
+    """
+
+    @staticmethod
+    def install(monkeypatch, tmp_path, *, frozen: bool, forge: bool = False):
+        """An agent that is cut off on every invocation.
+
+        ``frozen`` puts the pause mark where the runner writes it — the
+        state directory, read-only for the agent. ``forge`` puts it where
+        the agent can write it — its own artefacts — instead, the line the
+        mark used to live beside.
+        """
+        state_dir = tmp_path / "state"
+        artefact_dir = tmp_path / "artefacts"
+        state_dir.mkdir()
+        artefact_dir.mkdir()
+        monkeypatch.setenv("LOGOS_STATE_DIR", str(state_dir))
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(artefact_dir))
+        monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "notes")
+        runs: list = []
+        marker = (state_dir if frozen else artefact_dir) / run_session.INTERRUPTION_FILE
+
+        class FakeProcess:
+            def __init__(self):
+                # A fresh iterator per invocation: a class-level one is
+                # exhausted after the first run and every later run would
+                # read nothing. A forged pause, like a real one, prints
+                # nothing: the exit code is the only thing on the table.
+                self.stdout = iter([] if (frozen or forge) else ["API Error: Connection error."])
+
+            def wait(self):
+                runs.append(1)
+                if frozen or forge:
+                    with marker.open("a") as handle:
+                        handle.write("paused\n")
+                return 1
+
+        monkeypatch.setattr(run_session.subprocess, "Popen", lambda *a, **k: FakeProcess())
+        monkeypatch.setattr(run_session, "log", lambda *a, **k: None)
+        return runs
+
+    def test_a_session_the_runner_froze_keeps_coming_back(self, tmp_path, monkeypatch):
+        runs = self.install(monkeypatch, tmp_path, frozen=True)
+
+        with pytest.raises(RuntimeError) as failure:
+            run_session.run_agent("Fix the alignment.")
+
+        assert len(runs) == run_session._MAX_PAUSED_CONTINUATIONS + 1
+        # The ending says which of the two it was, so nobody reads it as
+        # "the agent failed".
+        assert "cut off" in str(failure.value) and "pauses" in str(failure.value)
+
+    def test_an_unexplained_interruption_stops_quickly(self, tmp_path, monkeypatch):
+        runs = self.install(monkeypatch, tmp_path, frozen=False)
+
+        with pytest.raises(RuntimeError) as failure:
+            run_session.run_agent("Fix the alignment.")
+
+        assert len(runs) == run_session._MAX_CONTINUATIONS + 1
+        assert "unexplained" in str(failure.value)
+
+    def test_a_plain_failure_is_not_retried_at_all(self, tmp_path, monkeypatch):
+        runs = self.install(monkeypatch, tmp_path, frozen=False)
+        monkeypatch.setattr(run_session, "_INTERRUPTIONS", ("nothing that appears",))
+
+        with pytest.raises(RuntimeError, match="agent exited with code 1"):
+            run_session.run_agent("Fix the alignment.")
+
+        assert len(runs) == 1
+
+    def test_a_pause_the_agent_writes_its_own_is_not_a_pause(self, tmp_path, monkeypatch):
+        # While the mark lived in the artefact directory, this was how a
+        # session bought its budget: a plain failure, and a line appended
+        # where only the runner was supposed to write. The same behaviour
+        # must now end after one invocation, the way a plain failure does.
+        runs = self.install(monkeypatch, tmp_path, frozen=False, forge=True)
+
+        with pytest.raises(RuntimeError, match="agent exited with code 1"):
+            run_session.run_agent("Fix the alignment.")
+
+        assert len(runs) == 1
+
+    def test_the_bound_for_pauses_is_the_larger_of_the_two(self):
+        # The whole point: being useful on a busy afternoon must not be
+        # rarer than a gateway being broken.
+        assert run_session._MAX_PAUSED_CONTINUATIONS > run_session._MAX_CONTINUATIONS
+
+
+class TestWhatCommitThisSessionIsAnswerableFor:
+    """A session is answerable for the commit it made, and for no other.
+
+    A session that only answered a question pushes nothing, and its branch
+    has no remote tip. The finalizer used to fall back to `HEAD` there —
+    which in a checkout of the default branch is *main's* tip. The runner
+    then watched main's checks, found them red for reasons that had nothing
+    to do with the session, and took the work up again; the follow-up failed
+    at checkout, took the work up again, and the request ran out of
+    attempts. All from a commit the session never made.
+    """
+
+    @staticmethod
+    def repo(tmp_path):
+        """A checkout on a branch that was never pushed."""
+        checkout = tmp_path / "repo"
+        checkout.mkdir()
+        _git("init", "--quiet", "--initial-branch", "main", cwd=checkout)
+        _git("config", "user.email", "a@b.c", cwd=checkout)
+        _git("config", "user.name", "a", cwd=checkout)
+        (checkout / "file.txt").write_text("hello\n")
+        _git("add", "-A", cwd=checkout)
+        _git("commit", "--quiet", "-m", "main's tip", cwd=checkout)
+        _git("checkout", "--quiet", "-B", "logos/agent/x/session-9", cwd=checkout)
+        return checkout
+
+    def test_a_branch_with_no_remote_tip_names_no_commit(self, tmp_path, monkeypatch):
+        checkout = self.repo(tmp_path)
+        monkeypatch.setattr(run_session, "CHECKOUT", checkout)
+
+        assert run_session._ref_sha("refs/remotes/origin/logos/agent/x/session-9") is None
+        # And HEAD does resolve — which is exactly the value that must not
+        # be reported as this session's commit.
+        assert run_session._ref_sha("HEAD") is not None
+
+    def test_the_branch_s_own_tip_is_reported_when_it_has_one(self, tmp_path, monkeypatch):
+        checkout = self.repo(tmp_path)
+        monkeypatch.setattr(run_session, "CHECKOUT", checkout)
+        # As a fetch would leave it: the branch exists on the remote.
+        _git("update-ref", "refs/remotes/origin/logos/agent/x/session-9", "HEAD", cwd=checkout)
+
+        assert run_session._ref_sha("refs/remotes/origin/logos/agent/x/session-9") == run_session._ref_sha("HEAD")

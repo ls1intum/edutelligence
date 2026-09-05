@@ -594,6 +594,7 @@ async def create_session(
     open_pull_request: bool,
     deploy_to_dev: bool,
     screenshot_paths: Sequence[str],
+    no_push: bool = False,
     trigger_kind: str | None = None,
     trigger_ref: str | None = None,
     branch: str | None = None,
@@ -626,12 +627,13 @@ async def create_session(
                     INSERT INTO agent_sessions
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
-                         trigger_kind, trigger_ref, branch_name, reply_target,
-                         reaction_target, priority, priority_reason)
+                         no_push, trigger_kind, trigger_ref, branch_name,
+                         reply_target, reaction_target, priority, priority_reason)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
                          :open_pr, :deploy, CAST(:paths AS jsonb),
-                         :trigger_kind, :trigger_ref, :branch, :reply_target,
+                         :no_push, :trigger_kind, :trigger_ref, :branch,
+                         :reply_target,
                          :reaction_target,
                          :priority, :priority_reason)
                     RETURNING id
@@ -645,6 +647,10 @@ async def create_session(
                     "open_pr": open_pull_request,
                     "deploy": deploy_to_dev,
                     "paths": json.dumps(list(screenshot_paths)),
+                    # Set only for the sessions that answer from a checkout
+                    # they may not write to: the finalizer is told by the
+                    # row, not by the task text, to leave the remote alone.
+                    "no_push": no_push,
                     "trigger_kind": trigger_kind,
                     "trigger_ref": trigger_ref,
                     # Set only when the work belongs on a branch that already
@@ -869,8 +875,8 @@ _SESSION_SELECT = """
            s.model, s.branch_name, s.pr_url, s.created_by, s.created_at,
            s.started_at, s.finished_at, s.exit_code, s.error,
            s.container_id, s.open_pull_request, s.deploy_to_dev,
-           s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
-           s.reaction_target,
+           s.screenshot_paths, s.no_push, s.trigger_kind, s.trigger_ref,
+           s.reply_target, s.reaction_target,
            s.priority, s.priority_reason, s.environment_notes,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
@@ -1058,6 +1064,20 @@ async def next_queued_session(*, include_triggered: bool = True) -> dict[str, An
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
                            )
+                       -- Nor while another session holds the same branch.
+                       -- Two triggers on one pull request — a review and a
+                       -- question, minutes apart — are two requests about
+                       -- one piece of work, and two sessions in different
+                       -- workspaces would each commit to that branch from a
+                       -- checkout taken before the other one pushed. One
+                       -- waits; its checkout then contains the other's work.
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions same
+                              WHERE same.branch_name IS NOT NULL
+                                AND same.branch_name = s.branch_name
+                                AND same.id <> s.id
+                                AND same.status = ANY(:occupying)
+                           )
                      ORDER BY s.priority DESC, s.created_at
                      LIMIT 1
                     """
@@ -1091,6 +1111,14 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
     once, counted *inside this statement*. Counting it beforehand and
     claiming afterwards leaves a window in which two schedulers both see
     room — the automation would then take the places kept for people.
+
+    A session with a branch holds that branch's advisory lock while it
+    claims: the row lock alone cannot keep two claims on one branch apart —
+    each locks only its own row, and the branch check sees the other still
+    queued. The branch is written at insert and never changed, so the peek
+    names exactly the branch the claim checks; the lock is held to the
+    end of this transaction, and the check below re-reads the branch only
+    after the previous holder has committed.
     """
     async with sessionmaker()() as db:
         if trigger_quota is not None:
@@ -1100,6 +1128,17 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
             # below, taking the places kept for people. Held to the end of
             # this transaction, which is the claim.
             await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-admission'))"))
+        branch = (
+            await db.execute(
+                text("SELECT s.branch_name FROM agent_sessions s WHERE s.id = :session_id"),
+                {"session_id": session_id},
+            )
+        ).scalar_one_or_none()
+        if branch is not None:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-branch:' || :branch))"),
+                {"branch": branch},
+            )
         claimed = (
             await db.execute(
                 text(
@@ -1111,6 +1150,20 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
+                           )
+                       -- Nor while another session holds the same branch.
+                       -- Two triggers on one pull request — a review and a
+                       -- question, minutes apart — are two requests about
+                       -- one piece of work, and two sessions in different
+                       -- workspaces would each commit to that branch from a
+                       -- checkout taken before the other one pushed. One
+                       -- waits; its checkout then contains the other's work.
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions same
+                              WHERE same.branch_name IS NOT NULL
+                                AND same.branch_name = s.branch_name
+                                AND same.id <> s.id
+                                AND same.status = ANY(:occupying)
                            )
                        AND (
                              s.trigger_ref IS NULL
@@ -1152,86 +1205,154 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
     return dict(row) if row else None
 
 
+# The conditions under which a queued session may be claimed, shared by the
+# branch peek and the claim below so the two cannot drift apart. A session
+# is startable only when no other session is already occupying its workspace
+# — the workspace is one working copy on one volume, so two concurrent
+# sessions in it would write over each other — and when no other session
+# occupies its branch, for the same reason one level up: two workspaces
+# committing to one branch from checkouts taken before the other pushed.
+# Parallelism comes from running several *workspaces*, not several sessions
+# per workspace or per branch.
+_CLAIMABLE = """
+    s.status = 'queued'
+      -- The automation may fill the platform, but not the
+      -- last places in it: with its quota used up, only
+      -- work a person queued is claimable.
+      AND (:include_triggered OR s.trigger_ref IS NULL)
+      AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions busy
+             WHERE busy.workspace_id = s.workspace_id
+               AND busy.status = ANY(:occupying)
+           )
+      -- Nor while another session holds the same branch.
+      -- Two triggers on one pull request — a review and a
+      -- question, minutes apart — are two requests about
+      -- one piece of work, and two sessions in different
+      -- workspaces would each commit to that branch from a
+      -- checkout taken before the other one pushed. One
+      -- waits; its checkout then contains the other's work.
+      AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions same
+             WHERE same.branch_name IS NOT NULL
+               AND same.branch_name = s.branch_name
+               AND same.id <> s.id
+               AND same.status = ANY(:occupying)
+           )
+      -- One candidate per workspace, so a workspace cannot
+      -- take several slots in a pass and then collide with
+      -- itself — and it is that workspace's most urgent
+      -- queued session, oldest among equals. Picking the
+      -- oldest outright would hide a security fix behind a
+      -- typo that happened to be queued into the same
+      -- checkout first, and the global order below could
+      -- never correct it.
+      AND s.id = (
+            SELECT peer.id FROM agent_sessions peer
+             WHERE peer.workspace_id = s.workspace_id
+               AND peer.status = 'queued'
+               -- The same trigger rule as the outer predicate: a pass that
+               -- may not take triggered rows must not let a triggered row
+               -- stand in as the workspace's best candidate either, or
+               -- every manual row behind it fails this comparison and the
+               -- workspace goes unclaimed while the quota is full.
+               AND (:include_triggered OR peer.trigger_ref IS NULL)
+             ORDER BY peer.priority DESC, peer.created_at, peer.id
+             LIMIT 1
+           )
+"""
+
+
 async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -> list[dict[str, Any]]:
     """Take up to `limit` startable queued sessions and mark them starting.
 
-    A session is startable only when no other session is already occupying its
-    workspace: the workspace is one working copy on one volume, so two
-    concurrent sessions in it would write over each other. Parallelism comes
-    from running several *workspaces*, not several sessions per workspace.
-
     ``FOR UPDATE SKIP LOCKED`` makes this safe to call from more than one
     replica: two schedulers never claim the same session.
+
+    Branches are the second axis the row locks cannot cover: one statement
+    can select several sessions that commit to one branch, and two replicas
+    can each select one. The peek therefore names every branch the pass
+    may touch, and those advisory locks are taken — sorted, so two passes
+    locking different sets cannot deadlock — before the claim re-checks
+    everything under the row locks. The claim selects *every* candidate,
+    not `limit`: dedup happens before the limit, so a second session of one
+    branch spends no slot the platform would never admit it to, and null
+    branches keep every slot they earn.
     """
     if limit <= 0:
         return []
     async with sessionmaker()() as db:
-        ids = (
+        params = {
+            "include_triggered": include_triggered,
+            "occupying": [
+                SessionStatus.STARTING.value,
+                SessionStatus.RUNNING.value,
+                SessionStatus.PAUSED.value,
+                # The finalizer runs git in the working copy on
+                # the same volume: a new session admitted during
+                # finalization would write over it.
+                SessionStatus.FINALIZING.value,
+            ],
+        }
+        candidates = (
             (
                 await db.execute(
                     text(
-                        """
-                    SELECT s.id FROM agent_sessions s
-                     WHERE s.status = 'queued'
-                       -- The automation may fill the platform, but not the
-                       -- last places in it: with its quota used up, only
-                       -- work a person queued is claimable.
-                       AND (:include_triggered OR s.trigger_ref IS NULL)
-                       AND NOT EXISTS (
-                             SELECT 1 FROM agent_sessions busy
-                              WHERE busy.workspace_id = s.workspace_id
-                                AND busy.status = ANY(:occupying)
-                           )
-                       -- One candidate per workspace, so a workspace cannot
-                       -- take several slots in a pass and then collide with
-                       -- itself — and it is that workspace's most urgent
-                       -- queued session, oldest among equals. Picking the
-                       -- oldest outright would hide a security fix behind a
-                       -- typo that happened to be queued into the same
-                       -- checkout first, and the global order below could
-                       -- never correct it.
-                       AND s.id = (
-                             SELECT peer.id FROM agent_sessions peer
-                              WHERE peer.workspace_id = s.workspace_id
-                                AND peer.status = 'queued'
-                              ORDER BY peer.priority DESC, peer.created_at, peer.id
-                              LIMIT 1
-                           )
-                     -- Most urgent first, oldest among equals: sessions are
-                     -- admitted one per capacity reading, so this order is
-                     -- what the platform works on while it is busy.
-                     ORDER BY s.priority DESC, s.created_at
-                     LIMIT :limit
-                     FOR UPDATE OF s SKIP LOCKED
-                    """
+                        "SELECT s.id, s.branch_name FROM agent_sessions s WHERE "
+                        + _CLAIMABLE
+                        # Most urgent first, oldest among equals: sessions
+                        # are admitted one per capacity reading, so this
+                        # order is what the platform works on while it is
+                        # busy. The id tie-break keeps the order below
+                        # deterministic when two sessions share a moment.
+                        + " ORDER BY s.priority DESC, s.created_at, s.id"
                     ),
-                    {
-                        "limit": limit,
-                        "include_triggered": include_triggered,
-                        "occupying": [
-                            SessionStatus.STARTING.value,
-                            SessionStatus.RUNNING.value,
-                            SessionStatus.PAUSED.value,
-                            # The finalizer runs git in the working copy on
-                            # the same volume: a new session admitted during
-                            # finalization would write over it.
-                            SessionStatus.FINALIZING.value,
-                        ],
-                    },
+                    params,
                 )
             )
-            .scalars()
+            .mappings()
             .all()
         )
-        if not ids:
+        for branch in sorted({c["branch_name"] for c in candidates if c["branch_name"] is not None}):
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-branch:' || :branch))"),
+                {"branch": branch},
+            )
+        claimed = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT s.id, s.branch_name FROM agent_sessions s WHERE "
+                        + _CLAIMABLE
+                        + " ORDER BY s.priority DESC, s.created_at, s.id"
+                        + " FOR UPDATE OF s SKIP LOCKED"
+                    ),
+                    params,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        taken: list[int] = []
+        seen_branches: set[str] = set()
+        for candidate in claimed:
+            if len(taken) >= limit:
+                break
+            branch = candidate["branch_name"]
+            if branch is not None:
+                if branch in seen_branches:
+                    continue
+                seen_branches.add(branch)
+            taken.append(candidate["id"])
+        if not taken:
             await db.rollback()
             return []
         await db.execute(
             text("UPDATE agent_sessions SET status = 'starting' WHERE id = ANY(:ids)"),
-            {"ids": list(ids)},
+            {"ids": list(taken)},
         )
         rows = (
-            (await db.execute(text(_SESSION_SELECT + " WHERE s.id = ANY(:ids)"), {"ids": list(ids)})).mappings().all()
+            (await db.execute(text(_SESSION_SELECT + " WHERE s.id = ANY(:ids)"), {"ids": list(taken)})).mappings().all()
         )
         await db.commit()
     return [dict(r) for r in rows]

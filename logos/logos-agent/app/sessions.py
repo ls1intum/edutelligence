@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
-from .config import REPLY_FILE, settings
+from .config import INTERRUPTION_FILE, REPLY_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -152,6 +152,16 @@ def artifact_dir(session_id: int) -> Path:
     return Path(settings.artifact_root) / str(session_id)
 
 
+def state_dir(session_id: int) -> Path:
+    """The runner's own per-session state.
+
+    On the runner's filesystem, not on the artefact volume the agent writes
+    to: the container mounts this directory read-only, so what the runner
+    says into it — the pause mark — cannot be written back by the session.
+    """
+    return Path(settings.state_root) / str(session_id)
+
+
 def _give_to_session_user(path: Path) -> None:
     """Hand a host-side artefact path to the unprivileged session user.
 
@@ -260,6 +270,10 @@ class SessionManager:
         # intent itself is on the row; this only keeps a resumed follow-up
         # from starting a second poller for a session already being polled.
         self._watching_checks: set[int] = set()
+        # What a helper printed before it failed, kept from the moment its
+        # container is read to the moment the failure is raised — the
+        # container is removed in between.
+        self._last_helper_output: dict[int, str] = {}
         self._scheduler_task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         # Serialises admission so two scheduler passes cannot both decide there
@@ -786,9 +800,53 @@ class SessionManager:
         # error on resume and retries, which is the cheapest possible way to
         # lose an in-flight answer.
         await self._detach_from_model_gateway(sid, container_id)
+        self._say_it_was_interrupted(sid)
         if await db.transition_session(sid, SessionStatus.PAUSED):
             await db.add_event(sid, EventKind.CAPACITY, {"decision": "pause", "reason": reason})
             logger.info("paused session %s: %s", sid, reason)
+
+    def _say_it_was_interrupted(self, session_id: int) -> None:
+        """Leave a mark the session can read when it thaws.
+
+        The session has to tell "the platform froze me and my answer died
+        with it" from "the model refused" — the first is picked up where it
+        left off, the second is a failure. It used to tell them apart by
+        matching the CLI's own prose, and the CLI changed it: production
+        printed "The response stopped arriving", which was in no list, so
+        two sessions were failed after an hour of work each and each burned
+        one of the three attempts its request had.
+
+        So the runner says so itself. It is the one that froze the session;
+        it does not need to recognise a sentence to know that. The mark goes
+        into the state directory the container mounts read-only — not into
+        the artefacts the agent writes — because a line the agent could
+        append would let it reclassify its own failures as platform pauses
+        and draw sixty continuations where it is owed three. Best effort,
+        because a mark that cannot be written costs only the older, weaker
+        signal — and the pause itself must not fail over it.
+        """
+        marker = state_dir(session_id) / INTERRUPTION_FILE
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            # mkdir honours the runner's umask, and under a 077 one the
+            # directory comes out 0700: the agent user cannot even
+            # traverse it, so the mark sits unread and the session spends
+            # its unexplained-interruption budget on a pause the platform
+            # is owed sixty of. Traversal is the only right this mount
+            # needs to give away — writing stays refused by the read-only
+            # mount, not by ownership.
+            marker.parent.chmod(0o755)
+            with marker.open("a", encoding="utf-8") as handle:
+                handle.write("paused\n")
+            # The container's agent user has to read the mark; the write
+            # protection is the read-only mount, not ownership, so the file
+            # only needs to be world-readable, no matter the runner's umask.
+            os.chmod(marker, 0o644)
+        except (OSError, ValueError) as exc:
+            # ValueError as well as OSError: a state root that is not a
+            # usable path at all fails before the filesystem is reached, and
+            # giving capacity back matters more than being able to explain it.
+            logger.info("could not mark session %s as interrupted: %s", session_id, exc)
 
     async def _detach_from_model_gateway(self, session_id: int, container_id: str) -> None:
         try:
@@ -959,6 +1017,14 @@ class SessionManager:
             directory = artifact_dir(sid)
             directory.mkdir(parents=True, exist_ok=True)
             _give_to_session_user(directory)
+            # The runner's state for this session, mounted read-only into the
+            # container. Best effort, for the same reason the mark itself is:
+            # a state directory that cannot be created degrades to the older,
+            # weaker signal, and the launch must not fail over it.
+            try:
+                state_dir(sid).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.info("could not create the state directory for session %s: %s", sid, exc)
             # The pictures a request carries, fetched by the side that has a
             # token and a network. An issue whose whole description is a
             # screenshot is unreadable to the sandbox otherwise.
@@ -1012,6 +1078,9 @@ class SessionManager:
                 ),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
+                # The agent's container is the one that reads the pause mark;
+                # the helper phases never do, and stay without the mount.
+                state_host_path=str(state_dir(sid)),
                 session_id=sid,
             )
             # Boundary: the container exists but has not run. Give it back
@@ -1187,6 +1256,12 @@ class SessionManager:
             # /artifacts is its output root; there is no per-session prefix
             # to get wrong.
             "LOGOS_ARTIFACT_DIR": "/artifacts",
+            # The runner's own state for this session, mounted read-only.
+            # The pause mark lives there rather than in the artefacts: the
+            # artefact directory is writable for the agent, and a line it
+            # could append would let it reclassify its own failures as
+            # platform pauses — sixty continuations where it is owed three.
+            "LOGOS_STATE_DIR": "/logos/state",
             # Where an answer goes when the session was asked something. The
             # task text names the same file; this is what makes it available
             # to anything else in the container that wants it.
@@ -1266,6 +1341,14 @@ class SessionManager:
                 logger.warning("helper %s for session %s timed out; stopping it", phase, session_id)
                 await docker_engine.stop_container(container_id)
                 code = 124
+            if code != 0:
+                # The exit code used to be the whole protocol, and it says
+                # nothing: "checkout preparation failed (exit 1)" reached a
+                # thread and a page while the one thing that could explain
+                # it — what the helper printed — was removed with the
+                # container in the block below. Read before that happens,
+                # and only on the path where somebody will want it.
+                self._last_helper_output[session_id] = await self._what_it_printed(container_id)
             return code
         finally:
             self._helpers.pop(session_id, None)
@@ -1274,6 +1357,26 @@ class SessionManager:
                     await docker_engine.remove_container(helper.container_id)
                 except Exception:
                     logger.warning("could not remove %s helper container for session %s", phase, session_id)
+
+    @staticmethod
+    async def _what_it_printed(container_id: str, *, lines: int = 12) -> str:
+        """The last thing a helper said before it exited, for the error.
+
+        Bounded twice over — the last few lines, each one shortened —
+        because this ends up in a session row, on a page, and in a comment
+        on a thread. A git failure says what it was in one line; a stack
+        trace says it in its last.
+        """
+        kept: list[str] = []
+        try:
+            async for line in docker_engine.stream_logs(container_id, follow=False):
+                text = line.strip()
+                if text:
+                    kept.append(text[:200])
+                    del kept[:-lines]
+        except Exception as exc:
+            return f"(its output could not be read: {exc})"
+        return " / ".join(kept)
 
     @staticmethod
     async def _continues_earlier_work(session: dict[str, Any], branch: str) -> bool:
@@ -1333,7 +1436,8 @@ class SessionManager:
             artifact_host_path=artifact_host_path,
         )
         if code != 0:
-            raise RuntimeError(f"checkout preparation failed (exit {code})")
+            said = self._last_helper_output.pop(session["id"], "")
+            raise RuntimeError(f"checkout preparation failed (exit {code}){f': {said}' if said else ''}")
 
     async def _finalize(self, session_id: int) -> bool:
         """Phase three: commit, push, and open the pull request, if asked.
@@ -1345,7 +1449,22 @@ class SessionManager:
         than settled as a success with a deploy attached.
         """
         session = await db.get_session(session_id)
-        if not session or not session.get("branch_name"):
+        if not session:
+            logger.warning("no session %s to finalize", session_id)
+            return False
+        if session.get("no_push"):
+            # A read-only session: the row says its work is not to reach the
+            # repository, so the credentialed finalization is not run at
+            # all — not skipped after it started, refused before it did.
+            # The launch did give it a local branch to work in, and the
+            # checkout it answered from may hold unpushed edits; none of
+            # that may travel to the remote. The reply it owes is in the
+            # artifact directory, and the runner posts it from there
+            # without a push. "The work reached the repository" is true by
+            # construction: there is nothing to land.
+            logger.info("session %s is read-only; leaving the remote alone", session_id)
+            return True
+        if not session.get("branch_name"):
             logger.warning("no branch recorded for session %s; cannot finalize", session_id)
             return False
         workspace = await db.get_workspace(session["workspace_id"])
@@ -1750,6 +1869,9 @@ class SessionManager:
                 model=session.get("model"),
                 created_by=by,
                 open_pull_request=bool(session.get("open_pull_request")),
+                # Read-only is a property of the work, not the attempt: a
+                # retried answer still must not push.
+                no_push=bool(session.get("no_push")),
                 # Deploying is a decision per attempt, not a property of the
                 # work.
                 deploy_to_dev=False,
@@ -1835,7 +1957,13 @@ class SessionManager:
             # A finalizer that fails fails the session — nothing landed, and
             # a deploy must not be dispatched behind it.
             if not await self._finalize(session_id):
+                said = self._last_helper_output.pop(session_id, "")
                 error = "finalization failed: the agent's work did not reach the repository"
+                if said:
+                    # The same reason the preparation failure carries one: a
+                    # push that was refused says why, and the sentence above
+                    # says only that something was.
+                    error = f"{error}: {said}"
         result = self._read_result(session_id)
         succeeded = exit_code == 0 and not error
 
@@ -1888,11 +2016,17 @@ class SessionManager:
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
 
         workspace_id, settled_branch = session_row.get("workspace_id"), session_row.get("branch_name")
-        if succeeded and workspace_id and settled_branch:
+        if succeeded and workspace_id and settled_branch and not session_row.get("no_push"):
             # The workspace now belongs to this branch. That is what lets a
             # review on the pull request find this working copy again — and
             # with it the conversation that produced the change — instead of
             # starting somewhere else from main.
+            #
+            # A read-only session's branch exists nowhere but the volume it
+            # was worked in: pointing the workspace at it would make the
+            # next session's preparation fetch a ref the remote never had.
+            # The workspace keeps the base it was created with — the pull
+            # request it was created to read.
             try:
                 await db.set_workspace_base_branch(int(workspace_id), str(settled_branch))
             except Exception as exc:

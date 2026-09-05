@@ -47,6 +47,16 @@ def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 # runner reads it and posts what it finds. It lives here rather than in
 # either of those modules so neither has to import the other.
 REPLY_FILE = "reply.md"
+
+# The file the runner appends to whenever it freezes a session, relative to
+# the session's state directory — not the artefact directory: the state
+# directory is the runner's own, mounted into the session read-only, so the
+# session can read the mark but not add to it. The other half of the same
+# contract, in the other direction: the runner is the one that cuts a
+# session off the model, and this is how it says so to the session that has
+# to survive it. Read by the session on the way out of an invocation, never
+# by the agent.
+INTERRUPTION_FILE = "interruptions"
 # The one line the agent writes about what it changed. The runner commits
 # with it, because the agent is the only one that knows what the change is —
 # and because a commit subject derived from the task reads like the task.
@@ -266,6 +276,11 @@ class Settings:
     # with the session containers.
     artifact_root: str = os.getenv("LOGOS_AGENT_ARTIFACT_ROOT", "/var/lib/logos-agent/artifacts")
     artifact_volume: str = os.getenv("LOGOS_AGENT_ARTIFACT_VOLUME", "logos_agent_artifacts")
+    # Where the runner keeps its own per-session state. Deliberately not on
+    # the artefact volume: the session container mounts this directory
+    # read-only, so a mark the runner writes into it cannot be written back
+    # by the agent that reads it.
+    state_root: str = os.getenv("LOGOS_AGENT_STATE_ROOT", "/var/lib/logos-agent/state")
 
     @property
     def session_token_is_runner_token(self) -> bool:

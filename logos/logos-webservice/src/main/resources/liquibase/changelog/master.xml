@@ -27,5 +27,6 @@
     <include file="liquibase/changelog/021_agent_controls.xml"/>
     <include file="liquibase/changelog/022_agent_instructions.xml"/>
     <include file="liquibase/changelog/023_token_cost_decomposition.xml"/>
+    <include file="liquibase/changelog/024_agent_session_no_push.xml"/>
 
 </databaseChangeLog>
