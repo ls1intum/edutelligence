@@ -117,6 +117,7 @@ def test_ingestion_dto_fails_closed_on_public_channel():
         conversationId="c1",
         postId="post-1",
         messageId="answer-1",
+        version=1,
         thread=_thread("post-1", "answer-1"),
         source=CourseMemorySource.THREAD_RESOLVED,
         settings=_settings(),
@@ -130,6 +131,7 @@ def _public_channel_dto(value):
         conversationId="c1",
         postId="post-1",
         messageId="answer-1",
+        version=1,
         thread=_thread("post-1", "answer-1"),
         source=CourseMemorySource.THREAD_RESOLVED,
         isPublicChannel=value,
@@ -162,6 +164,7 @@ def test_ingestion_requires_settings():
             conversationId="c1",
             postId="post-1",
             messageId="answer-1",
+            version=1,
             thread=_thread("post-1", "answer-1"),
             source=CourseMemorySource.THREAD_RESOLVED,
             settings=None,
@@ -175,7 +178,7 @@ def test_deletion_requires_settings():
 
 def test_deletion_dto_accepts_settings():
     dto = CourseMemoryDeletionExecutionDto(
-        courseId=1, postId="post-1", settings=_settings()
+        courseId=1, postId="post-1", version=1, settings=_settings()
     )
     assert dto.post_id == "post-1"
     assert dto.settings.artemis_base_url == "http://localhost:8080"
@@ -193,6 +196,7 @@ def test_deletion_requires_exactly_one_scope():
             {
                 "courseId": 1,
                 "postId": "7",
+                "version": 1,
                 "conversationId": "c1",
                 "settings": _settings(),
             }
@@ -213,6 +217,7 @@ def _correction_dto(existing_answer):
         conversationId="c1",
         postId="post-1",
         messageId="answer-1",
+        version=1,
         thread=_thread("post-1", "answer-1"),
         source=CourseMemorySource.IRIS_CORRECTED,
         existingAnswer=existing_answer,
@@ -224,7 +229,7 @@ def test_correction_requires_existing_answer():
     # A correction is stored as tutor-verified; without the tutor's actual edit
     # the pipeline would persist LLM output under that label, so reject it.
     for blank in (None, "", "   "):
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="IRIS_CORRECTED"):
             _correction_dto(blank)
 
 
@@ -233,12 +238,118 @@ def test_correction_accepts_non_blank_existing_answer():
     assert dto.existing_answer == "The tutor's corrected answer."
 
 
+def _dto_with_source(source, existing_answer=None):
+    return CourseMemoryIngestionExecutionDTO(
+        courseId=1,
+        conversationId="c1",
+        postId="post-1",
+        messageId="answer-1",
+        version=1,
+        thread=_thread("post-1", "answer-1"),
+        source=source,
+        existingAnswer=existing_answer,
+        settings=_settings(),
+    )
+
+
+def test_approved_draft_requires_the_approved_text_verbatim():
+    # IRIS_AUTO is a draft the tutor approved unchanged, and it is stored as
+    # tutor-verified on the strength of that approval. Without the exact text the
+    # extractor's paraphrase would be stored — and later served — as wording the
+    # tutor signed off on, which they never saw. Same rule as for corrections.
+    for blank in (None, "", "   "):
+        with pytest.raises(ValidationError, match="IRIS_AUTO"):
+            _dto_with_source(CourseMemorySource.IRIS_AUTO, blank)
+
+
+def test_approved_draft_with_verbatim_text_is_accepted():
+    dto = _dto_with_source(CourseMemorySource.IRIS_AUTO, "The approved draft.")
+    assert dto.existing_answer == "The approved draft."
+
+
+def test_sources_without_a_dashboard_signoff_need_no_verbatim_answer():
+    # TUTOR_WRITTEN and THREAD_RESOLVED are extracted from the flagged thread
+    # messages; there is no single approved wording to carry.
+    for source in (
+        CourseMemorySource.TUTOR_WRITTEN,
+        CourseMemorySource.THREAD_RESOLVED,
+    ):
+        assert _dto_with_source(source).existing_answer is None
+
+
+def _versioned_dto(**overrides):
+    fields = dict(
+        courseId=1,
+        conversationId="c1",
+        postId="post-1",
+        messageId="answer-1",
+        version=1,
+        thread=_thread("post-1", "answer-1"),
+        source=CourseMemorySource.THREAD_RESOLVED,
+        settings=_settings(),
+    )
+    fields.update(overrides)
+    return CourseMemoryIngestionExecutionDTO(**fields)
+
+
+def test_ingestion_requires_a_version():
+    # Without it the write cannot be ordered against a retraction or a newer edit
+    # of the same thread; an unordered write is exactly the resurrection bug.
+    payload = _versioned_dto().model_dump(by_alias=True)
+    del payload["version"]
+    with pytest.raises(ValidationError, match="version"):
+        CourseMemoryIngestionExecutionDTO.model_validate(payload)
+
+
+def test_ingestion_rejects_a_non_positive_version():
+    # Artemis mints versions from 1 upwards; 0 or a negative number is a client bug,
+    # and accepting it would make the write lose to every stored object.
+    for bad in (0, -1):
+        with pytest.raises(ValidationError, match="version"):
+            _versioned_dto(version=bad)
+
+
+def test_ingestion_accepts_a_java_long_max_version():
+    # The largest value Artemis can ever send has to survive the wire and the
+    # comparison against the stored int64.
+    assert _versioned_dto(version=9223372036854775807).version == 9223372036854775807
+
+
+def test_thread_deletion_requires_a_version():
+    # A thread retraction becomes a versioned tombstone; without the version it
+    # could not tell a stale ingestion from a newer re-resolution.
+    with pytest.raises(ValidationError, match="version"):
+        CourseMemoryDeletionExecutionDto.model_validate(
+            {"courseId": 1, "postId": "post-1", "settings": _settings()}
+        )
+
+
+def test_thread_deletion_carries_its_version():
+    dto = CourseMemoryDeletionExecutionDto.model_validate(
+        {"courseId": 1, "postId": "post-1", "version": 9, "settings": _settings()}
+    )
+    assert dto.version == 9
+
+
+def test_channel_and_course_deletions_need_no_version():
+    # Both delete by filter across many threads; there is no per-thread version to
+    # compare against, and Artemis sends none.
+    channel = CourseMemoryDeletionExecutionDto.model_validate(
+        {"courseId": 1, "conversationId": "c1", "settings": _settings()}
+    )
+    course = CourseMemoryDeletionExecutionDto.model_validate(
+        {"courseId": 1, "wholeCourse": True, "settings": _settings()}
+    )
+    assert channel.version is None and course.version is None
+
+
 def _thread_dto(thread, message_id="answer-1"):
     return CourseMemoryIngestionExecutionDTO(
         courseId=1,
         conversationId="c1",
         postId="post-1",
         messageId=message_id,
+        version=1,
         thread=thread,
         source=CourseMemorySource.TUTOR_WRITTEN,
         settings=_settings(),

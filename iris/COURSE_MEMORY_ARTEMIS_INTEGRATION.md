@@ -56,6 +56,7 @@ the requested variant/models aren't available on Pyris — handle gracefully (lo
   "conversationId": "12345", // string, REQUIRED — the CHANNEL id (backlink only)
   "postId": "67888", // string, REQUIRED — thread root post id; UPSERT KEY
   "messageId": "67890", // string, REQUIRED — answer that triggered this event (provenance)
+  "version": 12, // int >= 1, REQUIRED — monotonic per-thread operation version, see §2b
   "source": "THREAD_RESOLVED", // enum, REQUIRED — see below
   "isPublicChannel": true, // bool — MUST be a real JSON boolean and true
 
@@ -101,22 +102,23 @@ the requested variant/models aren't available on Pyris — handle gracefully (lo
 
 ### Field semantics / invariants
 
-| Field                       | Type       | Notes                                                                                                                                                                                                                                                                |
-| --------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `courseId`                  | int        | Required. Scopes every search; entries are never returned cross-course.                                                                                                                                                                                              |
-| `conversationId`            | **string** | Artemis ids are `Long` — **stringify them**. The **channel** the thread lives in, not the thread itself. Backlinking only.                                                                                                                                           |
-| `postId`                    | **string** | **Stringify. This is the dedup/upsert key**: Pyris maps `(courseId, postId)` to a deterministic UUID. Use the **thread root post's** id. One resolved thread yields exactly one entry, so a later correction or an additional resolving answer **overwrites** it.    |
-| `messageId`                 | **string** | **Stringify.** The answer message whose event triggered this ingestion. Stored as **provenance only** — it is deliberately _not_ the key and is never matched against `thread[].id`.                                                                                 |
-| `source`                    | enum       | One of `IRIS_AUTO`, `TUTOR_WRITTEN`, `IRIS_CORRECTED`, `THREAD_RESOLVED`.                                                                                                                                                                                            |
-| `isPublicChannel`           | bool       | Must be a **real JSON boolean** — `"true"`/`1` are rejected, not coerced. Send `true` only for public channels; Pyris skips ingestion if `false` (defense in depth — **Artemis must only fire for public channels**, req. 5).                                        |
-| `thread`                    | array      | Full thread, **ordered oldest→newest**. Pyris truncates to `context_message_limit` (default 20) messages — always keeping the root post and every flagged message — but send the whole thread.                                                                       |
-| `thread[].id`               | **string** | Backlink only. Post and answer ids come from **separate Artemis tables with independent sequences**, so a root post and one of its answers routinely share a number — namespace-qualify them (`post-7` / `answer-7`) to keep the thread's ids distinct.              |
-| `thread[].authorRole`       | string     | Use `"student"`, `"tutor"`, or `"iris"`. Weights the extraction.                                                                                                                                                                                                     |
-| `thread[].isIrisDraft`      | bool       | Mark the Iris-generated draft message `true` so the extractor knows it was AI-authored.                                                                                                                                                                              |
-| `thread[].isVerifiedAnswer` | bool       | **The answer anchor.** Set on the single answer whose verification/resolution triggered _this_ event (the message `messageId` refers to). **At most one per thread** — Artemis derives it from one triggering answer, so duplicates are rejected as an upstream bug. |
-| `thread[].resolvesPost`     | bool       | The durable Artemis `resolvesPost` flag. **Several are legitimate** (a post is resolved if _any_ answer resolves it); Pyris merges them into one answer.                                                                                                             |
-| `thread[].redacted`         | bool       | The author opted out of AI. Send an empty/absent `content` and **clear `isVerifiedAnswer` / `resolvesPost`** — Pyris renders the message as a placeholder so the thread still reads in order, and a placeholder must never be merged into the stored answer.         |
-| `existingAnswer`            | string     | **Required and non-blank when `source = IRIS_CORRECTED`.** Pyris stores this text as the answer **verbatim** (still derives the canonical question from the thread), so a correction always carries the tutor's actual edit rather than LLM output.                  |
+| Field                       | Type       | Notes                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `courseId`                  | int        | Required. Scopes every search; entries are never returned cross-course.                                                                                                                                                                                                                                                                                                                             |
+| `conversationId`            | **string** | Artemis ids are `Long` — **stringify them**. The **channel** the thread lives in, not the thread itself. Backlinking only.                                                                                                                                                                                                                                                                          |
+| `postId`                    | **string** | **Stringify. This is the dedup/upsert key**: Pyris maps `(courseId, postId)` to a deterministic UUID. Use the **thread root post's** id. One resolved thread yields exactly one entry, so a later correction or an additional resolving answer **overwrites** it.                                                                                                                                   |
+| `messageId`                 | **string** | **Stringify.** The answer message whose event triggered this ingestion. Stored as **provenance only** — it is deliberately _not_ the key and is never matched against `thread[].id`.                                                                                                                                                                                                                |
+| `version`                   | int        | **Required, ≥ 1.** Monotonic per-thread operation version (see §2b). Pyris stores it with the entry and ignores any later-arriving ingestion or retraction whose version is not newer than the stored one, so the latest state Artemis dispatched always wins.                                                                                                                                      |
+| `source`                    | enum       | One of `IRIS_AUTO`, `TUTOR_WRITTEN`, `IRIS_CORRECTED`, `THREAD_RESOLVED`.                                                                                                                                                                                                                                                                                                                           |
+| `isPublicChannel`           | bool       | Must be a **real JSON boolean** — `"true"`/`1` are rejected, not coerced. Send `true` only for public channels; Pyris skips ingestion if `false` (defense in depth — **Artemis must only fire for public channels**, req. 5).                                                                                                                                                                       |
+| `thread`                    | array      | Full thread, **ordered oldest→newest**. Pyris truncates to `context_message_limit` (default 20) messages — always keeping the root post and every flagged message — but send the whole thread.                                                                                                                                                                                                      |
+| `thread[].id`               | **string** | Backlink only. Post and answer ids come from **separate Artemis tables with independent sequences**, so a root post and one of its answers routinely share a number — namespace-qualify them (`post-7` / `answer-7`) to keep the thread's ids distinct.                                                                                                                                             |
+| `thread[].authorRole`       | string     | Use `"student"`, `"tutor"`, or `"iris"`. Weights the extraction.                                                                                                                                                                                                                                                                                                                                    |
+| `thread[].isIrisDraft`      | bool       | Mark the Iris-generated draft message `true` so the extractor knows it was AI-authored.                                                                                                                                                                                                                                                                                                             |
+| `thread[].isVerifiedAnswer` | bool       | **The answer anchor.** Set on the single answer whose verification/resolution triggered _this_ event (the message `messageId` refers to). **At most one per thread** — Artemis derives it from one triggering answer, so duplicates are rejected as an upstream bug.                                                                                                                                |
+| `thread[].resolvesPost`     | bool       | The durable Artemis `resolvesPost` flag. **Several are legitimate** (a post is resolved if _any_ answer resolves it); Pyris merges them into one answer.                                                                                                                                                                                                                                            |
+| `thread[].redacted`         | bool       | The author opted out of AI. Send an empty/absent `content` and **clear `isVerifiedAnswer` / `resolvesPost`** — Pyris renders the message as a placeholder so the thread still reads in order, and a placeholder must never be merged into the stored answer.                                                                                                                                        |
+| `existingAnswer`            | string     | **Required and non-blank when `source` is `IRIS_AUTO` or `IRIS_CORRECTED`.** Pyris stores this text as the answer **verbatim** (still derives the canonical question from the thread). Both sources mean a tutor signed off on one specific wording in the dashboard — unchanged or edited — and storing the extractor's paraphrase instead would serve, as tutor-approved, text no tutor ever saw. |
 
 The extractor synthesizes the stored answer **only** from messages flagged
 `isVerifiedAnswer` / `resolvesPost` — it never guesses which message is the answer, and
@@ -127,21 +129,61 @@ silently stored under a tutor-verified label it did not earn.
 
 - `courseId`, `conversationId`, `postId`, `messageId` or `source` missing.
 - `isPublicChannel` sent as a string or number instead of a boolean.
+- `version` missing, or below 1.
 - **No** thread message flagged `isVerifiedAnswer` or `resolvesPost`.
 - **More than one** message flagged `isVerifiedAnswer`.
-- `source = IRIS_CORRECTED` with a missing or blank `existingAnswer`.
+- `source = IRIS_AUTO` or `source = IRIS_CORRECTED` with a missing or blank `existingAnswer`.
 
 ### `source` value → which trigger
 
-- `THREAD_RESOLVED` — Trigger B (thread marked resolved, never went through verification).
-- `IRIS_AUTO` — Trigger A: tutor **approved** the Iris draft unchanged.
-- `TUTOR_WRITTEN` — Trigger A: tutor wrote their own answer (no Iris draft used).
+- `THREAD_RESOLVED` — Trigger B: the thread was marked resolved by someone who is not a
+  tutor, so nobody with authority signed off on the answer.
+- `IRIS_AUTO` — a tutor **approved** the Iris draft unchanged (Trigger A), or marked an
+  auto-published Iris answer as resolving (Trigger B) → set `existingAnswer` to the
+  answer's text verbatim.
+- `TUTOR_WRITTEN` — a tutor endorsed a human-written answer: wrote it in the dashboard
+  (Trigger A) or marked it resolving (Trigger B).
 - `IRIS_CORRECTED` — Trigger A: tutor **edited** the Iris draft → set `existingAnswer`
   to the edited text. The **same `postId`** overwrites the thread's prior entry.
 
-A `THREAD_RESOLVED` write **never overwrites** an entry already stored from a Trigger A
-source: the trust tier only moves up. Re-sending Trigger B for a thread a tutor already
-verified is a safe no-op.
+The trust tier follows the **endorsement**, not the authorship: a student's answer a tutor
+marks resolving is `TUTOR_WRITTEN`; a tutor's answer a student marks resolving is
+`THREAD_RESOLVED`. Artemis derives it from the endorser recorded on the resolving answer
+itself (`AnswerPost.resolvedBy`), never from whoever happened to trigger the refresh.
+
+### 2b. Ordering: the operation version
+
+Ingestions and retractions run asynchronously on Pyris and can be accepted or finish in
+any order. Artemis therefore stamps every thread-scoped operation with a **monotonic
+per-thread version**, and Pyris applies a simple rule: **the stored object keeps the
+highest version it has seen, and any operation carrying a version that is not newer is
+dropped.** A retraction does not delete the object but turns it into a **tombstone**
+(`deleted = true`) that keeps its version, so an ingestion accepted before the retraction
+finds a newer version when it finally writes and gives up, instead of re-inserting the
+retracted answer into an empty slot. Equally, an older extraction can no longer overwrite
+the entry a newer edit produced. Tombstones are invisible to retrieval and are overwritten
+in place by a later ingestion with a higher version (the thread was re-resolved).
+
+What Artemis has to do:
+
+- Keep one counter per thread (`post.course_memory_version`) and **increment it atomically
+  in the database** once per ingestion or thread retraction it dispatches. Mint the version
+  **before** reading the thread you serialize, so the operation with the highest version
+  always describes at least everything committed before it was minted.
+- Send that value as `version` on the ingestion payload and on the `postId`-scoped
+  deletion payload.
+- When the **thread itself is deleted**, its row is gone and nothing can be minted: send
+  `9223372036854775807` (`Long.MAX_VALUE`). Post ids are never reused, so nothing
+  legitimate can follow.
+- Channel- and course-scoped deletions carry **no** version; see §7.
+
+Because the version decides, provenance no longer does: a newer `THREAD_RESOLVED` write
+**does** replace an older tutor-verified entry. That is deliberate — Artemis only sends it
+when the tutor-verified answer is gone (deleted or un-marked) and a community-resolved one
+is all that remains, and refusing the write would keep serving the retracted text as
+tutor-verified. Artemis ranks tutor-endorsed anchors above community-resolved ones when
+choosing what to send, so a student marking a second answer never demotes a standing
+tutor-verified entry.
 
 ---
 
@@ -152,9 +194,11 @@ verified is a safe no-op.
 When a tutor approves / edits / replaces an Iris draft in the "Messages to Verify"
 dashboard, fire the webhook with:
 
-- `source` = `IRIS_AUTO` (approved as-is) | `IRIS_CORRECTED` (edited; set `existingAnswer`) | `TUTOR_WRITTEN` (tutor's own answer),
+- `source` = `IRIS_AUTO` (approved as-is; set `existingAnswer` to the approved text) |
+  `IRIS_CORRECTED` (edited; set `existingAnswer` to the edit) | `TUTOR_WRITTEN` (tutor's own answer),
 - `postId` = the **thread root post's** id (the upsert key),
 - `messageId` = the id of the just-verified answer message (provenance),
+- `version` = the thread's next operation version (§2b),
 - `thread` = the full thread with that same answer flagged `isVerifiedAnswer: true`
   (mark the Iris draft with `isIrisDraft: true`),
 - `verifiedBy` / `verifiedAt` set.
@@ -164,15 +208,18 @@ dashboard, fire the webhook with:
 When a thread is marked **resolved** via Artemis's existing mechanism **and it did not
 already go through the verification dashboard**, fire the webhook with:
 
-- `source` = `THREAD_RESOLVED`,
+- `source` = `THREAD_RESOLVED` when the endorser of the anchoring answer is not a tutor,
+  otherwise `TUTOR_WRITTEN` (human answer) or `IRIS_AUTO` (auto-published Iris answer;
+  send its text as `existingAnswer`),
 - `postId` = the **thread root post's** id (the upsert key),
 - `messageId` = the id of the resolving answer message (provenance),
+- `version` = the thread's next operation version (§2b),
 - `thread` = the full thread with **every** answer carrying Artemis's `resolvesPost`
   flag marked `resolvesPost: true`, and the answer that just triggered the event also
   marked `isVerifiedAnswer: true`.
 
 Both triggers are event-driven (not scheduled). Trigger B is safely **re-runnable** on
-re-resolution (idempotent upsert keyed on `postId`).
+re-resolution (idempotent upsert keyed on `postId`, ordered by `version`).
 
 ---
 
@@ -259,42 +306,53 @@ Content-Type: application/json
 {
   "settings": { /* same PipelineExecutionSettingsDTO as ingestion; REQUIRED, non-null */ },
   "courseId": 1,      // int, REQUIRED
-  "postId": "67888"   // string — the thread ROOT POST id (delete key)
-  // OR, instead of postId:
+  "postId": "67888",  // string — the thread ROOT POST id (delete key)
+  "version": 13       // int >= 1, REQUIRED with postId — see §2b; Long.MAX_VALUE for a deleted thread
+  // OR, instead of postId + version:
   // "conversationId": "12345"  // string — delete EVERY entry mined from this channel
+  // OR:
+  // "wholeCourse": true        // the course itself was deleted
 }
 ```
 
-**Exactly one** of `postId` / `conversationId` must be present; neither or both is
-rejected as a bad request, because a deletion that quietly does the wrong amount is worse
-than one that fails loudly.
+**Exactly one** of `postId` / `conversationId` / `wholeCourse` must be present; neither or
+several is rejected as a bad request, because a deletion that quietly does the wrong amount
+is worse than one that fails loudly. `version` is **required with `postId`** and rejected
+as missing otherwise.
 
 - **`postId`** — a single thread stopped being memory-worthy. Send the **same `postId`
   used at ingestion**: the entry is keyed on the thread, not on the answer message, so
-  deleting by an answer id removes nothing.
+  deleting by an answer id removes nothing. Pyris does not remove the object but writes a
+  **tombstone** carrying `version`; a retraction whose version is older than the stored
+  state is ignored (the thread was re-resolved since), an equal version still applies.
 - **`conversationId`** — a whole channel was deleted or stopped being public. Channel
   eligibility is only evaluated when an entry is _written_, so without this an answer
   ingested while the channel was public keeps being served after it is restricted.
   Artemis fires this from channel deletion and from the channel privacy toggle.
 
-Returns `202 Accepted`; the entry keyed on `(courseId, postId)` is removed in a
-background thread, which reports `FINISHED`/`FAILED` to the §4 status endpoint. Deletion
-works even when `course_memory.enabled` is `false` (so operators can purge while the
-feature is off), and is coordinated with in-flight ingestion so a delete can't be undone
-by an ingestion that started before it.
+Returns `202 Accepted`; the entry keyed on `(courseId, postId)` is retracted in a
+background thread, which reports `FINISHED`/`FAILED` to the §4 status endpoint (a
+retraction dropped as stale still reports `FINISHED` — it was superseded, not failed).
+Deletion works even when `course_memory.enabled` is `false` (so operators can purge while
+the feature is off). Thread retractions are ordered against in-flight ingestions by
+`version` (§2b); channel and course purges are ordered in-process, see §8.
 
 ## 8. Not yet supported on the Pyris side (coordinate if you need these)
 
 - **Structured backlinks in the autonomous-tutor response** (see §5).
 - **Correction propagation to near-duplicates** — out of scope by design; only the
   thread's own `postId` entry is overwritten.
-- **Multi-replica Pyris deployments** — ingestion/deletion ordering for the same thread
-  is coordinated in-process only. A single Pyris replica is assumed.
-- **Channel-wide deletion is not ordered against in-flight ingestion.** The per-thread
-  delete counters cannot be bumped for keys that are not known up front, so an ingestion
-  already running for one of the channel's threads may still land after the purge.
-  Artemis stops emitting ingestions for the channel at the same moment, so the window is
-  small; re-running the deletion clears any straggler.
+- **Multi-replica Pyris deployments** — per-thread ordering is durable (the version is
+  stored on the object), but the compare-and-write is only atomic within one process.
+  Two replicas racing on the same thread can still misorder within the read–compare–write
+  of a single object; the window used to be the whole extraction.
+- **Channel- and course-wide deletion are ordered against in-flight ingestion in-process
+  only.** They delete by filter across threads whose keys are not known up front, so they
+  cannot leave a versioned tombstone per thread; an ingestion accepted before the purge
+  is refused at write time by an in-process counter instead. On a single replica this
+  is exact; across replicas an ingestion running elsewhere may still land after the
+  purge. Artemis stops emitting ingestions for the channel at the same moment, so the
+  window is small; re-running the deletion clears any straggler.
 
 ---
 
@@ -304,8 +362,14 @@ by an ingestion that started before it.
 - [ ] Service method to POST `/api/v1/webhooks/course-memory/ingest` (reuse existing
       Pyris connector auth/base-url/variant handling from FAQ ingestion).
 - [ ] **Trigger A** hook in the verification dashboard flow (approve/edit/own-answer →
-      correct `source`, set `existingAnswer` on edit, `verifiedBy/At`).
-- [ ] **Trigger B** hook on thread-resolved (skip if already verified via dashboard).
+      correct `source`, set `existingAnswer` verbatim for `IRIS_AUTO` and `IRIS_CORRECTED`,
+      `verifiedBy/At`).
+- [ ] **Trigger B** hook on thread-resolved, deriving `source` / `verifiedBy` / `verifiedAt`
+      from the endorser recorded on the resolving answer (not from the acting user), and
+      preferring a tutor-endorsed or dashboard-verified anchor over a community-resolved one.
+- [ ] **Version** — a per-thread counter incremented atomically per dispatched ingestion
+      or thread retraction, minted before the thread is serialized, sent as `version`;
+      `Long.MAX_VALUE` when the thread itself was deleted (§2b).
 - [ ] **Public-channel guard** — only fire for public channels; set `isPublicChannel` as
       a real boolean.
 - [ ] Send the **thread root post's id** as `postId` so corrections and further resolving
@@ -314,7 +378,7 @@ by an ingestion that started before it.
 - [ ] Build the `thread` array (ordered, `authorRole` ∈ student/tutor/iris, mark
       `isIrisDraft`) and **flag the answer anchor** — exactly one `isVerifiedAnswer`,
       plus `resolvesPost` on every answer Artemis marks as resolving.
-- [ ] Delete by **`postId`**, matching the id used at ingestion.
+- [ ] Delete by **`postId`** (with `version`), matching the id used at ingestion.
 - [ ] Controller for the status callback at the §4 path with Bearer-token validation.
 - [ ] (Optional) Register/tolerate the `COURSE_MEMORY_INGESTION` health feature.
 
@@ -328,7 +392,7 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
   -d '{
     "settings": {"authenticationToken":"tok","artemisBaseUrl":"http://localhost:9999","selection":"CLOUD_AI","variant":"default"},
     "courseId": 1, "conversationId": "c1", "postId": "post-1", "messageId": "answer-1",
-    "source": "THREAD_RESOLVED", "isPublicChannel": true,
+    "version": 1, "source": "THREAD_RESOLVED", "isPublicChannel": true,
     "thread": [
       {"id":"post-1","authorRole":"student","content":"How do I submit the exercise?"},
       {"id":"answer-1","authorRole":"tutor","content":"Push to your repo before the deadline; the latest push is graded.","isVerifiedAnswer":true,"resolvesPost":true}
@@ -336,7 +400,7 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
   }'
 ```
 
-Correction (overwrites the `post-1` thread entry in place):
+Correction (overwrites the `post-1` thread entry in place; note the higher `version`):
 
 ```jsonc
 {
@@ -345,6 +409,7 @@ Correction (overwrites the `post-1` thread entry in place):
   "conversationId": "c1",
   "postId": "post-1", // same thread → overwrites the entry above
   "messageId": "answer-2", // the corrected answer message
+  "version": 2, // newer than the entry above, so it is applied
   "source": "IRIS_CORRECTED",
   "existingAnswer": "Corrected: push to your repo; only commits before 23:59 are graded.",
   "verifiedBy": "tutor-42",
@@ -373,6 +438,6 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/delete \
   -H "Authorization: secret" -H "Content-Type: application/json" \
   -d '{
     "settings": {"authenticationToken":"tok","artemisBaseUrl":"http://localhost:9999","selection":"CLOUD_AI","variant":"default"},
-    "courseId": 1, "postId": "post-1"
+    "courseId": 1, "postId": "post-1", "version": 3
   }'
 ```

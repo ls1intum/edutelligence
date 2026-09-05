@@ -24,7 +24,19 @@ from iris.pipeline.shared.organizational_guard import (
     classify_organizational_question,
     has_organizational_evidence,
     is_organizational_question,
+    tutor_verified_memory_hits,
 )
+from iris.vector_database.course_memory_schema import CourseMemorySchema
+
+
+def _memory(source):
+    """A course-memory hit as CourseMemoryRetrieval returns it: a property dict."""
+    return {
+        CourseMemorySchema.SOURCE.value: source,
+        CourseMemorySchema.QUESTION.value: "When is the exam?",
+        CourseMemorySchema.ANSWER.value: "July 30th.",
+    }
+
 
 # ---------------------------------------------------------------------------
 # Detection
@@ -88,9 +100,32 @@ def test_empty_message_is_not_organizational():
 # ---------------------------------------------------------------------------
 
 
-def test_faq_or_memory_hits_count_as_evidence():
+def test_faq_or_tutor_verified_memory_hits_count_as_evidence():
     assert has_organizational_evidence([{"faq": 1}], None)
-    assert has_organizational_evidence(None, [{"memory": 1}])
+    for source in ("IRIS_AUTO", "TUTOR_WRITTEN", "IRIS_CORRECTED"):
+        assert has_organizational_evidence(None, [_memory(source)])
+
+
+def test_community_resolved_memory_is_not_evidence():
+    # A THREAD_RESOLVED entry is a thread some participant marked resolved; no tutor
+    # checked the content. Retrieval already hands it to the agent labelled as
+    # unverified. Counting it here would let one student's claim about an exam date
+    # lift the cap and auto-publish that same claim to the whole course.
+    assert not has_organizational_evidence(None, [_memory("THREAD_RESOLVED")])
+    assert not has_organizational_evidence([], [_memory("THREAD_RESOLVED")] * 3)
+
+
+def test_one_verified_hit_among_community_hits_is_enough():
+    hits = [_memory("THREAD_RESOLVED"), _memory("TUTOR_WRITTEN")]
+    assert has_organizational_evidence(None, hits)
+    assert tutor_verified_memory_hits(hits) == [_memory("TUTOR_WRITTEN")]
+
+
+def test_memory_hit_without_a_readable_source_is_not_evidence():
+    # Fail closed: a hit whose provenance cannot be read is not trusted.
+    assert not has_organizational_evidence(None, [{"question": "q", "answer": "a"}])
+    assert not has_organizational_evidence(None, [{"source": ""}])
+    assert not has_organizational_evidence(None, ["not a dict"])
 
 
 def test_no_hits_is_no_evidence():
@@ -154,9 +189,26 @@ def test_supported_organizational_answer_is_left_alone(pipeline):
 
 
 def test_verified_prior_answer_also_counts_as_support(pipeline):
-    state = _state("What day will the exam take place?", faqs=[], memories=[{"id": 1}])
+    state = _state(
+        "What day will the exam take place?",
+        faqs=[],
+        memories=[_memory("TUTOR_WRITTEN")],
+    )
 
     assert pipeline._cap_unsupported_organizational_confidence(state, 0.93) == 0.93
+
+
+def test_community_resolved_prior_answer_does_not_lift_the_cap(pipeline, guard_cap):
+    # The regression Claudia flagged: a matching community claim about an exam date
+    # used to count as evidence, so the model's confident echo of it auto-published
+    # as authoritative. It has to go to a tutor like any other ungrounded claim.
+    state = _state(
+        "What day will the exam take place?",
+        faqs=[],
+        memories=[_memory("THREAD_RESOLVED")],
+    )
+
+    assert pipeline._cap_unsupported_organizational_confidence(state, 0.93) == guard_cap
 
 
 def test_subject_matter_answer_is_untouched(pipeline):

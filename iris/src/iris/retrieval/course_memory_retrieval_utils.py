@@ -1,6 +1,7 @@
 from weaviate.collections.classes.filters import Filter
 
 from iris.config import settings
+from iris.domain.data.course_memory_dto import TUTOR_VERIFIED_SOURCES
 from iris.vector_database.course_memory_schema import CourseMemorySchema
 from iris.vector_database.database import VectorDatabase
 
@@ -9,12 +10,16 @@ def should_allow_course_memory_tool(db: VectorDatabase, course_id: int) -> bool:
     """
     Check if course memory is enabled and there are stored entries for the course.
 
+    Tombstones of retracted threads do not count: a course whose every entry was
+    retracted has nothing to retrieve, and offering the tool would only cost a
+    round-trip that returns nothing.
+
     Args:
         db (VectorDatabase): The vector database instance.
         course_id (int): The course ID.
 
     Returns:
-        bool: True if course memory is enabled and has entries for the course.
+        bool: True if course memory is enabled and has live entries for the course.
     """
     if not settings.course_memory.enabled:
         return False
@@ -22,19 +27,13 @@ def should_allow_course_memory_tool(db: VectorDatabase, course_id: int) -> bool:
         result = db.course_memory.query.fetch_objects(
             filters=Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(
                 course_id
-            ),
+            )
+            & Filter.by_property(CourseMemorySchema.DELETED.value).equal(False),
             limit=1,
             return_properties=[CourseMemorySchema.MESSAGE_ID.value],
         )
         return len(result.objects) > 0
     return False
-
-
-# Sources produced by tutor verification (Trigger A). THREAD_RESOLVED (Trigger B,
-# any resolved thread) is NOT necessarily tutor-verified and must be labeled as such.
-# The ingestion pipeline's provenance guard shares this set (TUTOR_VERIFIED_SOURCES
-# in course_memory_ingestion_pipeline; kept there to avoid an import cycle).
-_TUTOR_VERIFIED_SOURCES = {"IRIS_AUTO", "TUTOR_WRITTEN", "IRIS_CORRECTED"}
 
 
 def build_thread_link(memory) -> str:
@@ -90,7 +89,7 @@ def format_course_memories(retrieved_memories) -> str:
         source = memory.get(CourseMemorySchema.SOURCE.value)
         label = (
             "Verified prior answer"
-            if source in _TUTOR_VERIFIED_SOURCES
+            if source in TUTOR_VERIFIED_SOURCES
             else "Prior answer (community-resolved, not tutor-verified)"
         )
         link = build_thread_link(memory)

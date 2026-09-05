@@ -2,7 +2,10 @@ from typing import List, Optional
 
 from pydantic import Field, StrictBool, model_validator
 
-from iris.domain.data.course_memory_dto import CourseMemorySource
+from iris.domain.data.course_memory_dto import (
+    VERBATIM_ANSWER_SOURCES,
+    CourseMemorySource,
+)
 from iris.domain.data.thread_message_dto import ThreadMessageDTO
 from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
@@ -30,6 +33,13 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     # The answer that most recently updated this entry. Provenance only — it is
     # deliberately not the dedup key and is never matched against thread ids.
     message_id: str = Field(alias="messageId")
+    # Monotonic per-thread operation version, minted by Artemis for every ingestion
+    # and every thread-scoped deletion it dispatches. Pyris keeps the highest version
+    # it has seen per (courseId, postId) and ignores anything older, so an ingestion
+    # accepted before a retraction — or before a newer edit — cannot finish later and
+    # overwrite the newer state, whichever order the webhooks arrive in and however
+    # long the extraction takes. Required: without it the write cannot be ordered.
+    version: int = Field(alias="version", ge=1)
     thread: List[ThreadMessageDTO] = Field(default_factory=list)
     source: CourseMemorySource
     verified_by: Optional[str] = Field(default=None, alias="verifiedBy")
@@ -42,20 +52,24 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     existing_answer: Optional[str] = Field(default=None, alias="existingAnswer")
 
     @model_validator(mode="after")
-    def _require_existing_answer_for_correction(
+    def _require_verbatim_answer_for_dashboard_signoff(
         self,
     ) -> "CourseMemoryIngestionExecutionDTO":
-        """A correction must carry the tutor's edited answer.
+        """A dashboard sign-off must carry the exact text the tutor approved.
 
-        ``IRIS_CORRECTED`` marks an entry as tutor-verified. Without a non-blank
-        ``existingAnswer`` the pipeline would fall back to LLM extraction and
-        still store the result under the tutor-verified label, so reject the
-        payload instead of persisting model-generated text as tutor-corrected.
+        ``IRIS_AUTO`` and ``IRIS_CORRECTED`` both mark an entry as tutor-verified
+        on the strength of a tutor having read and approved one specific wording —
+        unchanged in the first case, edited in the second. Without a non-blank
+        ``existingAnswer`` the pipeline would fall back to LLM extraction and still
+        store the result under that label, so retrieval would present a paraphrase
+        no tutor ever saw as tutor-approved. Reject the payload instead.
         """
-        if self.source == CourseMemorySource.IRIS_CORRECTED and not (
+        if self.source in VERBATIM_ANSWER_SOURCES and not (
             self.existing_answer and self.existing_answer.strip()
         ):
-            raise ValueError("existingAnswer is required when source is IRIS_CORRECTED")
+            raise ValueError(
+                f"existingAnswer is required when source is {self.source.value}"
+            )
         return self
 
     @model_validator(mode="after")

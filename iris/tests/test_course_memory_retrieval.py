@@ -3,8 +3,12 @@ from unittest.mock import MagicMock
 from uuid import NAMESPACE_URL, uuid5
 
 from weaviate.classes.query import HybridFusion
+from weaviate.collections.classes.filters import _Operator
 
 from iris.retrieval.course_memory_retrieval import CourseMemoryRetrieval
+from iris.retrieval.course_memory_retrieval_utils import (
+    should_allow_course_memory_tool,
+)
 from iris.vector_database.course_memory_schema import CourseMemorySchema
 
 
@@ -151,3 +155,52 @@ def test_empty_hybrid_result_skips_the_gate_query():
 
     assert not results
     retriever.collection.query.near_vector.assert_not_called()
+
+
+def _equality_clauses(filters):
+    """Flatten a composed Weaviate filter into {property: value} equality clauses."""
+    clauses = {}
+    nested = getattr(filters, "filters", None)
+    if nested is not None:
+        for child in nested:
+            clauses.update(_equality_clauses(child))
+        return clauses
+    if getattr(filters, "operator", None) == _Operator.EQUAL and isinstance(
+        filters.target, str
+    ):
+        clauses[filters.target] = filters.value
+    return clauses
+
+
+def test_tombstones_are_filtered_out_of_ranking_and_gate():
+    """A retracted thread keeps its object as a tombstone (deleted=True, with its
+    version) so a stale ingestion cannot resurrect it. That object still sits in the
+    BM25 and vector indexes, so both queries have to exclude it explicitly, or a
+    retracted answer's stale vector could still clear the certainty gate."""
+    retriever = _make_retriever()
+    _wire(retriever, ranked=[_obj("u1")], gate=[_obj("u1")])
+
+    retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+
+    for query in (
+        retriever.collection.query.hybrid,
+        retriever.collection.query.near_vector,
+    ):
+        clauses = _equality_clauses(query.call_args.kwargs["filters"])
+        assert clauses[CourseMemorySchema.COURSE_ID.value] == 42
+        assert clauses[CourseMemorySchema.DELETED.value] is False
+
+
+def test_tool_gate_ignores_tombstones():
+    # A course whose every entry was retracted has nothing to retrieve; offering the
+    # tool would only cost a round-trip that returns nothing.
+    db = MagicMock()
+    db.course_memory.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+
+    assert should_allow_course_memory_tool(db, course_id=42) is False
+
+    clauses = _equality_clauses(
+        db.course_memory.query.fetch_objects.call_args.kwargs["filters"]
+    )
+    assert clauses[CourseMemorySchema.COURSE_ID.value] == 42
+    assert clauses[CourseMemorySchema.DELETED.value] is False

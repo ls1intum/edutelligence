@@ -44,6 +44,7 @@ def _ingestion_dto(thread):
         conversationId="chan-9",
         postId="post-7",
         messageId="answer-9",
+        version=3,
         source=CourseMemorySource.TUTOR_WRITTEN,
         isPublicChannel=True,
         thread=thread,
@@ -81,6 +82,9 @@ def test_ingestion_webhook_logs_receipt_before_dispatch(monkeypatch, caplog):
         "course=42" in line and "thread=post-7" in line and "message=answer-9" in line
     )
     assert "source=TUTOR_WRITTEN" in line and "public=True" in line
+    # The version is what orders this run against the thread's other operations, so a
+    # dropped stale write can be matched back to the request that carried it.
+    assert "version=3" in line
     # Flag counts make it obvious at a glance which messages the extractor will merge.
     assert "thread_size=3" in line
     assert "verified_flags=1" in line and "resolving_flags=2" in line
@@ -90,6 +94,7 @@ def test_deletion_webhook_logs_receipt(monkeypatch, caplog):
     dto = SimpleNamespace(
         course_id=42,
         post_id="post-7",
+        version=5,
         conversation_id=None,
         whole_course=False,
         settings=None,
@@ -102,6 +107,7 @@ def test_deletion_webhook_logs_receipt(monkeypatch, caplog):
 
     assert "Course memory deletion webhook received" in caplog.text
     assert "course=42" in caplog.text and "thread=post-7" in caplog.text
+    assert "version=5" in caplog.text
 
 
 def test_deletion_webhook_logs_channel_scope(monkeypatch, caplog):
@@ -110,6 +116,7 @@ def test_deletion_webhook_logs_channel_scope(monkeypatch, caplog):
     dto = SimpleNamespace(
         course_id=42,
         post_id=None,
+        version=None,
         conversation_id="channel-3",
         whole_course=False,
         settings=None,
@@ -164,33 +171,47 @@ def test_disabled_feature_skip_names_the_thread(monkeypatch, caplog):
     assert "thread post-7" in caplog.text and "course 42" in caplog.text
 
 
-def test_upsert_logs_insert_and_replace_branches(caplog):
-    def _pipeline(exists):
+def test_upsert_logs_insert_replace_and_stale_branches(caplog):
+    def _pipeline(existing, version=2):
         pipeline = object.__new__(CourseMemoryIngestionPipeline)
         pipeline.llm_embedding = MagicMock()
         pipeline.llm_embedding.embed.return_value = [0.1, 0.2]
         pipeline.collection = MagicMock()
-        pipeline.collection.data.exists.return_value = exists
+        pipeline.collection.query.fetch_object_by_id.return_value = existing
         pipeline.dto = SimpleNamespace(
             course_id=42,
             post_id="post-7",
             message_id="answer-9",
             conversation_id="chan-9",
             source=CourseMemorySource.TUTOR_WRITTEN,
+            version=version,
             verified_at=None,
             verified_by=None,
         )
         return pipeline
 
+    def _stored(version, deleted=False):
+        return SimpleNamespace(properties={"version": version, "deleted": deleted})
+
     logger_name = "iris.pipeline.course_memory_ingestion_pipeline"
     with caplog.at_level(logging.INFO, logger=logger_name):
-        _pipeline(exists=False).upsert("q", "a")
+        _pipeline(existing=None).upsert("q", "a")
     assert "Inserted course memory entry for thread post-7" in caplog.text
+    assert "version 2" in caplog.text
 
     caplog.clear()
     with caplog.at_level(logging.INFO, logger=logger_name):
-        _pipeline(exists=True).upsert("q", "a")
+        _pipeline(existing=_stored(1)).upsert("q", "a")
     assert "Replaced course memory entry for thread post-7" in caplog.text
+    assert "version 1 -> 2" in caplog.text
+
+    # A dropped write has to say so, and say why: this is the only trace a stale
+    # ingestion leaves, since Artemis still receives a plain FINISHED.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger=logger_name):
+        _pipeline(existing=_stored(3, deleted=True)).upsert("q", "a")
+    assert "Ignoring stale course memory ingestion for thread post-7" in caplog.text
+    assert "version 2 is not newer than the stored version 3 (tombstone)" in caplog.text
 
 
 def test_truncate_collapses_whitespace_and_caps_length():

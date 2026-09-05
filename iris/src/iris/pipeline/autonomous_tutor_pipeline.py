@@ -25,6 +25,7 @@ from iris.pipeline.shared.confidence_scoring import (
 from iris.pipeline.shared.organizational_guard import (
     classify_organizational_question,
     has_organizational_evidence,
+    tutor_verified_memory_hits,
 )
 from iris.pipeline.shared.uncertainty_scoring import (
     DEFAULT_TOP_LOGPROBS,
@@ -401,7 +402,9 @@ class AutonomousTutorPipeline(
         Exam scope, dates, rooms, deadlines, grading and registration are facts about
         this one course. They cannot be derived from what the course teaches, so an
         answer to such a question is only worth publishing when a course FAQ entry or
-        a tutor-verified prior answer actually stated it.
+        a tutor-verified prior answer actually stated it. A community-resolved prior
+        answer is not that: it is a hint the agent may weigh, not evidence that lets
+        the answer skip tutor review.
 
         Neither confidence strategy catches this on its own. The verbalized prompt
         asks the model to score itself low and it often does not; the logprob
@@ -428,22 +431,26 @@ class AutonomousTutorPipeline(
         if has_organizational_evidence(faq_hits, memory_hits):
             logger.info(
                 "Organizational question (%s) is supported by retrieved evidence | "
-                "faqs=%d memories=%d",
+                "faqs=%d verified_memories=%d",
                 category,
                 len(faq_hits or []),
-                len(memory_hits or []),
+                len(tutor_verified_memory_hits(memory_hits)),
             )
             return confidence
 
         if confidence <= guard.confidence_cap:
             return confidence
 
+        # The memory count is logged so a capped answer can be told apart from one
+        # with no memory hit at all: community-resolved hits are present but do not
+        # count as support.
         logger.info(
             "Capping confidence for unsupported organizational question | "
-            "category=%s confidence=%.4f cap=%.4f",
+            "category=%s confidence=%.4f cap=%.4f unverified_memories=%d",
             category,
             confidence,
             guard.confidence_cap,
+            len(memory_hits or []),
         )
         return guard.confidence_cap
 

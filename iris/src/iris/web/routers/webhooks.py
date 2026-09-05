@@ -327,17 +327,18 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
 def run_course_memory_ingestion_worker(
     dto: CourseMemoryIngestionExecutionDTO,
     variant_id: str,
-    start_delete_gen: Optional[int] = None,
     start_channel_delete_gen: Optional[int] = None,
     start_course_delete_gen: Optional[int] = None,
 ):
     """Run the course memory ingestion pipeline in a separate thread.
 
-    ``start_delete_gen`` / ``start_channel_delete_gen`` / ``start_course_delete_gen``
-    are the thread-, channel- and course-scoped delete counters as sampled when the
-    request was accepted, so a deletion accepted afterwards — of this thread, of its
-    whole channel, or of the whole course — cannot be undone by this ingestion even
-    if the OS schedules this worker later.
+    ``start_channel_delete_gen`` / ``start_course_delete_gen`` are the channel- and
+    course-scoped purge counters as sampled when the request was accepted, so a purge
+    accepted afterwards — of the thread's whole channel, or of the whole course —
+    cannot be undone by this ingestion even if the OS schedules this worker later.
+    Ordering against other operations on the same thread needs no sampling: the
+    payload carries the Artemis operation version and the write compares against the
+    stored one (see ``CourseMemoryIngestionPipeline.upsert``).
     """
     callback = None
     try:
@@ -359,7 +360,6 @@ def run_course_memory_ingestion_worker(
             local=is_local,
         )
         pipeline(
-            start_delete_gen=start_delete_gen,
             start_channel_delete_gen=start_channel_delete_gen,
             start_course_delete_gen=start_course_delete_gen,
         )
@@ -391,10 +391,12 @@ def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
     # main.py logs those at ERROR with the request path.
     logger.info(
         "Course memory ingestion webhook received: course=%s thread=%s message=%s "
-        "source=%s public=%s thread_size=%d verified_flags=%d resolving_flags=%d",
+        "version=%s source=%s public=%s thread_size=%d verified_flags=%d "
+        "resolving_flags=%d",
         dto.course_id,
         dto.post_id,
         dto.message_id,
+        dto.version,
         dto.source.value,
         dto.is_public_channel,
         len(dto.thread),
@@ -404,11 +406,9 @@ def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
     variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
 
     # Sampled here, not in the worker: the thread may not be scheduled before a
-    # deletion request that arrives after this one completes, and an ingestion
-    # accepted earlier must never resurrect an entry deleted later.
-    start_delete_gen = CourseMemoryIngestionPipeline.delete_generation_for(
-        dto.post_id, dto.course_id
-    )
+    # channel or course purge that arrives after this one completes, and an
+    # ingestion accepted earlier must never resurrect an entry purged later. The
+    # per-thread ordering needs no sample — it rides on dto.version.
     start_channel_delete_gen = (
         CourseMemoryIngestionPipeline.channel_delete_generation_for(
             dto.conversation_id, dto.course_id
@@ -422,7 +422,6 @@ def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
         args=(
             dto,
             variant,
-            start_delete_gen,
             start_channel_delete_gen,
             start_course_delete_gen,
         ),
@@ -455,7 +454,8 @@ def run_course_memory_deletion_worker(dto: CourseMemoryDeletionExecutionDto):
                 dto.conversation_id, dto.course_id
             )
         else:
-            deleted = deleter.delete_for_thread(dto.post_id, dto.course_id)
+            # The DTO validator guarantees a version for the thread scope.
+            deleted = deleter.delete_for_thread(dto.post_id, dto.course_id, dto.version)
         if deleted:
             callback.finish()
         else:
@@ -477,9 +477,11 @@ def course_memory_deletion_webhook(dto: CourseMemoryDeletionExecutionDto):
     """Webhook endpoint to remove a course memory entry when its source answer is
     deleted or its verification is retracted in Artemis."""
     logger.info(
-        "Course memory deletion webhook received: course=%s thread=%s channel=%s whole_course=%s",
+        "Course memory deletion webhook received: course=%s thread=%s version=%s "
+        "channel=%s whole_course=%s",
         dto.course_id,
         dto.post_id,
+        dto.version,
         dto.conversation_id,
         dto.whole_course,
     )

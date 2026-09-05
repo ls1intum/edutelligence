@@ -21,6 +21,8 @@ wording. This module is the part that does not depend on the model behaving:
 The guard only ever lowers a score. An answer that the model was already unsure about
 stays unsure (and is discarded by Artemis as before); an answer that IS grounded in an
 FAQ entry or a tutor-verified prior answer is left alone and can still auto-publish.
+"Tutor-verified" is literal: a course-memory hit only counts when its provenance is one
+a tutor signed off on, never a community-resolved thread.
 
 Detection is a curated bilingual lexicon rather than a classifier call: it costs
 nothing, it is deterministic and inspectable (which a thesis evaluation needs), and
@@ -29,6 +31,9 @@ tutor review, it never lets an ungrounded exam claim through.
 """
 
 import re
+
+from iris.domain.data.course_memory_dto import TUTOR_VERIFIED_SOURCES
+from iris.vector_database.course_memory_schema import CourseMemorySchema
 
 # Terms matched on word boundaries. Kept here when the bare word is ambiguous enough
 # that a substring match would fire on unrelated text ("termin" inside "terminal",
@@ -185,14 +190,37 @@ def is_organizational_question(text: str | None) -> bool:
     return classify_organizational_question(text) is not None
 
 
+def tutor_verified_memory_hits(memory_hits) -> list:
+    """The course-memory hits whose provenance a tutor signed off on.
+
+    A hit is a Weaviate property dict as returned by ``CourseMemoryRetrieval``. Its
+    ``source`` decides the tier: ``IRIS_AUTO`` / ``TUTOR_WRITTEN`` / ``IRIS_CORRECTED``
+    mean a tutor confirmed the answer; ``THREAD_RESOLVED`` means some participant
+    marked the thread resolved and nobody with authority checked the content. A hit
+    with no readable source is not trusted either — the guard fails closed.
+    """
+    verified = []
+    for hit in memory_hits or []:
+        source = (
+            hit.get(CourseMemorySchema.SOURCE.value) if isinstance(hit, dict) else None
+        )
+        if source in TUTOR_VERIFIED_SOURCES:
+            verified.append(hit)
+    return verified
+
+
 def has_organizational_evidence(faq_hits, memory_hits) -> bool:
     """Whether a tool returned something that can ground an organizational fact.
 
     Only two sources qualify. The course FAQ is what instructors maintain for exactly
-    these questions, and course memory holds answers a tutor verified. Lecture content
-    does not qualify: it describes what is taught, and "what the course teaches" is
-    precisely the evidence the model keeps mistaking for "what the exam covers". The
-    course-details tool does not qualify either — it is always available, so counting
-    it would mean the guard never fires.
+    these questions, and course memory holds answers a tutor verified — but only that
+    tier of it counts. A ``THREAD_RESOLVED`` entry is offered to the agent as a hint
+    and labelled unverified; a hint cannot make an exam date authoritative, and
+    counting it would let one student's claim in a resolved thread lift the cap and
+    auto-publish that same claim to the whole course. Lecture content does not qualify:
+    it describes what is taught, and "what the course teaches" is precisely the
+    evidence the model keeps mistaking for "what the exam covers". The course-details
+    tool does not qualify either — it is always available, so counting it would mean
+    the guard never fires.
     """
-    return bool(faq_hits) or bool(memory_hits)
+    return bool(faq_hits) or bool(tutor_verified_memory_hits(memory_hits))

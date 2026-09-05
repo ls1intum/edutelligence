@@ -15,6 +15,30 @@ class CourseMemorySource(str, Enum):
     THREAD_RESOLVED = "THREAD_RESOLVED"
 
 
+# Sources a tutor signed off on: Trigger A (verification dashboard), or a tutor marking
+# an answer as resolving under Trigger B. THREAD_RESOLVED is community-resolved — some
+# participant allowed to resolve the thread did so, and no tutor confirmed the content.
+# Every reader of the trust tier (the retrieval formatter, the organizational evidence
+# guard) keys off this one set, so the two tiers cannot drift apart between modules.
+# Stored as the wire/schema string values because that is what a retrieved entry carries.
+TUTOR_VERIFIED_SOURCES: frozenset[str] = frozenset(
+    source.value
+    for source in (
+        CourseMemorySource.IRIS_AUTO,
+        CourseMemorySource.TUTOR_WRITTEN,
+        CourseMemorySource.IRIS_CORRECTED,
+    )
+)
+
+# Sources whose stored answer is the exact text a tutor signed off on in the dashboard —
+# unchanged (IRIS_AUTO) or edited (IRIS_CORRECTED). The payload must carry that text
+# verbatim as ``existingAnswer``; letting the extractor paraphrase it would store, and
+# later serve as tutor-verified, wording no tutor ever saw.
+VERBATIM_ANSWER_SOURCES: frozenset[CourseMemorySource] = frozenset(
+    {CourseMemorySource.IRIS_AUTO, CourseMemorySource.IRIS_CORRECTED}
+)
+
+
 class CourseMemoryEntryDTO(BaseModel):
     """A verified Q/A pair stored in the CourseMemory collection.
 
@@ -33,6 +57,12 @@ class CourseMemoryEntryDTO(BaseModel):
     source: CourseMemorySource
     verified_at: Optional[str] = Field(default=None, alias="verifiedAt")
     verified_by: Optional[str] = Field(default=None, alias="verifiedBy")
+    # The Artemis operation version this entry was written by; see
+    # CourseMemoryIngestionExecutionDTO.version for the ordering it establishes.
+    version: int
+    # Always False for a live entry. Retractions do not remove the object but turn it
+    # into a tombstone with deleted=True, see CourseMemoryDeleter.delete_for_thread.
+    deleted: bool = False
 
     def to_properties(self) -> dict:
         """Return the property dict keyed by the Weaviate schema property names."""
@@ -46,4 +76,6 @@ class CourseMemoryEntryDTO(BaseModel):
             CourseMemorySchema.SOURCE.value: self.source.value,
             CourseMemorySchema.VERIFIED_AT.value: self.verified_at or "",
             CourseMemorySchema.VERIFIED_BY.value: self.verified_by or "",
+            CourseMemorySchema.VERSION.value: self.version,
+            CourseMemorySchema.DELETED.value: self.deleted,
         }

@@ -20,15 +20,19 @@ All commands assume you are in `edutelligence/iris`.
 poetry run pytest tests/test_course_memory_*.py -q
 ```
 
-64 tests cover:
+105 tests cover:
 
-- schema index flags (`question` searchable, all metadata not),
-- retrieval threshold filtering, course scoping, graceful degradation, backlink ids,
-- LLM Q/A extraction JSON parsing (incl. the correction path),
-- upsert insert‑vs‑replace keyed on `postId` + question‑only embedding, provenance
-  (Trigger B never downgrades a tutor-verified entry), and the delete/ingest race,
-- wire-contract validation: strict `isPublicChannel`, required `settings`, exactly one
-  answer anchor, non-blank `existingAnswer` for corrections,
+- schema index flags (`question` searchable, all metadata not), the `version` /
+  `deleted` ordering properties, and the in-place migration of an older collection,
+- retrieval threshold filtering, course scoping, tombstone filtering, graceful
+  degradation, backlink ids,
+- LLM Q/A extraction JSON parsing (incl. the verbatim-answer path),
+- upsert insert‑vs‑replace keyed on `postId` + question‑only embedding, **version
+  ordering** (a stale ingestion or retraction is dropped, a retraction leaves a versioned
+  tombstone, a newer write replaces a tombstone), and the channel/course purge races,
+- wire-contract validation: strict `isPublicChannel`, required `settings`, required
+  `version` (≥ 1; also on thread-scoped deletions), exactly one answer anchor, non-blank
+  `existingAnswer` for `IRIS_AUTO` and `IRIS_CORRECTED`,
 - non‑public‑channel and feature‑disabled skips.
 
 Run the full suite to confirm no regressions:
@@ -104,13 +108,15 @@ def make_ingestion(dto):
 
 
 class DTO:
-    def __init__(self, post_id, message_id, course_id, source, verified_by=None):
-        # post_id is the upsert key (the thread root); message_id is provenance.
+    def __init__(self, post_id, message_id, course_id, source, version=1, verified_by=None):
+        # post_id is the upsert key (the thread root); message_id is provenance;
+        # version orders the write against the thread's other operations.
         self.post_id = post_id
         self.message_id = message_id
         self.course_id = course_id
         self.conversation_id = f"channel-{course_id}"
         self.source = source
+        self.version = version
         self.verified_at = "2026-06-21T10:00:00Z"
         self.verified_by = verified_by
 
@@ -154,8 +160,9 @@ try:
 
     print("\n5) Correction overwrite: re-ingest thread post-2 with a corrected answer + source IRIS_CORRECTED")
     # New answer message on the SAME thread: keyed on post_id, so it replaces
-    # the entry rather than adding a near-duplicate.
-    make_ingestion(DTO("post-2", "answer-2b", COURSE, CourseMemorySource.IRIS_CORRECTED, verified_by="tutor-42")).upsert(
+    # the entry rather than adding a near-duplicate. version=2 is newer than the
+    # entry's version=1, so the write is applied.
+    make_ingestion(DTO("post-2", "answer-2b", COURSE, CourseMemorySource.IRIS_CORRECTED, version=2, verified_by="tutor-42")).upsert(
         "When is the exam?", "CORRECTED: the exam moved to August 5th, 09:00, MI HS2.",
     )
     count = db.course_memory.aggregate.over_all(total_count=True).total_count
@@ -164,7 +171,24 @@ try:
     print(f"   total objects in collection = {count} (no duplicate for post-2)")
     print(f"   post-2 answer now = {exam[0]['answer']!r}")
 
-    print("\n6) Graceful degradation: embedding service raises -> retrieval returns []")
+    print("\n6) Ordering: a stale ingestion (version=1) must not overwrite the correction")
+    make_ingestion(DTO("post-2", "answer-2", COURSE, CourseMemorySource.THREAD_RESOLVED, version=1)).upsert(
+        "When is the exam?", "STALE: the exam is on July 30th.",
+    )
+    stale = [r for r in retr(chat_history=[], student_query="when is the exam", course_id=COURSE, rewrite=False) if r["post_id"] == "post-2"]
+    print("   post-2 answer still =", repr(stale[0]["answer"][:9]), "->", "OK" if stale[0]["answer"].startswith("CORRECTED") else "STALE WRITE LANDED!")
+
+    print("\n7) Retraction: a versioned tombstone hides the entry and blocks a late ingestion")
+    from iris.pipeline.course_memory_ingestion_pipeline import CourseMemoryDeleter
+    CourseMemoryDeleter.for_collection(db.course_memory).delete_for_thread("post-2", COURSE, version=3)
+    make_ingestion(DTO("post-2", "answer-2c", COURSE, CourseMemorySource.TUTOR_WRITTEN, version=2)).upsert(
+        "When is the exam?", "LATE: this ingestion was accepted before the retraction.",
+    )
+    gone = [r for r in retr(chat_history=[], student_query="when is the exam", course_id=COURSE, rewrite=False) if r["post_id"] == "post-2"]
+    count = db.course_memory.aggregate.over_all(total_count=True).total_count
+    print(f"   post-2 retrievable = {bool(gone)} (expect False); objects in collection = {count} (tombstone kept)")
+
+    print("\n8) Graceful degradation: embedding service raises -> retrieval returns []")
     class Boom:
         def embed(self, t):
             raise RuntimeError("Logos unavailable")
@@ -194,7 +218,9 @@ poetry run python /tmp/cm_verify.py
 4) Course scoping: ... post_ids: ['post-9'] -> OK
 5) Correction overwrite: total objects in collection = 3 (no duplicate for post-2)
    post-2 answer now = 'CORRECTED: the exam moved to August 5th, 09:00, MI HS2.'
-6) Graceful degradation: ... result: []
+6) Ordering: ... post-2 answer still = 'CORRECTED' -> OK
+7) Retraction: post-2 retrievable = False (expect False); objects in collection = 3 (tombstone kept)
+8) Graceful degradation: ... result: []
 ALL CHECKS DONE ✅
 ```
 
@@ -233,7 +259,7 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
   -d '{
     "settings": {"authenticationToken":"tok","artemisBaseUrl":"http://localhost:9999","selection":"CLOUD_AI","variant":"default"},
     "courseId": 1, "conversationId": "c1", "postId": "post-1", "messageId": "answer-1",
-    "source": "THREAD_RESOLVED", "isPublicChannel": true,
+    "version": 1, "source": "THREAD_RESOLVED", "isPublicChannel": true,
     "thread": [
       {"id":"post-1","authorRole":"student","content":"How do I submit the exercise?"},
       {"id":"answer-1","authorRole":"tutor","content":"Push to your repo before the deadline; the latest push is graded.","isVerifiedAnswer":true,"resolvesPost":true}
@@ -244,16 +270,21 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
 - Returns `202 Accepted` immediately; the pipeline runs in a background thread.
 - The status callback POSTs to `artemisBaseUrl/.../status`. If no Artemis is
   listening, that failure is **logged and non-fatal** — the entry still stores.
-- **Correction test:** re-send the same `postId` with `"source": "IRIS_CORRECTED"` and a
-  non-blank `"existingAnswer": "..."` to confirm the entry is overwritten in place (no
-  duplicate), even with a different `messageId`.
-- **Validation tests (expect `422`, nothing stored):** drop `postId`; send
-  `"isPublicChannel": "true"` as a string; send a thread where no message sets
-  `isVerifiedAnswer`/`resolvesPost`; set two messages to `isVerifiedAnswer`; send
-  `IRIS_CORRECTED` with a blank `existingAnswer`.
+- **Correction test:** re-send the same `postId` with a higher `"version"`,
+  `"source": "IRIS_CORRECTED"` and a non-blank `"existingAnswer": "..."` to confirm the
+  entry is overwritten in place (no duplicate), even with a different `messageId`.
+- **Ordering test:** re-send the original payload (`"version": 1`) after the correction —
+  it returns `202` but the log says `Ignoring stale course memory ingestion`, and the
+  corrected answer stays.
+- **Validation tests (expect `422`, nothing stored):** drop `postId`; drop `version` or
+  send `0`; send `"isPublicChannel": "true"` as a string; send a thread where no message
+  sets `isVerifiedAnswer`/`resolvesPost`; set two messages to `isVerifiedAnswer`; send
+  `IRIS_CORRECTED` or `IRIS_AUTO` with a blank `existingAnswer`.
 - **Deletion test:** `POST /api/v1/webhooks/course-memory/delete` with
-  `{"settings": {...}, "courseId": 1, "postId": "post-1"}` — the delete key is the
-  thread root, not the answer message.
+  `{"settings": {...}, "courseId": 1, "postId": "post-1", "version": 3}` — the delete key
+  is the thread root, not the answer message, and `version` is required with it. The
+  entry is not removed but tombstoned: it disappears from retrieval, and re-sending the
+  `"version": 1` ingestion afterwards is dropped as stale.
 
 ### Confirm retrieval via the autonomous tutor
 

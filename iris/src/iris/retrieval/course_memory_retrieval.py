@@ -96,9 +96,15 @@ class CourseMemoryRetrieval(BaseRetrieval):
                 )
                 query = student_query
 
+        # Course scoping plus the tombstone filter: a retracted thread keeps its
+        # object (with deleted=True and its version) so a stale ingestion cannot
+        # resurrect it, and that object still sits in the BM25 and vector indexes.
+        # Both queries below carry this filter so a tombstone can never be ranked,
+        # gated or returned. The filter applies to both the hybrid ranking and the
+        # certainty gate.
         course_filter = Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(
             course_id
-        )
+        ) & Filter.by_property(CourseMemorySchema.DELETED.value).equal(False)
         try:
             vec = self.llm_embedding.embed(query)
             # Rank by hybrid (BM25 + dense). Pin the fusion type so fused scores are
