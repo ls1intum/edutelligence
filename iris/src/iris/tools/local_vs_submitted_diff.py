@@ -63,14 +63,16 @@ def create_tool_local_vs_submitted_diff(
         parts = []
         for path, submitted in submission.submitted_repository.items():
             local = live.get(path, "")
+            # keepends, because the line terminator is part of the change: with it stripped,
+            # "code" and "code\n" compare equal and a file that differs is reported as
+            # unchanged. The output is then joined as difflib emits it, terminators and all.
             diff = difflib.unified_diff(
-                submitted.splitlines(),
-                local.splitlines(),
+                submitted.splitlines(keepends=True),
+                local.splitlines(keepends=True),
                 fromfile=f"submitted/{path}",
                 tofile=f"local/{path}",
-                lineterm="",
             )
-            diff_text = "\n".join(diff)
+            diff_text = "".join(diff)
             if diff_text:
                 parts.append(diff_text)
         return "\n\n".join(parts) if parts else _NO_CHANGES

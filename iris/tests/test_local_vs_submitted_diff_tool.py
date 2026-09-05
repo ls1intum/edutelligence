@@ -70,3 +70,34 @@ def test_submitted_repo_not_readable_reports_unavailable_not_no_changes():
 def test_none_submission_reports_unavailable():
     tool, _ = _tool(None)
     assert tool() == _UNAVAILABLE
+
+
+def test_final_newline_only_change_is_reported_as_a_change():
+    # The live file gained a trailing newline and is otherwise identical. Stripping terminators
+    # before comparing made this look like "no changes", so the tool told the model the working
+    # copy equalled the submitted code while it did not.
+    sub = _submission({"P.java": "code\n"}, {"P.java": "code"})
+    tool, _ = _tool(sub)
+    out = tool()
+    assert out != _NO_CHANGES
+    assert "submitted/P.java" in out
+    # Both sides of the terminator change are in the hunk, so the model sees WHAT differs.
+    assert "-code" in out
+    assert "+code" in out
+
+
+def test_final_newline_removed_locally_is_also_reported_as_a_change():
+    # The other direction: the live file LOST its trailing newline. Same defect, and worth pinning
+    # separately because the two sides render differently in the hunk.
+    sub = _submission({"P.java": "code"}, {"P.java": "code\n"})
+    tool, _ = _tool(sub)
+    out = tool()
+    assert out != _NO_CHANGES
+    assert "-code" in out
+    assert "+code" in out
+
+
+def test_identical_files_including_terminator_still_report_no_changes():
+    sub = _submission({"P.java": "code\n"}, {"P.java": "code\n"})
+    tool, _ = _tool(sub)
+    assert tool() == _NO_CHANGES
