@@ -50,7 +50,7 @@ Make it a habit to re-ingest after updating lecture materials. A quick click on 
 
 ## How Iris Uses Lecture Content
 
-Once ingested, Iris draws on your lecture materials when answering student questions in the **Course Chat** and **Lecture Chat**. When Iris references a specific slide or lecture, it includes citation markers so students can trace the information back to the source material.
+Once ingested, Iris draws on your lecture materials when answering student questions. A chat set to a specific lecture retrieves from that lecture, and a chat at course level retrieves across all of them. When Iris references a specific slide or lecture, it includes citation markers so students can trace the information back to the source material.
 
 This is particularly valuable because it means Iris does not rely solely on its general training data. It can answer questions specific to your course — including topics covered in a unique way, institutional conventions, or domain-specific terminology you use in your lectures.
 

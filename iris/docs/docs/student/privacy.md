@@ -27,15 +27,19 @@ When you use the **On-Premise** AI experience:
 
 When you use Iris, the following data may be included in requests to the language model:
 
-| Data                           | When It Is Sent                                 |
-| ------------------------------ | ----------------------------------------------- |
-| Your chat messages             | Every conversation                              |
-| Conversation history           | To maintain context within a session            |
-| Exercise problem statement     | In Exercise Chat                                |
-| Your code / submission text    | In Exercise Chat and Text Exercise Chat         |
-| Build logs and test results    | In Exercise Chat (programming exercises)        |
-| Lecture slides and transcripts | In Course Chat and Lecture Chat (via retrieval) |
-| Memory summaries               | When Memory is enabled                          |
+| Data                           | When It Is Sent                                                                                          |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Your chat messages             | Every conversation                                                                                       |
+| Conversation history           | To maintain context within a chat                                                                        |
+| Course structure               | Every conversation — exercise and lecture titles, competencies                                           |
+| Course FAQs                    | Every conversation — when relevant FAQ entries exist in the course                                       |
+| Exercise problem statement     | When an exercise is the active context                                                                   |
+| Your code / submission text    | When a programming or text exercise is the active context                                                |
+| Build logs and test results    | When a programming exercise is the active context                                                        |
+| Lecture slides and transcripts | When relevant to your question — scoped to the active lecture, or across the course when at course level |
+| Memory summaries               | When Memory is enabled                                                                                   |
+
+The [active context](./chat-context) therefore also determines the data footprint of a request. A chat at course level does not send your code, and switching away from an exercise stops sending it from the next message onwards.
 
 ### What Is NOT Sent
 
@@ -60,12 +64,13 @@ Iris operates under the General Data Protection Regulation (GDPR). Key points:
 
 You are always in control of your AI experience:
 
-| Action                                            | How                            |
-| ------------------------------------------------- | ------------------------------ |
-| Switch AI experience (Cloud / On-Premise / No AI) | Account settings in Artemis    |
-| Enable or disable Memory                          | Learner profile settings       |
-| Delete stored memories                            | Learner profile settings       |
-| Start a fresh conversation (clear context)        | Click the pen icon in the chat |
+| Action                                            | How                                 |
+| ------------------------------------------------- | ----------------------------------- |
+| Switch AI experience (Cloud / On-Premise / No AI) | Account settings in Artemis         |
+| Enable or disable Memory                          | Learner profile settings            |
+| Delete stored memories                            | Learner profile settings            |
+| Return the chat to course level                   | Remove the context chip in the chat |
+| Start a fresh conversation                        | Click the pen icon in the chat      |
 
 :::tip
 If you are unsure about data handling at your institution, ask your instructor or check with your university's data protection office.
