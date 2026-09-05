@@ -1141,19 +1141,34 @@ def _as_subject(text: str) -> str:
     return f"`Logos`: {cleaned}"
 
 
+def _closed_issues(task: str) -> str:
+    """The pull request's body, and nothing else.
+
+    The issues the work closes, named the way GitHub reads the reference:
+    merging the pull request closes them. The numbers are the task's — the
+    assigned issue and the ones its body and conversation point at — and
+    the list is the whole body, so nothing beside it can overstate what the
+    change does. What the change does belongs in the commit subject; why it
+    was made belongs to whoever picks it up.
+    """
+    numbers = sorted({int(number) for number in re.findall(r"#(\d+)\b", task)})
+    if not numbers:
+        return ""
+    return "closes " + ", ".join(f"#{number}" for number in numbers)
+
+
 def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     slug = os.environ.get("LOGOS_REPO_SLUG", "").strip()
     if not slug:
         log("no repository slug configured; skipping pull request")
         return None
 
-    # Title only. The description is the author's to write, and a pull
-    # request opened with a wall of generated text — a summary nobody wrote,
-    # the task pasted back, a checklist — buries the diff under boilerplate
-    # and gives the reviewer a page of things they already know. What the
-    # change does belongs in the commit subject; why it was made belongs to
-    # whoever picks it up.
+    # The title says what the change does; the body says what it closes —
+    # and a pull request opened with more words than that buries the diff
+    # under boilerplate and gives the reviewer a page of things they
+    # already know.
     title = _commit_subject(task)
+    body = _closed_issues(task)
     process = run(
         [
             "gh",
@@ -1167,10 +1182,11 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
             branch,
             "--title",
             title,
-            # Empty rather than absent: `gh` prompts for a body it was not
-            # given, and a session has no terminal to prompt at.
+            # Present rather than absent: `gh` prompts for a body it was
+            # not given, and a session has no terminal to prompt at.
+            # Empty when the task names no issue.
             "--body",
-            "",
+            body,
         ],
         cwd=CHECKOUT,
         check=False,

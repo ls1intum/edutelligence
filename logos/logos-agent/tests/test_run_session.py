@@ -967,11 +967,12 @@ class TestTranscriptLines:
 
 
 class TestHowAPullRequestIsOpened:
-    """A title, and nothing else.
+    """A title, and a body that names nothing but the closed issues.
 
-    The description belongs to whoever writes it. A pull request opened with
-    a generated wall — a summary nobody wrote, the task pasted back, a
-    checklist — buries the diff under boilerplate and tells the reviewer
+    Merging the pull request closes what its body says `closes` — so the
+    body is the list of issues the work is about and nothing else. A
+    generated wall — a summary nobody wrote, the task pasted back, a
+    checklist — would bury the diff under boilerplate and tell the reviewer
     things they already know.
     """
 
@@ -1000,13 +1001,28 @@ class TestHowAPullRequestIsOpened:
 
         assert "--draft" not in calls[0]
 
-    def test_the_body_is_empty(self, monkeypatch, tmp_path):
+    def test_a_task_naming_no_issue_leaves_the_body_empty(self, monkeypatch, tmp_path):
         calls = self.capture(monkeypatch, tmp_path)
 
         run_session.open_pull_request("logos/agent/x", "main", "a long task with all its house rules")
 
         body = calls[0][calls[0].index("--body") + 1]
         assert body == ""
+
+    def test_the_body_names_the_issues_the_task_closes(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+        task = (
+            "You have been assigned issue #493. Work on it.\n\n"
+            "Issue #493: The card sparkline overflows its slot\n\n"
+            "The same bug was filed on the mobile view as #948.\n"
+        )
+
+        run_session.open_pull_request("logos/agent/x", "main", task)
+
+        body = calls[0][calls[0].index("--body") + 1]
+        # The list, in order, without the duplicates the task repeats —
+        # and nothing else in the body.
+        assert body == "closes #493, #948"
 
     def test_the_title_still_describes_the_change(self, monkeypatch, tmp_path):
         calls = self.capture(monkeypatch, tmp_path)
