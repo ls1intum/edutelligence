@@ -279,57 +279,113 @@ def _lock_for(directory: Path) -> threading.Lock:
         return lock
 
 
+def _interpreter_from_shebang(script: str) -> str | None:
+    """The interpreter a directly-executed script runs under, from its shebang.
+
+    When the serving code ``execve``s the ``vllm`` script, the kernel picks the
+    interpreter from the script's ``#!`` line — so that shebang interpreter, not
+    any ``python`` that merely sits in the same directory, is what actually
+    loads (or refuses) the checkpoint. Handles absolute shebangs and
+    ``#!/usr/bin/env <name>`` (resolved via PATH); returns ``None`` when the
+    script has no usable shebang, in which case the caller falls back to a
+    sibling guess.
+    """
+    try:
+        with open(script, "rb") as fh:
+            first = fh.readline(512)
+    except OSError:
+        return None
+    if not first.startswith(b"#!"):
+        return None
+    parts = first[2:].decode("utf-8", "replace").split()
+    if not parts:
+        return None
+    interpreter = parts[0]
+    if os.path.basename(interpreter) == "env":
+        # ``#!/usr/bin/env python3`` — the interpreter is found by name via PATH
+        # (skipping any ``env`` flags, e.g. the ``-S`` in ``env -S python3.11``).
+        for arg in parts[1:]:
+            if not arg.startswith("-"):
+                return shutil.which(arg)
+        return None
+    if not os.path.isabs(interpreter):
+        # Relative shebangs are resolved CWD-relative by execve and are
+        # non-standard; we cannot follow them reliably, so treat as unreadable.
+        return None
+    if os.path.isfile(interpreter) and os.access(interpreter, os.X_OK):
+        return interpreter
+    return None
+
+
+def _sibling_python(script: str) -> str | None:
+    """A ``python``/``python3`` next to ``script`` — a fallback guess only.
+
+    Not authoritative: the interpreter a script runs under is named by its
+    shebang (see :func:`_interpreter_for_script`). Used only when that shebang
+    cannot be read.
+    """
+    base = Path(script)
+    for name in ("python", "python3"):
+        p = base.with_name(name)
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+    return None
+
+
+def _interpreter_for_script(script: str) -> str | None:
+    """The interpreter that serves ``script`` — its shebang, else a sibling guess."""
+    return _interpreter_from_shebang(script) or _sibling_python(script)
+
+
 def resolve_vllm_python(vllm_binary: str) -> str:
     """The Python interpreter that serves the configured vLLM binary.
 
     Mirrors ``VllmProcessHandle._resolve_vllm_binary`` step-for-step, returning
     the interpreter behind whichever ``vllm`` script that method would serve
-    with. The two must stay in lockstep: a sharded rejection is scoped to the
-    version of the interpreter that *loads* the checkpoint, so a divergence here
-    (for instance at the module fallback, which serves with the active
-    interpreter) would scope the record to a venv that is not actually serving.
-    The converter runs as ``<python> _sharded_convert.py …`` and needs vLLM on
-    its path, so it is pointed at this same interpreter too.
+    with. That method execs the ``vllm`` script, so the interpreter is the one
+    the script's *shebang* names — not a ``python`` that merely sits next to it.
+    The two must stay in lockstep: a sharded rejection is scoped to the version
+    of the interpreter that *loads* the checkpoint, so a divergence here (for
+    instance at the module fallback, which serves with the active interpreter)
+    would scope the record to a venv that is not actually serving. The converter
+    runs as ``<python> _sharded_convert.py …`` and needs vLLM on its path, and
+    the version probe asks it too, so it is pointed at this same interpreter —
+    which keeps the probe and the serving lane on one interpreter.
     """
     raw = (vllm_binary or "vllm").strip() or "vllm"
-
-    def _sibling_python(script: str) -> str | None:
-        base = Path(script)
-        for name in ("python", "python3"):
-            p = base.with_name(name)
-            if p.is_file() and os.access(p, os.X_OK):
-                return str(p)
-        return None
 
     # 1) Configured path (absolute or relative path-like value).
     if os.path.sep in raw or (os.path.altsep and os.path.altsep in raw):
         candidate = os.path.abspath(os.path.expanduser(raw))
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            sibling = _sibling_python(candidate)
-            if sibling:
-                return sibling
+            interpreter = _interpreter_for_script(candidate)
+            if interpreter:
+                return interpreter
 
     # 2) PATH lookup (configured name first, then plain 'vllm').
     for cmd_name in dict.fromkeys((raw, "vllm")):
         found = shutil.which(cmd_name)
         if found:
-            sibling = _sibling_python(found)
-            if sibling:
-                return sibling
+            interpreter = _interpreter_for_script(found)
+            if interpreter:
+                return interpreter
 
-    # 3) Sibling to the active interpreter (correct for activated venvs).
+    # 3) Sibling to the active interpreter (correct for activated venvs). The
+    #    venv's vllm script is served under its own shebang; for a standard venv
+    #    that is the active interpreter, but the shebang is the source of truth,
+    #    so read it and only fall back to the active interpreter.
     venv_sibling = Path(sys.executable).resolve().with_name("vllm")
     if venv_sibling.is_file() and os.access(venv_sibling, os.X_OK):
-        return sys.executable
+        return _interpreter_from_shebang(str(venv_sibling)) or sys.executable
 
     # 4) Well-known venv/install roots — only where a vllm script actually lives,
     #    so a root that merely has a python is not mistaken for the serving venv.
     for root in _WELL_KNOWN_VLLM_ROOTS:
         script = os.path.join(root, "vllm")
         if os.path.isfile(script) and os.access(script, os.X_OK):
-            sibling = _sibling_python(script)
-            if sibling:
-                return sibling
+            interpreter = _interpreter_for_script(script)
+            if interpreter:
+                return interpreter
 
     # 5) Module fallback: the serve command is ``sys.executable -m vllm``, so the
     #    interpreter is the active one — not whatever python happens to be on disk.

@@ -31,14 +31,59 @@ def test_resolve_cache_root_prefers_env(monkeypatch) -> None:
     assert sc.resolve_cache_root("/models") == "/models"
 
 
-def test_resolve_vllm_python_picks_sibling(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_vllm_python_prefers_the_script_shebang_over_a_different_sibling(monkeypatch, tmp_path: Path) -> None:
+    """The regression: when the vllm script's shebang names a *different*
+    interpreter than the ``python`` sitting next to it, the resolver must follow
+    the shebang. The serving lane execs the vllm script, so it runs under exactly
+    that shebang interpreter — the sibling python is not authoritative, and the
+    version probe / converter must not be pointed at it instead."""
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    script_py = bin_dir / "python3.11"
+    script_py.write_text("#!/bin/sh\nexit 0\n")
+    script_py.chmod(0o755)
+    sibling_py = bin_dir / "python"  # present, but not what the script runs under
+    sibling_py.write_text("#!/bin/sh\nexit 0\n")
+    sibling_py.chmod(0o755)
+    vllm = bin_dir / "vllm"
+    vllm.write_text(f"#!{script_py}\nimport sys\n")
+    vllm.chmod(0o755)
+    monkeypatch.setattr("logos_worker_node.sharded_checkpoint.shutil.which", lambda _c: None)
+    assert sc.resolve_vllm_python(str(vllm)) == str(script_py)
+
+
+def test_resolve_vllm_python_resolves_an_env_shebang_via_path(monkeypatch, tmp_path: Path) -> None:
+    """A venv-style ``#!/usr/bin/env python3`` shebang names the interpreter by
+    name, so it is looked up via PATH — not by falling back to a (different)
+    sibling that happens to be present."""
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    env_py = bin_dir / "python3"
+    env_py.write_text("#!/bin/sh\nexit 0\n")
+    env_py.chmod(0o755)
+    decoy = bin_dir / "python"  # a sibling guess would land here, not on python3
+    decoy.write_text("#!/bin/sh\nexit 0\n")
+    decoy.chmod(0o755)
+    vllm = bin_dir / "vllm"
+    vllm.write_text("#!/usr/bin/env python3\nimport sys\n")
+    vllm.chmod(0o755)
+    monkeypatch.setattr(
+        "logos_worker_node.sharded_checkpoint.shutil.which",
+        lambda name: str(env_py) if name == "python3" else None,
+    )
+    assert sc.resolve_vllm_python(str(vllm)) == str(env_py)
+
+
+def test_resolve_vllm_python_falls_back_to_sibling_when_the_shebang_is_unreadable(monkeypatch, tmp_path: Path) -> None:
+    """Only when the script has no usable shebang is the neighbouring python a
+    fallback at all — there is nothing better to read the interpreter from."""
     bin_dir = tmp_path / "venv" / "bin"
     bin_dir.mkdir(parents=True)
     py = bin_dir / "python"
     py.write_text("#!/bin/sh\nexit 0\n")
     py.chmod(0o755)
     vllm = bin_dir / "vllm"
-    vllm.write_text("#!/bin/sh\nexit 0\n")
+    vllm.write_text("import vllm\n")  # no shebang line for the resolver to read
     vllm.chmod(0o755)
     monkeypatch.setattr("logos_worker_node.sharded_checkpoint.shutil.which", lambda _c: None)
     assert sc.resolve_vllm_python(str(vllm)) == str(py)
