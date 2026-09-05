@@ -495,6 +495,7 @@ class VllmProcessHandle:
         purged_once = False
         unsharded_once = False
         self._skip_sharded_checkpoint = False
+        spawn_loop = asyncio.get_running_loop()
         while True:
             try:
                 status = await self._spawn_once(lane_config)
@@ -507,7 +508,10 @@ class VllmProcessHandle:
                 # that leaves the actual cause in place for the retry.
                 if not unsharded_once and self.has_broken_sharded_checkpoint:
                     unsharded_once = True
-                    self._invalidate_sharded_checkpoint(lane_config)
+                    # Discarding records the rejection against the serving vLLM's
+                    # version, which can probe a separate-venv interpreter; run it
+                    # off the event loop so that probe never stalls this loop.
+                    await spawn_loop.run_in_executor(None, lambda: self._invalidate_sharded_checkpoint(lane_config))
                     # Hold off the conversion for this lane's retry as well:
                     # rebuilding it would only reproduce the same bad output.
                     self._skip_sharded_checkpoint = True
@@ -779,15 +783,41 @@ class VllmProcessHandle:
         log_blob = "\n".join(self._recent_logs).lower()
         return any(frag in log_blob for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS)
 
+    def _sharded_rejection_reason(self) -> str:
+        """A short, greppable reason line for the sharded-checkpoint rejection record.
+
+        The first recent log line that named the sharded loader (or one of the
+        known "shards are wrong" payload messages) is the line that told us the
+        checkpoint — not the model or the GPU — was the problem; record it so a
+        later reader of the sidecar sees *why* the conversion was rejected.
+        Truncated so the sidecar stays small.
+        """
+        for line in self._recent_logs or []:
+            low = line.lower()
+            if any(frag in low for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS):
+                return " ".join(line.split())[:300]
+        return "vLLM rejected the pre-sharded checkpoint"
+
     def _invalidate_sharded_checkpoint(self, lane_config: LaneConfig) -> bool:
-        """Remove the sharded checkpoint this lane just failed to load."""
+        """Remove the sharded checkpoint this lane just failed to load.
+
+        Also records the rejection (version-scoped) so later spawns — and later
+        worker processes — do not rebuild a conversion the loader is going to
+        refuse again; see ``sharded_checkpoint.rejection_state``.
+        """
         directory = self._sharded_model_dir
         if not directory:
             return False
         try:
             from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
 
-            removed = sc.invalidate_sharded_checkpoint(Path(directory))
+            vllm_config = lane_config.vllm_config
+            binary = vllm_config.vllm_binary if vllm_config is not None else "vllm"
+            removed = sc.invalidate_sharded_checkpoint(
+                Path(directory),
+                vllm_version=sc.resolve_vllm_version(binary),
+                reason=self._sharded_rejection_reason(),
+            )
         except Exception:  # noqa: BLE001
             logger.exception("[%s] Failed to discard sharded checkpoint %s", self.lane_id, directory)
             return False
@@ -1746,6 +1776,26 @@ class VllmProcessHandle:
             )
             return
 
+        loop = asyncio.get_running_loop()
+        # The rejection check can probe a separate-venv vLLM interpreter for its
+        # version; run it off the event loop so a slow probe (bounded by the
+        # probe timeout) never stalls every other coroutine on this loop.
+        rejection = await loop.run_in_executor(None, lambda: sc.rejection_state(target, vllm_binary=vc.vllm_binary))
+        if rejection == "skip":
+            # A conversion for this (model, tp) was already built and the loader
+            # rejected it for the vLLM that is installed now (recorded on the
+            # earlier failure). Rebuilding it here would burn minutes of GPU
+            # time to reproduce the same unusable shards and fail the same way,
+            # so go straight to the full checkpoint — no conversion attempt.
+            logger.info(
+                "[%s] serving %s (tp=%d) from the full checkpoint — its sharded "
+                "checkpoint was rejected by this vLLM",
+                self.lane_id,
+                lane_config.model,
+                tp,
+            )
+            return
+
         if not getattr(ec, "sharded_checkpoint_convert_on_spawn", True):
             return
 
@@ -1760,7 +1810,6 @@ class VllmProcessHandle:
             lane_config.model,
             tp,
         )
-        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: sc.ensure_sharded_checkpoint(
