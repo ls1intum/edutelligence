@@ -1251,6 +1251,12 @@ _CLAIMABLE = """
             SELECT peer.id FROM agent_sessions peer
              WHERE peer.workspace_id = s.workspace_id
                AND peer.status = 'queued'
+               -- The same trigger rule as the outer predicate: a pass that
+               -- may not take triggered rows must not let a triggered row
+               -- stand in as the workspace's best candidate either, or
+               -- every manual row behind it fails this comparison and the
+               -- workspace goes unclaimed while the quota is full.
+               AND (:include_triggered OR peer.trigger_ref IS NULL)
              ORDER BY peer.priority DESC, peer.created_at, peer.id
              LIMIT 1
            )

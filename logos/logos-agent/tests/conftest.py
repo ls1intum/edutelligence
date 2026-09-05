@@ -9,9 +9,9 @@ the policy build their own.
 
 from __future__ import annotations
 
-import pytest
 from dataclasses import replace
 
+import pytest
 from app import controls, conventions, db, docker_engine, model_policy, sessions
 
 
@@ -89,9 +89,7 @@ def state_root_off_the_host(tmp_path, monkeypatch):
     this suite runs on — and a run as root would leave it behind. Tests
     that are about the state root set it themselves.
     """
-    monkeypatch.setattr(
-        sessions, "settings", replace(sessions.settings, state_root=str(tmp_path / "state"))
-    )
+    monkeypatch.setattr(sessions, "settings", replace(sessions.settings, state_root=str(tmp_path / "state")))
 
 
 @pytest.fixture(autouse=True)

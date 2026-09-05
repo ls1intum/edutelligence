@@ -5022,6 +5022,30 @@ class TestSayingThatItFroze:
         # Giving capacity back matters more than being able to explain it.
         await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "users are queueing")
 
+    async def test_a_restrictive_umask_keeps_the_mark_readable(self, monkeypatch, tmp_path):
+        # mkdir honours the runner's umask. Under a 077 one the state
+        # directory comes out 0700, the agent user cannot traverse it, and
+        # the mark sits unread: the session would spend its three
+        # unexplained-interruption chances on a pause the platform is owed
+        # sixty of. Writing stays refused by the read-only mount, so the
+        # only right the directory gives away is traversal.
+        import os
+        import stat
+
+        from app import sessions
+        from app.config import INTERRUPTION_FILE
+
+        self.install(monkeypatch, tmp_path)
+        old_umask = os.umask(0o077)
+        try:
+            await sessions.manager._pause({"id": 7, "container_id": "cid-7"}, "users are queueing")
+        finally:
+            os.umask(old_umask)
+
+        state = tmp_path / "state" / "7"
+        assert state.stat().st_mode & stat.S_IXOTH
+        assert (state / INTERRUPTION_FILE).read_text().strip() == "paused"
+
 
 class TestAFailureThatSaysWhy:
     """A helper's exit code is not a reason.

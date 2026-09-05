@@ -828,6 +828,14 @@ class SessionManager:
         marker = state_dir(session_id) / INTERRUPTION_FILE
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
+            # mkdir honours the runner's umask, and under a 077 one the
+            # directory comes out 0700: the agent user cannot even
+            # traverse it, so the mark sits unread and the session spends
+            # its unexplained-interruption budget on a pause the platform
+            # is owed sixty of. Traversal is the only right this mount
+            # needs to give away — writing stays refused by the read-only
+            # mount, not by ownership.
+            marker.parent.chmod(0o755)
             with marker.open("a", encoding="utf-8") as handle:
                 handle.write("paused\n")
             # The container's agent user has to read the mark; the write

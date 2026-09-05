@@ -347,7 +347,7 @@ def _remote_default_branch() -> str | None:
     for line in (process.stdout or "").splitlines():
         match = re.match(r"ref: (refs/heads/\S+)\s+HEAD", line)
         if match:
-            return match.group(1)[len("refs/heads/"):].strip()
+            return match.group(1)[len("refs/heads/") :].strip()
     return None
 
 
@@ -542,7 +542,12 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     # verifies against it. A first run has no remote branch: the fetch fails
     # quietly, the tracking ref stays absent, and the lease then requires the
     # remote branch to be absent, which it is.
-    run(["git", "fetch", "--depth", "50", "origin", f"{branch}:refs/remotes/origin/{branch}"], cwd=CHECKOUT, check=False, quiet=True)
+    run(
+        ["git", "fetch", "--depth", "50", "origin", f"{branch}:refs/remotes/origin/{branch}"],
+        cwd=CHECKOUT,
+        check=False,
+        quiet=True,
+    )
     run(["git", "symbolic-ref", "HEAD", f"refs/heads/{branch}"], cwd=CHECKOUT, quiet=True)
     # Mixed reset: the index follows the branch, the working tree — the
     # agent's work — is left exactly as it stands.

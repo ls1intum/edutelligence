@@ -788,7 +788,7 @@ class TriggerPoller:
                 # it. An old matching actor from the remainder is not the
                 # authorization for acting now.
                 logger.info(
-                    "the timeline of pull request #%s is longer than the runner can read; not acting on its review request",
+                    "the timeline of pull request #%s is longer than the runner can read; not acting",
                     number,
                 )
                 continue
@@ -1044,6 +1044,13 @@ class TriggerPoller:
             # seen the diff. Its title was `#882` for the same reason.
             other = None if pull else await self._pull_request(number)
             title = pull["title"] if pull else str((other or {}).get("title") or f"#{number}")
+            # About a pull request's code when it is one this runner
+            # answers for or one it read: the checkout must carry that
+            # pull request's own head even when the head is not a branch
+            # it may push to — its own protected branch, for instance —
+            # or the answer would be written from main, a diff it was
+            # never shown.
+            about_pull = pull is not None or other is not None
             # Anybody may comment on a public repository; not everybody may
             # direct a change to it. A conversation with no writer in it is
             # answered in words and gets no branch, so the credentialed
@@ -1085,7 +1092,7 @@ class TriggerPoller:
                         title,
                         comments,
                         branch=branch,
-                        reading=other is not None,
+                        reading=about_pull,
                     ),
                     "branch": branch,
                     # A thread with no writer in it is answered in words:
@@ -1094,8 +1101,8 @@ class TriggerPoller:
                     # launches and could in principle be anything else.
                     "no_push": branch is None,
                     # No branch to push to, but a pull request to read.
-                    "read_ref": f"refs/pull/{number}/head" if other is not None and not branch else None,
-                    "workspace": workspace_name("pr", number, title) if branch or other else None,
+                    "read_ref": f"refs/pull/{number}/head" if about_pull and not branch else None,
+                    "workspace": workspace_name("pr", number, title) if branch or about_pull else None,
                     "urgency": priority.of("comment", pull["labels"] if pull else ()),
                     "reaction": (
                         f"/repos/{settings.repo_slug}/pulls/comments/{newest}"

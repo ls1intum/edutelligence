@@ -595,6 +595,31 @@ class TestConversation:
         assert created["no_push"] is True
         assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/864/head"
 
+    async def test_a_question_on_its_own_protected_branch_reads_the_pull_request(self, monkeypatch):
+        # A pull request the runner answers for stays a pull request when
+        # its head is a protected branch: the question on it is about its
+        # diff, and answering from the default branch would be answering
+        # about a diff the session was never shown.
+        repo = FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[comment(9001, 772, "Why does this need a lock?")],
+            heads={772: ("main", REPO)},
+        )
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        created = fake_db.created[0]
+        # The head may not be pushed; the row says so.
+        assert created["branch"] is None
+        assert created["no_push"] is True
+        # The checkout carries the pull request's own code, not main.
+        assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/772/head"
+        assert "checkout of that pull request's own code" in created["task"]
+
     async def test_an_inline_question_is_answered_inline(self, monkeypatch):
         repo = FakeRepo(
             authored_pulls=[pull(772)],
