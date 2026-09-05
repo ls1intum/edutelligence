@@ -31,16 +31,14 @@ class _StubEnricher:
 
     def __init__(self, gate: threading.Event | None = None):
         self.gate = gate
-        self.keyword_calls: list[list[str]] = []
         self.summary_calls: list[str] = []
         self._counter = 0
         self._lock = threading.Lock()
 
-    def generate_keyword(self, content, language_instruction, used_keywords):
+    def generate_keyword(self, content, language_instruction):
         if self.gate is not None:
             self.gate.wait(timeout=5)
         with self._lock:
-            self.keyword_calls.append(list(used_keywords))
             self._counter += 1
             keyword = f"Topic{self._counter}"
         return keyword, []
@@ -142,6 +140,47 @@ def test_final_render_waits_for_enrichment():
         "Gradients flow.[cite:L:42:7:::Topic1:Summary of Backpropagation explained]"
     )
     registry.close()
+
+
+def test_close_waits_for_a_running_worker_and_stops_its_second_call():
+    """A worker already inside a model call cannot be cancelled, only awaited.
+
+    ``close()`` runs in the pipeline's ``finally`` block. A worker that passed
+    the closed check just before that must not keep calling the model on its
+    own afterwards.
+    """
+    entered_keyword = threading.Event()
+    release_keyword = threading.Event()
+    summary_calls: list[str] = []
+
+    class _BlockingKeywordEnricher:
+        def generate_keyword(self, content, language_instruction):
+            entered_keyword.set()
+            release_keyword.wait(timeout=5)
+            return "Topic1", []
+
+        def generate_summary(self, content, language_instruction):
+            summary_calls.append(content)
+            return "Summary", []
+
+    registry = CitationRegistry(_BlockingKeywordEnricher())
+    handle = _register_lecture(registry)
+
+    # Kick enrichment off and wait until the worker is inside its first call.
+    registry.render(f"Gradients flow.{handle}")
+    assert entered_keyword.wait(timeout=5)
+
+    # Release the call only after close() has already started, so the worker
+    # is guaranteed to be mid-flight when the closed flag is set.
+    threading.Timer(0.05, release_keyword.set).start()
+    started = time.monotonic()
+    registry.close()
+    elapsed = time.monotonic() - started
+
+    # close() blocked until the running call came back...
+    assert elapsed >= 0.04
+    # ...and the worker skipped the second call instead of issuing it.
+    assert summary_calls == []
 
 
 def test_partially_typed_handle_is_hidden_until_complete():

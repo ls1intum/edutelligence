@@ -1,6 +1,6 @@
 """Tool for retrieving lecture content using RAG."""
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, List, Optional
 
 from ..pipeline.shared.citation_registry import CITE_TYPE_LECTURE, CitationRegistry
 from ..retrieval.lecture.lecture_retrieval import LectureRetrieval
@@ -19,7 +19,6 @@ def create_tool_lecture_content_retrieval(
     callback: StatusCallback,
     query_text: str,
     history: List[Any],
-    lecture_content_storage: Dict[str, Any],
     lecture_id: Optional[int] = None,
     lecture_unit_id: Optional[int] = None,
     citation_registry: Optional[CitationRegistry] = None,
@@ -34,7 +33,6 @@ def create_tool_lecture_content_retrieval(
         callback: Callback for status updates.
         query_text: The student's query text.
         history: Chat history messages.
-        lecture_content_storage: Storage for retrieved content.
         citation_registry: Optional registry for inline citation handles.
 
     Returns:
@@ -73,9 +71,6 @@ def create_tool_lecture_content_retrieval(
             lecture_unit_id=lecture_unit_id,
             base_url=base_url,
         )
-
-        # Store the lecture content for later use
-        lecture_content_storage["content"] = lecture_content
 
         result = "Lecture slide content:\n"
         for paragraph in lecture_content.lecture_unit_page_chunks:

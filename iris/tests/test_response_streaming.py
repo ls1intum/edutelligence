@@ -758,6 +758,82 @@ def test_reset_during_in_flight_post_still_clears_draft():
     assert partial_results.index("") > partial_results.index("Hello")
 
 
+def test_reset_during_transform_suppresses_the_superseded_draft():
+    # The transform runs outside the lock, so on_delta(None) can reset the
+    # stream while a draft is being rendered. That rendered text belongs to the
+    # old epoch and must not reach the client as a retracted flash.
+    posts = []
+    in_transform = threading.Event()
+    release_transform = threading.Event()
+
+    def slow_transform(text):
+        if text == "Hello":
+            in_transform.set()
+            release_transform.wait(1.0)
+        return text
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=slow_transform,
+        )
+        sender.start()
+        sender.on_delta("Hello")
+        assert in_transform.wait(1.0)
+        # Reset while "Hello" is still inside the transform.
+        sender.on_delta(None)
+        release_transform.set()
+        time.sleep(0.1)
+        sender.stop()
+
+    assert "Hello" not in [post["partialResult"] for post in posts]
+
+
+def test_appended_delta_during_transform_still_posts_the_snapshot():
+    # Counterpart to the test above: an append is NOT staleness. A partial that
+    # raced with an incoming delta must still be posted, otherwise a busy stream
+    # would starve the client of partials entirely.
+    posts = []
+    in_transform = threading.Event()
+    release_transform = threading.Event()
+
+    def slow_transform(text):
+        if text == "Hello":
+            in_transform.set()
+            release_transform.wait(1.0)
+        return text
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=slow_transform,
+        )
+        sender.start()
+        sender.on_delta("Hello")
+        assert in_transform.wait(1.0)
+        # More of the answer arrives while "Hello" is being transformed.
+        sender.on_delta(" world")
+        release_transform.set()
+        _wait_until(lambda: any(p["partialResult"] == "Hello world" for p in posts))
+        sender.stop()
+
+    partial_results = [post["partialResult"] for post in posts]
+    assert "Hello" in partial_results
+    assert "Hello world" in partial_results
+
+
 def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
     class Settings(SimpleNamespace):
         def is_local(self):

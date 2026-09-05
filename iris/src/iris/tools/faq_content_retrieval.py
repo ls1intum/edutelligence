@@ -1,6 +1,6 @@
 """Tool for retrieving FAQ content using RAG."""
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, List, Optional
 
 from ..pipeline.shared.citation_registry import CitationRegistry
 from ..retrieval.faq_retrieval import FaqRetrieval
@@ -16,7 +16,6 @@ def create_tool_faq_content_retrieval(
     callback: StatusCallback,
     query_text: str,
     history: List[Any],
-    faq_storage: Dict[str, Any],
     citation_registry: Optional[CitationRegistry] = None,
 ) -> Callable[[], str]:
     """
@@ -30,7 +29,6 @@ def create_tool_faq_content_retrieval(
         callback: Callback for status updates.
         query_text: The student's query text.
         history: Chat history messages.
-        faq_storage: Storage for retrieved FAQs.
         citation_registry: If given, each FAQ is registered and its citation
             handle is shown to the model so it can cite inline.
 
@@ -62,9 +60,6 @@ def create_tool_faq_content_retrieval(
             course_id=course_id,
             base_url=base_url,
         )
-
-        # Store the retrieved FAQs for later use
-        faq_storage["faqs"] = retrieved_faqs
 
         return format_faqs(retrieved_faqs, citation_registry)
 

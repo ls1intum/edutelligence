@@ -3,8 +3,8 @@
 ``LectureRetrieval.fetch_context_content`` looks up the exact slide page chunks
 and transcription segments referenced by the student's current position so they
 can be pasted directly into the prompt, independently of the RAG lecture tool.
-This content is also stored so it can be cited without the agent calling the
-lecture retrieval tool.
+This content is also registered in the citation registry so it can be cited
+without the agent calling the lecture retrieval tool.
 """
 
 # pylint: skip-file
@@ -117,7 +117,7 @@ def test_fetch_context_content_suppresses_unreleased_unit():
     pipeline._fetch_transcriptions_by_timestamp.assert_not_called()
 
 
-def test_current_view_content_is_stored_with_inline_citation_ids():
+def test_current_view_content_carries_inline_citation_ids():
     """Current-view content must remain citable without the retrieval tool."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
@@ -133,7 +133,6 @@ def test_current_view_content_is_stored_with_inline_citation_ids():
             VideoContextDTO(type="video", lectureUnitId=1, timestamp=50.0),
         ],
         lecture_retriever=retriever,
-        lecture_content_storage={},
         citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
@@ -154,10 +153,15 @@ def test_current_view_content_is_stored_with_inline_citation_ids():
         "lecture unit Test Unit (lecture unit ID: 1). "
         "The transcript at this point:\n---\nTranscript 45-55\nCitation id: [cite:2]\n---",
     ]
-    stored = state.lecture_content_storage["current_view"]
-    assert stored.lecture_unit_page_chunks == [page_chunk]
-    assert stored.lecture_transcriptions == [transcription]
-    assert stored.lecture_unit_segments == []
+    # Both handles resolve to full markers, so the viewed content stays citable
+    # even though the lecture retrieval tool never ran.
+    rendered = state.citation_registry.render("[cite:1]|[cite:2]", final=True)
+    slide_marker, transcript_marker = rendered.split("|")
+    assert slide_marker.startswith(f"[cite:L:{page_chunk.lecture_unit_id}:3:")
+    assert (
+        transcript_marker.startswith(f"[cite:L:{transcription.lecture_unit_id}:")
+        and ":45:55:" in transcript_marker
+    )
 
 
 def test_multiple_chunks_on_same_page_share_one_block():
@@ -173,7 +177,6 @@ def test_multiple_chunks_on_same_page_share_one_block():
     state = SimpleNamespace(
         lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=2)],
         lecture_retriever=retriever,
-        lecture_content_storage={},
         citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
@@ -204,7 +207,6 @@ def test_position_omitted_when_material_not_ingested():
             SlidesContextDTO(type="slides", lectureUnitId=42, page=7),
         ],
         lecture_retriever=retriever,
-        lecture_content_storage={},
         citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
@@ -215,9 +217,9 @@ def test_position_omitted_when_material_not_ingested():
     blocks = pipeline._build_current_view(state)
 
     # Without ingested content there is no position to describe and nothing to
-    # store for citations.
+    # register for citations.
     assert blocks == []
-    assert "current_view" not in state.lecture_content_storage
+    assert not state.citation_registry.has_sources
 
 
 def test_only_ingested_positions_are_described():
@@ -237,7 +239,6 @@ def test_only_ingested_positions_are_described():
             SlidesContextDTO(type="slides", lectureUnitId=1, page=5),
         ],
         lecture_retriever=retriever,
-        lecture_content_storage={},
         citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
@@ -271,7 +272,6 @@ def test_each_viewed_position_remains_separately_described():
             SlidesContextDTO(type="slides", lectureUnitId=1, page=5),
         ],
         lecture_retriever=retriever,
-        lecture_content_storage={},
         citation_registry=CitationRegistry(),
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),

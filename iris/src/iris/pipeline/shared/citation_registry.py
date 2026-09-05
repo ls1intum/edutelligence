@@ -29,7 +29,12 @@ TRAILING_HANDLE_FRAGMENT_PATTERN = re.compile(r"\[(?:c(?:i(?:t(?:e(?::\d*)?)?)?)
 CITE_TYPE_LECTURE = "L"
 CITE_TYPE_FAQ = "F"
 
-_PIPELINE_ID = "citation_enricher"
+# Config key under ``llm_configuration``; renaming it breaks deployed setups.
+_PIPELINE_ID = "citation_pipeline"
+
+# How long ``close()`` waits for workers whose model call is already in flight.
+# Bounded so a hanging completion cannot pin the request thread.
+_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 
 def _format_part(value) -> str:
@@ -70,16 +75,13 @@ class CitationEnricher:
         self._summary_prompt_str = _read_prompt("citation_summary_prompt.txt")
 
     def generate_keyword(
-        self, content: str, language_instruction: str, used_keywords: list[str]
+        self, content: str, language_instruction: str
     ) -> tuple[str, list[TokenUsageDTO]]:
         prompt = PromptTemplate(
             template=language_instruction + self._keyword_prompt_str,
-            input_variables=["Paragraph", "UsedKeywords"],
+            input_variables=["Paragraph"],
         )
-        return self._invoke(
-            prompt,
-            {"Paragraph": content, "UsedKeywords": ", ".join(sorted(used_keywords))},
-        )
+        return self._invoke(prompt, {"Paragraph": content})
 
     def generate_summary(
         self, content: str, language_instruction: str
@@ -243,24 +245,58 @@ class CitationRegistry:
                 )
 
     def _run_enrichment(self, content: str) -> tuple[str, str]:
-        with self._lock:
-            if self._closed:
-                return "", ""
+        if self._is_closed():
+            return "", ""
         keyword, keyword_tokens = self._enricher.generate_keyword(
-            content, self._language_instruction, []
-        )
-        summary, tokens = self._enricher.generate_summary(
             content, self._language_instruction
         )
-        with self._lock:
-            self.tokens.extend(keyword_tokens)
-            self.tokens.extend(tokens)
+        self._record_tokens(keyword_tokens)
+        # ``close()`` can land while the call above is in flight. Bail out here
+        # instead of spending a second completion whose result is discarded —
+        # this also halves how long ``close()`` has to wait for us.
+        if self._is_closed():
+            return "", ""
+        summary, summary_tokens = self._enricher.generate_summary(
+            content, self._language_instruction
+        )
+        self._record_tokens(summary_tokens)
         return keyword, summary
 
+    def _is_closed(self) -> bool:
+        with self._lock:
+            return self._closed
+
+    def _record_tokens(self, tokens: list[TokenUsageDTO]) -> None:
+        with self._lock:
+            self.tokens.extend(tokens)
+
     def close(self) -> None:
-        """Stop enrichment for this run. Idempotent."""
+        """Stop enrichment for this run and wait for in-flight workers.
+
+        Setting the flag alone only stops workers that have not reached their
+        first model call yet. A running completion cannot be cancelled --
+        ``Future.cancel()`` is useless once the worker started -- so we also
+        wait for the ones already past that check, otherwise they would keep
+        calling the model after the pipeline is done with them. The wait is
+        bounded: a hanging completion must not pin the request thread.
+        Idempotent.
+        """
         with self._lock:
             self._closed = True
+            pending = [
+                future
+                for future in self._enrichment_futures.values()
+                if not future.done()
+            ]
+        if not pending:
+            return
+        _, still_running = wait(pending, timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+        if still_running:
+            logger.warning(
+                "Citation enrichment still running %ss after close (%d worker(s))",
+                _SHUTDOWN_TIMEOUT_SECONDS,
+                len(still_running),
+            )
 
 
 def _run_in_thread(fn, *args) -> Future:

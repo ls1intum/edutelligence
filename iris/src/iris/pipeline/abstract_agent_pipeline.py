@@ -61,8 +61,6 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     local: bool
     tracing_context: Optional[TracingContext]
     query_text: str
-    lecture_content_storage: dict
-    faq_storage: dict
     accessed_memory_storage: list
     # Maps ``[cite:N]`` handles to retrieved sources.
     citation_registry: CitationRegistry
@@ -666,8 +664,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.tokens = []
         state.local = local  # Store local flag in state
         state.query_text = ""
-        state.lecture_content_storage = {}
-        state.faq_storage = {}
         state.accessed_memory_storage = []
         state.citation_registry = self.create_citation_registry(state)
         state.allow_lecture_tool = False

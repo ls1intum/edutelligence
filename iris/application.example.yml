@@ -206,7 +206,7 @@ llm_configuration:
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
-  citation_enricher:
+  citation_pipeline:
     default:
       keyword_summary:
         local: oai-gpt-5-nano

@@ -51,7 +51,6 @@ def test_lecture_tool_shows_a_handle_for_every_citable_paragraph():
         ],
     )
 
-    storage = {}
     tool = create_tool_lecture_content_retrieval(
         lecture_retriever=lambda **_: lecture_content,
         course_id=1,
@@ -59,13 +58,11 @@ def test_lecture_tool_shows_a_handle_for_every_citable_paragraph():
         callback=SimpleNamespace(),
         query_text="What is this lecture about?",
         history=[],
-        lecture_content_storage=storage,
         citation_registry=CitationRegistry(),
     )
 
     result = tool()
 
-    assert storage["content"] is lecture_content
     # The slide chunk and the transcript segment are citable and get their own
     # handle each; the segment summary is not citable and gets none.
     assert "Page: 3, Citation id: [cite:1]" in result
@@ -99,7 +96,6 @@ def test_lecture_tool_omits_handles_without_a_registry():
         callback=SimpleNamespace(),
         query_text="What is this lecture about?",
         history=[],
-        lecture_content_storage={},
     )
 
     assert "Citation id:" not in tool()

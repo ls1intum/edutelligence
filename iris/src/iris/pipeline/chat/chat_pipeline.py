@@ -26,7 +26,6 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -131,7 +130,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         ("advanced", "Advanced", "Uses a larger model, balancing speed and quality."),
     ]
     DEPENDENCIES = [
-        Dep("citation_enricher"),
+        Dep("citation_pipeline"),
         Dep("session_title_generation_pipeline"),
         Dep("interaction_suggestion_pipeline", variant="course"),
         Dep("interaction_suggestion_pipeline", variant="exercise"),
@@ -662,15 +661,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             item.lecture_unit_id: item.lecture_unit_name
             for item in (*page_chunks, *transcriptions)
         }
-
-        # Store the content under a dedicated key so it is kept separate from
-        # the lecture retrieval tool's "content" and the tool stays completely
-        # independent of the viewing context.
-        state.lecture_content_storage["current_view"] = LectureRetrievalDTO(
-            lecture_unit_segments=[],
-            lecture_transcriptions=list(transcriptions),
-            lecture_unit_page_chunks=list(page_chunks),
-        )
 
         # Group the page chunks by slide page so all chunks of one page are
         # bundled into a single block under that page's position description.

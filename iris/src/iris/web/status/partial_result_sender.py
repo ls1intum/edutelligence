@@ -111,6 +111,17 @@ class PartialResultSender(Thread):
             if self._stopped_permanently:
                 return None
 
+            # on_delta(None) reset the stream while we were transforming: what we
+            # just rendered belongs to a superseded epoch, so drop it rather than
+            # flash a retracted draft at the client. Only the epoch is compared,
+            # never ``raw`` itself: during active streaming deltas keep arriving,
+            # and treating an appended delta as staleness would suppress nearly
+            # every partial exactly when partials matter. Posting a slightly
+            # older prefix is what a snapshot sender does -- the next tick
+            # carries the newer text, and partialSeq keeps the order.
+            if epoch != self._epoch:
+                return None
+
             # Already delivered exactly this text at this epoch -> nothing new.
             if text == self._last_posted_text and epoch == self._last_posted_epoch:
                 return None

@@ -126,7 +126,6 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.callback,
         state.query_text,
         state.message_history,
-        state.lecture_content_storage,
         lecture_id=lecture_id,
         lecture_unit_id=lecture_unit_id,
         citation_registry=state.citation_registry,
@@ -149,7 +148,6 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
         state.callback,
         state.query_text,
         state.message_history,
-        state.faq_storage,
         citation_registry=state.citation_registry,
     )
 
