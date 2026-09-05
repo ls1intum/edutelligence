@@ -68,7 +68,14 @@ class PartialResultSender(Thread):
             self._accumulated += delta
 
     def stop(self) -> None:
-        # Stop queuing new partials and wait briefly for the worker to drain.
+        # Prevent any further partials from being queued while we drain, then
+        # wait for the worker to finish. The join budget deliberately exceeds the
+        # per-POST timeout so that, in the common case, a partial POST already in
+        # flight has returned before we hand control back to the pipeline, which
+        # sends the final result immediately after this returns. This is
+        # best-effort: if the drain budget is exceeded the sender logs a warning
+        # below, and Artemis's terminal-state handling (a FINISHED run state is
+        # monotonic) is the backstop against a late stale partial.
         with self._lock:
             self._stopped_permanently = True
         self._stop_event.set()
@@ -104,10 +111,17 @@ class PartialResultSender(Thread):
             if self._stopped_permanently:
                 return None
 
+            # Already delivered exactly this text at this epoch -> nothing new.
             if text == self._last_posted_text and epoch == self._last_posted_epoch:
                 return None
 
-            # Send empty text only as an explicit clear of a visible draft.
+            # An empty buffer is only worth sending as a *clearing* partial when
+            # a non-empty draft is currently visible on the client (e.g. a
+            # tool-call preamble or a retried stream was posted, then reset via
+            # on_delta(None)). Emitting an empty partialResult with a higher
+            # partialSeq tells Artemis to wipe that stale draft. We suppress the
+            # initial empty state and duplicate consecutive empty resets so we
+            # do not spam Artemis with redundant clears.
             if not text and not self._last_posted_text:
                 return None
 
@@ -142,7 +156,11 @@ class PartialResultSender(Thread):
             return False
 
     def _record_success(self, text: str, epoch: int) -> None:
-        # Record what actually reached the client.
+        # Record what was actually delivered to the client, regardless of the
+        # current epoch. A POST that started before an on_delta(None) reset still
+        # reaches Artemis and stays visible, so ``_last_posted_text`` must reflect
+        # it; otherwise the subsequent clearing partial would be suppressed as
+        # "no draft visible" (see _next_payload) and the stale draft would linger.
         with self._lock:
             self._last_posted_text = text
             self._last_posted_epoch = epoch

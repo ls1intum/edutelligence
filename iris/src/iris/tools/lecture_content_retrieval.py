@@ -74,6 +74,7 @@ def create_tool_lecture_content_retrieval(
             base_url=base_url,
         )
 
+        # Store the lecture content for later use
         lecture_content_storage["content"] = lecture_content
 
         result = "Lecture slide content:\n"

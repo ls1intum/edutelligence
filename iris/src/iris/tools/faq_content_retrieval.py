@@ -63,6 +63,7 @@ def create_tool_faq_content_retrieval(
             base_url=base_url,
         )
 
+        # Store the retrieved FAQs for later use
         faq_storage["faqs"] = retrieved_faqs
 
         return format_faqs(retrieved_faqs, citation_registry)
