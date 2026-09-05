@@ -36,6 +36,12 @@ class LogosNodeSchedulingDataFacade:
         self._providers: Dict[int, LogosNodeDataProvider] = {}
         self._model_to_provider: Dict[int, Set[int]] = {}
         self._request_tracking: Dict[str, Dict] = {}
+        # Monotonic last-activity per (provider_id, model_name), fed by request
+        # begin/complete events. The capacity planner reads it to keep a lane's
+        # idle clock from running through a busy window the periodic poll did
+        # not sample (a blocking action can stall the cycle long enough for
+        # short requests to start and finish between two polls).
+        self._model_last_activity: Dict[tuple[int, str], float] = {}
         self._lock = threading.RLock()
         logger.info("LogosNodeSchedulingDataFacade initialized")
 
@@ -144,6 +150,14 @@ class LogosNodeSchedulingDataFacade:
                     data.get("provider_id"),
                 )
                 in valid_pairs
+            }
+            valid_activity_keys = {
+                (provider_id, str(model_name))
+                for provider_id, entry in desired_by_provider.items()
+                for model_name in entry["models"].values()
+            }
+            self._model_last_activity = {
+                key: ts for key, ts in self._model_last_activity.items() if key in valid_activity_keys
             }
 
     def get_model_status(self, model_id: int, provider_id: Optional[int] = None) -> ModelStatus:
@@ -290,6 +304,29 @@ class LogosNodeSchedulingDataFacade:
                 }
             return {"providers": providers, "tracked_requests": tracked_requests}
 
+    def _note_model_activity(self, provider_id: int, model_name: Optional[str]) -> None:
+        """Record that (provider, model) just did work.
+
+        Called from the request-event handlers below while ``self._lock`` is
+        held. Monotonic: the stored timestamp only ever moves forward, so a
+        later poll can treat it as a lower bound on when the lane last had
+        activity even if it catches the lane empty.
+        """
+        if model_name is None:
+            return
+        key = (int(provider_id), model_name)
+        self._model_last_activity[key] = max(self._model_last_activity.get(key, 0.0), time.time())
+
+    def get_model_last_activity(self, provider_id: int, model_name: str) -> Optional[float]:
+        """Epoch seconds of the most recent request begin/complete for this
+        (provider, model), or ``None`` if no request for it has been seen.
+
+        The capacity planner reads this to keep a lane's idle clock from
+        running through a busy window the periodic poll did not sample.
+        """
+        with self._lock:
+            return self._model_last_activity.get((int(provider_id), model_name))
+
     def on_request_start(self, request_id: str, model_id: int, provider_id: int, priority: str = "normal") -> None:
         with self._lock:
             provider = self._get_provider_for_model(model_id, provider_id)
@@ -320,6 +357,7 @@ class LogosNodeSchedulingDataFacade:
                 model_id=model_id,
                 increment_active=increment_active,
             )
+            self._note_model_activity(provider.provider_id, provider._model_id_to_name.get(model_id))
             tracking_data["processing_start_time"] = time.time()
 
     def on_request_complete(
@@ -339,6 +377,9 @@ class LogosNodeSchedulingDataFacade:
             queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
             provider = self._get_provider_for_model(model_id, provider_id)
             provider.decrement_active(model_id, reuse_slot=reuse_slot, request_id=request_id)
+            # A completion is the lane's most recent "did work" moment; record it
+            # so the planner's idle clock can't run through this request.
+            self._note_model_activity(provider.provider_id, provider._model_id_to_name.get(model_id))
             return RequestMetrics(
                 queue_wait_ms=max(0, queue_wait_ms),
                 was_cold_start=was_cold_start,
