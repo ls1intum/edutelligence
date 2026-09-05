@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from iris.domain.search.lecture_search_dto import LectureSearchResultDTO
+from iris.domain.search.global_search_dto import LectureSearchResultDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 
 

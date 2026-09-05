@@ -9,6 +9,7 @@ oversubscribed data.
 Usage:
     python3 tests/performance/plot_ollama_vs_vllm_ttft.py
 """
+
 from __future__ import annotations
 
 import csv

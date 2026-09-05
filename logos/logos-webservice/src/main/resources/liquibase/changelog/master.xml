@@ -22,9 +22,11 @@
     <include file="liquibase/changelog/016_model_profiles_max_reported_context_length.xml"/>
     <include file="liquibase/changelog/017_provider_performance.xml"/>
     <include file="liquibase/changelog/018_model_aliases.xml"/>
+    <include file="liquibase/changelog/019_latency_observations.xml"/>
     <include file="liquibase/changelog/020_agent_sessions.xml"/>
     <include file="liquibase/changelog/021_agent_controls.xml"/>
     <include file="liquibase/changelog/022_agent_instructions.xml"/>
-    <include file="liquibase/changelog/023_agent_session_no_push.xml"/>
+    <include file="liquibase/changelog/023_token_cost_decomposition.xml"/>
+    <include file="liquibase/changelog/024_agent_session_no_push.xml"/>
 
 </databaseChangeLog>

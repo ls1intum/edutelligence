@@ -6,6 +6,7 @@ import pytest
 
 from logos import AzureCapacity, LaneSchedulerSignals, ModelSchedulerView, ReadinessTier, SchedulingRequest
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.latency_store import LatencyStore
 from logos.queue import PriorityQueueManager
 
 
@@ -102,7 +103,14 @@ class MockLogosNodeFacade:
     def get_model_profiles(self, provider_id):
         return {}
 
+    def set_model_name(self, model_id, provider_id, name):
+        self._model_names = getattr(self, "_model_names", {})
+        self._model_names[(model_id, provider_id)] = name
+
     def get_model_name(self, model_id, provider_id):
+        explicit = getattr(self, "_model_names", {}).get((model_id, provider_id))
+        if explicit is not None:
+            return explicit
         view = self._views.get((model_id, provider_id))
         return view.model_name if view else None
 
@@ -325,6 +333,93 @@ def test_estimate_ettft_no_visible_lanes_sets_cold_warmth():
     est = scheduler._estimate_ettft(1, 10, "logosnode")
     assert est.tier == ReadinessTier.COLD
     assert est.warmth_state == -1
+
+
+def test_estimate_ettft_no_lane_uses_latency_store_cold_overhead():
+    """When no lane is visible, the learned cold overhead from the latency store
+    must replace the static OVERHEAD_COLD_S so that provider-specific history
+    still influences cold-provider selection after a lane is removed."""
+    store = LatencyStore()
+    store.record_overhead("model-x", 10, ReadinessTier.COLD, 120.0)
+
+    logosnode = MockLogosNodeFacade()
+    logosnode.set_model_name(1, 10, "model-x")
+
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=PriorityQueueManager(),
+        logosnode_facade=logosnode,
+        azure_facade=MockAzureFacade(),
+        latency_store=store,
+    )
+
+    est = scheduler._estimate_ettft(1, 10, "logosnode")
+    assert est.tier == ReadinessTier.COLD
+    assert est.expected_wait_s == pytest.approx(120.0)
+    assert est.state_overhead_s == pytest.approx(120.0)
+
+
+def test_estimate_ettft_no_lane_uses_prior_when_no_learned_value():
+    """When no lane is visible and the store has no learned value, the
+    size-derived prior (or static constant) is used — not the hardcoded 45 s."""
+    store = LatencyStore(io_bandwidth_mb_s=500.0)
+    # No observations — store will compute a prior.
+
+    class _MockFacadeWithProfile(MockLogosNodeFacade):
+        def get_model_profiles(self, provider_id):
+            profile = MagicMock()
+            profile.estimate_vram_mb.return_value = 50_000.0
+            profile.kv_budget_mb = 0
+            profile.tensor_parallel_size = 1
+            return {"model-y": profile}
+
+        def get_model_name(self, model_id, provider_id):
+            return "model-y"
+
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=PriorityQueueManager(),
+        logosnode_facade=_MockFacadeWithProfile(),
+        azure_facade=MockAzureFacade(),
+        latency_store=store,
+    )
+
+    est = scheduler._estimate_ettft(1, 10, "logosnode")
+    assert est.tier == ReadinessTier.COLD
+    # 50 000 MB / 500 MB/s = 100 s prior (not the static 45 s constant)
+    assert est.expected_wait_s == pytest.approx(100.0)
+
+
+@pytest.mark.asyncio
+async def test_learned_ttft_breaks_tie_between_warm_providers():
+    """Two warm providers with no queue: the one with lower learned TTFT wins.
+
+    ETTFT for a warm model with no queue = 0 (overhead) + 0 (queue_wait) + TTFT.
+    Without TTFT the scores are identical and provider selection is arbitrary.
+    """
+    store = LatencyStore()
+    store.record_ttft("model-a", 10, 0.5)  # provider 10: fast
+    store.record_ttft("model-a", 20, 2.0)  # provider 20: slow
+
+    logosnode = MockLogosNodeFacade()
+    for pid in (10, 20):
+        logosnode.set_view(1, pid, _make_view(model_id=1, model_name="model-a", provider_id=pid))
+        logosnode.set_reserve(1, pid, True)
+
+    scheduler = ClassificationCorrectingScheduler(
+        queue_manager=PriorityQueueManager(),
+        logosnode_facade=logosnode,
+        azure_facade=MockAzureFacade(),
+        latency_store=store,
+    )
+    request = _make_request(
+        [(1, 1.0, 5)],
+        [
+            {"model_id": 1, "provider_id": 10, "type": "logosnode"},
+            {"model_id": 1, "provider_id": 20, "type": "logosnode"},
+        ],
+    )
+    result = await scheduler.schedule(request)
+    assert result is not None
+    assert result.provider_id == 10
 
 
 @pytest.mark.asyncio
