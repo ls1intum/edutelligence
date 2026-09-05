@@ -1,7 +1,7 @@
 """Ephemeral partial-result status callback sender."""
 
 from threading import Event, Lock, Thread
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -36,11 +36,17 @@ class PartialResultSender(Thread):
         url: str,
         run_id: str,
         interval_seconds: float = 0.35,
+        transform: Optional[Callable[[str], str]] = None,
     ):
+        """
+        Args:
+            transform: Applied to the accumulated draft before posting.
+        """
         super().__init__(daemon=True)
         self.url = url
         self.run_id = run_id
         self.interval_seconds = interval_seconds
+        self._transform = transform
         self._lock = Lock()
         self._stop_event = Event()
         self._accumulated = ""
@@ -95,9 +101,26 @@ class PartialResultSender(Thread):
         with self._lock:
             if self._stopped_permanently:
                 return None
-
-            text = self._accumulated
+            raw = self._accumulated
             epoch = self._epoch
+
+        # Transform outside the lock.
+        text = self._transform(raw) if self._transform is not None else raw
+
+        with self._lock:
+            if self._stopped_permanently:
+                return None
+
+            # on_delta(None) reset the stream while we were transforming: what we
+            # just rendered belongs to a superseded epoch, so drop it rather than
+            # flash a retracted draft at the client. Only the epoch is compared,
+            # never ``raw`` itself: during active streaming deltas keep arriving,
+            # and treating an appended delta as staleness would suppress nearly
+            # every partial exactly when partials matter. Posting a slightly
+            # older prefix is what a snapshot sender does -- the next tick
+            # carries the newer text, and partialSeq keeps the order.
+            if epoch != self._epoch:
+                return None
 
             # Already delivered exactly this text at this epoch -> nothing new.
             if text == self._last_posted_text and epoch == self._last_posted_epoch:

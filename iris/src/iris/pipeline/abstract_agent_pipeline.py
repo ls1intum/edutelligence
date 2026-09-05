@@ -20,6 +20,7 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
 from iris.pipeline.shared.activity_tracker import ActivityTracker
+from iris.pipeline.shared.citation_registry import CitationRegistry
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.tracing import (
     TracingContext,
@@ -60,9 +61,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     local: bool
     tracing_context: Optional[TracingContext]
     query_text: str
-    lecture_content_storage: dict
-    faq_storage: dict
     accessed_memory_storage: list
+    # Maps ``[cite:N]`` handles to retrieved sources.
+    citation_registry: CitationRegistry
     allow_lecture_tool: bool
     allow_faq_tool: bool
     allow_memiris_tool: bool
@@ -475,6 +476,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 )
         return final_output
 
+    def create_citation_registry(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+    ) -> CitationRegistry:
+        """Build the citation registry for this run."""
+        del state
+        return CitationRegistry()
+
     def _create_partial_result_sender(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
@@ -485,6 +494,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         return PartialResultSender(
             state.callback.url,
             state.callback.run_id,
+            transform=state.citation_registry.render,
         )
 
     def _start_partial_result_sender(
@@ -654,9 +664,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.tokens = []
         state.local = local  # Store local flag in state
         state.query_text = ""
-        state.lecture_content_storage = {}
-        state.faq_storage = {}
         state.accessed_memory_storage = []
+        state.citation_registry = self.create_citation_registry(state)
         state.allow_lecture_tool = False
         state.allow_faq_tool = False
         state.allow_memiris_tool = False
@@ -776,5 +785,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
+            # Release citation workers even if the agent loop failed.
+            state.citation_registry.close()
             # Clean up tracing context to prevent memory leaks
             clear_current_context()
