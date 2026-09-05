@@ -36,6 +36,15 @@ def _format_part(value) -> str:
     return "" if value is None else str(value)
 
 
+def _handle_numbers(text: str) -> list[int]:
+    """The handle numbers in ``text``, de-duplicated, in order of first use."""
+    return list(
+        dict.fromkeys(
+            int(match.group(1)) for match in CITATION_HANDLE_PATTERN.finditer(text)
+        )
+    )
+
+
 @dataclass
 class _Source:
     """A citable piece of retrieved content and its coordinates in Artemis."""
@@ -191,20 +200,14 @@ class CitationRegistry:
         return rendered
 
     def _await_enrichment(self, text: str) -> None:
-        pending = []
         with self._lock:
-            seen: set[int] = set()
-            for match in CITATION_HANDLE_PATTERN.finditer(text):
-                number = int(match.group(1))
-                if number in seen:
-                    continue
-                seen.add(number)
-                future = self._enrichment_futures.get(number)
-                if future is not None and not future.done():
-                    pending.append(future)
-        if not pending:
-            return
-        wait(pending)
+            pending = [
+                self._enrichment_futures[number]
+                for number in _handle_numbers(text)
+                if number in self._enrichment_futures
+            ]
+        if pending:
+            wait(pending)
 
     def _render_handle(self, number: int, final: bool) -> str:
         with self._lock:
@@ -213,43 +216,31 @@ class CitationRegistry:
         if source is None:
             return ""
 
-        if source.content.strip():
-            if future is None:
-                if not final:
-                    return ""
-                keyword, summary = "", ""
-            elif not future.done():
-                if not final:
-                    return ""
-                keyword, summary = _future_value(future)
-            else:
-                keyword, summary = _future_value(future)
-        else:
+        if not source.content.strip():
             keyword, summary = "", ""
+        elif not final and (future is None or not future.done()):
+            # Enrichment is still running; hide the marker until the final render.
+            return ""
+        else:
+            keyword, summary = _future_value(future) if future is not None else ("", "")
         return (
             f"[cite:{source.cite_type}:{source.entity_id}:{source.page}"
             f":{source.start}:{source.end}:{keyword}:{summary}]"
         )
 
     def _start_enrichment(self, text: str) -> None:
-        for match in CITATION_HANDLE_PATTERN.finditer(text):
-            number = int(match.group(1))
+        if self._enricher is None:
+            return
+        for number in _handle_numbers(text):
             with self._lock:
-                source = self._sources.get(number)
-                if source is None:
+                if self._closed or number in self._enrichment_futures:
                     continue
-                self._start_enrichment_for_number(number, source)
-
-    def _start_enrichment_for_number(self, number: int, source: _Source) -> None:
-        if self._closed or self._enricher is None:
-            return
-        if number in self._enrichment_futures:
-            return
-        if not source.content.strip():
-            return
-        self._enrichment_futures[number] = _run_in_thread(
-            self._run_enrichment, source.content
-        )
+                source = self._sources.get(number)
+                if source is None or not source.content.strip():
+                    continue
+                self._enrichment_futures[number] = _run_in_thread(
+                    self._run_enrichment, source.content
+                )
 
     def _run_enrichment(self, content: str) -> tuple[str, str]:
         with self._lock:
