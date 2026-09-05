@@ -1,0 +1,12 @@
+{#
+  The hints already delivered in this episode, rendered identically for every intent: the model is
+  asked to reason about this list (same-diagnosis rule, rung counting), so the three prompts must
+  describe it the same way. The caller passes `heading`, which is the only part that differs.
+-#}
+{% if episode and episode.hints %}
+
+{{ heading }}
+{% for hint in episode.hints %}
+- [{{ hint.level }}, t={{ hint.at_session_s | int }}s] {{ hint.text }}
+{% endfor %}
+{% endif %}

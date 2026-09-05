@@ -32,6 +32,9 @@ from iris.domain.status.rewriting_status_update_dto import (
 )
 from iris.domain.status.run_state_dto import RunStateEnum, StatusErrorDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.struggle_intervention_status_update_dto import (
+    StruggleInterventionStatusUpdateDTO,
+)
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
@@ -282,6 +285,8 @@ class ChatRunCallback(StatusCallback):
             url, run_id, ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
         )
         self._undelivered_result_fields: Optional[dict[str, Any]] = None
+        # How many entries of the run's cumulative token list Artemis has received.
+        self._delivered_token_count = 0
 
     def activity_snapshot(self, activities: list[ActivityDTO], seq: int) -> None:
         payload = self._payload(
@@ -290,6 +295,20 @@ class ChatRunCallback(StatusCallback):
             activity_seq=seq,
         )
         self._enqueue_running_update(payload)
+
+    def update(self, **fields) -> bool:
+        """Post a RUNNING update. Usage must not travel this way.
+
+        ``update`` posts the reusable status DTO directly and would therefore bypass the
+        delta bookkeeping every other send goes through. Chat usage belongs on
+        ``send_result``, ``finish`` or ``fail``.
+        """
+        if "tokens" in fields:
+            raise ValueError(
+                "ChatRunCallback.update() must not carry tokens; "
+                "use send_result(), finish() or fail() so the usage is reported once."
+            )
+        return super().update(**fields)
 
     def send_result(
         self,
@@ -410,6 +429,13 @@ class ChatRunCallback(StatusCallback):
 
         fields, carried_result = self._merge_undelivered_result(fields)
 
+        pending_tokens: Optional[list[TokenUsageDTO]] = None
+        if "tokens" in fields:
+            pending_tokens = self._tokens_not_yet_delivered(fields["tokens"])
+            # A copy: the caller keeps the cumulative list it passed, which send_result
+            # stores as the undelivered payload and the next send slices again.
+            fields = {**fields, "tokens": pending_tokens}
+
         # A terminal send is the LAST chance to deliver an answer that a prior
         # send_result() failed to hand off. Give it the same retry/backoff so a
         # transient failure there does not drop the delivery-critical answer.
@@ -430,6 +456,8 @@ class ChatRunCallback(StatusCallback):
                 if self._send_status_payload(payload):
                     if carried_result:
                         self._undelivered_result_fields = None
+                    if pending_tokens:
+                        self._delivered_token_count += len(pending_tokens)
                     return True
                 if attempt < attempts - 1:
                     time.sleep((1, 2, 4)[attempt])
@@ -437,6 +465,30 @@ class ChatRunCallback(StatusCallback):
         finally:
             if terminal_send:
                 self._shutdown_running_update_executor()
+
+    def _tokens_not_yet_delivered(
+        self, tokens: list[TokenUsageDTO]
+    ) -> list[TokenUsageDTO]:
+        """Return the part of the run's usage Artemis has not been told about yet.
+
+        Every send hands over the run's cumulative token list, but Artemis appends what
+        arrives to the run's trace without deduplicating it, so an entry sent twice is
+        billed twice. The counter only advances after a delivered POST, which is what
+        carries the usage of a failed send forward to the next one.
+        """
+        if len(tokens) < self._delivered_token_count:
+            # Someone passed a partial list instead of the run's cumulative one. Sending it
+            # would re-report what Artemis already has, so report nothing and say so loudly.
+            message = (
+                f"Token list for run {self.run_id} shrank from "
+                f"{self._delivered_token_count} to {len(tokens)} entries; "
+                "expected the run's cumulative usage. Reporting nothing for this send."
+            )
+            logger.error(message)
+            capture_message(message)
+            return []
+        delivered = self._delivered_token_count
+        return tokens[delivered:]
 
     def _merge_undelivered_result(
         self, fields: dict[str, Any]
@@ -530,3 +582,35 @@ class AutonomousTutorCallback(StatusCallback):
             run_id,
             AutonomousTutorPipelineStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
+
+
+class StruggleInterventionCallback(StatusCallback):
+    """Status callback for the proactive struggle-intervention pipeline."""
+
+    def __init__(self, run_id: str, base_url: str):
+        url = f"{base_url}/{self.api_url}/struggle-intervention/runs/{run_id}/status"
+        super().__init__(
+            url,
+            run_id,
+            StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        )
+        self._trailing_finish_seen = False
+
+    def _reject_after_terminal(self, operation: str) -> None:
+        """Absorb the one trailing finish this pipeline's shape produces.
+
+        post_agent_hook owns the terminal frame here: it finishes the decision itself, or fails
+        a help request that came back unusable. AbstractAgentPipeline then closes every run with
+        a finish of its own, which arrives after that and is rejected. It is structural, not an
+        anomaly, so it must not reach Sentry on every single run. Exactly one is absorbed; a
+        second one, and every rejected fail or update, stays an anomaly and is reported.
+        """
+        if operation == "finish" and not self._trailing_finish_seen:
+            self._trailing_finish_seen = True
+            logger.debug(
+                "Absorbed the trailing finish for run %s; the pipeline had already sent its "
+                "terminal frame",
+                self.run_id,
+            )
+            return
+        super()._reject_after_terminal(operation)
