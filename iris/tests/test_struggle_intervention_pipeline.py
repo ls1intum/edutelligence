@@ -510,6 +510,47 @@ def test_hint_contract_reaches_the_two_hinting_prompts_only():
     assert "HINT LADDER" not in close
 
 
+def test_contract_allows_the_references_it_also_requires():
+    """
+    The Forbidden list and the Allowed list have to be satisfiable at once. Banning everything
+    that came out of a tool would ban the file, the line, the method name, the symptom and the
+    failing test name that the Allowed list requires, and a model resolving that either way gets
+    it wrong: too strict it stops naming the test, too loose the ban stops meaning anything.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = _render(pipeline.help_request_template, _episode_with(1))
+
+    assert (
+        "Solution-bearing content quoted or reproduced from repository files"
+        in rendered
+    )
+    assert "Allowed list names -- file and line" in rendered
+    assert "stay permitted; it is the material" in rendered
+    assert (
+        "Anything lifted from tool output beyond a file/line reference" not in rendered
+    )
+
+
+def test_decide_prompt_keeps_a_silent_decision_free_of_an_anchor():
+    """
+    A repeated diagnosis has to go `silent`, and it can still have one concrete line. Requiring
+    an anchor whenever a line is the locus would attach one to that silent decision, which is
+    the same disclosure the silence was for. Artemis drops it, but the model should not be told
+    two incompatible things.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = _render(pipeline.system_prompt_template, _episode_with(1))
+
+    assert (
+        "For an `ambient` or `active` decision, set `anchor`+`inlineHint`" in rendered
+    )
+    assert "A `silent` decision carries no hint at all" in rendered
+    assert (
+        "Outside `silent`, set both to null ONLY for genuinely diffuse struggle"
+        in rendered
+    )
+
+
 def test_contract_names_the_prose_spoiler_classes():
     """
     The observed spoiler carried no code fence: it was an algorithm plus its bounds and
