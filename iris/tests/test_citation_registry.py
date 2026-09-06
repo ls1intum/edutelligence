@@ -170,16 +170,31 @@ def test_close_waits_for_a_running_worker_and_stops_its_second_call():
     registry.render(f"Gradients flow.{handle}")
     assert entered_keyword.wait(timeout=5)
 
-    # Release the call only after close() has already started, so the worker
-    # is guaranteed to be mid-flight when the closed flag is set.
-    threading.Timer(0.05, release_keyword.set).start()
-    started = time.monotonic()
-    registry.close()
-    elapsed = time.monotonic() - started
+    close_returned = threading.Event()
 
-    # close() blocked until the running call came back...
-    assert elapsed >= 0.04
-    # ...and the worker skipped the second call instead of issuing it.
+    def run_close() -> None:
+        registry.close()
+        close_returned.set()
+
+    closer = threading.Thread(target=run_close)
+    closer.start()
+
+    # Hold the keyword call until close() has actually flipped the flag, so the
+    # worker is guaranteed to be mid-flight rather than merely scheduled.
+    deadline = time.monotonic() + 5
+    while not registry._is_closed() and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert registry._is_closed()
+
+    # The worker is still parked inside its model call, so close() cannot have
+    # come back yet -- this is what "waits for in-flight workers" means.
+    assert not close_returned.is_set()
+
+    release_keyword.set()
+    assert close_returned.wait(timeout=5)
+    closer.join(timeout=1)
+
+    # And the worker skipped the second call instead of issuing it.
     assert summary_calls == []
 
 
