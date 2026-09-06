@@ -67,6 +67,70 @@ def _location_label(source: LectureSearchResultDTO) -> str:
     return f"Slide {page}"
 
 
+_CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+
+def sanitize_citation_markers(
+    answer: str | None, num_sources: int
+) -> tuple[str | None, set[int]]:
+    """Validate inline citation markers; return (answer, cited 0-based indices).
+
+    The answer LLM appends sentence-level markers like ``[2]`` after the claim
+    each source supports. This keeps every in-range marker, DROPS out-of-range
+    ones (a hallucinated ``[9]`` over 5 sources must not reach a student), and
+    collapses immediately repeated markers (``[1][1]`` -> ``[1]``). Chains of
+    DISTINCT adjacent markers (``[1][2][3]``) are the model citing several
+    sources for one claim and are preserved; the client groups them visually.
+
+    An answer without markers passes through untouched, which is the
+    compatibility path: rendering falls back to the unattributed card.
+    """
+    if not answer:
+        return answer, set()
+    cited: set[int] = set()
+    # (last kept index, end offset of the current marker run) in original
+    # string coordinates; a removed marker extends the run so [1][9][1]
+    # still collapses to [1] once [9] is gone.
+    run: list = [None, -1]
+
+    def _replace(match: re.Match) -> str:
+        index = int(match.group(1))
+        contiguous = match.start() == run[1]
+        run[1] = match.end()
+        if not contiguous:
+            run[0] = None
+        if not 1 <= index <= num_sources:
+            return ""
+        if run[0] == index:
+            return ""
+        run[0] = index
+        cited.add(index - 1)
+        return match.group(0)
+
+    sanitized = _CITATION_MARKER_RE.sub(_replace, answer)
+    return sanitized, cited
+
+
+def renumber_citation_markers(
+    answer: str | None, old_to_new: dict[int, int]
+) -> str | None:
+    """Rewrite marker numbers after the used-sources filter.
+
+    Markers reference the numbered CONTEXT (1..N over all grounded sources),
+    but the response returns only the used sources, so ``[4]`` must become the
+    position of that source in the returned list. Unknown numbers are stripped
+    defensively; sanitation has already removed them in the normal flow.
+    """
+    if not answer:
+        return answer
+
+    def _replace(match: re.Match) -> str:
+        new = old_to_new.get(int(match.group(1)))
+        return f"[{new}]" if new is not None else ""
+
+    return _CITATION_MARKER_RE.sub(_replace, answer)
+
+
 def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     """Parse the answer LLM's raw output into (answer, used 0-based indices).
 
@@ -75,6 +139,10 @@ def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[i
     student may actually see.
     """
     answer, used_indices = _extract_answer(raw, num_sources)
+    answer, cited_indices = sanitize_citation_markers(answer, num_sources)
+    # A cited source is a used source even when the model forgot to list it —
+    # and inline markers count as grounding for the suppression guard below.
+    used_indices = used_indices | cited_indices
     answer = _sanitize_and_suppress(answer, used_indices)
     return answer, used_indices
 
@@ -294,6 +362,13 @@ class GlobalSearchPipeline(SubPipeline):
         raw = self._generate_answer(query, grounded_sources)
         answer, used_indices = parse_answer_response(raw, len(grounded_sources))
         used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
+        # Markers referenced the context numbering; the response carries only
+        # the used sources, so renumber them onto the returned list.
+        ordered_used = sorted(used_indices)
+        answer = renumber_citation_markers(
+            answer,
+            {old + 1: new + 1 for new, old in enumerate(ordered_used)},
+        )
 
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
