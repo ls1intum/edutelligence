@@ -112,6 +112,22 @@ interface ModelLog {
   readonly providerId: number;
   readonly node: string;
   readonly modelName: string;
+  readonly success: boolean;
+}
+
+interface CalibrationProbeSummary {
+  readonly tensor_parallel_size: number | null;
+  readonly gpu_devices: string | null;
+  readonly kv_cache_sent_mb: number | null;
+  readonly base_residency_mb: number | null;
+  readonly loaded_vram_mb: number | null;
+  readonly sleeping_residual_mb: number | null;
+  readonly min_kv_cache_mb: number | null;
+  readonly max_kv_cache_mb: number | null;
+  readonly max_model_len: number | null;
+  readonly cold_load_time_s: number | null;
+  readonly wake_from_sleep_time_s: number | null;
+  readonly probe_command: string | null;
 }
 
 interface BackendCalibrationLog {
@@ -120,6 +136,7 @@ interface BackendCalibrationLog {
   readonly success: boolean;
   readonly probe_command: string | null;
   readonly error: string | null;
+  readonly summary: CalibrationProbeSummary | null;
   readonly log_text: string | null;
   readonly recorded_at: string | null;
   readonly updated_at: string;
@@ -297,6 +314,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   private readonly rawLogsByProviderId =
     signal<ReadonlyMap<number, string>>(new Map());
 
+  private readonly summaryByProviderId =
+    signal<ReadonlyMap<number, CalibrationProbeSummary | null>>(new Map());
+
   private readonly modelLogs =
     signal<readonly ModelLog[]>([]);
 
@@ -363,8 +383,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   };
 
   readonly hasAnyLogText = computed(() => {
-    return [...this.rawLogsByProviderId().values()].some(text => text.length > 0);
+    const hasRawLog = [...this.rawLogsByProviderId().values()].some(text => text.length > 0);
+    const hasSummary = [...this.summaryByProviderId().values()].some(summary => summary != null);
+    return hasRawLog || hasSummary;
   });
+
+  readonly showSelectedSummary = computed(() => this.selectedLog()?.success === true && this.selectedSummary() != null);
 
   readonly visibleTabs =
     computed<readonly ModelErrorTab[]>(() => this.tabs);
@@ -408,6 +432,58 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     }
     return this.rawLogsByProviderId().get(providerId) ?? '';
   });
+
+  readonly selectedSummary = computed(() => {
+    const providerId = this.selectedLog()?.providerId;
+    if (providerId == null) {
+      return null;
+    }
+    return this.summaryByProviderId().get(providerId) ?? null;
+  });
+
+  readonly summaryTiles = computed<readonly { title: string; rows: { label: string; value: string }[] }[]>(() => {
+    const summary = this.selectedSummary();
+    if (!summary) {
+      return [];
+    }
+
+    const vramRows: { label: string; value: string }[] = [
+      { label: 'Base residency', value: this.formatMb(summary.base_residency_mb) },
+      { label: 'Loaded VRAM', value: this.formatMb(summary.loaded_vram_mb) },
+    ];
+    if (summary.sleeping_residual_mb != null) {
+      vramRows.push({ label: 'Sleeping residual', value: this.formatMb(summary.sleeping_residual_mb) });
+    }
+
+    const timingRows: { label: string; value: string }[] = [
+      { label: 'Cold load', value: this.formatDuration(summary.cold_load_time_s != null ? summary.cold_load_time_s * 1000 : null) },
+    ];
+    if (summary.wake_from_sleep_time_s != null) {
+      timingRows.push({ label: 'Wake from sleep', value: this.formatDuration(summary.wake_from_sleep_time_s * 1000) });
+    }
+
+    return [
+      {
+        title: 'Placement',
+        rows: [
+          { label: 'Tensor parallel size', value: this.formatNumber(summary.tensor_parallel_size) },
+          { label: 'GPU devices', value: summary.gpu_devices || '—' },
+        ],
+      },
+      { title: 'VRAM', rows: vramRows },
+      {
+        title: 'KV cache',
+        rows: [
+          { label: 'Sent', value: this.formatMb(summary.kv_cache_sent_mb) },
+          { label: 'Range', value: `${this.formatMb(summary.min_kv_cache_mb)} – ${this.formatMb(summary.max_kv_cache_mb)}` },
+          { label: 'Max model length', value: this.formatNumber(summary.max_model_len) },
+        ],
+      },
+      { title: 'Timing', rows: timingRows },
+    ];
+  });
+
+  readonly summaryProbeCommand = computed(() => this.selectedSummary()?.probe_command || null);
 
   readonly logLines = computed(() =>
     this.completeLog().split('\n')
@@ -573,11 +649,16 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           providerId: log.provider_id,
           node: log.provider_name,
           modelName,
+          success: log.success,
         }))
       );
 
       this.rawLogsByProviderId.set(
         new Map(logs.map(log => [log.provider_id, log.log_text ?? '']))
+      );
+
+      this.summaryByProviderId.set(
+        new Map(logs.map(log => [log.provider_id, log.summary ?? null]))
       );
 
       this.calibrationResults.set(
@@ -589,6 +670,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     } catch {
       this.modelLogs.set([]);
       this.rawLogsByProviderId.set(new Map());
+      this.summaryByProviderId.set(new Map());
       this.calibrationResults.set([]);
     }
   }
@@ -779,6 +861,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
     const seconds = milliseconds / 1000;
     return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
+  }
+
+  formatMb(value: number | null): string {
+    return value === null || !Number.isFinite(value) ? '—' : `${value.toFixed(0)} MB`;
+  }
+
+  formatNumber(value: number | null): string {
+    return value === null || !Number.isFinite(value) ? '—' : `${value}`;
   }
 
   formatBenchmarkDuration(

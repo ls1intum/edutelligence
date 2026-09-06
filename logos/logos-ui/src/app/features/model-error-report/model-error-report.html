@@ -333,34 +333,29 @@
                   }
                 </select>
 
-                <button
-                  class="btn-copy-log"
-                  type="button"
-                  [class.btn-copy-log--ok]="logCopied()"
-                  [class.btn-copy-log--error]="logCopyFailed()"
-                  [disabled]="!completeLog()"
-                  (click)="copyLog()"
-                >
-                  @if (logCopied()) {
-                    <i class="pi pi-check"></i> Copied!
-                  } @else if (logCopyFailed()) {
-                    <i class="pi pi-times"></i> Copy failed
-                  } @else {
-                    <i class="pi pi-copy"></i> Copy log
-                  }
-                </button>
+                @if (completeLog()) {
+                  <button
+                    class="btn-copy-log"
+                    type="button"
+                    [class.btn-copy-log--ok]="logCopied()"
+                    [class.btn-copy-log--error]="logCopyFailed()"
+                    (click)="copyLog()"
+                  >
+                    @if (logCopied()) {
+                      <i class="pi pi-check"></i> Copied!
+                    } @else if (logCopyFailed()) {
+                      <i class="pi pi-times"></i> Copy failed
+                    } @else {
+                      <i class="pi pi-copy"></i> Copy log
+                    }
+                  </button>
+                }
 
               </div>
 
               <div class="log-viewer">
 
-                @if (!completeLog()) {
-
-                  <p class="log-viewer__empty">
-                    No log found for this node.
-                  </p>
-
-                } @else {
+                @if (completeLog()) {
 
                   <cdk-virtual-scroll-viewport
                     class="log-viewer__viewport"
@@ -384,6 +379,48 @@
                     </div>
 
                   </cdk-virtual-scroll-viewport>
+
+                } @else if (showSelectedSummary()) {
+
+                  <div class="log-summary">
+
+                    <div class="calibration-status calibration-status--success">
+                      <span class="calibration-status__icon">
+                        <i class="pi pi-check" aria-hidden="true"></i>
+                      </span>
+                      <span class="calibration-status__label">
+                        Calibration succeeded
+                      </span>
+                      <span class="calibration-status__value">
+                        No raw log is kept for successful runs
+                      </span>
+                    </div>
+
+                    <div class="metric-grid">
+                      @for (tile of summaryTiles(); track tile.title) {
+                        <section class="metric">
+                          <strong>{{ tile.title }}</strong>
+                          @for (row of tile.rows; track row.label) {
+                            <span>{{ row.label }} <b>{{ row.value }}</b></span>
+                          }
+                        </section>
+                      }
+                    </div>
+
+                    @if (summaryProbeCommand(); as command) {
+                      <div class="serving-command">
+                        <strong>Probe command</strong>
+                        <pre><code>{{ command }}</code></pre>
+                      </div>
+                    }
+
+                  </div>
+
+                } @else {
+
+                  <p class="log-viewer__empty">
+                    No log found for this node.
+                  </p>
 
                 }
 
