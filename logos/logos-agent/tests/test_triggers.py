@@ -27,10 +27,10 @@ def pull(number: int, title: str = "A change", body: str = "What it does.") -> d
     return {"number": number, "title": title, "body": body, "pull_request": {}}
 
 
-def github_error(message: str) -> Exception:
+def github_error(message: str, status: int = 404) -> Exception:
     from app.github import GitHubError
 
-    return GitHubError(message, status=404)
+    return GitHubError(message, status=status)
 
 
 def review(review_id: int, state: str = "CHANGES_REQUESTED", body: str = "Please fix X.") -> dict:
@@ -83,6 +83,7 @@ class FakeRepo:
         inline_comments=None,
         writers=("wasnertobias",),
         conversation=None,
+        failing_heads=None,
     ):
         self.conversation = conversation or []
         self.conversation_missing: list[str] = []
@@ -106,6 +107,10 @@ class FakeRepo:
         # Per pull request: (head ref, head repository). Defaults to an agent
         # branch in this repository.
         self.heads = heads or {}
+        # Numbers whose head lookup fails — a rate limit or a dropped
+        # connection, not a 404: the answer is a failure, not a "this is
+        # not a pull request".
+        self.failing_heads = failing_heads or set()
         self.review_comments = review_comments or {}
         self.issue_comments = issue_comments or []
         self.inline_comments = inline_comments or []
@@ -133,6 +138,8 @@ class FakeRepo:
             return self.review_comments.get((number, review_id), [])
 
         async def pull_request(number):
+            if number in self.failing_heads:
+                raise github_error(f"GET /pulls/{number} failed (502)", status=502)
             if number in self.not_pulls:
                 # What GitHub answers for a plain issue.
                 raise github_error(f"GET /pulls/{number} failed (404)")
@@ -1898,3 +1905,94 @@ class TestBeingAskedForAReview:
             "pr-882-review-requested-wasnertobias-event-900882",
             "pr-882-review-requested-wasnertobias-event-900883",
         ]
+
+
+class TestAHeadThePassCouldNotRead:
+    """What a failed lookup may not stand behind.
+
+    A rate limit or a dropped connection is not a fork: the head that
+    could not be read is confirmed neither ours to push nor somebody
+    else's. A request about it waits for the next pass instead of being
+    spent on an answer the failure does not allow — a read-only session
+    would record its reference and never try the branch again.
+    """
+
+    async def test_a_change_request_waits_while_the_head_is_unreadable(self, monkeypatch):
+        # A change requested on its own pull request while the head lookup
+        # fails. Neither a session on the branch nor a read-only one may be
+        # queued — the second would spend the request — and the comment
+        # mark must not move past the question, or it falls out of the
+        # window.
+        repo = FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[comment(9110, 772, "please also handle the empty case", "wasnertobias")],
+            heads={772: ("logos/agent/x/session-1", REPO)},
+            failing_heads={772},
+        )
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert queued == []
+        assert fake_db.created == []
+        assert fake_db.comment_mark is None
+
+    async def test_the_next_pass_answers_the_waited_question(self, monkeypatch):
+        # The same request once the lookup works again is real work: the
+        # session lands on the branch the head has, and the reference is
+        # recorded only then.
+        repo = FakeRepo(
+            authored_pulls=[pull(772)],
+            issue_comments=[comment(9111, 772, "please also handle the empty case", "wasnertobias")],
+            heads={772: ("logos/agent/x/session-1", REPO)},
+            failing_heads={772},
+        )
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        poller = triggers.TriggerPoller()
+
+        assert await poller.poll_once() == []
+        assert fake_db.handled == set()
+
+        repo.failing_heads.clear()
+        queued = await poller.poll_once()
+
+        assert len(queued) == 1
+        assert fake_db.created[0]["branch"] == "logos/agent/x/session-1"
+
+    async def test_a_review_request_is_not_spent_on_a_failed_lookup(self, monkeypatch):
+        # The review request stays unacknowledged while the head cannot be
+        # read, and the next pass — with the lookup working — answers it.
+        repo = FakeRepo(
+            heads={882: ("logos/agent/pr/session-882", REPO)},
+            failing_heads={882},
+        )
+        repo.review_requests = [self.asked(882)]
+        repo.review_requesters = {882: "wasnertobias"}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        poller = triggers.TriggerPoller()
+
+        assert await poller.poll_once() == []
+        assert fake_db.created == []
+
+        repo.failing_heads.clear()
+        queued = await poller.poll_once()
+
+        assert len(queued) == 1
+        created = fake_db.created[0]
+        assert created["trigger_kind"] == "review-request"
+        # The head is in this repository, so the answer works its branch.
+        assert created["branch"] == "logos/agent/pr/session-882"
+
+    @staticmethod
+    def asked(number: int, title: str = "A change", body: str = "What it does."):
+        return {"number": number, "title": title, "body": body, "labels": []}

@@ -90,6 +90,14 @@ CREATED_BY = "logos-agent (trigger)"
 # Where a session writes an answer for the runner to post.
 REPLY_FILE = "reply.md"
 
+# The head of a pull request the pass could not read. Not the same as None:
+# None is an answer — the lookup succeeded and the head is confirmed not
+# ours to push (a fork's branch, a protected one). This is the absence of
+# an answer, and a candidate about it is deferred to the next pass rather
+# than worked, because neither a branch nor a read-only answer is something
+# a failed lookup may stand behind.
+_HEAD_UNKNOWN = object()
+
 
 _NAME_SAFE = re.compile(r"[^a-z0-9]+")
 
@@ -516,6 +524,15 @@ class TriggerPoller:
         for candidate in candidates:
             if candidate["ref"] in handled:
                 continue
+            if candidate.get("deferred"):
+                # The head of its pull request could not be read this
+                # pass, and no shape of the candidate is an answer the
+                # pass may back up. Nothing is recorded, and the mark
+                # below must not move past the conversation either: the
+                # next pass reads the head again and asks the same
+                # question.
+                deferred = True
+                continue
             if room <= 0:
                 deferred = True
                 continue
@@ -691,6 +708,11 @@ class TriggerPoller:
         consumed: set[int] = set()
         for number, pull in responsible.items():
             branch = pull["branch"]
+            if branch is _HEAD_UNKNOWN:
+                # Neither a review nor a takeover is an answer a failed
+                # lookup allows. Both are read from the repository's state,
+                # so the next pass finds them again; nothing is recorded.
+                continue
             review = await github.latest_changes_requested_review(number)
             if review is not None:
                 review_id = int(review["id"])
@@ -806,7 +828,14 @@ class TriggerPoller:
             # finds: the head is its branch when the head is ours to push
             # — in this repository and not protected. A fork's head is not,
             # and there the review is words and only words.
-            branch = await self._writable_head(number)
+            try:
+                branch = await self._writable_head(number)
+            except Exception as exc:
+                # The request stays unacknowledged and the next pass finds
+                # it again; answering it now would spend it on a shape this
+                # pass may not back up.
+                logger.info("could not read the head of pull request %s: %s", number, exc)
+                continue
             found.append(
                 {
                     # One request per timeline event, not per person: asking
@@ -855,12 +884,20 @@ class TriggerPoller:
             number = entry.get("number")
             if not isinstance(number, int) or number in pulls:
                 return
+            try:
+                branch = await self._writable_head(number)
+            except Exception as exc:
+                # A head that cannot be read is not a read-only head:
+                # read-only is what a successful lookup concludes, and the
+                # difference is the one a transient failure must not blur.
+                logger.info("could not read the head of pull request %s: %s", number, exc)
+                branch = _HEAD_UNKNOWN
             pulls[number] = {
                 "title": str(entry.get("title") or ""),
                 "body": str(entry.get("body") or ""),
                 "labels": entry.get("labels") or (),
                 "assigned": assigned,
-                "branch": await self._writable_head(number),
+                "branch": branch,
             }
 
         # Its own first, and deliberately so: `remember` keeps the first
@@ -957,12 +994,15 @@ class TriggerPoller:
         required: a pull request handed over by a person keeps its own
         branch name, because renaming it would abandon the pull request it
         belongs to.
+
+        ``None`` is an answer, not a shrug: it means the lookup succeeded
+        and the head is confirmed not ours to push. A lookup that fails
+        raises instead — a caller that mistook a rate limit or a dead
+        network for a fork's head would answer a code-change request in
+        words and record its reference, spending the request the failure
+        was standing in the way of.
         """
-        try:
-            pull = await github.pull_request(number)
-        except Exception as exc:
-            logger.warning("could not read pull request %s: %s", number, exc)
-            return None
+        pull = await github.pull_request(number)
         ref, repo = github.head_of(pull)
         if not ref:
             return None
@@ -1051,6 +1091,8 @@ class TriggerPoller:
             # or the answer would be written from main, a diff it was
             # never shown.
             about_pull = pull is not None or other is not None
+            newest = thread["newest_id"]
+            inline = kind == "inline"
             # Anybody may comment on a public repository; not everybody may
             # direct a change to it. A conversation with no writer in it is
             # answered in words and gets no branch, so the credentialed
@@ -1060,7 +1102,33 @@ class TriggerPoller:
             # "@agent please fix the linting" is a request to change code,
             # and answering it with a description of the change is not what
             # was asked.
-            branch = pull["branch"] if pull else (await self._writable_head(number) if other else None)
+            if pull:
+                branch = pull["branch"]
+            elif other:
+                try:
+                    branch = await self._writable_head(number)
+                except Exception as exc:
+                    logger.info("could not read the head of pull request %s: %s", number, exc)
+                    branch = _HEAD_UNKNOWN
+            else:
+                branch = None
+            if branch is _HEAD_UNKNOWN:
+                # Read-only is an answer a failed lookup does not give, and
+                # queueing this conversation in any shape would spend the
+                # request the failure was standing in the way of. The
+                # candidate still exists, with nothing queued for it, so
+                # the comment mark does not move past it: the next pass
+                # reads the head again and then answers it for real.
+                candidates.append(
+                    {
+                        "ref": (
+                            f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"
+                        ),
+                        "kind": "comment",
+                        "deferred": True,
+                    }
+                )
+                continue
             comments = thread["comments"]
             if branch is not None:
                 # A writable branch makes the answer a code change, and a
@@ -1077,8 +1145,6 @@ class TriggerPoller:
                     branch = None
                 else:
                     comments = directed
-            newest = thread["newest_id"]
-            inline = kind == "inline"
             candidates.append(
                 {
                     # The reference names the conversation and its latest
