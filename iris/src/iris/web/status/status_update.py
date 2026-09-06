@@ -112,6 +112,29 @@ class StatusCallback:
                 capture_exception(e)
             return False
 
+    # Delay before each retry of a delivery-critical send. The nth entry sits between attempt n and
+    # n+1, so a three-attempt send waits 1s and then 2s. A send with more attempts than entries keeps
+    # repeating the last delay rather than growing one.
+    _RETRY_BACKOFF_S: tuple[int, ...] = (1, 2, 4)
+
+    def _send_payload_with_backoff(
+        self, payload: dict[str, Any], attempts: int
+    ) -> bool:
+        """Send a payload, retrying up to ``attempts`` times with backoff.
+
+        A frame Artemis must not lose (the chat answer, a terminal decision) is worth a second and a
+        third try; everything else is sent once, because a heartbeat that fails is superseded by the
+        next one anyway and retrying it only delays the pipeline.
+        """
+        for attempt in range(attempts):
+            if self._send_status_payload(payload):
+                return True
+            if attempt < attempts - 1:
+                time.sleep(
+                    self._RETRY_BACKOFF_S[min(attempt, len(self._RETRY_BACKOFF_S) - 1)]
+                )
+        return False
+
     def _get_running_update_executor(self) -> TracedThreadPoolExecutor:
         """Create the FIFO async sender lazily for running updates."""
         with self._running_update_lock:
@@ -452,15 +475,12 @@ class ChatRunCallback(StatusCallback):
         self._drain_running_updates()
 
         try:
-            for attempt in range(attempts):
-                if self._send_status_payload(payload):
-                    if carried_result:
-                        self._undelivered_result_fields = None
-                    if pending_tokens:
-                        self._delivered_token_count += len(pending_tokens)
-                    return True
-                if attempt < attempts - 1:
-                    time.sleep((1, 2, 4)[attempt])
+            if self._send_payload_with_backoff(payload, attempts):
+                if carried_result:
+                    self._undelivered_result_fields = None
+                if pending_tokens:
+                    self._delivered_token_count += len(pending_tokens)
+                return True
             return False
         finally:
             if terminal_send:
@@ -611,12 +631,9 @@ class StruggleInterventionCallback(StatusCallback):
         """
         if not self._terminal_sent:
             return super().on_status_update()
-        for attempt in range(self._TERMINAL_RETRY_ATTEMPTS):
-            if super().on_status_update():
-                return True
-            if attempt < self._TERMINAL_RETRY_ATTEMPTS - 1:
-                time.sleep((1, 2)[attempt])
-        return False
+        return self._send_payload_with_backoff(
+            self._serialize_status(), self._TERMINAL_RETRY_ATTEMPTS
+        )
 
     def _reject_after_terminal(self, operation: str) -> None:
         """Absorb the one trailing finish this pipeline's shape produces.
