@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import requests
 
@@ -113,14 +113,21 @@ def test_a_terminal_frame_artemis_rejects_once_is_retried():
 
 
 def test_a_terminal_frame_gives_up_after_the_bounded_retries():
+    """Three attempts, waiting 1s then 2s, then the frame is reported as undelivered.
+
+    The numbers are spelled out rather than read back off the callback: comparing the call count
+    against the very constant that produced it would pass for any bound, including one someone
+    lowered to a single attempt.
+    """
     cb = StruggleInterventionCallback(run_id="job-9", base_url="http://localhost:8080")
     with (
         patch("requests.post", return_value=_FailingResponse()) as post,
-        patch("time.sleep"),
+        patch("time.sleep") as sleep,
     ):
         assert cb.finish(result="a hint") is False
 
-    assert post.call_count == StruggleInterventionCallback._TERMINAL_RETRY_ATTEMPTS
+    assert post.call_count == 3
+    assert sleep.call_args_list == [call(1), call(2)]
 
 
 def test_a_running_update_is_not_retried():
