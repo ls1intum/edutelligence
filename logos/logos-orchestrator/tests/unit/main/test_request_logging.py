@@ -54,7 +54,9 @@ def _make_dummy_db(cost_micro_cents=None):
         def update_log_entry_metrics(self, **kwargs):
             self.metric_calls.append(kwargs)
 
-        def get_usage_cost_micro_cents(self, model_id, provider_id, usage, response_at):  # noqa: ARG002
+        def get_usage_cost_micro_cents(
+            self, model_id, provider_id, usage, response_at, service_tier=None
+        ):  # noqa: ARG002
             return cost_micro_cents
 
     return DummyDB
@@ -68,6 +70,57 @@ async def _read_stream_response(response) -> str:
         else:
             chunks.append(chunk)
     return b"".join(chunks).decode("utf-8")
+
+
+def test_native_gemini_usage_metadata_prices_live(monkeypatch):
+    dummy_db = _make_dummy_db(cost_micro_cents=1234)
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    payload, changed = main._response_with_cost(
+        {
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 4,
+                "thoughtsTokenCount": 1,
+                "totalTokenCount": 15,
+            }
+        },
+        provider_id=2,
+        model_id=3,
+        response_at=main.datetime.datetime.now(main.datetime.timezone.utc),
+    )
+    assert changed is True
+    assert payload["usage"]["cost"] == round(1234 / 100_000_000, 8)
+    assert payload["usage"]["cost_currency"] == "USD"
+
+
+def test_completed_image_response_prices_derived_quantities_live(monkeypatch):
+    dummy_db = _make_dummy_db(cost_micro_cents=400_000_000)
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    payload, changed = main._response_with_cost(
+        {"data": [{"url": "https://example.invalid/image.png"}]},
+        provider_id=2,
+        model_id=3,
+        response_at=main.datetime.datetime.now(main.datetime.timezone.utc),
+        request_payload={"size": "1024x1024"},
+        path="v1/images/generations",
+        allow_derived_only=True,
+    )
+    assert changed is True
+    assert payload["usage"]["cost"] == 4.0
+    assert dummy_db.payload_calls == []
+
+
+def test_intermediate_frame_does_not_price_derived_request_quantity(monkeypatch):
+    dummy_db = _make_dummy_db(cost_micro_cents=1)
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    payload, changed = main._response_with_cost(
+        {"choices": [{"delta": {"content": "hello"}}]},
+        provider_id=2,
+        model_id=3,
+        response_at=main.datetime.datetime.now(main.datetime.timezone.utc),
+    )
+    assert changed is False
+    assert "usage" not in payload
 
 
 def _make_pipeline(
@@ -183,6 +236,9 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
         "prompt_tokens": 3,
         "completion_tokens": 5,
         "total_tokens": 8,
+        "billed_requests": 1,
+        "billed_input_characters": 2,
+        "billed_output_characters": 5,
     }
     assert dummy_db.payload_calls[0]["payload"]["usage"]["total_tokens"] == 8
     assert completion_calls == [
@@ -195,6 +251,9 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
                 "prompt_tokens": 3,
                 "completion_tokens": 5,
                 "total_tokens": 8,
+                "billed_requests": 1,
+                "billed_input_characters": 2,
+                "billed_output_characters": 5,
             },
         }
     ]
@@ -262,6 +321,9 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
         "completion_tokens": 4,
         "total_tokens": 14,
         "prompt_cached_tokens": 6,
+        "billed_requests": 1,
+        "billed_input_characters": 2,
+        "billed_output_characters": 2,
     }
 
 
@@ -365,6 +427,52 @@ async def test_cloud_streaming_response_returns_eur_cost_in_terminal_usage(monke
 
 
 @pytest.mark.asyncio
+async def test_cloud_streaming_delta_frames_get_no_interim_cost(monkeypatch):
+    # A delta frame carries no provider usage object; only the terminal usage
+    # frame should be enriched with a settled cost. Without the usage-signal gate
+    # every delta frame would get its own interim cost (billed_requests alone is
+    # enough to price a request-priced model).
+    dummy_db = _make_dummy_db(cost_micro_cents=375)
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    pipeline, _, _ = _make_pipeline(
+        stream_chunks=[
+            b'data: {"id":"c","choices":[{"delta":{"content":"one"}}]}\n\n',
+            b'data: {"id":"c","choices":[{"delta":{"content":"two"}}]}\n\n',
+            b'data: {"id":"c","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\n\n',
+            b"data: [DONE]\n\n",
+        ],
+        stream_headers={"Content-Type": "text/event-stream"},
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="cloud", forward_url="https://provider.test/v1/chat/completions"),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        62,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+    )
+
+    body = await _read_stream_response(response)
+    frames = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: {")]
+    delta_frames = [f for f in frames if f.get("choices") and f["choices"][0].get("delta")]
+    assert delta_frames, "expected the delta frames to be forwarded"
+    assert all("usage" not in f for f in delta_frames)
+    usage_frames = [f for f in frames if isinstance(f.get("usage"), dict)]
+    assert len(usage_frames) == 1
+    assert usage_frames[0]["usage"]["cost"] == 0.00000375
+
+
+@pytest.mark.asyncio
 async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
     dummy_db = _make_dummy_db(cost_micro_cents=12345)
     monkeypatch.setattr(main, "DBManager", dummy_db)
@@ -407,7 +515,51 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
         "prompt_tokens": 10,
         "completion_tokens": 5,
         "total_tokens": 15,
+        "billed_requests": 1,
+        "billed_input_characters": 2,
+        "billed_output_characters": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_duration_only_response_still_prices_live(monkeypatch):
+    # A verbose audio transcription puts duration at the root and carries no
+    # usage object; the duration is a provider usage signal, so a live cost is
+    # still settled onto the response.
+    dummy_db = _make_dummy_db(cost_micro_cents=999)
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response={"text": "transcribed", "duration": "3.36"},
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers=None,
+            status_code=200,
+        )
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="cloud", forward_url="https://provider.test/v1/audio/transcriptions"),
+        {"file": "audio"},
+        64,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+    )
+
+    body = json.loads(response.body)
+    assert body["usage"]["cost"] == round(999 / 100_000_000, 8)
+    assert body["usage"]["cost_currency"] == "USD"
 
 
 @pytest.mark.asyncio
@@ -535,6 +687,8 @@ async def test_proxy_streaming_response_logs_usage_and_status(monkeypatch):
         "prompt_tokens": 2,
         "completion_tokens": 4,
         "total_tokens": 6,
+        "billed_requests": 1,
+        "billed_output_characters": 5,
     }
     assert dummy_db.metric_calls == [
         {
@@ -601,8 +755,11 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
             "result_status": "error",
             "error_message": terminal_error,
             "cold_start": False,
-            # The stream carried no usage chunk, so nothing was extracted.
-            "usage_tokens": {},
+            # Failed requests do not receive the flat successful-request charge.
+            "usage_tokens": {
+                "billed_input_characters": 2,
+                "billed_output_characters": 7,
+            },
         }
     ]
     assert completion_logs[0]["status"] == "error"
@@ -800,8 +957,8 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
             "result_status": "error",
             "error_message": "bad request",
             "cold_start": False,
-            # An error body carries no usage, so nothing was extracted.
-            "usage_tokens": {},
+            # Failed requests do not receive the flat successful-request charge.
+            "usage_tokens": {"billed_input_characters": 3},
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-sync-error")]
@@ -862,6 +1019,9 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
         "prompt_tokens": 11,
         "completion_tokens": 13,
         "total_tokens": 24,
+        "billed_requests": 1,
+        "billed_input_characters": 3,
+        "billed_output_characters": 2,
     }
     assert completion_calls == [
         {
@@ -873,6 +1033,9 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
                 "prompt_tokens": 11,
                 "completion_tokens": 13,
                 "total_tokens": 24,
+                "billed_requests": 1,
+                "billed_input_characters": 3,
+                "billed_output_characters": 2,
             },
         }
     ]
@@ -1151,7 +1314,7 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio
@@ -1209,7 +1372,7 @@ async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "application/json"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250}
+    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio

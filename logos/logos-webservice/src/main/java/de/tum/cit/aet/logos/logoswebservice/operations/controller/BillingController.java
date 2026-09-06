@@ -38,7 +38,7 @@ public class BillingController {
         try {
             return ResponseEntity.ok(billingService.addBilling(typeName, typeCost, validFrom, modelId));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 

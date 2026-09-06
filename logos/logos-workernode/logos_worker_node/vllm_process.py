@@ -411,6 +411,22 @@ class VllmProcessHandle:
         self._process_group_id: int | None = None
         self._max_concurrency: int | None = None
         self.hf_home_override: str | None = None
+        # Duration of the most recent successful cold start (spawn → ready).
+        # None until at least one spawn has completed. Included in the lane
+        # status dict so the orchestrator can feed it into its LatencyStore.
+        self._last_cold_load_s: float | None = None
+        # Duration of the most recent successful wake-from-sleep (/wake_up
+        # call). None until at least one successful wake has been observed.
+        self._last_wake_from_sleep_s: float | None = None
+        # Cumulative vLLM Prometheus counters from the previous poll; used to
+        # compute per-interval deltas for the prefill EWMA in the orchestrator.
+        # TTFT includes prefill; TPOT (time-per-output-token) is decode-only.
+        # Genuine prefill = avg_TTFT − avg_TPOT avoids double-counting.
+        self._prev_ttft_sum: float = 0.0
+        self._prev_ttft_count: float = 0.0
+        self._prev_tpot_sum: float = 0.0
+        self._prev_tpot_count: float = 0.0
+        self._prev_prompt_tokens_total: float = 0.0
         # Set by _maybe_prepare_sharded_checkpoint when a pre-sharded checkpoint
         # is used for a TP>1 lane; _build_cmd then serves this directory with
         # --load-format sharded_state instead of the full checkpoint.
@@ -569,6 +585,7 @@ class VllmProcessHandle:
         )
 
         process_env = self._build_process_env(lane_config, env, cmd)
+        _spawn_t0 = asyncio.get_event_loop().time()
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             env=process_env,
@@ -593,6 +610,13 @@ class VllmProcessHandle:
             self._persist_failure_logs("startup_failed")
             await self._kill_process()
             raise RuntimeError(failure)
+
+        self._last_cold_load_s = asyncio.get_event_loop().time() - _spawn_t0
+        logger.info(
+            "[%s] Cold load completed in %.1f s",
+            self.lane_id,
+            self._last_cold_load_s,
+        )
 
         # Discover TP worker child PIDs so _verify_vram_released can track them
         self._known_child_pids = await self._discover_child_pids(self._process.pid)
@@ -623,6 +647,26 @@ class VllmProcessHandle:
         else:
             self._stuck_vram = False
         return self.status()
+
+    @property
+    def last_cold_load_s(self) -> float | None:
+        """Wall-clock seconds from process spawn to first successful health check.
+
+        None until the first successful cold start has been observed.
+        Included in the runtime status dict so the orchestrator can feed it
+        into its LatencyStore.
+        """
+        return self._last_cold_load_s
+
+    @property
+    def last_wake_from_sleep_s(self) -> float | None:
+        """Wall-clock seconds of the most recent /wake_up HTTP call.
+
+        None until at least one wake has completed successfully.
+        Included in the runtime status dict so the orchestrator can feed it
+        into its LatencyStore as a SLEEPING-tier overhead observation.
+        """
+        return self._last_wake_from_sleep_s
 
     @property
     def has_stuck_vram(self) -> bool:
@@ -1275,7 +1319,10 @@ class VllmProcessHandle:
             "prompt_tokens_total": None,
             "generation_tokens_total": None,
             "ttft_histogram": {},
+            "tpot_histogram": {},
             "e2e_latency_histogram": {},
+            "last_prefill_s": None,
+            "last_prefill_tokens": None,
         }
         if self._http is None:
             return metrics
@@ -1287,6 +1334,10 @@ class VllmProcessHandle:
             _prefix_hits: float = 0.0
             _spec_draft_tokens_total: float = 0.0
             _spec_accepted_tokens_total: float = 0.0
+            _ttft_sum: float = self._prev_ttft_sum
+            _ttft_count: float = self._prev_ttft_count
+            _tpot_sum: float = self._prev_tpot_sum
+            _tpot_count: float = self._prev_tpot_count
             for raw_line in resp.text.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#"):
@@ -1348,6 +1399,19 @@ class VllmProcessHandle:
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["ttft_histogram"][bucket] = value
+                elif metric_name.endswith("time_to_first_token_seconds_sum"):
+                    _ttft_sum = value
+                elif metric_name.endswith("time_to_first_token_seconds_count"):
+                    _ttft_count = value
+                elif "time_per_output_token_seconds_bucket" in metric_name:
+                    bucket = "unknown"
+                    if 'le="' in name:
+                        bucket = name.split('le="', 1)[1].split('"', 1)[0]
+                    metrics["tpot_histogram"][bucket] = value
+                elif metric_name.endswith("time_per_output_token_seconds_sum"):
+                    _tpot_sum = value
+                elif metric_name.endswith("time_per_output_token_seconds_count"):
+                    _tpot_count = value
                 elif "e2e_request_latency_seconds_bucket" in metric_name:
                     bucket = "unknown"
                     if 'le="' in name:
@@ -1367,6 +1431,25 @@ class VllmProcessHandle:
                 # token-weighted aggregation in the orchestrator).
                 metrics["mtp_draft_tokens_total"] = _spec_draft_tokens_total
                 metrics["mtp_accepted_tokens_total"] = _spec_accepted_tokens_total
+            # Compute genuine prefill duration as TTFT − TPOT.
+            # Both require positive deltas; a negative delta means the vLLM process
+            # restarted and counters reset — skip that poll to avoid wrong estimates.
+            delta_ttft_count = _ttft_count - self._prev_ttft_count
+            delta_tpot_count = _tpot_count - self._prev_tpot_count
+            if delta_ttft_count > 0 and delta_tpot_count > 0:
+                avg_ttft = (_ttft_sum - self._prev_ttft_sum) / delta_ttft_count
+                avg_tpot = (_tpot_sum - self._prev_tpot_sum) / delta_tpot_count
+                prefill_s = max(0.0, avg_ttft - avg_tpot)
+                delta_tokens = (metrics["prompt_tokens_total"] or 0.0) - self._prev_prompt_tokens_total
+                if prefill_s > 0.0:
+                    metrics["last_prefill_s"] = prefill_s
+                if delta_tokens > 0:
+                    metrics["last_prefill_tokens"] = delta_tokens / delta_ttft_count
+            self._prev_ttft_sum = _ttft_sum
+            self._prev_ttft_count = _ttft_count
+            self._prev_tpot_sum = _tpot_sum
+            self._prev_tpot_count = _tpot_count
+            self._prev_prompt_tokens_total = metrics["prompt_tokens_total"] or 0.0
         except httpx.HTTPError:
             return metrics
         return metrics
@@ -1395,6 +1478,7 @@ class VllmProcessHandle:
         """Wake up a sleeping vLLM lane."""
         self._ensure_sleep_mode_ready()
         url = f"{self._base_url()}/wake_up"
+        _wake_t0 = asyncio.get_event_loop().time()
         try:
             resp = await self._http.post(url, timeout=120.0)
         except httpx.HTTPError as exc:
@@ -1408,6 +1492,9 @@ class VllmProcessHandle:
 
         if resp.status_code not in (200, 202):
             raise RuntimeError(f"[{self.lane_id}] vLLM /wake_up failed with HTTP {resp.status_code}: {payload}")
+
+        self._last_wake_from_sleep_s = asyncio.get_event_loop().time() - _wake_t0
+        logger.info("[%s] Wake from sleep completed in %.1f s", self.lane_id, self._last_wake_from_sleep_s)
 
         # Workaround for upstream vLLM bug: /sleep clears only the
         # EngineCore-side (P1) mm receiver cache via EngineCore.reset_mm_cache,
