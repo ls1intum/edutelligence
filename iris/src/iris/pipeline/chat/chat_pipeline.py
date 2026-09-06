@@ -227,6 +227,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "exercise_chat_guide_prompt.j2"
         )
         self._guide_model_cache = {}
+        # Bound to the run's list by AbstractAgentPipeline.__call__; initialised here so the
+        # outer error path can report usage even for a run that died before that binding.
+        self.tokens = []
 
     def __repr__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
@@ -397,10 +400,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
             activities, activity_seq = _tool_activity_snapshot(state)
+            # fail() is terminal, so this is the last chance to report what the run spent.
+            # The callback drops whatever a previous send already delivered, so an answer
+            # that went out before the failure is not billed a second time.
             state.callback.fail(
                 "Error in processing response",
                 activities=activities,
                 activity_seq=activity_seq,
+                tokens=state.tokens,
                 exception=e,
             )
             return state.result
@@ -1028,5 +1035,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             callback.fail(
                 "An error occurred while running the chat pipeline.",
+                tokens=self.tokens,
                 exception=e,
             )
