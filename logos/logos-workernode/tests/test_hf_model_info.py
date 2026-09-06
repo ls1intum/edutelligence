@@ -91,6 +91,20 @@ def test_derive_kv_per_token_bytes_skips_mamba_hybrid_architectures():
     assert _derive_kv_per_token_bytes(config, None) is None
 
 
+def test_derive_kv_per_token_bytes_skips_pure_mamba_architectures():
+    """Pure Mamba/SSM models carry no attention KV cache at all. HF's own
+    MambaConfig names this field state_size (confirmed against a real
+    state-spaces/mamba-130m-hf config.json) — distinct from the
+    mamba_d_state field hybrid SSM+attention configs (Jamba) use."""
+    config = {
+        "num_hidden_layers": 24,
+        "hidden_size": 768,
+        "torch_dtype": "float32",
+        "state_size": 16,
+    }
+    assert _derive_kv_per_token_bytes(config, None) is None
+
+
 def test_kv_bytes_for_dtype():
     # Same geometry, a plan's --kv-cache-dtype override recomputed on
     # demand instead of the value cached under the config's own dtype.
@@ -383,6 +397,41 @@ def test_cache_get_treats_a_malformed_entry_as_a_miss(tmp_path):
     assert "org/not-a-dict" not in cache._entries  # noqa: SLF001
     assert cache.get("org/unexpected-key") is None
     assert "org/unexpected-key" not in cache._entries  # noqa: SLF001
+
+
+def test_cache_get_treats_wrong_typed_values_as_a_miss(tmp_path):
+    """All keys can be legitimate and still corrupt: HfModelMetadata is a
+    plain dataclass and never validates field types, so a string
+    weight_bytes would otherwise deserialize fine and only blow up much
+    later in _fits_at_tp's arithmetic — aborting the whole calibration
+    session instead of just missing the cache for this one model."""
+    cache = HfModelInfoCache(tmp_path)
+    cache._entries["org/string-weight"] = {  # noqa: SLF001
+        "weight_bytes": "corrupt",
+        "source": "hf",
+        "fetched_at": time.time(),
+    }
+    cache._entries["org/string-heads"] = {  # noqa: SLF001
+        "num_key_value_heads": "8",
+        "source": "hf",
+        "fetched_at": time.time(),
+    }
+    cache._entries["org/negative-weight"] = {  # noqa: SLF001
+        "weight_bytes": -1,
+        "source": "hf",
+        "fetched_at": time.time(),
+    }
+    cache._entries["org/bool-weight"] = {  # noqa: SLF001
+        "weight_bytes": True,
+        "source": "hf",
+        "fetched_at": time.time(),
+    }
+
+    assert cache.get("org/string-weight") is None
+    assert "org/string-weight" not in cache._entries  # noqa: SLF001
+    assert cache.get("org/string-heads") is None
+    assert cache.get("org/negative-weight") is None
+    assert cache.get("org/bool-weight") is None
 
 
 def test_cache_put_sweeps_a_malformed_entry_belonging_to_another_model(tmp_path):

@@ -83,6 +83,26 @@ class HfModelMetadata:
 
 _HF_METADATA_FIELDS = frozenset(f.name for f in fields(HfModelMetadata))
 
+# Expected type(s) per field — a value of the wrong type would otherwise
+# pass _is_valid_entry's key-only check and crash later arithmetic
+# (min_feasible_tp/_fits_at_tp) instead of being treated as a cache
+# miss. Fields absent here (none currently) are left unchecked.
+_HF_METADATA_VALUE_TYPES: dict[str, tuple[type, ...]] = {
+    "weight_bytes": (int,),
+    "kv_per_token_bytes": (int,),
+    "num_key_value_heads": (int,),
+    "num_hidden_layers": (int,),
+    "kv_head_dim": (int, float),
+    "max_context_length": (int,),
+    "quantization_method": (str,),
+    "fetched_at": (int, float),
+    "source": (str,),
+    "error": (str,),
+}
+# May legitimately be None; "fetched_at"/"source" always carry a
+# concrete default and are never written as None by put().
+_HF_METADATA_NULLABLE_FIELDS = frozenset(_HF_METADATA_VALUE_TYPES) - {"fetched_at", "source"}
+
 
 def _get_config_field(config: dict[str, Any], key: str) -> Any:
     # Multimodal checkpoints (Llava, Qwen-VL, ...) nest the LM config under
@@ -117,9 +137,9 @@ def _effective_max_context_length(config: dict[str, Any], base: int | None) -> i
 
 # config.json fields marking architectures whose KV cache doesn't
 # follow the standard "layers * kv_heads * head_dim" shape: kv_lora_rank
-# (MLA — DeepSeek-V2/V3/R1, compressed latent, not per-head) and
+# (MLA), state_size (HF's own MambaConfig field for pure Mamba/SSM),
 # mamba_d_state / layers_block_type (SSM hybrids — Jamba, Zamba).
-_NON_STANDARD_KV_MARKER_FIELDS = ("kv_lora_rank", "mamba_d_state", "layers_block_type")
+_NON_STANDARD_KV_MARKER_FIELDS = ("kv_lora_rank", "state_size", "mamba_d_state", "layers_block_type")
 
 
 def _uses_non_standard_kv_cache(config: dict[str, Any]) -> bool:
@@ -314,11 +334,25 @@ class HfModelInfoCache:
 
     @staticmethod
     def _is_valid_entry(entry: Any) -> bool:
-        # A JSON value that isn't a plain mapping of only the fields
-        # HfModelMetadata(**entry) accepts (hand-edited, corrupted, or a
-        # schema this code doesn't know) would otherwise raise out of
-        # get()/put() instead of being treated as a miss.
-        return isinstance(entry, dict) and set(entry.keys()) <= _HF_METADATA_FIELDS
+        # A JSON value with unknown keys or wrongly-typed values would
+        # otherwise raise out of get()/put() — a dataclass doesn't
+        # validate types, so e.g. a string weight_bytes would reach
+        # _fits_at_tp's math and crash the whole calibration run.
+        if not (isinstance(entry, dict) and set(entry.keys()) <= _HF_METADATA_FIELDS):
+            return False
+        for key, value in entry.items():
+            expected_types = _HF_METADATA_VALUE_TYPES.get(key)
+            if expected_types is None:
+                continue
+            if value is None:
+                if key in _HF_METADATA_NULLABLE_FIELDS:
+                    continue
+                return False
+            if isinstance(value, bool) or not isinstance(value, expected_types):
+                return False
+            if expected_types != (str,) and value < 0:
+                return False
+        return True
 
     @staticmethod
     def _is_expired(entry: dict[str, Any]) -> bool:

@@ -18,8 +18,12 @@ whole_model_kv_mb * heads_per_rank / num_key_value_heads.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
+
 from logos.capacity.capacity_planner import CapacityPlanner
-from logos.sdi.models import ModelProfile
+from logos.sdi.models import LaneSchedulerSignals, ModelProfile
 
 
 def _hf_profile(*, kv_per_token_bytes: int, num_key_value_heads: int | None, max_context_length: int = 8192):
@@ -147,3 +151,58 @@ def test_estimate_model_loaded_vram_grows_when_kv_heads_replicated():
     wide = _hf_profile(kv_per_token_bytes=2 * 32 * 8 * 128 * 2, num_key_value_heads=8)
     wide.tensor_parallel_size = 16
     assert planner._estimate_model_loaded_vram(wide) > planner._estimate_model_loaded_vram(narrow)  # noqa: SLF001
+
+
+def test_fleet_kv_rebalance_sends_per_rank_budget_at_tp_greater_than_one():
+    """Regression: _compute_fleet_kv_allocation derived kv_share from the
+    lane's TOTAL KV pool (per_gpu_vram * lane_gpu_count, minus total base
+    and safety margin) but sent it straight through as
+    kv_cache_memory_bytes — a PER-RANK budget vLLM applies on each of the
+    lane's GPUs. At tp=2 this requested roughly twice the intended cache
+    on every GPU, which can fail the reconfiguration outright."""
+    facade = MagicMock()
+    facade.get_model_profiles.return_value = {
+        "test/model": ModelProfile(
+            model_name="test/model",
+            engine="vllm",
+            base_residency_mb=8000.0,
+            kv_budget_mb=4096.0,  # observed, already per-rank
+        )
+    }
+    facade.get_capacity_info.return_value = MagicMock(total_vram_mb=32768.0)
+
+    registry = MagicMock()
+    registry.peek_runtime_snapshot.return_value = {"runtime": {"devices": {"devices": [{}, {}]}}}
+
+    demand = MagicMock()
+    demand.get_score.return_value = 0.0
+
+    planner = CapacityPlanner(logosnode_facade=facade, logosnode_registry=registry, demand_tracker=demand)
+    planner._last_kv_rebalance_time = 0.0  # bypass the 30-minute interval gate
+
+    lane = LaneSchedulerSignals(
+        lane_id="lane-1",
+        model_name="test/model",
+        runtime_state="running",
+        sleep_state="awake",
+        is_vllm=True,
+        active_requests=0,  # a lane with active requests is deferred, not reconfigured now
+        queue_waiting=0.0,
+        requests_running=0.0,
+        gpu_cache_usage_percent=90.0,  # above GPU_CACHE_HIGH — forces a look
+        ttft_p95_seconds=0.5,
+        e2e_latency_p50_seconds=0.5,
+        effective_vram_mb=16000.0,
+        num_parallel=4,
+        tensor_parallel_size=2,
+    )
+
+    actions = planner._compute_fleet_kv_allocation(provider_id=1, lanes=[lane])  # noqa: SLF001
+
+    assert len(actions) == 1
+    kv_str = actions[0].params["updates"]["vllm_config"]["kv_cache_memory_bytes"]
+    sent_kv_mb = CapacityPlanner._parse_kv_cache_to_mb(kv_str)  # noqa: SLF001
+
+    # per_gpu_vram=16384, lane_vram=32768 (tp=2), safety_margin=1638.4,
+    # total pool=32768-8000-1638.4=23129.6 -> per-rank=11564.8, not 23129.6.
+    assert sent_kv_mb == pytest.approx(11564.8, abs=0.1)

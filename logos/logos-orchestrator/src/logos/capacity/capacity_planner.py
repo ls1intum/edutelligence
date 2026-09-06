@@ -5328,8 +5328,11 @@ class CapacityPlanner:
         actions: list[CapacityPlanAction] = []
 
         for i, (lane, profile, lane_gpu_count) in enumerate(vllm_lanes):
-            # Each lane's KV share is bounded by its own GPU VRAM, not the whole worker
-            kv_share = lane_kv_pools[i]
+            # lane_kv_pools[i] is the lane's total KV pool across all its
+            # GPUs; kv_cache_memory_bytes (like _current_lane_kv_mb below)
+            # is per-rank — divide by lane_gpu_count or a TP>1 lane gets
+            # its whole-lane pool reapplied on every GPU (~tp too much).
+            kv_share = lane_kv_pools[i] / lane_gpu_count
             kv_share = max(kv_share, self.KV_CACHE_MIN_MB)
 
             # Determine current KV budget
