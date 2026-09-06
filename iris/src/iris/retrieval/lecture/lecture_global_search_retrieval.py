@@ -12,6 +12,7 @@ from iris.config import settings
 from iris.domain.search.global_search_dto import (
     AccessContext,
     CourseInfo,
+    EntitySourceDTO,
     LectureInfo,
     LectureSearchResultDTO,
     LectureUnitInfo,
@@ -79,6 +80,17 @@ _DEDUP_KEY_CHARS = 100
 _LANE_DEPTH = 25
 # Upper bound on candidates sent to the reranker (one search unit covers 100).
 _RERANK_MAX_CANDIDATES = 60
+# Entity candidates (pre-fetched by Artemis, rendered as cards) always enter
+# the rerank slice: their pre-rerank scores are meaningless, so they cannot
+# compete for slice slots on fused ordering.
+_MAX_ENTITY_CANDIDATES = 15
+# Post-floor representation guarantee: the best above-floor hits of each kind
+# keep a context slot even when the other kind sweeps the top-K. Entity cards
+# are 1-2 lines (cheap context) and entity titles are ambiguous across types
+# (unit/exercise/channel share names), so they get two slots; content
+# snippets are ~1000 chars and get one.
+_ENTITY_REPRESENTATION_SLOTS = 2
+_CONTENT_REPRESENTATION_SLOTS = 1
 # Hard wall-clock bound on the ANSWER-PATH rerank call: on timeout the search
 # falls back to the fused ordering instead of blocking the request. The results
 # list uses the shorter settings.global_search_rerank_list_timeout_s budget.
@@ -123,6 +135,9 @@ class _SearchTelemetry:
     reranked: bool = False
     expand_ms: float | None = None
     expanded: int = 0
+    entity_candidates: int = 0
+    entity_kept: int = 0
+    pointer_tier: bool = False
 
     def record_drop(self, kind: str, reason: str | None, props: dict[str, Any]) -> None:
         self.drop_counts[f"{kind}_{reason}"] += 1
@@ -148,6 +163,10 @@ class _Candidate:
     score: float
     dto: LectureSearchResultDTO
     unit_key: tuple[Any, Any, Any]
+
+
+def _is_entity(candidate: "_Candidate") -> bool:
+    return isinstance(candidate.dto, EntitySourceDTO)
 
 
 def _fused_score(obj: Any) -> float:
@@ -265,7 +284,8 @@ class LectureGlobalSearchRetrieval:
         course_ids: list[int] | None = None,
         auto_cut: bool = False,
         access_context: AccessContext | None = None,
-    ) -> list[LectureSearchResultDTO]:
+        entity_sources: list[EntitySourceDTO] | None = None,
+    ) -> list[LectureSearchResultDTO | EntitySourceDTO]:
         """
         Search for lecture content based on a query.
 
@@ -295,6 +315,7 @@ class LectureGlobalSearchRetrieval:
             course_ids=effective_course_ids,
             auto_cut=auto_cut,
             policy=_VisibilityPolicy.from_context(access_context),
+            entity_sources=entity_sources,
         )
 
     def _run_hybrid_search(
@@ -306,8 +327,15 @@ class LectureGlobalSearchRetrieval:
         course_ids: list[int] | None = None,
         auto_cut: bool = False,
         policy: "_VisibilityPolicy | None" = None,
-    ) -> list[LectureSearchResultDTO]:
-        """Run the recall lanes, rerank the candidate pool, map to DTOs."""
+        entity_sources: list[EntitySourceDTO] | None = None,
+    ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
+        """Run the recall lanes, rerank the candidate pool, map to DTOs.
+
+        ``entity_sources`` are pre-fetched, pre-authorized entity cards from
+        Artemis; they join the shared rerank pool so one cross-encoder scores
+        entities and content on the same calibrated scale. Their visibility
+        was already decided by Artemis and is not re-checked here.
+        """
         if policy is None:
             policy = _VisibilityPolicy.from_context(None)
         telemetry = _SearchTelemetry()
@@ -327,7 +355,14 @@ class LectureGlobalSearchRetrieval:
             policy,
         )
         deduped = _dedupe_by_snippet(scored, telemetry)
-        top = self._rerank_and_gate(query, deduped, limit, auto_cut, telemetry)
+        entity_pool = [
+            _Candidate(0.0, dto, (None, None, None))
+            for dto in (entity_sources or [])[:_MAX_ENTITY_CANDIDATES]
+        ]
+        telemetry.entity_candidates = len(entity_pool)
+        top = self._rerank_and_gate(
+            query, deduped, limit, auto_cut, telemetry, entity_pool
+        )
         # Expansion is for generation contexts only: the instant results list is
         # a ranked list by contract, and its latency budget is ~400ms.
         if auto_cut and settings.global_search_expand_units:
@@ -467,6 +502,7 @@ class LectureGlobalSearchRetrieval:
         limit: int,
         auto_cut: bool,
         telemetry: "_SearchTelemetry",
+        entity_pool: list[_Candidate] | None = None,
     ) -> list[_Candidate]:
         """Stage 2: shared reranker over the candidate pool, then the junk floor.
 
@@ -486,8 +522,17 @@ class LectureGlobalSearchRetrieval:
         only when configured. The list also gets a tighter rerank budget: a
         slow call there delays a ~1s response (and can trip the caller's own
         timeout), while the answer path hides the same wait behind the LLM.
+
+        Entity cards always enter the rerank slice (their pre-rerank scores
+        are meaningless). After the floor, a representation pass guarantees
+        the best above-floor hits of each kind a slot, and when NOTHING
+        clears the floor, entity pointers from the calibrated band below it
+        are admitted as navigational evidence. Without a reranker there is no
+        shared scale to admit entities on, so the fused fallback returns
+        content only.
         """
-        candidates = deduped[:_RERANK_MAX_CANDIDATES]
+        entity_pool = entity_pool or []
+        candidates = deduped[: _RERANK_MAX_CANDIDATES - len(entity_pool)] + entity_pool
         use_rerank = auto_cut or settings.global_search_rerank_results_list
         timeout_s = (
             _RERANK_TIMEOUT_S
@@ -500,6 +545,8 @@ class LectureGlobalSearchRetrieval:
             else None
         )
         if rerank_result is None:
+            if entity_pool:
+                telemetry.drop_counts["entities_dropped_no_rerank"] += len(entity_pool)
             return deduped[:limit]
 
         telemetry.rerank_ms, relevance = rerank_result
@@ -513,11 +560,52 @@ class LectureGlobalSearchRetrieval:
             reverse=True,
         )
         floor = settings.global_search_rerank_floor
-        kept = [c for c in reranked if c.score >= floor]
-        below = len(reranked) - len(kept)
+        above = [c for c in reranked if c.score >= floor]
+        below = len(reranked) - len(above)
         if below:
             telemetry.drop_counts["below_rerank_floor"] += below
-        return kept[:limit]
+        kept = above[:limit]
+
+        # Representation pass: ranking decides ORDER, but whether a proven
+        # (above-floor) candidate reaches the answer LLM at all is a
+        # structural decision — for "is there an exercise about X?" twelve
+        # relevant content passages must not push the one relevant exercise
+        # card out of the context (same philosophy as _expand_by_unit).
+        if above:
+            slots = {
+                True: _ENTITY_REPRESENTATION_SLOTS,
+                False: _CONTENT_REPRESENTATION_SLOTS,
+            }
+            counts = {True: 0, False: 0}
+            for candidate in kept:
+                counts[_is_entity(candidate)] += 1
+            for candidate in above[limit:]:
+                kind = _is_entity(candidate)
+                if counts[kind] < slots[kind]:
+                    kept.append(candidate)
+                    counts[kind] += 1
+                if all(counts[k] >= slot_limit for k, slot_limit in slots.items()):
+                    break
+            telemetry.entity_kept = sum(1 for c in kept if _is_entity(c))
+
+        # Pointer tier: an empty floored pool with an entity card in the
+        # calibrated band just below the floor is not "nothing exists" — it
+        # is "no content answers this, but this material seems related". The
+        # answer stage phrases that as navigation.
+        if not kept and entity_pool:
+            pointer_floor = settings.global_search_pointer_floor
+            pointers = [
+                c
+                for c in reranked
+                if _is_entity(c) and pointer_floor <= c.score < floor
+            ][:_ENTITY_REPRESENTATION_SLOTS]
+            if pointers:
+                telemetry.pointer_tier = True
+                telemetry.entity_kept = len(pointers)
+                for candidate in pointers:
+                    candidate.dto.via_pointer_tier = True
+                kept = pointers
+        return kept
 
     def _expand_by_unit(
         self,
@@ -650,7 +738,8 @@ class LectureGlobalSearchRetrieval:
         logger.info(
             "[LectureSearch] query=%r course_ids=%s alpha=%.2f auto_cut=%s "
             "raw_hits=%d+%d mapped=%d dropped=%s reranked=%s rerank_ms=%s "
-            "hits=%d expanded=%d search_ms=%.0f meta_ms=%.0f expand_ms=%s",
+            "hits=%d expanded=%d entities=%d/%d pointer_tier=%s "
+            "search_ms=%.0f meta_ms=%.0f expand_ms=%s",
             query,
             course_ids,
             alpha,
@@ -663,6 +752,9 @@ class LectureGlobalSearchRetrieval:
             f"{telemetry.rerank_ms:.0f}" if telemetry.rerank_ms is not None else "n/a",
             len(top),
             telemetry.expanded,
+            telemetry.entity_kept,
+            telemetry.entity_candidates,
+            telemetry.pointer_tier,
             telemetry.search_ms,
             telemetry.meta_ms,
             f"{telemetry.expand_ms:.0f}" if telemetry.expand_ms is not None else "n/a",
@@ -672,6 +764,18 @@ class LectureGlobalSearchRetrieval:
         score_label = "rerank" if telemetry.reranked else "fused"
         for rank, candidate in enumerate(top, start=1):
             dto = candidate.dto
+            if _is_entity(candidate):
+                logger.info(
+                    "[LectureSearch]   #%d %s=%.4f source=entity:%s course=%r "
+                    "title=%r",
+                    rank,
+                    score_label,
+                    candidate.score,
+                    dto.entity_type,
+                    dto.course.name if dto.course else None,
+                    dto.title[:80],
+                )
+                continue
             logger.info(
                 "[LectureSearch]   #%d %s=%.4f source=%s course=%r unit=%r "
                 "page=%s snippet=%r",
@@ -688,7 +792,7 @@ class LectureGlobalSearchRetrieval:
     def _safe_rerank(
         self,
         query: str,
-        candidates: list[LectureSearchResultDTO],
+        candidates: list["LectureSearchResultDTO | EntitySourceDTO"],
         timeout_s: float = _RERANK_TIMEOUT_S,
     ) -> tuple[float, list[float]] | None:
         """Rerank candidate snippets; return (duration_ms, per-candidate relevance).
@@ -700,8 +804,15 @@ class LectureGlobalSearchRetrieval:
         """
         if self.reranker_model_id is None or len(candidates) < 2:
             return None
+        # Entity cards guarantee a non-empty snippet; the lecture-unit name is
+        # the fallback for content DTOs only.
         documents = [
-            (dto.snippet or dto.lecture_unit.name or "")[:2000] for dto in candidates
+            (
+                dto.snippet
+                or getattr(getattr(dto, "lecture_unit", None), "name", None)
+                or ""
+            )[:2000]
+            for dto in candidates
         ]
         t0 = time.perf_counter()
         try:

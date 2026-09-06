@@ -388,6 +388,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             limit=dto.limit,
             intent=intent,
             access_context=dto.access_context,
+            entity_candidates=dto.entity_candidates,
         )
         total_ms = (time.perf_counter() - started) * 1000
         if result.answer:
@@ -405,7 +406,10 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 total_ms,
             )
         callback.finish(
-            answer=result.answer, sources=result.sources, tokens=pipeline.tokens
+            answer=result.answer,
+            sources=result.sources,
+            entity_sources=result.entity_sources,
+            tokens=pipeline.tokens,
         )
     except Exception as e:
         logger.error("Error running global search pipeline", exc_info=e)

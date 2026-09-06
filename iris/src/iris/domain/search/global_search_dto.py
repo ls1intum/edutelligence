@@ -89,6 +89,66 @@ class LectureSearchResultDTO(BaseModel):
     snippet: str
 
 
+class EntityCandidateDTO(BaseModel):
+    """A pre-fetched SearchableEntities row, forwarded by Artemis.
+
+    Artemis owns entity visibility (channel membership, exam assignment,
+    role-dependent release rules live in its database), so it runs the
+    filtered entity search and forwards the surviving candidates. Pyris only
+    renders, reranks and gates them — it never queries the entity collection
+    itself.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    entity_type: str = Field(alias="entityType")
+    entity_id: int | None = Field(default=None, alias="entityId")
+    course_id: int | None = Field(default=None, alias="courseId")
+    course_name: str | None = Field(default=None, alias="courseName")
+    title: str | None = None
+    description: str | None = None
+    short_name: str | None = Field(default=None, alias="shortName")
+    link: str | None = None
+    release_date: datetime | None = Field(default=None, alias="releaseDate")
+    start_date: datetime | None = Field(default=None, alias="startDate")
+    due_date: datetime | None = Field(default=None, alias="dueDate")
+    end_date: datetime | None = Field(default=None, alias="endDate")
+    visible_date: datetime | None = Field(default=None, alias="visibleDate")
+    exam_visible_date: datetime | None = Field(default=None, alias="examVisibleDate")
+    exam_start_date: datetime | None = Field(default=None, alias="examStartDate")
+    exam_end_date: datetime | None = Field(default=None, alias="examEndDate")
+    max_points: float | None = Field(default=None, alias="maxPoints")
+    quiz_duration_seconds: int | None = Field(default=None, alias="quizDurationSeconds")
+    programming_language: str | None = Field(default=None, alias="programmingLanguage")
+    exercise_type: str | None = Field(default=None, alias="exerciseType")
+    unit_type: str | None = Field(default=None, alias="unitType")
+    faq_state: str | None = Field(default=None, alias="faqState")
+    channel_is_public: bool | None = Field(default=None, alias="channelIsPublic")
+
+
+class EntitySourceDTO(BaseModel):
+    """An entity source in the answer response.
+
+    ``snippet`` carries the rendered entity card and is never empty — the
+    renderer always produces at least the head line, and the rerank stage
+    relies on that.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    entity_type: str = Field(alias="entityType")
+    entity_id: int | None = Field(default=None, alias="entityId")
+    course: CourseInfo | None = None
+    title: str = ""
+    snippet: str = ""
+    link: str | None = None
+    # Internal: True when retrieval admitted this card from the calibrated
+    # band BELOW the rerank floor because nothing cleared it — the "no content
+    # answers this, but this material seems related" state. The pipeline
+    # phrases that as navigation. Never serialized.
+    via_pointer_tier: bool = Field(default=False, exclude=True)
+
+
 class GlobalSearchRequestDTO(BaseModel):
     """Request DTO for the asynchronous global search answer pipeline."""
 
@@ -98,6 +158,9 @@ class GlobalSearchRequestDTO(BaseModel):
     limit: int = Field(default=5, ge=1, le=10)
     settings: PipelineExecutionSettingsDTO
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
+    entity_candidates: list[EntityCandidateDTO] = Field(
+        default_factory=list, alias="entityCandidates"
+    )
 
     @field_validator("query")
     @classmethod
@@ -112,3 +175,6 @@ class GlobalSearchResponseDTO(BaseModel):
 
     answer: str | None
     sources: list[LectureSearchResultDTO]
+    entity_sources: list[EntitySourceDTO] = Field(
+        default_factory=list, alias="entitySources"
+    )
