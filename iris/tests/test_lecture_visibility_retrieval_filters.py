@@ -14,6 +14,7 @@ from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     _LANE_DEPTH,
     LectureGlobalSearchRetrieval,
+    _Candidate,
 )
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
@@ -643,7 +644,10 @@ def test_global_search_merges_both_lanes_into_one_ranked_pool():
     low_score_segment = _search_result_dto("slide text", "lecture_unit_slide")
     high_score_transcription = _search_result_dto("video text", "lecture_unit_video")
     retrieval._map_candidates = Mock(
-        return_value=[(0.9, high_score_transcription), (0.2, low_score_segment)]
+        return_value=[
+            _Candidate(0.9, high_score_transcription, ("http://a", 1, 10)),
+            _Candidate(0.2, low_score_segment, ("http://a", 1, 10)),
+        ]
     )
     retrieval._safe_rerank = Mock(return_value=None)
 

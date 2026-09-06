@@ -121,6 +121,8 @@ class _SearchTelemetry:
     meta_ms: float = 0.0
     rerank_ms: float | None = None
     reranked: bool = False
+    expand_ms: float | None = None
+    expanded: int = 0
 
     def record_drop(self, kind: str, reason: str | None, props: dict[str, Any]) -> None:
         self.drop_counts[f"{kind}_{reason}"] += 1
@@ -133,28 +135,52 @@ class _SearchTelemetry:
             )
 
 
+@dataclass
+class _Candidate:
+    """A scored hit plus the structural key used for graph expansion.
+
+    The key is (base_url, course_id, lecture_unit_id) rather than the unit id
+    alone: several Artemis instances can share one Weaviate and their numeric
+    unit ids collide, which is the same hazard the metadata fetch guards
+    against. The DTO does not carry base_url, so it is kept alongside.
+    """
+
+    score: float
+    dto: LectureSearchResultDTO
+    unit_key: tuple[Any, Any, Any]
+
+
 def _fused_score(obj: Any) -> float:
     return (
         obj.metadata.score if obj.metadata and obj.metadata.score is not None else 0.0
     )
 
 
+def _unit_key(props: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """Structural identity of the lecture unit a hit belongs to."""
+    return (props.get("base_url"), props.get("course_id"), props.get("lecture_unit_id"))
+
+
+def _snippet_key(dto: "LectureSearchResultDTO") -> str:
+    return (dto.snippet or "")[:_DEDUP_KEY_CHARS].casefold().strip()
+
+
 def _dedupe_by_snippet(
-    scored: list[tuple[float, "LectureSearchResultDTO"]],
+    scored: list[_Candidate],
     telemetry: _SearchTelemetry,
-) -> list[tuple[float, "LectureSearchResultDTO"]]:
+) -> list[_Candidate]:
     """Collapse near-identical slides (the same deck ingested by several
     courses): keep the highest-scoring copy so the list carries distinct
     evidence."""
-    deduped: list[tuple[float, LectureSearchResultDTO]] = []
+    deduped: list[_Candidate] = []
     seen_keys: set[str] = set()
-    for score, dto in scored:
-        key = (dto.snippet or "")[:_DEDUP_KEY_CHARS].casefold().strip()
+    for candidate in scored:
+        key = _snippet_key(candidate.dto)
         if key in seen_keys:
             telemetry.drop_counts["duplicate_snippet"] += 1
             continue
         seen_keys.add(key)
-        deduped.append((score, dto))
+        deduped.append(candidate)
     return deduped
 
 
@@ -302,8 +328,12 @@ class LectureGlobalSearchRetrieval:
         )
         deduped = _dedupe_by_snippet(scored, telemetry)
         top = self._rerank_and_gate(query, deduped, limit, auto_cut, telemetry)
+        # Expansion is for generation contexts only: the instant results list is
+        # a ranked list by contract, and its latency budget is ~400ms.
+        if auto_cut and settings.global_search_expand_units:
+            top = self._expand_by_unit(top, telemetry, policy)
         self._log_results(query, course_ids, alpha, auto_cut, telemetry, top)
-        return [dto for _, dto in top]
+        return [c.dto for c in top]
 
     def _search_lanes(
         self,
@@ -402,14 +432,14 @@ class LectureGlobalSearchRetrieval:
         slides_by_display_page: dict[tuple[int, int], list[Any]],
         telemetry: "_SearchTelemetry",
         policy: "_VisibilityPolicy",
-    ) -> list[tuple[float, LectureSearchResultDTO]]:
+    ) -> list[_Candidate]:
         """Map raw hits to scored DTOs, recording every drop with its reason.
 
         Silent drops here directly shrink the result list the user sees, so
         each one must be visible in the logs (this accounting is how the
         original vanishing-answer bug was found).
         """
-        scored: list[tuple[float, LectureSearchResultDTO]] = []
+        scored: list[_Candidate] = []
         for obj in seg_objects:
             dto, drop_reason = self._segment_to_dto(
                 obj.properties, units_by_id, start_times, policy
@@ -417,7 +447,7 @@ class LectureGlobalSearchRetrieval:
             if dto is None:
                 telemetry.record_drop("seg", drop_reason, obj.properties)
                 continue
-            scored.append((_fused_score(obj), dto))
+            scored.append(_Candidate(_fused_score(obj), dto, _unit_key(obj.properties)))
         for obj in trans_objects:
             dto, drop_reason = self._transcription_to_dto(
                 obj.properties, units_by_id, slides_by_display_page, policy
@@ -425,25 +455,32 @@ class LectureGlobalSearchRetrieval:
             if dto is None:
                 telemetry.record_drop("trans", drop_reason, obj.properties)
                 continue
-            scored.append((_fused_score(obj), dto))
-        scored.sort(key=lambda x: x[0], reverse=True)
+            scored.append(_Candidate(_fused_score(obj), dto, _unit_key(obj.properties)))
+        scored.sort(key=lambda c: c.score, reverse=True)
         telemetry.mapped = len(scored)
         return scored
 
     def _rerank_and_gate(
         self,
         query: str,
-        deduped: list[tuple[float, LectureSearchResultDTO]],
+        deduped: list[_Candidate],
         limit: int,
         auto_cut: bool,
         telemetry: "_SearchTelemetry",
-    ) -> list[tuple[float, LectureSearchResultDTO]]:
-        """Stage 2: shared reranker over the candidate pool, then the gate.
+    ) -> list[_Candidate]:
+        """Stage 2: shared reranker over the candidate pool, then the junk floor.
 
         Fused scores are per-collection-normalized and mutually incomparable;
         the cross-encoder rescores every candidate against the query on ONE
-        calibrated scale, and candidates below the threshold are dropped — an
-        all-below pool is the honest "no content exists" state. On any rerank
+        calibrated scale. The floor then removes GARBAGE, not weak answers:
+        it is calibrated against what irrelevant candidates score, so the
+        surviving set is "everything plausibly worth showing", and relevance
+        among survivors is decided by the ordering plus the answer LLM rather
+        than by a cutoff. An all-below pool is the honest "no content exists"
+        state. Deliberately NOT tuned to admit only strong matches - a cutoff
+        placed inside the relevant band both deletes real answers and lands
+        within the reranker's run-to-run noise, so identical requests would
+        return different results. On any rerank
         failure the search falls back to the fused ordering. Generation
         contexts (auto_cut=True) are always reranked; the instant results list
         only when configured. The list also gets a tighter rerank budget: a
@@ -458,7 +495,7 @@ class LectureGlobalSearchRetrieval:
             else settings.global_search_rerank_list_timeout_s
         )
         rerank_result = (
-            self._safe_rerank(query, [dto for _, dto in candidates], timeout_s)
+            self._safe_rerank(query, [c.dto for c in candidates], timeout_s)
             if use_rerank
             else None
         )
@@ -468,16 +505,137 @@ class LectureGlobalSearchRetrieval:
         telemetry.rerank_ms, relevance = rerank_result
         telemetry.reranked = True
         reranked = sorted(
-            zip(relevance, (dto for _, dto in candidates)),
-            key=lambda x: x[0],
+            (
+                _Candidate(rel, c.dto, c.unit_key)
+                for rel, c in zip(relevance, candidates)
+            ),
+            key=lambda c: c.score,
             reverse=True,
         )
-        threshold = settings.global_search_rerank_threshold
-        kept = [(rel, dto) for rel, dto in reranked if rel >= threshold]
+        floor = settings.global_search_rerank_floor
+        kept = [c for c in reranked if c.score >= floor]
         below = len(reranked) - len(kept)
         if below:
-            telemetry.drop_counts["below_rerank_threshold"] += below
+            telemetry.drop_counts["below_rerank_floor"] += below
         return kept[:limit]
+
+    def _expand_by_unit(
+        self,
+        kept: list[_Candidate],
+        telemetry: "_SearchTelemetry",
+        policy: "_VisibilityPolicy",
+    ) -> list[_Candidate]:
+        """Graph expansion: pull the rest of each surviving unit's material.
+
+        Ranking is a competition, so every additional passage of an already
+        identified unit has to win a slot it does not need to win - the answer
+        is known to live in that unit. Measured on the scattered-scenario
+        harness: at least one relevant item is returned for 93% of queries,
+        but ALL of the collections holding relevant material are represented
+        for only 16%, because the rest lose the ranking contest.
+
+        So once an anchor survives the floor, its siblings are FETCHED by the
+        structural key rather than ranked: a join has 100% recall by
+        construction, which turns a multi-collection conjunction into the
+        single question of whether the anchor was right.
+
+        Expanded items are appended after the ranked anchors and carry their
+        anchor's score, so ordering is unchanged for everything that earned
+        its place.
+        """
+        if not kept:
+            return kept
+        unit_keys: list[tuple[Any, Any, Any]] = []
+        for candidate in kept:
+            if candidate.unit_key not in unit_keys and all(
+                part is not None for part in candidate.unit_key
+            ):
+                unit_keys.append(candidate.unit_key)
+        unit_keys = unit_keys[: settings.global_search_expand_max_units]
+        if not unit_keys:
+            return kept
+
+        unit_ids = list({key[2] for key in unit_keys})
+        t_expand = time.perf_counter()
+        with TracedThreadPoolExecutor(max_workers=2) as executor:
+            seg_future = executor.submit(
+                self._fetch_unit_objects,
+                self.collection,
+                LectureUnitSegmentSchema,
+                unit_ids,
+            )
+            trans_future = executor.submit(
+                self._fetch_unit_objects,
+                self.transcription_collection,
+                LectureTranscriptionSchema,
+                unit_ids,
+            )
+        # Only objects whose FULL key matches an anchor: a bare unit-id match can
+        # belong to a different Artemis instance sharing this Weaviate.
+        wanted = set(unit_keys)
+        seg_objects = [
+            o for o in seg_future.result() if _unit_key(o.properties) in wanted
+        ]
+        trans_objects = [
+            o for o in trans_future.result() if _unit_key(o.properties) in wanted
+        ]
+        if not seg_objects and not trans_objects:
+            telemetry.expand_ms = (time.perf_counter() - t_expand) * 1000
+            return kept
+
+        units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
+            seg_objects, trans_objects, telemetry
+        )
+        siblings = self._map_candidates(
+            seg_objects,
+            trans_objects,
+            units_by_id,
+            start_times,
+            slides_by_display_page,
+            telemetry,
+            policy,
+        )
+
+        seen = {_snippet_key(c.dto) for c in kept}
+        anchor_score = {key: 0.0 for key in unit_keys}
+        for candidate in kept:
+            anchor_score[candidate.unit_key] = max(
+                anchor_score.get(candidate.unit_key, 0.0), candidate.score
+            )
+        per_unit: Counter = Counter()
+        added: list[_Candidate] = []
+        for candidate in siblings:
+            key = _snippet_key(candidate.dto)
+            if key in seen or candidate.unit_key not in wanted:
+                continue
+            if per_unit[candidate.unit_key] >= settings.global_search_expand_per_unit:
+                continue
+            seen.add(key)
+            per_unit[candidate.unit_key] += 1
+            added.append(
+                _Candidate(
+                    anchor_score.get(candidate.unit_key, 0.0),
+                    candidate.dto,
+                    candidate.unit_key,
+                )
+            )
+        telemetry.expand_ms = (time.perf_counter() - t_expand) * 1000
+        telemetry.expanded = len(added)
+        return kept + added
+
+    @staticmethod
+    def _fetch_unit_objects(
+        collection: Any, schema: Any, unit_ids: list[int]
+    ) -> list[Any]:
+        """Every object of the given units, fetched by join rather than ranked."""
+        if not unit_ids:
+            return []
+        return collection.query.fetch_objects(
+            filters=Filter.by_property(schema.LECTURE_UNIT_ID.value).contains_any(
+                unit_ids
+            ),
+            limit=settings.global_search_expand_fetch_limit,
+        ).objects
 
     @staticmethod
     def _log_results(
@@ -486,13 +644,13 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         auto_cut: bool,
         telemetry: "_SearchTelemetry",
-        top: list[tuple[float, LectureSearchResultDTO]],
+        top: list[_Candidate],
     ) -> None:
         """One summary line plus per-drop and per-hit detail lines."""
         logger.info(
             "[LectureSearch] query=%r course_ids=%s alpha=%.2f auto_cut=%s "
             "raw_hits=%d+%d mapped=%d dropped=%s reranked=%s rerank_ms=%s "
-            "hits=%d search_ms=%.0f meta_ms=%.0f",
+            "hits=%d expanded=%d search_ms=%.0f meta_ms=%.0f expand_ms=%s",
             query,
             course_ids,
             alpha,
@@ -504,19 +662,22 @@ class LectureGlobalSearchRetrieval:
             telemetry.reranked,
             f"{telemetry.rerank_ms:.0f}" if telemetry.rerank_ms is not None else "n/a",
             len(top),
+            telemetry.expanded,
             telemetry.search_ms,
             telemetry.meta_ms,
+            f"{telemetry.expand_ms:.0f}" if telemetry.expand_ms is not None else "n/a",
         )
         for detail in telemetry.drop_details:
             logger.info("[LectureSearch]   dropped %s", detail)
         score_label = "rerank" if telemetry.reranked else "fused"
-        for rank, (score, dto) in enumerate(top, start=1):
+        for rank, candidate in enumerate(top, start=1):
+            dto = candidate.dto
             logger.info(
                 "[LectureSearch]   #%d %s=%.4f source=%s course=%r unit=%r "
                 "page=%s snippet=%r",
                 rank,
                 score_label,
-                score,
+                candidate.score,
                 dto.lecture_unit.source_type,
                 dto.course.name,
                 dto.lecture_unit.name,

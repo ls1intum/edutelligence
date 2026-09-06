@@ -5,9 +5,18 @@ unit ids from a shared multi-instance Weaviate truncating the metadata fetch)
 that produced the original "vanishing answer" production complaint.
 """
 
+# pylint: disable=protected-access
+
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from iris.config import settings
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     QWEN3_RETRIEVAL_INSTRUCTION,
     LectureGlobalSearchRetrieval,
+    _Candidate,
+    _SearchTelemetry,
+    _VisibilityPolicy,
 )
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 
@@ -95,3 +104,80 @@ def test_retrieval_instruction_is_query_side_prefix():
     # reformat cannot silently break the trained scaffold.
     assert QWEN3_RETRIEVAL_INSTRUCTION.startswith("Instruct: ")
     assert QWEN3_RETRIEVAL_INSTRUCTION.endswith("Query: ")
+
+
+def test_rerank_floor_keeps_weak_but_plausible_candidates():
+    """The floor removes garbage, not weak answers.
+
+    Measured on Qwen3-Reranker-8B: deliberately irrelevant candidates peaked at
+    0.065 while relevant entity records sat as low as 0.08. The previous 0.30
+    cutoff sat inside the relevant band and nulled 8 of 105 queries that had
+    provably relevant material.
+    """
+    floor = settings.global_search_rerank_floor
+    junk_ceiling = 0.065
+    assert floor > junk_ceiling, "floor must reject measured junk"
+    assert (
+        floor < 0.20
+    ), "floor must stay below the relevant band; 0.30 deleted real answers"
+    # and it must clear the reranker's measured run-to-run noise (+/-0.01)
+    # by a real margin, so borderline candidates are not decided by jitter
+    assert floor - junk_ceiling > 3 * 0.01
+
+
+def _candidate(score, snippet, unit_key):
+    dto = SimpleNamespace(snippet=snippet)
+    return _Candidate(score, dto, unit_key)
+
+
+def test_expansion_fetches_siblings_by_join_not_by_ranking():
+    """Siblings of a surviving anchor arrive by structural join.
+
+    A join has 100% recall by construction, which is the point: the harness
+    measured at least one relevant item returned for 93% of queries but every
+    relevant collection represented for only 16%, because siblings lost the
+    ranking contest they should never have had to enter.
+    """
+    key = ("http://a", 1, 10)
+    other_instance = ("http://b", 1, 10)  # same numeric unit id, different Artemis
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval.collection = object()
+    retrieval.transcription_collection = object()
+
+    def _props(base_url, snippet):
+        return SimpleNamespace(
+            properties={
+                "base_url": base_url,
+                "course_id": 1,
+                "lecture_unit_id": 10,
+                "snippet": snippet,
+            }
+        )
+
+    retrieval._fetch_unit_objects = Mock(
+        side_effect=lambda collection, schema, ids: [
+            _props("http://a", "sibling"),
+            _props("http://b", "wrong instance"),
+        ]
+    )
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(
+        return_value=[
+            _candidate(0.0, "sibling", key),
+            _candidate(0.0, "wrong instance", other_instance),
+        ]
+    )
+
+    telemetry = _SearchTelemetry()
+    anchors = [_candidate(0.5, "anchor", key)]
+    out = retrieval._expand_by_unit(
+        anchors, telemetry, _VisibilityPolicy.from_context(None)
+    )
+
+    snippets = [c.dto.snippet for c in out]
+    assert snippets[0] == "anchor", "anchors keep their earned position"
+    assert "sibling" in snippets, "the unit's other material is pulled in"
+    assert (
+        "wrong instance" not in snippets
+    ), "a bare unit-id match from another Artemis instance must not leak"
+    assert telemetry.expanded == 1
