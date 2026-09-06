@@ -393,6 +393,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   readonly showSelectedSummary = computed(() => this.selectedLog()?.success === true && this.selectedSummary() != null);
 
+  readonly showSelectedFailure = computed(() => this.selectedLog()?.success === false);
+
   readonly visibleTabs =
     computed<readonly ModelErrorTab[]>(() => this.tabs);
 

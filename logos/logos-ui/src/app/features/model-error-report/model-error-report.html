@@ -333,39 +333,43 @@
                   }
                 </select>
 
-                @if (completeLog()) {
+                <div class="log-selector__actions">
+
+                  @if (completeLog()) {
+                    <button
+                      class="btn-copy-log"
+                      type="button"
+                      [class.btn-copy-log--ok]="logCopied()"
+                      [class.btn-copy-log--error]="logCopyFailed()"
+                      (click)="copyLog()"
+                    >
+                      @if (logCopied()) {
+                        <i class="pi pi-check"></i> Copied!
+                      } @else if (logCopyFailed()) {
+                        <i class="pi pi-times"></i> Copy failed
+                      } @else {
+                        <i class="pi pi-copy"></i> Copy log
+                      }
+                    </button>
+                  }
+
                   <button
                     class="btn-copy-log"
                     type="button"
-                    [class.btn-copy-log--ok]="logCopied()"
-                    [class.btn-copy-log--error]="logCopyFailed()"
-                    (click)="copyLog()"
+                    [class.btn-copy-log--error]="downloadLogError()"
+                    [disabled]="downloadingLog()"
+                    (click)="downloadFullLog()"
                   >
-                    @if (logCopied()) {
-                      <i class="pi pi-check"></i> Copied!
-                    } @else if (logCopyFailed()) {
-                      <i class="pi pi-times"></i> Copy failed
+                    @if (downloadingLog()) {
+                      <i class="pi pi-spin pi-spinner"></i> Downloading…
+                    } @else if (downloadLogError()) {
+                      <i class="pi pi-times"></i> Download failed
                     } @else {
-                      <i class="pi pi-copy"></i> Copy log
+                      <i class="pi pi-download"></i> Download full logs
                     }
                   </button>
-                }
 
-                <button
-                  class="btn-copy-log"
-                  type="button"
-                  [class.btn-copy-log--error]="downloadLogError()"
-                  [disabled]="downloadingLog()"
-                  (click)="downloadFullLog()"
-                >
-                  @if (downloadingLog()) {
-                    <i class="pi pi-spin pi-spinner"></i> Downloading…
-                  } @else if (downloadLogError()) {
-                    <i class="pi pi-times"></i> Download failed
-                  } @else {
-                    <i class="pi pi-download"></i> Download full logs
-                  }
-                </button>
+                </div>
 
               </div>
 
@@ -376,6 +380,17 @@
               <div class="log-viewer">
 
                 @if (completeLog()) {
+
+                  @if (showSelectedFailure()) {
+                    <div class="calibration-status calibration-status--failure">
+                      <span class="calibration-status__icon">
+                        <i class="pi pi-times" aria-hidden="true"></i>
+                      </span>
+                      <span class="calibration-status__label">
+                        Calibration failed
+                      </span>
+                    </div>
+                  }
 
                   <cdk-virtual-scroll-viewport
                     class="log-viewer__viewport"
@@ -437,6 +452,17 @@
                   </div>
 
                 } @else {
+
+                  @if (showSelectedFailure()) {
+                    <div class="calibration-status calibration-status--failure">
+                      <span class="calibration-status__icon">
+                        <i class="pi pi-times" aria-hidden="true"></i>
+                      </span>
+                      <span class="calibration-status__label">
+                        Calibration failed
+                      </span>
+                    </div>
+                  }
 
                   <p class="log-viewer__empty">
                     No log found for this node.
