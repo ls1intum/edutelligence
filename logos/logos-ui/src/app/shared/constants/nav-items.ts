@@ -6,7 +6,6 @@ const ADMIN_AND_ABOVE: UserRole[] = ['logos_admin', 'app_admin'];
 
 export const MENU_ITEMS: MenuItem[] = [
   // System (logos_admin only)
-  { label: 'Dashboard',  path: '/dashboard',       piIcon: 'th-large',       group: 'system',     roles: ['logos_admin'] },
   { label: 'Statistics', path: '/statistics',      piIcon: 'chart-bar',      group: 'system',     roles: ['logos_admin'] },
   { label: 'Models',     path: '/models',          piIcon: 'microchip-ai',   group: 'system',     roles: ALL_ROLES },
   { label: 'Providers',  path: '/providers',       piIcon: 'cloud',          group: 'system',     roles: ['logos_admin'] },
@@ -22,7 +21,7 @@ export const MENU_ITEMS: MenuItem[] = [
 ];
 
 export const HOME_ROUTE: Record<UserRole, string> = {
-  logos_admin:   '/dashboard',
+  logos_admin:   '/statistics',
   app_admin:     '/user-management',
   app_developer: '/my-workspace',
 };
