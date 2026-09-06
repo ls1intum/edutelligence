@@ -1151,7 +1151,9 @@ def _closed_issues(task: str) -> str:
     change does. What the change does belongs in the commit subject; why it
     was made belongs to whoever picks it up.
     """
-    numbers = sorted({int(number) for number in re.findall(r"#(\d+)\b", task)})
+    # First-seen order, deduplicated: the body lists the references the way
+    # the task names them, not in numerical order.
+    numbers = list(dict.fromkeys(re.findall(r"#(\d+)\b", task)))
     if not numbers:
         return ""
     return "closes " + ", ".join(f"#{number}" for number in numbers)

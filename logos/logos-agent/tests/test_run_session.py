@@ -922,6 +922,25 @@ class TestCommitSubjects:
         assert run_session._commit_subject("") == "`Logos`: Update from an agent session"
 
 
+class TestClosedIssues:
+    """The body names the issues the change closes — and in the order the
+    task names them.
+
+    A task that writes `#948` before `#493` is working through the references
+    in that order, and a body re-sorted numerically no longer reads as the
+    task's.
+    """
+
+    def test_references_are_listed_in_the_tasks_own_order(self):
+        assert run_session._closed_issues("Fix #948, then the follow-up in #493") == "closes #948, #493"
+
+    def test_a_reference_named_twice_is_listed_once(self):
+        assert run_session._closed_issues("Fix #948. The repro is in the comments of #948.") == "closes #948"
+
+    def test_a_task_without_references_closes_nothing(self):
+        assert run_session._closed_issues("Just a change, no issues named") == ""
+
+
 class TestTranscriptLines:
     """What a person watching a session gets to read.
 
