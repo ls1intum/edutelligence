@@ -34,7 +34,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=2          # 2026-09-04
+CLAUDE_LOGOS_VERSION=3          # 2026-09-06
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
