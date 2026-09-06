@@ -429,11 +429,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   });
 
   readonly completeLog = computed(() => {
-    const providerId = this.selectedLog()?.providerId;
-    if (providerId == null) {
+    const log = this.selectedLog();
+    if (log == null) {
       return '';
     }
-    return this.rawLogsByProviderId().get(providerId) ?? '';
+    if (log.success) {
+      return '';
+    }
+    return this.rawLogsByProviderId().get(log.providerId) ?? '';
   });
 
   readonly selectedSummary = computed(() => {
