@@ -41,6 +41,7 @@ _INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
 )
 
 _MAX_CALIBRATION_LOG_TEXT_BYTES = 512 * 1024
+_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES = 10 * 1024 * 1024
 
 
 # Commands that can grow this node's VRAM footprint. Refused while a
@@ -733,6 +734,8 @@ class LogosBridgeClient:
             return await self._handle_start_calibration_session(params)
         if action == "stop_calibration_session":
             return await self._handle_stop_calibration_session()
+        if action == "get_calibration_log":
+            return await self._handle_get_calibration_log(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
 
@@ -847,6 +850,30 @@ class LogosBridgeClient:
             current_model or "<none>",
         )
         return {"ok": True, "was_active": True, "current_model": current_model}
+
+    async def _handle_get_calibration_log(self, params: dict[str, Any]) -> dict[str, Any]:
+        """On-demand fetch of one model's on-disk calibration log.
+
+        Backs the Download-full-logs button for successful runs, which no
+        longer ship log_text automatically. Plain disk read, no GPU/vLLM
+        involved — capped higher (10 MB) than the automatic 512 KB send.
+        """
+        from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+        model_name = str(params.get("model_name", "")).strip()
+        if not model_name:
+            return {"ok": False, "error": "model_name is required"}
+
+        log_dir = get_state_dir() / "calibration_logs"
+        log_text = await self._read_calibration_log_text(
+            model_name, log_dir, max_bytes=_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES
+        )
+        if not log_text:
+            return {"ok": False, "error": "No calibration log found on this node for this model"}
+        return {
+            "ok": True,
+            "log_text": self._truncate_calibration_log_text(log_text, max_bytes=_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES),
+        }
 
     # ------------------------------------------------------------------
     # Calibration session driver

@@ -837,6 +837,13 @@
   }
 }
 
+.log-fetch-error {
+  margin: 0;
+  padding: 8px 4px 0;
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-sm);
+}
+
 .log-viewer {
   margin: 0;
   padding: 0;

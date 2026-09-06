@@ -2444,6 +2444,40 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
 
 
+@app.get("/internal/calibration_probe_logs/fetch", tags=["admin"])
+async def internal_fetch_calibration_log(provider_id: int, model_name: str, request: Request):
+    """On-demand fetch of a model's full calibration log from the worker.
+
+    Backs the Download-full-logs button: successful runs skip storing
+    log_text, so this re-reads the on-disk log live. Pure file read, no
+    GPU impact; needs the worker online and not yet recalibrated since.
+    """
+    if not _INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+    auth_header = request.headers.get("authorization", "")
+    token = (
+        auth_header.removeprefix("Bearer ").strip()
+        if auth_header.lower().startswith("bearer ")
+        else auth_header.strip()
+    )
+    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+    try:
+        result = await _logosnode_registry.send_command(
+            provider_id,
+            "get_calibration_log",
+            params={"model_name": model_name},
+            timeout_seconds=20,
+        )
+    except LogosNodeOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc) or "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+
+    return JSONResponse(status_code=200, content=jsonable_encoder({"log_text": result.get("log_text", "")}))
+
+
 class _InternalCalibrateRequest(BaseModel):
     provider_id: int
 

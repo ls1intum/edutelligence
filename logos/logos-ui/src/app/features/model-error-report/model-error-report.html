@@ -351,7 +351,27 @@
                   </button>
                 }
 
+                <button
+                  class="btn-copy-log"
+                  type="button"
+                  [class.btn-copy-log--error]="downloadLogError()"
+                  [disabled]="downloadingLog()"
+                  (click)="downloadFullLog()"
+                >
+                  @if (downloadingLog()) {
+                    <i class="pi pi-spin pi-spinner"></i> Downloading…
+                  } @else if (downloadLogError()) {
+                    <i class="pi pi-times"></i> Download failed
+                  } @else {
+                    <i class="pi pi-download"></i> Download full logs
+                  }
+                </button>
+
               </div>
+
+              @if (downloadLogError(); as error) {
+                <p class="log-fetch-error">{{ error }}</p>
+              }
 
               <div class="log-viewer">
 

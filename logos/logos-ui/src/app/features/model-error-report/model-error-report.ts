@@ -311,6 +311,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     return result !== null && !result.ok && result.providerId === this.selectedLogProviderId();
   });
 
+  readonly downloadingLog = signal(false);
+  readonly downloadLogError = signal<string | null>(null);
+
   private readonly rawLogsByProviderId =
     signal<ReadonlyMap<number, string>>(new Map());
 
@@ -975,6 +978,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     const providerId = Number(value);
     if (!Number.isNaN(providerId)) {
       this.selectedLogProviderId.set(providerId);
+      this.downloadLogError.set(null);
     }
   }
 
@@ -1002,6 +1006,45 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       this.logCopyResult.set(null);
       this.logCopiedResetTimer = null;
     }, 2000);
+  }
+
+  async downloadFullLog(): Promise<void> {
+    const modelId = this.modelId();
+    const providerId = this.selectedLogProviderId();
+    if (modelId == null || providerId == null || this.downloadingLog()) {
+      return;
+    }
+
+    this.downloadingLog.set(true);
+    this.downloadLogError.set(null);
+
+    try {
+      const response = await firstValueFrom(
+        this.http.post<{ log_text?: string }>(
+          '/api/logosdb/get_model_calibration_log_full',
+          { id: modelId, provider_id: providerId }
+        )
+      );
+      this.triggerLogFileDownload(response.log_text ?? '');
+    } catch (error) {
+      const response = error instanceof HttpErrorResponse ? error.error : null;
+      const message = typeof response?.error === 'string' ? response.error : null;
+      this.downloadLogError.set(message ?? 'Failed to fetch the log from the worker.');
+    } finally {
+      this.downloadingLog.set(false);
+    }
+  }
+
+  private triggerLogFileDownload(logText: string): void {
+    const modelName = (this.model()?.name ?? 'model').replace(/\//g, '__');
+    const node = this.selectedLog()?.node ?? 'node';
+    const blob = new Blob([logText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${modelName}-${node}-calibration.log`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   openNodeLog(
