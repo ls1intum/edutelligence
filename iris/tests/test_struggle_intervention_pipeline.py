@@ -734,6 +734,20 @@ def test_inline_hint_is_specified_and_parsed_as_plain_text():
     )
 
 
+def test_inline_hint_is_drawn_as_one_line():
+    """
+    The gutter draws a single line after the anchored statement. A cue that arrives with a newline
+    in it would lose everything after the break, or push it somewhere the student cannot read, so
+    the whole cue is collapsed onto one line before the budget is measured.
+    """
+    gate = _gate(
+        '{"action": "ambient", "message": "m", "confidence": 0.5,'
+        ' "anchor": {"file": "Sort.java", "line": 42},'
+        ' "inlineHint": "Check the loop bound\\nand the return"}'
+    )
+    assert gate.inline_hint == "Check the loop bound and the return"
+
+
 def test_inline_hint_is_clamped_to_the_gutter_budget():
     """
     The cue is drawn inline after the anchored line of the student's own code and nothing

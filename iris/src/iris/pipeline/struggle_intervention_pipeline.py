@@ -66,13 +66,16 @@ def _clean_inline_hint(raw: str) -> Optional[str]:
     Two things the prompt asks for but cannot guarantee, both enforced here because this
     value reaches the editor unfiltered:
 
-    - No markdown. The gutter has no markdown pass, so a backtick arrives as a backtick
-      next to the code. Observed live before this existed.
+    - No markdown, and one line. The gutter has no markdown pass, so a backtick arrives as
+      a backtick next to the code, and it draws a single line, so an embedded newline would
+      either be swallowed or push the rest of the cue out of view.
     - At most INLINE_HINT_MAX_CHARS. Truncation happens at a word boundary with an ellipsis,
       so a slightly long cue is shortened rather than lost; only a cue with no boundary to
       cut at inside the budget is dropped, since a word cut mid-way reads as a defect.
     """
-    cue = raw.replace("`", "").strip()
+    # split() with no argument collapses every whitespace run, newlines included, so the budget
+    # below measures the cue as the gutter will actually draw it.
+    cue = " ".join(raw.replace("`", "").split())
     if not cue:
         return None
     if len(cue) <= INLINE_HINT_MAX_CHARS:

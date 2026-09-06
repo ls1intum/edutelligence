@@ -596,6 +596,28 @@ class StruggleInterventionCallback(StatusCallback):
         )
         self._trailing_finish_seen = False
 
+    # Attempts (with backoff) for the terminal frame, matching the chat callback's
+    # delivery-critical sends.
+    _TERMINAL_RETRY_ATTEMPTS = 3
+
+    def on_status_update(self) -> bool:
+        """Post the current status, retrying the terminal frame.
+
+        The terminal frame is the only thing Artemis ever learns about this run: it carries the
+        decision, and it is what completes the student's in-flight request. ``finish`` marks the
+        run terminal before it posts and this callback absorbs the pipeline's trailing finish, so
+        nothing behind it would try again. One 5xx or one restart landing on this POST would drop
+        the hint and leave the client waiting for its own timeout.
+        """
+        if not self._terminal_sent:
+            return super().on_status_update()
+        for attempt in range(self._TERMINAL_RETRY_ATTEMPTS):
+            if super().on_status_update():
+                return True
+            if attempt < self._TERMINAL_RETRY_ATTEMPTS - 1:
+                time.sleep((1, 2)[attempt])
+        return False
+
     def _reject_after_terminal(self, operation: str) -> None:
         """Absorb the one trailing finish this pipeline's shape produces.
 
