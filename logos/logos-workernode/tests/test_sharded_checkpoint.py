@@ -74,6 +74,30 @@ def test_resolve_vllm_python_resolves_an_env_shebang_via_path(monkeypatch, tmp_p
     assert sc.resolve_vllm_python(str(vllm)) == str(env_py)
 
 
+def test_resolve_vllm_python_skips_env_option_operands(monkeypatch, tmp_path: Path) -> None:
+    """``#!/usr/bin/env -S -u PYTHONPATH python3``: ``-u`` takes ``PYTHONPATH``
+    as its operand, so the command ``env`` runs is ``python3`` — the resolver
+    must not mistake the operand for the interpreter name and look it up."""
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    env_py = bin_dir / "python3"
+    env_py.write_text("#!/bin/sh\nexit 0\n")
+    env_py.chmod(0o755)
+    decoy = bin_dir / "python"  # a sibling guess would land here, not on python3
+    decoy.write_text("#!/bin/sh\nexit 0\n")
+    decoy.chmod(0o755)
+    vllm = bin_dir / "vllm"
+    vllm.write_text("#!/usr/bin/env -S -u PYTHONPATH python3\nimport sys\n")
+    vllm.chmod(0o755)
+    looked_up: list[str] = []
+    monkeypatch.setattr(
+        "logos_worker_node.sharded_checkpoint.shutil.which",
+        lambda name: (looked_up.append(name), str(env_py) if name == "python3" else None)[1],
+    )
+    assert sc.resolve_vllm_python(str(vllm)) == str(env_py)
+    assert looked_up == ["python3"]
+
+
 def test_resolve_vllm_python_falls_back_to_sibling_when_the_shebang_is_unreadable(monkeypatch, tmp_path: Path) -> None:
     """Only when the script has no usable shebang is the neighbouring python a
     fallback at all — there is nothing better to read the interpreter from."""

@@ -302,11 +302,22 @@ def _interpreter_from_shebang(script: str) -> str | None:
         return None
     interpreter = parts[0]
     if os.path.basename(interpreter) == "env":
-        # ``#!/usr/bin/env python3`` — the interpreter is found by name via PATH
-        # (skipping any ``env`` flags, e.g. the ``-S`` in ``env -S python3.11``).
-        for arg in parts[1:]:
+        # ``#!/usr/bin/env python3`` — the interpreter is found by name via PATH.
+        # ``env`` stops option parsing at the command, so the command is the
+        # first free-standing non-option. Options that take an operand (``-u
+        # NAME``, ``-C DIR``, ``-L NUM``) must skip that operand or it would be
+        # mistaken for the command, as in ``env -S -u PYTHONPATH python3``.
+        # ``-S`` stays a flag: in a shebang its string is the rest of the line,
+        # which is already split into ``parts`` here.
+        i = 1
+        while i < len(parts):
+            arg = parts[i]
             if not arg.startswith("-"):
                 return shutil.which(arg)
+            if arg in ("-C", "-L", "-u", "--chdir", "--default-signal-limit"):
+                i += 2
+                continue
+            i += 1
         return None
     if not os.path.isabs(interpreter):
         # Relative shebangs are resolved CWD-relative by execve and are
