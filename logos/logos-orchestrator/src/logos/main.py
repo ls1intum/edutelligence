@@ -28,15 +28,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.auth import AuthContext, authenticate_api_key
+from logos.benchmarks.configuration import BenchmarkSettings
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
     BENCHMARK_PHASE_HEADER,
     BENCHMARK_PROVIDER_HEADER,
     BENCHMARK_TOKEN_HEADER,
-)
-from logos.benchmarks.configuration import BenchmarkSettings
-from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
-from logos.benchmarks.guidellm_runner import (
     benchmark_affinity_headers,
     benchmark_affinity_token,
     credential_transport_is_secure,
@@ -45,6 +42,7 @@ from logos.benchmarks.guidellm_runner import (
     resolve_benchmark_target,
     run_benchmark_job,
 )
+from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
@@ -2507,8 +2505,12 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
-        if data.serving_overrides.model_dump(exclude_none=True) and (provider_type != "logosnode" or _capacity_planner is None):
-            raise HTTPException(status_code=400, detail="Serving overrides require a Logos worker with capacity planning")
+        if data.serving_overrides.model_dump(exclude_none=True) and (
+            provider_type != "logosnode" or _capacity_planner is None
+        ):
+            raise HTTPException(
+                status_code=400, detail="Serving overrides require a Logos worker with capacity planning"
+            )
         endpoint = str(target.get("target") or "").strip()
         if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
@@ -2580,9 +2582,13 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
     )
 
     if worker_preparer is not None and data.serving_overrides.model_dump(exclude_none=True):
-        worker_preparer = lambda: _capacity_planner.prepare_configured_benchmark_lane(
-            provider_id, model_name, data.serving_overrides,
-        )
+
+        def worker_preparer():
+            return _capacity_planner.prepare_configured_benchmark_lane(
+                provider_id,
+                model_name,
+                data.serving_overrides,
+            )
 
     task = asyncio.create_task(
         run_benchmark_job(

@@ -217,8 +217,11 @@ def build_scenario(
         "metadata": {"labels": {"dataset": settings.dataset, "purpose": "logos-model-provider-performance"}},
         "spec": {
             "backend": backend,
-            "profile": ({"kind": "synchronous"} if settings.profile == "synchronous"
-                        else {"kind": "concurrent", "streams": settings.concurrency}),
+            "profile": (
+                {"kind": "synchronous"}
+                if settings.profile == "synchronous"
+                else {"kind": "concurrent", "streams": settings.concurrency}
+            ),
             "constraints": [
                 {"kind": "max_requests", "count": samples},
                 {"kind": "max_errors", "count": 1},
@@ -296,8 +299,11 @@ def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -
         extra_args = list(vllm_config.get("extra_args") or [])
         for key, flag in _EXTRA_SERVING_FLAGS.items():
             for index, arg in enumerate(extra_args):
-                raw = (extra_args[index + 1] if arg == flag and index + 1 < len(extra_args)
-                       else str(arg).split("=", 1)[1] if str(arg).startswith(flag + "=") else None)
+                raw = (
+                    extra_args[index + 1]
+                    if arg == flag and index + 1 < len(extra_args)
+                    else str(arg).split("=", 1)[1] if str(arg).startswith(flag + "=") else None
+                )
                 if raw is not None:
                     try:
                         result[key] = json.loads(raw)

@@ -1137,7 +1137,11 @@ class CapacityPlanner:
         return target is not None and self.benchmark_lane_is_safe(provider_id, target)
 
     async def prepare_configured_benchmark_lane(
-        self, provider_id: int, model_name: str, overrides, timeout_seconds: float = 600.0,
+        self,
+        provider_id: int,
+        model_name: str,
+        overrides,
+        timeout_seconds: float = 600.0,
     ) -> bool:
         """Reload an idle vLLM lane and wait for its new configuration to be reported."""
         from logos.benchmarks.guidellm_runner import apply_serving_overrides
@@ -1151,8 +1155,14 @@ class CapacityPlanner:
             if not self._benchmark_provider_is_idle(provider_id, model_name):
                 return False
             snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
-            lane = next((lane for lane in (snapshot.get("runtime") or {}).get("lanes", [])
-                         if lane.get("lane_id") == target.lane_id), None)
+            lane = next(
+                (
+                    lane
+                    for lane in (snapshot.get("runtime") or {}).get("lanes", [])
+                    if lane.get("lane_id") == target.lane_id
+                ),
+                None,
+            )
             config = (lane or {}).get("lane_config") or {}
             if not config.get("vllm"):
                 raise RuntimeError("Serving overrides require an existing vLLM lane on this worker")
@@ -1163,7 +1173,8 @@ class CapacityPlanner:
             self._mark_lane_cold(provider_id, target.lane_id)
             try:
                 await self._registry.send_command(
-                    provider_id, "reconfigure_lane",
+                    provider_id,
+                    "reconfigure_lane",
                     {"lane_id": target.lane_id, "updates": {"vllm_config": updated}, "require_idle": True},
                     timeout_seconds=int(timeout_seconds),
                 )
