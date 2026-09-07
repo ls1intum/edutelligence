@@ -345,3 +345,14 @@ def test_non_positive_env_values_are_clamped(monkeypatch):
 def test_unset_env_keeps_the_default(monkeypatch):
     monkeypatch.delenv("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", raising=False)
     assert cloud_model_sync._env_number("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", 900, minimum=1) == 900
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "NaN", "Infinity"])
+def test_non_finite_env_values_fall_back(monkeypatch, raw):
+    # float() accepts these; the int() the interval goes through does not, so
+    # letting them past would crash the orchestrator at import — the very
+    # failure the fallback exists to prevent.
+    monkeypatch.setenv("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", raw)
+    value = cloud_model_sync._env_number("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", 900, minimum=1)
+    assert value == 900
+    assert int(value) == 900  # what module import actually does

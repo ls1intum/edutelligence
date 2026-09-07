@@ -26,6 +26,7 @@ endpoint URL needs, none of which ``/v1/models`` reports.
 
 import asyncio
 import logging
+import math
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
@@ -54,6 +55,13 @@ def _env_number(name: str, default: float, minimum: float) -> float:
         value = float(raw)
     except (TypeError, ValueError):
         logger.warning("Ignoring non-numeric %s=%r; using %s", name, raw, default)
+        return default
+    # float() accepts "nan" and "inf". Neither survives the int() the interval
+    # goes through below — NaN raises ValueError and infinity OverflowError —
+    # so letting them past here reintroduces the import-time crash this
+    # function exists to prevent.
+    if not math.isfinite(value):
+        logger.warning("Ignoring non-finite %s=%r; using %s", name, raw, default)
         return default
     return max(value, minimum)
 
