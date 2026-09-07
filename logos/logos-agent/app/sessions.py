@@ -1471,6 +1471,18 @@ class SessionManager:
         if workspace is None:
             logger.warning("workspace of session %s is gone; cannot finalize", session_id)
             return False
+        # The issue the fresh pull request closes — the session's own assigned
+        # issue, by the number the row carries, not a reference the task text
+        # happens to name. The task renders the issue's body and its
+        # conversation, and those point at other issues all the time; a "see
+        # #948" in them is a pointer, not an authorization to close #948. Only
+        # an assigned issue opens a fresh pull request, so only it has a
+        # number to give; anything else leaves the body empty.
+        closes = ""
+        if session.get("open_pull_request") and session.get("trigger_kind") == "issue":
+            number = str(session.get("trigger_ref") or "").removeprefix("issue-")
+            if number.isdigit():
+                closes = number
         env = {
             "LOGOS_SESSION_PHASE": "finalize",
             "LOGOS_SESSION_ID": str(session_id),
@@ -1478,6 +1490,11 @@ class SessionManager:
             "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
             "LOGOS_SESSION_TASK": str(session.get("task") or ""),
             "LOGOS_SESSION_OPEN_PR": "1" if session.get("open_pull_request") else "0",
+            # The issue the pull request closes, see above: the assigned
+            # issue's number, or empty when this session opens no issue pull
+            # request. The finalizer reads it rather than the task, for the
+            # same reason it reads no_push and open_pull_request from the row.
+            "LOGOS_SESSION_CLOSES": closes,
             "LOGOS_REPO_URL": settings.repo_url,
             "LOGOS_REPO_SLUG": settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",

@@ -1141,22 +1141,24 @@ def _as_subject(text: str) -> str:
     return f"`Logos`: {cleaned}"
 
 
-def _closed_issues(task: str) -> str:
+def _closed_issues(closes: str) -> str:
     """The pull request's body, and nothing else.
 
-    The issues the work closes, named the way GitHub reads the reference:
-    merging the pull request closes them. The numbers are the task's — the
-    assigned issue and the ones its body and conversation point at — and
-    the list is the whole body, so nothing beside it can overstate what the
-    change does. What the change does belongs in the commit subject; why it
-    was made belongs to whoever picks it up.
+    The issue the work closes, named the way GitHub reads the reference:
+    merging the pull request closes it. The number is the session's own — the
+    issue it was assigned — carried in by the runner, not read out of the
+    task: the task renders the issue's body and its conversation, and those
+    name other issues all the time, a "see #948" pointer among them. A
+    pointer is not an authorization to close, so the body names only what the
+    runner says the session is the work on. Empty when there is no number,
+    which is also the safe default: never close a reference nobody gave. What
+    the change does belongs in the commit subject; why it was made belongs to
+    whoever picks it up.
     """
-    # First-seen order, deduplicated: the body lists the references the way
-    # the task names them, not in numerical order.
-    numbers = list(dict.fromkeys(re.findall(r"#(\d+)\b", task)))
-    if not numbers:
+    number = closes.strip().lstrip("#")
+    if not number.isdigit():
         return ""
-    return "closes " + ", ".join(f"#{number}" for number in numbers)
+    return f"closes #{number}"
 
 
 def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
@@ -1168,9 +1170,11 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     # The title says what the change does; the body says what it closes —
     # and a pull request opened with more words than that buries the diff
     # under boilerplate and gives the reviewer a page of things they
-    # already know.
+    # already know. The closing issue comes from the runner, not the task:
+    # the task renders the issue's body and conversation, which name other
+    # issues that are pointers, not authorizations to close.
     title = _commit_subject(task)
-    body = _closed_issues(task)
+    body = _closed_issues(os.environ.get("LOGOS_SESSION_CLOSES", ""))
     process = run(
         [
             "gh",
@@ -1186,7 +1190,7 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
             title,
             # Present rather than absent: `gh` prompts for a body it was
             # not given, and a session has no terminal to prompt at.
-            # Empty when the task names no issue.
+            # Empty when the session has no issue to close.
             "--body",
             body,
         ],

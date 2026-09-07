@@ -923,22 +923,30 @@ class TestCommitSubjects:
 
 
 class TestClosedIssues:
-    """The body names the issues the change closes — and in the order the
-    task names them.
+    """The body names the issue the session is the work on — and nothing else.
 
-    A task that writes `#948` before `#493` is working through the references
-    in that order, and a body re-sorted numerically no longer reads as the
-    task's.
+    The number arrives from the runner as the session's assigned issue, not
+    read out of the task. The task renders the issue's body and its
+    conversation, and those point at other issues that are pointers, not
+    authorizations to close: the body must not turn a "see #948" into a
+    closing keyword.
     """
 
-    def test_references_are_listed_in_the_tasks_own_order(self):
-        assert run_session._closed_issues("Fix #948, then the follow-up in #493") == "closes #948, #493"
+    def test_the_assigned_issue_is_named(self):
+        assert run_session._closed_issues("493") == "closes #493"
 
-    def test_a_reference_named_twice_is_listed_once(self):
-        assert run_session._closed_issues("Fix #948. The repro is in the comments of #948.") == "closes #948"
+    def test_a_number_that_already_carries_a_hash_is_not_double_hashed(self):
+        assert run_session._closed_issues("#493") == "closes #493"
 
-    def test_a_task_without_references_closes_nothing(self):
-        assert run_session._closed_issues("Just a change, no issues named") == ""
+    def test_no_number_closes_nothing(self):
+        assert run_session._closed_issues("") == ""
+
+    def test_whitespace_closes_nothing(self):
+        assert run_session._closed_issues("   ") == ""
+
+    def test_a_value_that_is_not_a_number_closes_nothing(self):
+        # The safe default: rather than close the wrong reference, close none.
+        assert run_session._closed_issues("issue-493") == ""
 
 
 class TestTranscriptLines:
@@ -1010,6 +1018,8 @@ class TestHowAPullRequestIsOpened:
 
         monkeypatch.setenv("LOGOS_REPO_SLUG", "x/y")
         monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        # A clean default: each test that wants a closing issue sets it.
+        monkeypatch.delenv("LOGOS_SESSION_CLOSES", raising=False)
         monkeypatch.setattr(run_session, "run", fake_run)
         return calls
 
@@ -1020,7 +1030,7 @@ class TestHowAPullRequestIsOpened:
 
         assert "--draft" not in calls[0]
 
-    def test_a_task_naming_no_issue_leaves_the_body_empty(self, monkeypatch, tmp_path):
+    def test_no_assigned_issue_leaves_the_body_empty(self, monkeypatch, tmp_path):
         calls = self.capture(monkeypatch, tmp_path)
 
         run_session.open_pull_request("logos/agent/x", "main", "a long task with all its house rules")
@@ -1028,8 +1038,12 @@ class TestHowAPullRequestIsOpened:
         body = calls[0][calls[0].index("--body") + 1]
         assert body == ""
 
-    def test_the_body_names_the_issues_the_task_closes(self, monkeypatch, tmp_path):
+    def test_the_body_closes_only_the_assigned_issue(self, monkeypatch, tmp_path):
+        # The task names another issue in passing — a pointer from the issue
+        # body or the conversation, not an authorization. The runner names the
+        # one issue the session is the work on, and only that may be closed.
         calls = self.capture(monkeypatch, tmp_path)
+        monkeypatch.setenv("LOGOS_SESSION_CLOSES", "493")
         task = (
             "You have been assigned issue #493. Work on it.\n\n"
             "Issue #493: The card sparkline overflows its slot\n\n"
@@ -1039,9 +1053,8 @@ class TestHowAPullRequestIsOpened:
         run_session.open_pull_request("logos/agent/x", "main", task)
 
         body = calls[0][calls[0].index("--body") + 1]
-        # The list, in order, without the duplicates the task repeats —
-        # and nothing else in the body.
-        assert body == "closes #493, #948"
+        # Only the assigned issue — not the #948 the task merely points at.
+        assert body == "closes #493"
 
     def test_the_title_still_describes_the_change(self, monkeypatch, tmp_path):
         calls = self.capture(monkeypatch, tmp_path)

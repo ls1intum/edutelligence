@@ -1251,10 +1251,56 @@ class TestAgentPhaseIsolation:
         assert helper["env"]["GH_TOKEN"] == "ghp-session-token"
         assert helper["env"]["LOGOS_REPO_URL"] == patched.repo_url
         assert helper["env"]["LOGOS_SESSION_OPEN_PR"] == "1"
+        # This row opens a pull request but is not an issue session, so there
+        # is no assigned issue to close: the body stays empty.
+        assert helper["env"]["LOGOS_SESSION_CLOSES"] == ""
         assert helper["network"] == patched.session_egress_network
         assert helper["labels"] == {"logos.agent.helper": "finalize"}
         # The helper is a one-shot: created, waited on, removed.
         assert removed == ["cid-finalize", "cid-7"]
+
+    async def test_the_finalizer_is_told_the_issue_the_session_closes(self, monkeypatch, tmp_path):
+        # The pull request's body closes the issue the session is the work on.
+        # The finalizer is told that number by the row — the issue session's
+        # trigger reference — not by re-reading the task: the task renders the
+        # issue's body and conversation, which name other issues that are
+        # pointers, not authorizations to close.
+        from app import sessions
+
+        self._patch_base(monkeypatch, tmp_path)
+        created: list = []
+        issue_row = {
+            **self.ROW,
+            "trigger_kind": "issue",
+            "trigger_ref": "issue-493",
+            "task": "assigned issue #493; the same bug was filed as #948",
+        }
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(issue_row))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert len(created) == 1
+        # The assigned issue's number, from the row — not the #948 the task
+        # merely points at.
+        assert created[0]["env"]["LOGOS_SESSION_CLOSES"] == "493"
 
     async def test_a_failed_agent_run_is_not_finalized(self, monkeypatch, tmp_path):
         # A crashed agent left nothing worth committing: no finalizer runs,
