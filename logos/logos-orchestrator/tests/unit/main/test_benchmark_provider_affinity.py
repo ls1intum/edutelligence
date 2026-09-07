@@ -365,7 +365,12 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
             return {"log-id": 99}, 200
 
     request = MagicMock()
-    request.json = AsyncMock(return_value={"model": "org/model"})
+    body = {
+        "model": "org/model",
+        "messages": [{"role": "user", "content": "What is 2 + 2?"}],
+        "max_tokens": 32,
+    }
+    request.json = AsyncMock(return_value=body)
     request.headers = {main.BENCHMARK_JOB_HEADER: "7"}
     planner = MagicMock()
     planner.prepare_benchmark_lane = AsyncMock(return_value=True)
@@ -386,6 +391,7 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
             "user_id": None,
             "environment": "model-provider-benchmark",
             "log_level": "FULL",
+            "input_payload": body,
             "request_id": execute.await_args.kwargs["request_id"],
         }
     ]

@@ -2719,6 +2719,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
             user_id=None,
             environment=auth.environment,
             log_level=auth.log_level,
+            input_payload=sanitized_payload_for_logging(body),
             request_id=request_id,
         )
     log_id = int(log_result["log-id"])
