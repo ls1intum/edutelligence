@@ -1401,7 +1401,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "requests", specifier = ">=2.32.3,<3.0.0" },
     { name = "sentence-transformers", specifier = ">=5.0.0,<6.0.0" },
-    { name = "shared", directory = "/Users/timgrobecker/TUM/S26/[CIT000000] BT/edutelligence/logos/logos-orchestrator/shared" },
+    { name = "shared", editable = "shared" },
     { name = "sqlalchemy", specifier = ">=2.0.40,<3.0.0" },
     { name = "tiktoken", specifier = ">=0.9.0,<0.10.0" },
     { name = "torch", specifier = ">=2.5,<3.0", index = "https://download.pytorch.org/whl/cpu" },
@@ -3012,7 +3012,7 @@ wheels = [
 [[package]]
 name = "shared"
 version = "2.7"
-source = { directory = "/Users/timgrobecker/TUM/S26/[CIT000000] BT/edutelligence/logos/logos-orchestrator/shared" }
+source = { editable = "shared" }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
 ]
