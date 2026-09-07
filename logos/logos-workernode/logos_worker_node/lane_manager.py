@@ -798,8 +798,6 @@ class LaneManager:
     ) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
         async with self._lock:
-            if require_idle and any(count > 0 for count in self._active_requests.values()):
-                raise RuntimeError("Cannot reconfigure a benchmark lane while requests are active on the worker")
             handle = self._handles.get(lane_id)
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")
@@ -821,6 +819,12 @@ class LaneManager:
             new_lc = LaneConfig(**current_data)
             self._validate_vllm_runtime_requirements([new_lc])
             if _lane_needs_restart(current, new_lc):
+                active = self._active_requests.get(lane_id, 0)
+                if require_idle and active > 0:
+                    raise RuntimeError(
+                        f"Cannot apply vLLM settings: model '{current.model}' still has {active} active request(s). "
+                        "Wait for them to finish, or run the benchmark with the current settings."
+                    )
                 await self._restart_lane_unlocked(lane_id, new_lc)
             prom.LANE_TRANSITIONS_TOTAL.labels(action="reconfigure").inc()
 

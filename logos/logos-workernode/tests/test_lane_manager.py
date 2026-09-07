@@ -4,7 +4,7 @@ import asyncio
 import socket
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -2853,10 +2853,32 @@ async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_benchmark_reconfigure_rejects_active_requests_before_restart() -> None:
+@pytest.mark.parametrize("busy_lane", ["benchmark-lane", "other-lane"])
+async def test_benchmark_reconfigure_only_protects_requests_on_restarted_lane(busy_lane) -> None:
     manager = LaneManager(OllamaConfig(), lane_port_start=15100, lane_port_end=15110)
-    manager._active_requests["other-lane"] = 1
+    current = LaneConfig(model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=1))
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._active_requests[busy_lane] = 1
     manager._restart_lane_unlocked = AsyncMock()
-    with pytest.raises(RuntimeError, match="requests are active"):
-        await manager.reconfigure_lane("benchmark-lane", {"vllm_config": {}}, require_idle=True)
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 2}}
+    if busy_lane == "benchmark-lane":
+        with pytest.raises(RuntimeError, match="still has 1 active request"):
+            await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_benchmark_reconfigure_unchanged_settings_allow_active_requests() -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._active_requests["benchmark-lane"] = 1
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    await manager.reconfigure_lane("benchmark-lane", {"model": current.model}, require_idle=True)
     manager._restart_lane_unlocked.assert_not_awaited()

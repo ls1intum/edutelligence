@@ -45,7 +45,7 @@ async def test_benchmark_lane_reuses_ready_lane_on_exact_worker():
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_wakes_sleeping_lane_without_reclaim():
+async def test_benchmark_lane_wakes_sleeping_lane_with_normal_capacity_handling():
     target = _lane("sleeping", "sleeping")
     ready = _lane("loaded", "awake")
     planner = _planner(target)
@@ -58,13 +58,13 @@ async def test_benchmark_lane_wakes_sleeping_lane_without_reclaim():
         "org/model",
         target,
         30.0,
-        allow_reclaim=False,
+        raise_on_failure=True,
     )
     planner._cold_load_for_request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_cold_loads_without_reclaim():
+async def test_benchmark_lane_cold_loads_with_normal_capacity_handling():
     ready = _lane("loaded", "awake")
     planner = _planner(None)
     planner._pick_request_target_lane.side_effect = [None, ready]
@@ -75,7 +75,7 @@ async def test_benchmark_lane_cold_loads_without_reclaim():
         7,
         "org/model",
         30.0,
-        allow_reclaim=False,
+        raise_on_failure=True,
     )
 
 
@@ -93,23 +93,24 @@ async def test_benchmark_lane_waits_for_starting_lane():
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_rejects_production_load():
+async def test_benchmark_lane_allows_concurrent_requests():
     target = _lane("loaded", "awake")
     target.active_requests = 1
     planner = _planner(target)
     planner._safe_get_lanes.return_value = [target]
 
-    assert await planner.prepare_benchmark_lane(7, "org/model") is False
+    assert await planner.prepare_benchmark_lane(7, "org/model") is True
 
 
 @pytest.mark.asyncio
-async def test_benchmark_lane_does_not_load_while_production_request_is_queued():
+async def test_benchmark_lane_loads_while_other_requests_are_queued():
+    ready = _lane("loaded", "awake")
     planner = _planner(None)
-    planner._safe_get_profiles.return_value = {"org/model": MagicMock()}
+    planner._pick_request_target_lane.side_effect = [None, ready]
     planner._facade.get_scheduler_queue_depth_by_model_name.return_value = 1
 
-    assert await planner.prepare_benchmark_lane(7, "org/model") is False
-    planner._cold_load_for_request.assert_not_awaited()
+    assert await planner.prepare_benchmark_lane(7, "org/model") is True
+    planner._cold_load_for_request.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -118,7 +119,8 @@ async def test_benchmark_lane_fails_fast_when_an_existing_start_errors():
     planner = _planner(starting)
     planner._safe_get_lanes.return_value = [_lane("error", "unsupported")]
 
-    assert await planner.prepare_benchmark_lane(7, "org/model", 30.0) is False
+    with pytest.raises(RuntimeError, match="failed to start on worker 7"):
+        await planner.prepare_benchmark_lane(7, "org/model", 30.0)
     planner._prepare_existing_lane.assert_not_awaited()
     planner._cold_load_for_request.assert_not_awaited()
 
@@ -177,8 +179,59 @@ async def test_configured_benchmark_restores_routing_if_worker_refuses():
     planner._unmark_lane_cold.assert_called_once_with(7, "model-lane")
 
 
-async def test_configured_benchmark_does_not_restart_busy_provider():
+async def test_configured_benchmark_allows_requests_on_other_lanes():
     planner, overrides, _ = _configured_planner()
-    planner._benchmark_provider_is_idle = MagicMock(return_value=False)
-    assert await planner.prepare_configured_benchmark_lane(7, "org/model", overrides) is False
+    other = _lane("running", "awake")
+    other.lane_id = "other-lane"
+    other.active_requests = 2
+    planner._safe_get_lanes.return_value = [other]
+    assert await planner.prepare_configured_benchmark_lane(7, "org/model", overrides) is True
+    planner._registry.send_command.assert_awaited_once()
+
+
+async def test_unchanged_serving_settings_do_not_restart_busy_model():
+    from logos.benchmarks.configuration import ServingOverrides
+
+    planner, _, _ = _configured_planner()
+    target = _lane("running", "awake")
+    target.active_requests = 1
+    planner._safe_get_lanes.return_value = [target]
+    assert (
+        await planner.prepare_configured_benchmark_lane(7, "org/model", ServingOverrides(tensor_parallel_size=1))
+        is True
+    )
     planner._registry.send_command.assert_not_awaited()
+
+
+async def test_benchmark_reports_missing_worker_status():
+    planner = _planner(None)
+    planner._registry.has_received_first_status.return_value = False
+    with pytest.raises(RuntimeError, match="Worker 7 has not reported its status"):
+        await planner.prepare_benchmark_lane(7, "org/model")
+    planner._cold_load_for_request.assert_not_awaited()
+
+
+async def test_benchmark_reports_startup_timeout():
+    target = _lane("starting", "unsupported")
+    planner = _planner(target)
+    planner._safe_get_lanes.return_value = [target]
+    with pytest.raises(RuntimeError, match="did not become ready within 0 seconds"):
+        await planner.prepare_benchmark_lane(7, "org/model", 0)
+
+
+async def test_benchmark_reports_missing_capacity():
+    planner = _planner(None)
+    planner._safe_get_capacity = MagicMock(return_value=None)
+    with pytest.raises(RuntimeError, match="Worker capacity information is unavailable"):
+        await CapacityPlanner._cold_load_for_request(planner, 7, "org/model", 30, raise_on_failure=True)
+    # Normal request callers retain their existing retry/None behavior.
+    assert await CapacityPlanner._cold_load_for_request(planner, 7, "org/model", 30) is None
+
+
+async def test_benchmark_reports_gpu_capacity_failure():
+    target = _lane("cold", "unsupported")
+    planner = _planner(target)
+    planner._ensure_request_capacity = AsyncMock(return_value=False)
+    with pytest.raises(RuntimeError, match="Could not make enough GPU capacity"):
+        await CapacityPlanner._prepare_existing_lane(planner, 7, "org/model", target, 30, raise_on_failure=True)
+    planner._registry.select_lane_for_model.assert_not_called()

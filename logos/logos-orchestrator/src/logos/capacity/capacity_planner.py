@@ -1098,43 +1098,25 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float = 600.0,
     ) -> bool:
-        """Prepare an idle benchmark lane without reclaiming production capacity."""
+        """Prepare a benchmark model alongside other requests using normal capacity handling."""
         if self._registry and not self._registry.has_received_first_status(provider_id):
-            return False
+            raise RuntimeError(f"Worker {provider_id} has not reported its status yet. Retry after it connects.")
 
         target = self._pick_request_target_lane(provider_id, model_name)
-        if target is not None and target.runtime_state in {"loaded", "running"}:
-            return self.benchmark_lane_is_safe(provider_id, target)
-        if not self._benchmark_provider_is_idle(provider_id, model_name):
-            return False
+        if target is not None and self._benchmark_lane_is_ready(target):
+            return True
         if target is not None and target.runtime_state == "starting":
-            if not await self._wait_for_benchmark_lane_ready(provider_id, model_name, timeout_seconds):
-                return False
+            await self._wait_for_benchmark_lane_ready(provider_id, model_name, timeout_seconds)
         elif target is not None and target.runtime_state in {"sleeping", "cold"}:
-            if (
-                await self._prepare_existing_lane(
-                    provider_id,
-                    model_name,
-                    target,
-                    timeout_seconds,
-                    allow_reclaim=False,
-                )
-                is None
-            ):
-                return False
-        elif (
-            await self._cold_load_for_request(
-                provider_id,
-                model_name,
-                timeout_seconds,
-                allow_reclaim=False,
-            )
-            is None
-        ):
-            return False
+            await self._prepare_existing_lane(provider_id, model_name, target, timeout_seconds, raise_on_failure=True)
+        else:
+            await self._cold_load_for_request(provider_id, model_name, timeout_seconds, raise_on_failure=True)
 
         target = self._pick_request_target_lane(provider_id, model_name)
-        return target is not None and self.benchmark_lane_is_safe(provider_id, target)
+        if target is None or not self._benchmark_lane_is_ready(target):
+            state = target.runtime_state if target is not None else "missing"
+            raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id} is not ready (state: {state}).")
+        return True
 
     async def prepare_configured_benchmark_lane(
         self,
@@ -1150,10 +1132,10 @@ class CapacityPlanner:
             return False
         target = self._pick_request_target_lane(provider_id, model_name)
         if target is None:
-            return False
+            raise RuntimeError(
+                f"Benchmark model '{model_name}' disappeared from worker {provider_id} before reconfiguration."
+            )
         async with self._lane_lock(provider_id, target.lane_id):
-            if not self._benchmark_provider_is_idle(provider_id, model_name):
-                return False
             snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
             lane = next(
                 (
@@ -1186,8 +1168,6 @@ class CapacityPlanner:
                     actual = (lane.get("lane_config") or {}).get("vllm_config") or {}
                     if all(actual.get(key) == value for key, value in updated.items()):
                         break
-                    if not self._benchmark_provider_is_idle(provider_id, model_name):
-                        return False
                     await asyncio.sleep(1)
                 else:
                     raise RuntimeError("Worker did not confirm the requested vLLM configuration")
@@ -1195,23 +1175,9 @@ class CapacityPlanner:
                 self._unmark_lane_cold(provider_id, target.lane_id)
         return await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds)
 
-    def _benchmark_provider_is_idle(self, provider_id: int, model_name: str) -> bool:
-        """Reject preparation as soon as production work exists on the provider."""
-        lanes = self._safe_get_lanes(provider_id)
-        for lane in lanes:
-            if lane.active_requests > 0 or lane.requests_running > 0 or lane.queue_waiting > 0:
-                return False
-        queued_models = {model_name, *(lane.model_name for lane in lanes), *self._safe_get_profiles(provider_id)}
-        for queued_model in queued_models:
-            if self._facade.get_scheduler_queue_depth_by_model_name(queued_model, provider_id) > 0:
-                return False
-        return True
-
-    def benchmark_lane_is_safe(self, provider_id: int, target: LaneSchedulerSignals) -> bool:
-        """Return whether a benchmark can run without competing with production."""
-        if target.runtime_state not in {"loaded", "running"} or target.sleep_state == "sleeping":
-            return False
-        return self._benchmark_provider_is_idle(provider_id, target.model_name)
+    @staticmethod
+    def _benchmark_lane_is_ready(target: LaneSchedulerSignals) -> bool:
+        return target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping"
 
     async def _wait_for_benchmark_lane_ready(
         self,
@@ -1228,13 +1194,21 @@ class CapacityPlanner:
                 if target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
                     return True
                 if target.runtime_state in {"cold", "sleeping"}:
-                    return False
+                    raise RuntimeError(
+                        f"Benchmark model '{model_name}' on worker {provider_id} stopped starting "
+                        f"and entered state '{target.runtime_state}'."
+                    )
             elif any(lane.runtime_state in {"stopped", "error"} for lane in matching_lanes):
-                return False
+                raise RuntimeError(
+                    f"Benchmark model '{model_name}' failed to start on worker {provider_id}. Check its model logs."
+                )
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return False
+                raise RuntimeError(
+                    f"Benchmark model '{model_name}' on worker {provider_id} did not become ready "
+                    f"within {timeout_seconds:g} seconds."
+                )
             await asyncio.sleep(min(1.0, remaining))
 
     async def _prepare_existing_lane(
@@ -1244,8 +1218,16 @@ class CapacityPlanner:
         target: LaneSchedulerSignals,
         timeout_seconds: float,
         allow_reclaim: bool = True,
+        *,
+        raise_on_failure: bool = False,
     ) -> dict[str, Any] | None:
         """Wake or prepare an existing lane for a request."""
+
+        def failed(reason: str) -> None:
+            if raise_on_failure:
+                raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id}: {reason}")
+            return None
+
         profile = self._safe_get_profiles(provider_id).get(model_name)
         if target.runtime_state == "sleeping" and self._lane_is_in_wake_failure_cooldown(provider_id, target.lane_id):
             logger.info(
@@ -1253,7 +1235,7 @@ class CapacityPlanner:
                 target.lane_id,
                 self._facade.get_provider_name(provider_id) or provider_id,
             )
-            return None
+            return failed("A recent wake attempt failed; wait for the retry cooldown to expire.")
         if target.runtime_state in {"sleeping", "cold"}:
             ok = await self._ensure_request_capacity(
                 provider_id=provider_id,
@@ -1263,9 +1245,9 @@ class CapacityPlanner:
                 allow_reclaim=allow_reclaim,
             )
             if not ok:
-                if allow_reclaim:
+                if allow_reclaim and not raise_on_failure:
                     self._pending_capacity[model_name] = (provider_id, time.time())
-                return None
+                return failed("Could not make enough GPU capacity available to wake the model.")
 
         if target.runtime_state == "sleeping":
             async with self._lane_lock(provider_id, target.lane_id):
@@ -1297,7 +1279,9 @@ class CapacityPlanner:
                         timeout_seconds=max(timeout_seconds, self.REQUEST_WAKE_TIMEOUT_SECONDS),
                     )
                     if not woke:
-                        return None
+                        return failed(
+                            "The worker did not confirm that the model woke successfully. Check its model logs."
+                        )
 
         try:
             return await self._registry.select_lane_for_model(provider_id, model_name)
@@ -1308,7 +1292,9 @@ class CapacityPlanner:
                 model_name,
                 exc_info=True,
             )
-            return None
+            return failed(
+                "The prepared model is no longer available for requests. Check the worker connection and model logs."
+            )
 
     def _check_host_ram_headroom_for_cold_load(
         self,
@@ -1451,8 +1437,16 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float,
         allow_reclaim: bool = True,
+        *,
+        raise_on_failure: bool = False,
     ) -> dict[str, Any] | None:
         """Load a model that has no lane at all (request-time cold load)."""
+
+        def failed(reason: str) -> None:
+            if raise_on_failure:
+                raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id}: {reason}")
+            return None
+
         profile = self._safe_get_profiles(provider_id).get(model_name)
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
@@ -1461,7 +1455,7 @@ class CapacityPlanner:
                 self._facade.get_provider_name(provider_id) or provider_id,
                 model_name,
             )
-            return None
+            return failed("Worker capacity information is unavailable; wait for its next status report.")
 
         # No early feasibility bail-out here — the reclaim loop below will
         # sleep/stop idle lanes to free VRAM.  The feasibility check against
@@ -1486,7 +1480,7 @@ class CapacityPlanner:
                 self._facade.get_provider_name(provider_id) or provider_id,
                 lane_id,
             )
-            return None
+            return failed("A recent model load failed; wait for the retry cooldown to expire.")
 
         estimated = self._estimate_action_vram(load_action, profile, capacity)
         available = float(capacity.available_vram_mb)
@@ -1546,9 +1540,12 @@ class CapacityPlanner:
                 # the operator (or another planner cycle) frees enough host
                 # RAM — e.g. by stopping an unused lane — the retry will
                 # pass the gate naturally. We do NOT stop lanes here.
-                if allow_reclaim:
+                if allow_reclaim and not raise_on_failure:
                     self._pending_capacity[model_name] = (provider_id, time.time())
-                return None
+                return failed(
+                    f"Not enough host RAM to load the model: {projected_host_ram_mb:.0f} MiB required, "
+                    f"{eff_avail:.0f} MiB available after reservations."
+                )
 
         # Use the same reclaim engine as wake — it checks aggregate + per-GPU
         # VRAM with ledger awareness, and returns True immediately if sufficient.
@@ -1582,9 +1579,9 @@ class CapacityPlanner:
                 model_name,
                 self._facade.get_provider_name(provider_id) or provider_id,
             )
-            if allow_reclaim:
+            if allow_reclaim and not raise_on_failure:
                 self._pending_capacity[model_name] = (provider_id, time.time())
-            return None
+            return failed("Could not make enough GPU capacity available to load the model.")
 
         logger.info(
             "Cold-loading %s on worker=%s (lane=%s)",
@@ -1609,7 +1606,7 @@ class CapacityPlanner:
         finally:
             self._release_host_ram(host_ram_reservation_id)
         if not loaded:
-            return None
+            return failed("The worker did not confirm that the model loaded successfully. Check its model logs.")
 
         try:
             return await self._registry.select_lane_for_model(provider_id, model_name)
@@ -1620,7 +1617,9 @@ class CapacityPlanner:
                 model_name,
                 exc_info=True,
             )
-            return None
+            return failed(
+                "The loaded model is no longer available for requests. Check the worker connection and model logs."
+            )
 
     # ------------------------------------------------------------------
     # Idle tracking

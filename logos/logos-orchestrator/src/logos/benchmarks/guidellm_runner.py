@@ -416,9 +416,7 @@ async def run_benchmark_job(
             raise RuntimeError("GuideLLM executable is not installed in the orchestrator")
 
         if worker_preparer is not None and not await worker_preparer():
-            raise RuntimeError(
-                "The selected worker could not safely load the benchmark model without interrupting production"
-            )
+            raise RuntimeError("The worker did not prepare the benchmark model. Check its connection and model logs.")
 
         with DBManager() as db:
             db.update_job_status(

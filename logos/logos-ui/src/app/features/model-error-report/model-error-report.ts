@@ -651,7 +651,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     const settings = structuredClone(this.benchmarkSettings());
     const sampleSize = this.benchmarkSampleSize();
     const confirmed = window.confirm(
-      `Start the benchmark on ${pair.provider_name} · ${pair.model_name}?\n\nConfirm that this provider is currently safe for benchmark traffic. The benchmark runs at low priority and stops automatically when production load is detected.${this.hasServingOverrides() ? "\n\nThe selected vLLM settings will be applied to this worker and may reload the model. They remain active after the run." : ""}`,
+      `Start the benchmark on ${pair.provider_name} · ${pair.model_name}?\n\nThe benchmark runs alongside other requests. Concurrent traffic can affect the measured performance.${this.hasServingOverrides() ? "\n\nThe selected vLLM settings will be applied to this worker and may reload the model. They remain active after the run." : ""}`,
     );
     if (!confirmed) return;
 
