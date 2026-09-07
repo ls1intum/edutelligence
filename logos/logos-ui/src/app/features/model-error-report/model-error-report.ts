@@ -187,6 +187,15 @@ interface ReasonDescription {
   // openNodeLog) when this reason came from the regex fallback path —
   // backend-supplied stages carry their own log_anchor instead.
   readonly needle?: string;
+  // For a reason that can occur at more than one point in the sequence
+  // (domain=undefined, resolved positionally — e.g. cuda-oom can be
+  // "weights don't fit" OR "KV cache doesn't fit", which are different
+  // situations needing different fixes), override label/description
+  // per the domain it actually resolved to. Keyed by domain id (see
+  // DOMAIN_* above). A domain with no entry here falls back to the
+  // generic label/description — this is deliberately sparse, only for
+  // reasons where the phase changes what ops should actually do.
+  readonly domainOverrides?: Record<string, { label: string; description: string }>;
 }
 
 const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
@@ -277,9 +286,40 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
     description:
       'The GPU ran out of memory on the last failing probe. Non-blocking ' +
       '— the kv-cache search retries with a smaller budget automatically.',
-    // Can hit during weight loading OR kv-cache reservation — resolved
-    // positionally (domain omitted).
+    // Can hit during weight loading OR kv-cache reservation OR warmup —
+    // resolved positionally (domain omitted). These are operationally
+    // different situations, so the resolved stage gets a tailored
+    // description instead of the generic text above (see
+    // domainOverrides / lookupReason's resolvedDomainId param).
     needle: 'CUDA out of memory',
+    domainOverrides: {
+      [DOMAIN_WEIGHT_LOADING]: {
+        label: 'Model weights too large for GPU',
+        description:
+          'The model\'s weights alone exceeded available GPU memory ' +
+          'while loading — before any KV cache was even reserved. ' +
+          'Shrinking the KV-cache budget will NOT fix this; the model ' +
+          'needs a smaller quantization, more tensor-parallel GPUs, or ' +
+          'more VRAM.',
+      },
+      [DOMAIN_KV_CACHE_FIT]: {
+        label: 'KV-cache budget exceeds free memory',
+        description:
+          'The model itself loaded successfully, but the requested ' +
+          'KV-cache size didn\'t fit in the remaining GPU memory. This ' +
+          'is the expected, self-correcting case — the calibration ' +
+          'search automatically retries with a smaller KV-cache budget.',
+      },
+      [DOMAIN_SERVER_START]: {
+        label: 'Out of memory during CUDA graph warmup',
+        description:
+          'Both the model weights and KV cache fit, but the GPU ran ' +
+          'out of memory during CUDA graph capture/warmup — often a ' +
+          'sign the memory headroom is borderline. If this persists, ' +
+          'consider enabling eager mode (--enforce-eager) or reducing ' +
+          'concurrency.',
+      },
+    },
   },
   'cuda-runtime-error': {
     label: 'CUDA runtime error (observed)',
@@ -327,7 +367,8 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
 
 function lookupReason(
   kind: AuthoritativeReasonKind,
-  code: string
+  code: string,
+  resolvedDomainId?: string
 ): ReasonDescription {
   const table =
     kind === 'unsupported'
@@ -336,14 +377,18 @@ function lookupReason(
       ? NODE_UNHEALTHY_REASON_DESCRIPTIONS
       : OBSERVED_REASON_DESCRIPTIONS;
 
-  return (
-    table[code] ?? {
-      label: code,
-      description:
-        `Worker reported reason code "${code}", which the UI does ` +
-        'not yet recognize (frontend out of date with calibration.py?).',
-    }
-  );
+  const base = table[code] ?? {
+    label: code,
+    description:
+      `Worker reported reason code "${code}", which the UI does ` +
+      'not yet recognize (frontend out of date with calibration.py?).',
+  };
+
+  const override = resolvedDomainId
+    ? base.domainOverrides?.[resolvedDomainId]
+    : undefined;
+
+  return override ? { ...base, ...override } : base;
 }
 
 // ==========================================================================
@@ -1282,9 +1327,17 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
       const reasonKind = stage.reason_kind ?? undefined;
       const reasonCode = stage.reason_code ?? undefined;
+      // The backend places the failure on the resolved stage's ROW
+      // (stage.name is that stage's label) but doesn't send display
+      // text — look up the domain id for that label so a
+      // positionally-resolved reason (e.g. cuda-oom) picks its
+      // phase-specific wording instead of the generic one.
+      const domainId = CALIBRATION_DOMAINS.find(
+        domain => domain.label === stage.name
+      )?.id;
       const resolved =
         reasonKind && reasonCode
-          ? lookupReason(reasonKind, reasonCode)
+          ? lookupReason(reasonKind, reasonCode, domainId)
           : undefined;
 
       return {
@@ -1490,8 +1543,20 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         ? undefined
         : this.getCalibrationError(block);
 
-      const errorMessage = authoritativeReason?.label ?? error?.summary;
-      const errorDetail = authoritativeReason?.description ?? error?.detail;
+      // Re-resolve display text now that the ACTUAL landing stage is
+      // known — for a positionally-resolved reason (e.g. cuda-oom) this
+      // picks the phase-specific wording (see domainOverrides) instead
+      // of the generic one picked at node-level resolution time.
+      const resolved = authoritativeReason
+        ? lookupReason(
+            authoritativeReason.kind,
+            authoritativeReason.code,
+            CALIBRATION_DOMAINS[effectiveIndex]?.id
+          )
+        : undefined;
+
+      const errorMessage = resolved?.label ?? error?.summary;
+      const errorDetail = resolved?.description ?? error?.detail;
       // Raw-log substring for the scroll-to-line search — the reason's
       // needle if classified, else the generic grep's own (already raw)
       // summary line. NEVER the polished errorMessage above, which
