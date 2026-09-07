@@ -8,6 +8,16 @@ The default remains `openai/gsm8k`, configuration `main`, split `test`, prompt c
 
 These are serving-performance benchmarks. Choosing GSM8K supplies its questions as prompts; Logos does not grade answers against the dataset's reference answers.
 
+The picker shows a scrollable preview of the first five entries in the selected
+configuration/split, including the prompt and available reference-answer fields.
+It reuses the HF Viewer `first-rows` response already fetched for column discovery;
+there is no additional dataset download. Each cell is limited to 2,000 characters,
+with truncation indicated in the UI. Structured answers are displayed as plain
+JSON text. These are dataset examples, not generated model responses or a promise
+that the benchmark's seeded sample will contain these exact rows.
+**Open in Hugging Face** opens the full viewer for the current configuration/split
+in a new tab and stays available if the preview cannot load.
+
 ## Next-run settings
 
 A historical result's Configuration section offers **Use for next benchmark**. It copies captured settings into an independent editable draft, including vLLM values. Stored benchmark results are unchanged. Samples (1–100), maximum output tokens (1–4096), sequential/concurrent profile (1–32 streams), seed and dataset mapping are editable. Tool version, measured worker strategy and the recorded command remain historical information.

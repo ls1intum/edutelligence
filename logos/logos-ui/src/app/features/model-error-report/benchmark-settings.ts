@@ -23,6 +23,14 @@ export interface DatasetMetadata {
   split: string;
   splits: { subset: string; split: string }[];
   text_columns: string[];
+  preview_columns?: string[];
+  preview_rows?: { row_index: number; cells: Record<string, string | null>; truncated_columns: string[] }[];
+}
+
+/** Keep the viewer on the same configuration and split as the benchmark draft. */
+export function datasetViewerUrl(settings: Pick<BenchmarkSettings, 'dataset' | 'subset' | 'split'>): string {
+  const dataset = settings.dataset.split('/').map(encodeURIComponent).join('/');
+  return `https://huggingface.co/datasets/${dataset}/viewer/${encodeURIComponent(settings.subset)}/${encodeURIComponent(settings.split)}`;
 }
 
 export const SERVING_FIELDS = [

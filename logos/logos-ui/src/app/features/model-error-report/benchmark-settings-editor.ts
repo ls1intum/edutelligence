@@ -1,7 +1,7 @@
 import { Component, computed, effect, inject, model, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ModelManagementService } from '../../core/services/model-management.service';
-import { BenchmarkSettings, DatasetMetadata, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
+import { BenchmarkSettings, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
 
 @Component({
   selector: 'app-benchmark-settings-editor', standalone: true, imports: [FormsModule],
@@ -19,6 +19,16 @@ export class BenchmarkSettingsEditor {
   readonly searching = signal(false);
   readonly error = signal<string | null>(null);
   readonly jsonError = signal<string | null>(null);
+  readonly viewerUrl = computed(() => datasetViewerUrl(this.settings()));
+  readonly previewColumns = computed(() => {
+    const prompt = this.settings().text_column;
+    return [prompt, ...(this.metadata()?.preview_columns ?? []).filter(column => column !== prompt)];
+  });
+  readonly previewMatchesSelection = computed(() => {
+    const meta = this.metadata();
+    const s = this.settings();
+    return meta?.dataset === s.dataset && meta?.subset === s.subset && meta?.split === s.split;
+  });
   private metadataVersion = 0;
   private searchVersion = 0;
   readonly subsets = computed(() => [...new Set(this.metadata()?.splits.map(s => s.subset) ?? [this.settings().subset])]);
