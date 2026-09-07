@@ -56,15 +56,17 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/lanes/add", Map.of("provider_id", providerId, "lane", lane));
     }
 
-    public ResponseEntity<Map> startModelBenchmark(int modelProviderId, int sampleSize, int maxOutputTokens) {
-        return post(
-            "/internal/model_benchmarks/run",
-            Map.of(
-                "model_provider_id", modelProviderId,
-                "samples", sampleSize,
-                "max_output_tokens", maxOutputTokens
-            )
-        );
+    public ResponseEntity<Map> startModelBenchmark(int modelProviderId, int sampleSize, int maxOutputTokens,
+                                                   Map<String, Object> settings) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>(settings);
+        body.put("model_provider_id", modelProviderId);
+        body.put("samples", sampleSize);
+        body.put("max_output_tokens", maxOutputTokens);
+        return post("/internal/model_benchmarks/run", body);
+    }
+
+    public ResponseEntity<Map> benchmarkDatasets(String operation, Map<String, Object> body) {
+        return post("/internal/model_benchmarks/datasets/" + operation, body);
     }
 
     public ResponseEntity<Map> cancelModelBenchmark(int jobId) {

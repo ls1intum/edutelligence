@@ -34,7 +34,8 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_PROVIDER_HEADER,
     BENCHMARK_TOKEN_HEADER,
 )
-from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
+from logos.benchmarks.configuration import BenchmarkSettings
+from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
 from logos.benchmarks.guidellm_runner import (
     benchmark_affinity_headers,
     benchmark_affinity_token,
@@ -2458,16 +2459,44 @@ class _InternalAddLaneRequest(BaseModel):
     lane: dict[str, Any]
 
 
-class _InternalBenchmarkRequest(BaseModel):
+class _InternalBenchmarkRequest(BenchmarkSettings):
     model_provider_id: int = Field(gt=0)
     samples: int = Field(default=5, gt=0, le=100)
     max_output_tokens: int = Field(default=512, gt=0, le=4096)
 
 
+class _DatasetSearchRequest(BaseModel):
+    query: str = Field(default="gsm8k", min_length=1, max_length=200)
+
+
+class _DatasetMetadataRequest(BaseModel):
+    dataset: str = Field(max_length=200, pattern=r"^[\w.-]+/[\w.-]+$")
+    subset: str | None = Field(default=None, max_length=200)
+    split: str | None = Field(default=None, max_length=100)
+
+
+@app.post("/internal/model_benchmarks/datasets/search", tags=["admin"])
+async def internal_search_benchmark_datasets(data: _DatasetSearchRequest, request: Request):
+    """Search public Hugging Face datasets for the benchmark picker."""
+    _require_internal_secret(request)
+    return await search_datasets(data.query)
+
+
+@app.post("/internal/model_benchmarks/datasets/metadata", tags=["admin"])
+async def internal_benchmark_dataset_metadata(data: _DatasetMetadataRequest, request: Request):
+    """Inspect dataset columns and splits without downloading the dataset."""
+    _require_internal_secret(request)
+    return await dataset_metadata(data.dataset, data.subset, data.split)
+
+
 @app.post("/internal/model_benchmarks/run", tags=["admin"])
 async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
-    """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
+    """Queue a configured GuideLLM run for one exact provider-model pair."""
     _require_internal_secret(request)
+
+    metadata = await dataset_metadata(data.dataset, data.subset, data.split)
+    if data.text_column not in metadata["text_columns"]:
+        raise HTTPException(status_code=400, detail="Select a valid text column for the dataset.")
 
     # One orchestrator process owns benchmark execution. Serialize the short
     # check-and-create section in memory so simultaneous starts cannot both
@@ -2515,9 +2544,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             "provider_name": target["provider_name"],
             "model_id": target["model_id"],
             "model_name": model_name,
-            "dataset": BENCHMARK_DATASET,
-            "subset": "main",
-            "split": "test",
+            **data.model_dump(exclude={"model_provider_id", "samples", "max_output_tokens"}),
             "samples": data.samples,
             "max_output_tokens": data.max_output_tokens,
             "provider_session_id": runtime_snapshot.get("session_id") if runtime_snapshot else None,
@@ -2558,6 +2585,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             model=model_name,
             api_key=None if is_internal_worker_benchmark else api_key or None,
             samples=data.samples,
+            settings=data,
             max_output_tokens=data.max_output_tokens,
             serving_configuration=serving_configuration,
             serving_configuration_getter=lambda: extract_serving_configuration(

@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from logos.benchmarks.configuration import BenchmarkSettings
+
 DATASET = "openai/gsm8k"
 _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
 _SERVING_KEYS = {
@@ -189,8 +191,10 @@ def build_scenario(
     max_output_tokens: int,
     report_path: Path,
     request_headers: dict[str, str] | None = None,
+    settings: BenchmarkSettings | None = None,
 ) -> dict[str, Any]:
-    """Build the fixed, reproducible GSM8K scenario used by Logos."""
+    """Build a reproducible scenario from the selected text dataset."""
+    settings = settings or BenchmarkSettings()
     backend: dict[str, Any] = {
         "kind": "openai_http",
         "target": target.rstrip("/"),
@@ -210,10 +214,11 @@ def build_scenario(
         backend["extras"]["headers"] = dict(request_headers)
 
     return {
-        "metadata": {"labels": {"dataset": DATASET, "purpose": "logos-model-provider-performance"}},
+        "metadata": {"labels": {"dataset": settings.dataset, "purpose": "logos-model-provider-performance"}},
         "spec": {
             "backend": backend,
-            "profile": {"kind": "synchronous"},
+            "profile": ({"kind": "synchronous"} if settings.profile == "synchronous"
+                        else {"kind": "concurrent", "streams": settings.concurrency}),
             "constraints": [
                 {"kind": "max_requests", "count": samples},
                 {"kind": "max_errors", "count": 1},
@@ -221,16 +226,16 @@ def build_scenario(
             "data": [
                 {
                     "kind": "huggingface",
-                    "source": DATASET,
-                    "load_kwargs": {"name": "main", "split": "test"},
+                    "source": settings.dataset,
+                    "load_kwargs": {"name": settings.subset, "split": settings.split},
                 }
             ],
             "data_column_mapper": {
                 "kind": "generative_column_mapper",
-                "column_mappings": {"text_column": "question"},
+                "column_mappings": {"text_column": settings.text_column},
             },
             "data_loader": {"kind": "pytorch", "samples": samples, "shuffle": False},
-            "seed": {"kind": "static", "value": 42},
+            "seed": {"kind": "static", "value": settings.seed},
             "metrics": {"kind": "generative", "sample_size": 0},
             "outputs": [{"kind": "json", "path": str(report_path)}],
         },
@@ -272,6 +277,7 @@ def successful_summary(
     model_provider_id: int,
     expected_samples: int,
     serving_configuration: dict[str, Any],
+    dataset: str = DATASET,
 ) -> dict[str, Any]:
     """Normalize exactly one complete, error-free benchmark result."""
     for benchmark in report.get("benchmarks", []):
@@ -301,7 +307,7 @@ def successful_summary(
                 "benchmark": redact_secrets(benchmark.get("config", {})),
                 "serving": serving_configuration,
             },
-            "dataset": DATASET,
+            "dataset": dataset,
             "sample_size": total,
             "metrics": metrics,
             "recorded_at": recorded_at,
@@ -323,6 +329,7 @@ async def run_benchmark_job(
     request_headers: dict[str, str] | None = None,
     worker_preparer: Callable[[], Awaitable[bool]] | None = None,
     worker_session_is_current: Callable[[], bool] | None = None,
+    settings: BenchmarkSettings | None = None,
 ) -> None:
     """Execute GuideLLM outside the event loop and update the shared job row."""
     from logos.dbutils.dbmanager import DBManager
@@ -335,6 +342,7 @@ async def run_benchmark_job(
             result_payload={"stage": "preparing_worker", "started_samples": 0, "total_samples": samples},
         )
 
+    settings = settings or BenchmarkSettings()
     owner_task = asyncio.current_task()
 
     async def renew_lease() -> None:
@@ -396,6 +404,7 @@ async def run_benchmark_job(
                 max_output_tokens=max_output_tokens,
                 report_path=report_path,
                 request_headers=request_headers,
+                settings=settings,
             )
             scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
             scenario_path.chmod(0o600)
@@ -443,6 +452,7 @@ async def run_benchmark_job(
                 model_provider_id=model_provider_id,
                 expected_samples=samples,
                 serving_configuration=serving_configuration,
+                dataset=settings.dataset,
             )
 
         with DBManager() as db:

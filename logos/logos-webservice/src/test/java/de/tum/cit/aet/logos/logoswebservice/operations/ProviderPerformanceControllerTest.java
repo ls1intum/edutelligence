@@ -289,7 +289,7 @@ class ProviderPerformanceControllerTest {
 
     @Test
     void runModelBenchmark_forwardsFixedSmallRunToOrchestrator() throws Exception {
-        when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 5, 512))
+        when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 5, 512, Map.of()))
             .thenReturn(ResponseEntity.accepted().body(Map.of(
                 "job_id", 42,
                 "status", "pending",

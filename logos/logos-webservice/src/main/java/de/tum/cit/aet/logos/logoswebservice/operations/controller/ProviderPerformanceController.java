@@ -96,11 +96,46 @@ public class ProviderPerformanceController {
         }
         try {
             return orchestratorWorkerAdminClient.startModelBenchmark(
-                request.modelProviderId(), sampleSize, maxOutputTokens);
+                request.modelProviderId(), sampleSize, maxOutputTokens, benchmarkSettings(request));
         } catch (HttpStatusCodeException e) {
             return ResponseEntity.status(e.getStatusCode()).body(orchestratorError(e));
         } catch (RuntimeException e) {
             return ResponseEntity.status(503).body(Map.of("error", "Benchmark service is unavailable"));
+        }
+    }
+
+    private Map<String, Object> benchmarkSettings(RunModelBenchmarkRequestDTO request) {
+        Map<String, Object> settings = new java.util.LinkedHashMap<>();
+        if (request.dataset() != null) settings.put("dataset", request.dataset());
+        if (request.subset() != null) settings.put("subset", request.subset());
+        if (request.split() != null) settings.put("split", request.split());
+        if (request.textColumn() != null) settings.put("text_column", request.textColumn());
+        if (request.profile() != null) settings.put("profile", request.profile());
+        if (request.concurrency() != null) settings.put("concurrency", request.concurrency());
+        if (request.seed() != null) settings.put("seed", request.seed());
+        if (request.servingOverrides() != null) settings.put("serving_overrides", request.servingOverrides());
+        return settings;
+    }
+
+    @PostMapping("/model_benchmarks/datasets/search")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> searchDatasets(@RequestBody Map<String, Object> body) {
+        return datasetMetadataResponse("search", body);
+    }
+
+    @PostMapping("/model_benchmarks/datasets/metadata")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> datasetMetadata(@RequestBody Map<String, Object> body) {
+        return datasetMetadataResponse("metadata", body);
+    }
+
+    private ResponseEntity<?> datasetMetadataResponse(String operation, Map<String, Object> body) {
+        try {
+            return orchestratorWorkerAdminClient.benchmarkDatasets(operation, body);
+        } catch (HttpStatusCodeException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(orchestratorError(e));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(503).body(Map.of("error", "Dataset service is unavailable"));
         }
     }
 

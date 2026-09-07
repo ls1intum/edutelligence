@@ -7,6 +7,11 @@ import pytest
 import logos as main
 
 
+@pytest.fixture(autouse=True)
+def mock_dataset_metadata(monkeypatch):
+    monkeypatch.setattr(main, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
+
+
 def _job(*, status="running", provider_id=20, model_id=1, model_name="org/model"):
     return {
         "status": status,
