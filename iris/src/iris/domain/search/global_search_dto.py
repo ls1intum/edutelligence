@@ -142,6 +142,8 @@ class EntitySourceDTO(BaseModel):
     title: str = ""
     snippet: str = ""
     link: str | None = None
+    # Lets the client render the same per-exercise-type icon as the palette.
+    exercise_type: str | None = Field(default=None, alias="exerciseType")
     # Internal: True when retrieval admitted this card from the calibrated
     # band BELOW the rerank floor because nothing cleared it — the "no content
     # answers this, but this material seems related" state. The pipeline

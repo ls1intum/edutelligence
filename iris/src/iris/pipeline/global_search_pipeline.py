@@ -431,6 +431,7 @@ class GlobalSearchPipeline(SubPipeline):
                     title=(candidate.title or "").strip(),
                     snippet=render_entity_card(candidate),
                     link=candidate.link,
+                    exercise_type=candidate.exercise_type,
                 )
             )
         return sources
