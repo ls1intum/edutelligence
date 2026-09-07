@@ -45,6 +45,35 @@ def infer_cloud_provider_type(
     return None
 
 
+def cloud_auth_header(
+    auth_name: Optional[str],
+    auth_format: Optional[str],
+    api_key: Optional[str],
+) -> Optional[tuple[str, str]]:
+    """The HTTP auth header a cloud provider's stored credentials produce.
+
+    The provider form advertises "Authorization" and "Bearer {}" as
+    placeholders, so operators routinely save an OpenAI-shaped provider with
+    both fields empty; without a default the header is dropped and the upstream
+    rejects the request as unauthenticated. An explicit header name (e.g.
+    Azure's "api-key") keeps its own name and defaults to the bare key rather
+    than a Bearer prefix.
+
+    Returns ``None`` when there is no key to send, which is legitimate for an
+    upstream that serves unauthenticated.
+    """
+    name = (auth_name or "").strip()
+    fmt = auth_format or ""
+    if not api_key:
+        return None
+    if not name:
+        name = "Authorization"
+        fmt = fmt or "Bearer {}"
+    elif not fmt:
+        fmt = "{}"
+    return name, fmt.format(api_key)
+
+
 def get_unique_models_from_deployments(deployments: List[Deployment]) -> List[int]:
     """
     Return unique model IDs from the deployment list while preserving order.

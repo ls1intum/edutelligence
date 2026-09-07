@@ -1,5 +1,16 @@
 export type ProviderType = 'logosnode' | 'cloud';
-export type CloudProviderType = 'azure' | 'openai' | 'anthropic' | 'gemini' | 'bedrock' | 'deepseek' | 'groq' | 'none';
+// 'logos' is another Logos instance used as an upstream: it serves every
+// surface this one does, so requests reach it unchanged.
+export type CloudProviderType =
+  | 'azure'
+  | 'openai'
+  | 'anthropic'
+  | 'gemini'
+  | 'bedrock'
+  | 'deepseek'
+  | 'groq'
+  | 'logos'
+  | 'none';
 export type PrivacyLevel = 'LOCAL' | 'CLOUD_IN_EU_BY_US_PROVIDER' | 'CLOUD_NOT_IN_EU_BY_US_PROVIDER' | 'CLOUD_IN_EU_BY_EU_PROVIDER';
 
 export interface Provider {

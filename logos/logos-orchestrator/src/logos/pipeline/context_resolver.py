@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode
 
+from logos.anthropic_compat import UpstreamDialect, dialect_for, forward_path_for, is_messages_path, translate_request
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.types import cloud_auth_header
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 from logos.pipeline.effort_normalization import normalize_reasoning_effort
 from logos.request_content import is_multipart_payload, set_payload_field
@@ -38,6 +40,12 @@ class ExecutionContext:
     # "model" field must be rewritten to (Azure /responses resolves the
     # deployment from the body, not the URL). See ``_azure_responses_route``.
     azure_responses_deployment: Optional[str] = None
+    # Set only for inbound ``POST /v1/messages``: which surface this upstream
+    # actually serves, and therefore whether the request and its response have
+    # to be translated out of and back into the Anthropic Messages shape.
+    # ``None`` for every other route; ``NATIVE`` for upstreams that serve the
+    # Messages API themselves and are forwarded verbatim.
+    anthropic_dialect: Optional[UpstreamDialect] = None
 
 
 class ContextResolver:
@@ -104,29 +112,28 @@ class ContextResolver:
                 }
                 else provider_type_raw
             )
+            cloud_type = str(auth_info.get("cloud_provider_type") or "").lower() or None
             auth_name = (auth_info.get("auth_name") or "").strip()
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
 
-            # The provider form advertises "Authorization" and "Bearer {}" as
-            # placeholders, so operators routinely save an OpenAI-shaped cloud
-            # provider with both fields empty. Without a default the header was
-            # dropped silently below and the upstream rejected the request as
-            # unauthenticated — apply the advertised convention instead. An
-            # explicit header name (e.g. Azure's "api-key") keeps its own name
-            # and defaults to the bare key rather than a Bearer prefix.
-            if provider_type != "logosnode" and api_key:
-                if not auth_name:
-                    auth_name = "Authorization"
-                    auth_format = auth_format or "Bearer {}"
-                elif not auth_format:
-                    auth_format = "{}"
-
-            if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
-                logger.error(
-                    f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}"
-                )
-                return None
+            # Cloud credentials get the convention the provider form advertises
+            # filled in — see ``cloud_auth_header``, which the model sync uses
+            # against the same providers. A provider that configured a header
+            # but has no key cannot authenticate at all, which is an error
+            # rather than an unauthenticated request.
+            auth_value = auth_format.format(api_key or "")
+            if provider_type != "logosnode":
+                header = cloud_auth_header(auth_name, auth_format, api_key)
+                if header is None:
+                    if auth_name or auth_format:
+                        logger.error(
+                            f"No API key for model {model_id} / "
+                            f"provider {auth_info.get('provider_name', provider_id)}"
+                        )
+                        return None
+                else:
+                    auth_name, auth_value = header
 
         provider_name = auth_info["provider_name"]
         model_name = auth_info["model_name"]
@@ -202,7 +209,7 @@ class ContextResolver:
             # (and /v2) routes, so forward like-for-like on the inbound path.
             # Auth comes from the DB (auth_name / auth_format / api_key) like
             # every other non-logosnode provider.
-            forward_url = self._cloud_forward_url(base_url, request_path, endpoint)
+            forward_url = self._cloud_forward_url(base_url, request_path, endpoint, cloud_provider_type=cloud_type)
             # Azure Responses deployments are stored deployment-scoped
             # (.../deployments/<id>/responses) so the id survives into here;
             # collapse to Azure's real /openai/responses route and remember the
@@ -214,6 +221,16 @@ class ContextResolver:
         else:
             forward_url = self._merge_url(base_url, endpoint)
 
+        anthropic_dialect = (
+            dialect_for(
+                provider_type=provider_type,
+                cloud_provider_type=cloud_type,
+                forward_url=forward_url,
+            )
+            if is_messages_path(request_path)
+            else None
+        )
+
         return ExecutionContext(
             model_id=model_id,
             provider_id=provider_id,
@@ -221,10 +238,11 @@ class ContextResolver:
             provider_type=provider_type,
             forward_url=forward_url,
             auth_header=auth_name,
-            auth_value=auth_format.format(api_key or ""),
+            auth_value=auth_value,
             model_name=model_name,
             lane_id=lane_id,
             azure_responses_deployment=azure_responses_deployment,
+            anthropic_dialect=anthropic_dialect,
         )
 
     @staticmethod
@@ -246,6 +264,14 @@ class ContextResolver:
         headers = {} if is_multipart_payload(payload) else {"Content-Type": "application/json"}
         if context.auth_header and context.auth_value:
             headers[context.auth_header] = context.auth_value
+
+        # An inbound Anthropic Messages request bound for an upstream without a
+        # Messages route becomes a chat/completions or Responses request here.
+        # Done before everything below so the rewrites that follow (model
+        # injection, effort normalization) act on the body that is actually
+        # sent.
+        if context.anthropic_dialect is not None:
+            payload = translate_request(payload, context.anthropic_dialect, model_name=context.model_name)
 
         # OpenWebUI requires model name injection
         if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
@@ -365,6 +391,19 @@ class ContextResolver:
         return f"{host}/openai/responses{query}", deployment
 
     @staticmethod
+    def _upstream_path(request_path: str, cloud_provider_type: Optional[str]) -> str:
+        """The path an OpenAI-shaped cloud upstream is addressed under.
+
+        The inbound path unchanged, except for ``POST /v1/messages`` against an
+        upstream that has no Messages route: those are re-pointed at
+        ``chat/completions``, the surface the Anthropic translation targets.
+        """
+        if not is_messages_path(request_path):
+            return request_path
+        dialect = dialect_for(provider_type="cloud", cloud_provider_type=cloud_provider_type)
+        return request_path if dialect is UpstreamDialect.NATIVE else forward_path_for(dialect)
+
+    @staticmethod
     def _merge_url(base_url: str, endpoint: str) -> str:
         """Merge base URL and endpoint path."""
         if endpoint.startswith("http"):
@@ -378,6 +417,8 @@ class ContextResolver:
         base_url: str,
         request_path: Optional[str],
         endpoint_fallback: Optional[str],
+        *,
+        cloud_provider_type: Optional[str] = None,
     ) -> str:
         """Build forward URL for a cloud upstream provider.
 
@@ -402,13 +443,20 @@ class ContextResolver:
         like-for-like ``request_path`` rewrite below only applies to
         OpenAI-shaped upstreams whose ``base_url`` is a plain ``/v1`` host and
         whose per-model endpoint is relative or empty.
+
+        ``POST /v1/messages`` is the one path that is not forwarded
+        like-for-like: an upstream without a Messages route is addressed on
+        ``chat/completions`` instead, which is the surface the Anthropic
+        translation targets. This only affects the ``base_url`` branch —
+        an Azure deployment keeps the operation its stored endpoint names, and
+        the dialect follows from that instead.
         """
         if endpoint_fallback and endpoint_fallback.startswith("http"):
             return ContextResolver._align_azure_operation(endpoint_fallback, request_path)
         base = (base_url or "").rstrip("/")
         if not request_path:
             return ContextResolver._merge_url(base_url, endpoint_fallback or "")
-        path = request_path.lstrip("/")
+        path = ContextResolver._upstream_path(request_path, cloud_provider_type).lstrip("/")
         for prefix in ("v1/", "v2/"):
             if base.endswith("/" + prefix.rstrip("/")) and path.startswith(prefix):
                 path = path[len(prefix) :]
