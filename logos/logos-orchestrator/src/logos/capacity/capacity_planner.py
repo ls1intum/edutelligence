@@ -1136,6 +1136,54 @@ class CapacityPlanner:
         target = self._pick_request_target_lane(provider_id, model_name)
         return target is not None and self.benchmark_lane_is_safe(provider_id, target)
 
+    async def prepare_configured_benchmark_lane(
+        self, provider_id: int, model_name: str, overrides, timeout_seconds: float = 600.0,
+    ) -> bool:
+        """Reload an idle vLLM lane and wait for its new configuration to be reported."""
+        from logos.benchmarks.guidellm_runner import apply_serving_overrides
+
+        if not await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds):
+            return False
+        target = self._pick_request_target_lane(provider_id, model_name)
+        if target is None:
+            return False
+        async with self._lane_lock(provider_id, target.lane_id):
+            if not self._benchmark_provider_is_idle(provider_id, model_name):
+                return False
+            snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
+            lane = next((lane for lane in (snapshot.get("runtime") or {}).get("lanes", [])
+                         if lane.get("lane_id") == target.lane_id), None)
+            config = (lane or {}).get("lane_config") or {}
+            if not config.get("vllm"):
+                raise RuntimeError("Serving overrides require an existing vLLM lane on this worker")
+            current = config.get("vllm_config") or {}
+            updated = apply_serving_overrides(current, overrides)
+            if updated == current:
+                return True
+            self._mark_lane_cold(provider_id, target.lane_id)
+            try:
+                await self._registry.send_command(
+                    provider_id, "reconfigure_lane",
+                    {"lane_id": target.lane_id, "updates": {"vllm_config": updated}, "require_idle": True},
+                    timeout_seconds=int(timeout_seconds),
+                )
+                deadline = time.monotonic() + timeout_seconds
+                while time.monotonic() < deadline:
+                    snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
+                    lanes = (snapshot.get("runtime") or {}).get("lanes", [])
+                    lane = next((item for item in lanes if item.get("lane_id") == target.lane_id), {})
+                    actual = (lane.get("lane_config") or {}).get("vllm_config") or {}
+                    if all(actual.get(key) == value for key, value in updated.items()):
+                        break
+                    if not self._benchmark_provider_is_idle(provider_id, model_name):
+                        return False
+                    await asyncio.sleep(1)
+                else:
+                    raise RuntimeError("Worker did not confirm the requested vLLM configuration")
+            finally:
+                self._unmark_lane_cold(provider_id, target.lane_id)
+        return await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds)
+
     def _benchmark_provider_is_idle(self, provider_id: int, model_name: str) -> bool:
         """Reject preparation as soon as production work exists on the provider."""
         lanes = self._safe_get_lanes(provider_id)

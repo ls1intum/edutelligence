@@ -2507,6 +2507,8 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
+        if data.serving_overrides.model_dump(exclude_none=True) and (provider_type != "logosnode" or _capacity_planner is None):
+            raise HTTPException(status_code=400, detail="Serving overrides require a Logos worker with capacity planning")
         endpoint = str(target.get("target") or "").strip()
         if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
@@ -2576,6 +2578,11 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
         if request_headers is not None and _capacity_planner is not None
         else None
     )
+
+    if worker_preparer is not None and data.serving_overrides.model_dump(exclude_none=True):
+        worker_preparer = lambda: _capacity_planner.prepare_configured_benchmark_lane(
+            provider_id, model_name, data.serving_overrides,
+        )
 
     task = asyncio.create_task(
         run_benchmark_job(

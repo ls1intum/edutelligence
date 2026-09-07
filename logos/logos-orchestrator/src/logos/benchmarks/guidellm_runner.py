@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from logos.benchmarks.configuration import BenchmarkSettings
+from logos.benchmarks.configuration import BenchmarkSettings, ServingOverrides
 
 DATASET = "openai/gsm8k"
 _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
@@ -242,6 +242,38 @@ def build_scenario(
     }
 
 
+_EXTRA_SERVING_FLAGS = {
+    "pipeline_parallel_size": "--pipeline-parallel-size",
+    "max_num_batched_tokens": "--max-num-batched-tokens",
+    "hf_overrides": "--hf-overrides",
+}
+
+
+def apply_serving_overrides(current: dict[str, Any], overrides: ServingOverrides) -> dict[str, Any]:
+    """Merge selected values while preserving unrelated worker configuration."""
+    result = dict(current)
+    extra_args = list(result.get("extra_args") or [])
+    for key, value in overrides.model_dump(exclude_none=True).items():
+        flag = _EXTRA_SERVING_FLAGS.get(key)
+        if flag is None:
+            result[key] = value
+            continue
+        cleaned = []
+        index = 0
+        while index < len(extra_args):
+            arg = str(extra_args[index])
+            if arg == flag:
+                index += 2
+                continue
+            if not arg.startswith(flag + "="):
+                cleaned.append(arg)
+            index += 1
+        extra_args = cleaned + [flag, json.dumps(value) if isinstance(value, dict) else str(value)]
+    if extra_args or "extra_args" in result:
+        result["extra_args"] = extra_args
+    return result
+
+
 def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -> dict[str, Any]:
     """Capture the live vLLM lane configuration for the benchmarked model."""
     runtime = (snapshot or {}).get("runtime")
@@ -261,6 +293,16 @@ def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -
         if not isinstance(vllm_config, dict):
             vllm_config = {}
         result = {key: vllm_config[key] for key in _SERVING_KEYS if key in vllm_config}
+        extra_args = list(vllm_config.get("extra_args") or [])
+        for key, flag in _EXTRA_SERVING_FLAGS.items():
+            for index, arg in enumerate(extra_args):
+                raw = (extra_args[index + 1] if arg == flag and index + 1 < len(extra_args)
+                       else str(arg).split("=", 1)[1] if str(arg).startswith(flag + "=") else None)
+                if raw is not None:
+                    try:
+                        result[key] = json.loads(raw)
+                    except (ValueError, TypeError):
+                        result[key] = raw
         if "kv_cache_memory_bytes" in result:
             result["kv_cache_memory"] = result.pop("kv_cache_memory_bytes")
         if lane_config.get("gpu_devices"):

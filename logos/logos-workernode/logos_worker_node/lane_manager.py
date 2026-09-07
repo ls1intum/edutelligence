@@ -793,9 +793,11 @@ class LaneManager:
                     return
             await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
 
-    async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
+    async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any], *, require_idle: bool = False) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
         async with self._lock:
+            if require_idle and any(count > 0 for count in self._active_requests.values()):
+                raise RuntimeError("Cannot reconfigure a benchmark lane while requests are active on the worker")
             handle = self._handles.get(lane_id)
             if handle is None:
                 raise KeyError(f"Lane '{lane_id}' not found")

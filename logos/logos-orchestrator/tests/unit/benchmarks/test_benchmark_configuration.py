@@ -51,3 +51,20 @@ async def test_metadata_rejects_unknown_split_before_preview(monkeypatch):
     with pytest.raises(HTTPException, match="does not exist"):
         await hf.dataset_metadata("openai/gsm8k", "main", "missing")
     assert get.await_count == 1
+
+
+def test_serving_overrides_preserve_unrelated_flags_and_replace_old_values():
+    from logos.benchmarks.configuration import ServingOverrides
+    from logos.benchmarks.guidellm_runner import apply_serving_overrides, extract_serving_configuration
+    current = {"dtype": "auto", "enable_sleep_mode": True,
+               "extra_args": ["--pipeline-parallel-size=2", "--max-num-batched-tokens", "1024", "--other", "x"]}
+    result = apply_serving_overrides(current, ServingOverrides(
+        tensor_parallel_size=2, pipeline_parallel_size=4, max_num_batched_tokens=2048, hf_overrides={"key": 1}))
+    assert result["enable_sleep_mode"] is True
+    assert result["extra_args"] == ["--other", "x", "--pipeline-parallel-size", "4", "--max-num-batched-tokens", "2048", "--hf-overrides", '{"key": 1}']
+    assert current["extra_args"][0] == "--pipeline-parallel-size=2"
+    snapshot = {"runtime": {"lanes": [{"model": "m", "lane_config": {"vllm_config": result}}]}}
+    captured = extract_serving_configuration(snapshot, "m")
+    assert captured["pipeline_parallel_size"] == 4
+    assert captured["max_num_batched_tokens"] == 2048
+    assert captured["hf_overrides"] == {"key": 1}

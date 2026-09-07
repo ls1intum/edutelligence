@@ -11,13 +11,13 @@ class ServingOverrides(BaseModel):
     tensor_parallel_size: int | None = Field(default=None, ge=1, le=64)
     pipeline_parallel_size: int | None = Field(default=None, ge=1, le=64)
     kv_cache_dtype: Literal["auto", "fp8", "fp8_e4m3", "fp8_e5m2"] | None = None
-    kv_cache_memory_bytes: int | None = Field(default=None, gt=0)
-    max_num_seqs: int | None = Field(default=None, ge=1, le=65536)
+    kv_cache_memory_bytes: str | None = Field(default=None, max_length=32, pattern=r"^(?:[0-9]+(?:[.][0-9]+)?[KMGTPkmgpt]?[iI]?[bB]?)?$")
+    max_num_seqs: int | None = Field(default=None, ge=0, le=65536)
     max_num_batched_tokens: int | None = Field(default=None, gt=0)
     enable_prefix_caching: bool | None = None
-    max_model_len: int | None = Field(default=None, gt=0)
-    gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1)
-    quantization: str | None = Field(default=None, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
+    max_model_len: int | None = Field(default=None, ge=0)
+    gpu_memory_utilization: float | None = Field(default=None, ge=0.1, le=1)
+    quantization: str | None = Field(default=None, max_length=64, pattern=r"^[a-zA-Z0-9_.-]*$")
     dtype: Literal["auto", "float16", "bfloat16", "float32", "half", "float"] | None = None
     enforce_eager: bool | None = None
     disable_custom_all_reduce: bool | None = None

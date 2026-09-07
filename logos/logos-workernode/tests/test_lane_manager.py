@@ -2850,3 +2850,13 @@ async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
     await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
     assert "org_left-model" in manager._handles  # noqa: SLF001
     manager.end_calibration_session()
+
+
+@pytest.mark.asyncio
+async def test_benchmark_reconfigure_rejects_active_requests_before_restart() -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15100, lane_port_end=15110)
+    manager._active_requests["other-lane"] = 1
+    manager._restart_lane_unlocked = AsyncMock()
+    with pytest.raises(RuntimeError, match="requests are active"):
+        await manager.reconfigure_lane("benchmark-lane", {"vllm_config": {}}, require_idle=True)
+    manager._restart_lane_unlocked.assert_not_awaited()
