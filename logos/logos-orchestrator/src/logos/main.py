@@ -2522,8 +2522,8 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
             # results already gathered for every other one — see below.
             logger.exception("[Precheck] unexpected failure checking provider %s for %s", pid, model_name)
             return {"provider_id": pid, "provider_name": pname, "ok": False, "error": f"Unexpected error: {exc}"}
+
     results = await asyncio.gather(*(_check_one(pid) for pid in provider_ids))
-    return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
     return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
 
 
