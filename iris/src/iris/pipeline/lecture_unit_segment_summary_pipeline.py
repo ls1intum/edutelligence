@@ -6,6 +6,7 @@ from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 
+from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
@@ -19,6 +20,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
+from iris.vector_database.batch_verify import raise_on_failed_delete
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -32,6 +34,8 @@ from iris.vector_database.lecture_unit_segment_schema import (
     init_lecture_unit_segment_schema,
 )
 from iris.web.status.status_update import StatusCallback
+
+logger = get_logger(__name__)
 
 
 class LectureUnitSegmentSummaryPipeline(SubPipeline):
@@ -119,7 +123,59 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             self._upsert_lecture_object(
                 slide_index, summary, display_page_number, hidden_until
             )
+        self._prune_stale_segments(slide_number_start, slide_number_end)
         return summaries, self.tokens
+
+    def _prune_stale_segments(self, slide_number_start: int, slide_number_end: int):
+        """Remove segments for slides that no longer exist.
+
+        Segments are upserted per slide, so a unit whose PDF shrank would keep
+        summaries for the removed slides forever without this sweep.
+        """
+        stale_filter = Filter.all_of(
+            [
+                self._get_segment_unit_filter(),
+                Filter.any_of(
+                    [
+                        Filter.by_property(
+                            LectureUnitSegmentSchema.PAGE_NUMBER.value
+                        ).less_than(slide_number_start),
+                        Filter.by_property(
+                            LectureUnitSegmentSchema.PAGE_NUMBER.value
+                        ).greater_than(slide_number_end),
+                    ]
+                ),
+            ]
+        )
+        delete_result = self.lecture_unit_segment_collection.data.delete_many(
+            where=stale_filter
+        )
+        raise_on_failed_delete(delete_result, "stale lecture unit segments")
+        if delete_result.matches:
+            logger.info(
+                "[%s / unit %d] Pruned %d stale segment(s) outside slides %d-%d",
+                self.lecture_unit_dto.lecture_name,
+                self.lecture_unit_dto.lecture_unit_id,
+                delete_result.successful,
+                slide_number_start,
+                slide_number_end,
+            )
+
+    def _get_segment_unit_filter(self):
+        segment_filter = Filter.by_property(
+            LectureUnitSegmentSchema.COURSE_ID.value
+        ).equal(self.lecture_unit_dto.course_id)
+        segment_filter &= Filter.by_property(
+            LectureUnitSegmentSchema.LECTURE_ID.value
+        ).equal(self.lecture_unit_dto.lecture_id)
+        segment_filter &= Filter.by_property(
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
+        ).equal(self.lecture_unit_dto.lecture_unit_id)
+        if self.lecture_unit_dto.base_url is not None:
+            segment_filter &= Filter.by_property(
+                LectureUnitSegmentSchema.BASE_URL.value
+            ).equal(self.lecture_unit_dto.base_url)
+        return segment_filter
 
     def _get_transcriptions(self, slide_number: int):
         transcription_filter = self._get_lecture_transcription_filter()

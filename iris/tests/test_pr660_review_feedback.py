@@ -8,6 +8,10 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.ingestion_errors import (  # noqa: E402
+    TRANSCRIPT_INGESTION_FAILED,
+    IngestionStageError,
+)
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO  # noqa: E402
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (  # noqa: E402
     IngestionPipelineExecutionDto,
@@ -68,15 +72,25 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
     def update():
         assert lock.inside is False
 
+    def delete_inside_lock(_transcription):
+        assert lock.inside is True
+
     batch = MagicMock()
     dynamic_context = MagicMock()
     dynamic_context.__enter__.return_value = batch
     dynamic_context.__exit__.return_value = None
     pipeline.collection = SimpleNamespace(
-        batch=SimpleNamespace(dynamic=MagicMock(return_value=dynamic_context))
+        batch=SimpleNamespace(
+            dynamic=MagicMock(return_value=dynamic_context),
+            failed_objects=[],
+        )
     )
     pipeline.callback = SimpleNamespace(update=MagicMock(side_effect=update))
     pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
+    pipeline.dto = SimpleNamespace(lecture_unit=_lecture_unit())
+    pipeline.delete_existing_transcription_data = MagicMock(
+        side_effect=delete_inside_lock
+    )
     chunk = {LectureTranscriptionSchema.SEGMENT_TEXT.value: "transcript"}
 
     with patch(
@@ -86,6 +100,7 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
         pipeline.batch_insert([chunk])
 
     pipeline.callback.update.assert_called_once()
+    pipeline.delete_existing_transcription_data.assert_called_once()
     batch.add_object.assert_called_once_with(properties=chunk, vector=[0.1])
 
 
@@ -94,13 +109,14 @@ def test_transcription_ingestion_reraises_without_terminal_callback():
     pipeline.callback = MagicMock()
     pipeline.dto = SimpleNamespace(lecture_unit=_lecture_unit())
     pipeline.tokens = []
-    pipeline.delete_existing_transcription_data = MagicMock(
-        side_effect=RuntimeError("delete failed")
+    pipeline.chunk_transcription = MagicMock(
+        side_effect=RuntimeError("chunking failed")
     )
 
-    with pytest.raises(RuntimeError, match="delete failed"):
+    with pytest.raises(IngestionStageError, match="chunking failed") as exc_info:
         pipeline()
 
+    assert exc_info.value.error_code == TRANSCRIPT_INGESTION_FAILED
     pipeline.callback.fail.assert_not_called()
 
 

@@ -7,6 +7,10 @@ from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.ingestion_errors import (
+    TRANSCRIPT_INGESTION_FAILED,
+    IngestionStageError,
+)
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
@@ -27,6 +31,10 @@ from iris.pipeline.prompts.transcription_ingestion_prompts import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
+from iris.vector_database.batch_verify import (
+    raise_on_failed_batch_objects,
+    raise_on_failed_delete,
+)
 from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -81,7 +89,6 @@ class TranscriptionIngestionPipeline(SubPipeline):
     def __call__(self) -> (str, []):
         try:
             self.callback.update()
-            self.delete_existing_transcription_data(self.dto.lecture_unit)
             self.callback.update()
 
             self.callback.update()
@@ -103,16 +110,24 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.callback.update()
 
             return self.dto.lecture_unit.transcription.language, self.tokens
+        except IngestionStageError as e:
+            if not e.tokens:
+                e.tokens = list(self.tokens)
+            raise
         except Exception as e:
             logger.error(
                 "Error processing transcription ingestion pipeline: %s",
                 e,
                 exc_info=True,
             )
-            raise
+            raise IngestionStageError(
+                TRANSCRIPT_INGESTION_FAILED,
+                f"Failed to ingest the transcription into the database: {e}",
+                tokens=list(self.tokens),
+            ) from e
 
     def delete_existing_transcription_data(self, transcription: LectureUnitPageDTO):
-        self.collection.data.delete_many(
+        delete_result = self.collection.data.delete_many(
             where=Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
                 transcription.course_id
             )
@@ -126,8 +141,15 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 self.dto.settings.artemis_base_url
             )
         )
+        raise_on_failed_delete(delete_result, "outdated transcription chunks")
 
     def batch_insert(self, chunks):
+        """Embed outside the shared write lock, then atomically swap the rows.
+
+        The delete of the previous transcription happens only after every
+        summary and embedding succeeded, so a failed run never leaves the unit
+        without its old transcription.
+        """
         prepared_chunks = []
         try:
             for i, chunk in enumerate(chunks):
@@ -142,6 +164,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
             raise
 
         with batch_update_lock:
+            self.delete_existing_transcription_data(self.dto.lecture_unit)
             with self.collection.batch.dynamic() as batch:
                 try:
                     for chunk, embed_chunk in prepared_chunks:
@@ -149,6 +172,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 except Exception as e:
                     logger.error("Error indexing lecture transcription chunk: %s", e)
                     raise
+            raise_on_failed_batch_objects(self.collection, "transcription chunks")
 
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO

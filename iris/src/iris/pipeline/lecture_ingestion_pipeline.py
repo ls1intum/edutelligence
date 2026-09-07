@@ -3,7 +3,6 @@ import json
 import os
 import re
 import tempfile
-import threading
 from datetime import datetime
 from typing import Optional
 
@@ -14,6 +13,11 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.ingestion_errors import (
+    PAGE_INGESTION_FAILED,
+    SLIDE_VISION_FAILED,
+    IngestionStageError,
+)
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
@@ -33,6 +37,11 @@ from ..llm import (
 )
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
+from ..vector_database.batch_verify import (
+    raise_on_failed_batch_objects,
+    raise_on_failed_delete,
+)
+from ..vector_database.database import batch_update_lock
 from ..vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
@@ -46,7 +55,7 @@ from . import Pipeline
 
 logger = get_logger(__name__)
 
-batch_update_lock = threading.Lock()
+VISION_MAX_ATTEMPTS = 3
 
 
 _UNICODE_BULLETS = (
@@ -222,12 +231,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 return self.course_language, self.tokens
             self.callback.update()
             self._load_existing_slide_visibility()
-            self.delete_lecture_unit(
-                self.dto.lecture_unit.course_id,
-                self.dto.lecture_unit.lecture_id,
-                self.dto.lecture_unit.lecture_unit_id,
-                self.dto.settings.artemis_base_url,
-            )
             self.callback.update()
             self.callback.update()
             chunks = []
@@ -241,13 +244,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             )
             cleanup_temporary_file(pdf_path)
             self.callback.update()
+            prepared_chunks = self.embed_chunks(chunks)
             self.callback.update()
             logger.info(
-                "[%s] Embedding and indexing %d chunks into Weaviate",
+                "[%s] Replacing %d chunks in Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
-                len(chunks),
+                len(prepared_chunks),
             )
-            self.batch_update(chunks)
+            self.replace_chunks(prepared_chunks)
 
             self.callback.update(tokens=self.tokens)
 
@@ -256,14 +260,16 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.dto.lecture_unit.course_name,
             )
             return self.course_language, self.tokens
+        except IngestionStageError as e:
+            if not e.tokens:
+                e.tokens = list(self.tokens)
+            raise
         except Exception as e:
-            logger.error("Error updating lecture unit", exc_info=e)
-            self.callback.fail(
-                f"Failed to ingest lectures into the database: {e}",
-                exception=e,
-                tokens=self.tokens,
-            )
-            return "", []
+            raise IngestionStageError(
+                PAGE_INGESTION_FAILED,
+                f"Failed to ingest lecture pages into the database: {e}",
+                tokens=list(self.tokens),
+            ) from e
 
     def check_if_attachment_needs_update(self) -> bool:
         page_chunk = self.collection.query.fetch_objects(
@@ -276,7 +282,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             LectureUnitPageChunkSchema.PAGE_VERSION.value
         )
 
-        return version < self.dto.lecture_unit.attachment_version
+        # None means a legacy row without a stored version, and inequality (not
+        # "less than") also re-ingests after a version rollback, e.g. an import
+        # that restored an older attachment.
+        return version is None or version != self.dto.lecture_unit.attachment_version
 
     def _get_page_chunk_filter(self):
         page_chunk_filter = Filter.by_property(
@@ -363,25 +372,35 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             by_page[page_number] for page_number in sorted(by_page)
         ]
 
-    def batch_update(self, chunks):
-        """
-        Batch update the chunks into the database
-        This method is thread-safe and can only be executed by one thread at a time.
-        Weaviate limitation.
+    def embed_chunks(self, chunks):
+        """Embed all chunks before any write, outside the shared write lock."""
+        prepared_chunks = []
+        for i, chunk in enumerate(chunks):
+            if i % 10 == 0:
+                self.callback.update()
+            embedding = self.llm_embedding.embed(
+                chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
+            )
+            prepared_chunks.append((chunk, embedding))
+        return prepared_chunks
+
+    def replace_chunks(self, prepared_chunks):
+        """Atomically swap the unit's page chunks for the prepared ones.
+
+        All fallible LLM work is done by now, so the delete-then-insert window
+        is a few seconds of Weaviate calls instead of the whole vision and
+        embedding phase. Both halves are verified: a failed delete or a dropped
+        batch object fails the run rather than leaving a partial unit.
         """
         with batch_update_lock:
+            delete_result = self.collection.data.delete_many(
+                where=self._get_page_chunk_filter()
+            )
+            raise_on_failed_delete(delete_result, "outdated lecture page chunks")
             with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
-                try:
-                    for i, chunk in enumerate(chunks):
-                        if i % 10 == 0:
-                            self.callback.update()
-                        embed_chunk = self.llm_embedding.embed(
-                            chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
-                        )
-                        batch.add_object(properties=chunk, vector=embed_chunk)
-                except Exception as e:
-                    logger.error("Error updating lecture unit", exc_info=e)
-                    raise
+                for chunk, embedding in prepared_chunks:
+                    batch.add_object(properties=chunk, vector=embedding)
+            raise_on_failed_batch_objects(self.collection, "lecture page chunks")
 
     def chunk_data(
         self,
@@ -486,30 +505,46 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             ],
         )
 
-        try:
-            response = self.llm_chat.chat(
-                [iris_message],
-                CompletionArguments(temperature=0, response_format="JSON"),
-                tools=[],
-            )
-            self._append_tokens(
-                response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
-            )
+        last_error = None
+        for attempt in range(1, VISION_MAX_ATTEMPTS + 1):
+            try:
+                response = self.llm_chat.chat(
+                    [iris_message],
+                    CompletionArguments(temperature=0, response_format="JSON"),
+                    tools=[],
+                )
+                self._append_tokens(
+                    response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION
+                )
 
-            # Parse structured response
-            response_text = response.contents[0].text_content or "{}"
-            # Strip markdown code fences if present
-            cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
-            parsed = json.loads(cleaned)
+                # Parse structured response
+                response_text = response.contents[0].text_content or "{}"
+                # Strip markdown code fences if present
+                cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
+                parsed = json.loads(cleaned)
 
-            return SlideVisionDTO(
-                display_page_number=parsed.get("display_page_number", -1),
-                academic_description=parsed.get("academic_description", ""),
-            )
+                description = (parsed.get("academic_description") or "").strip()
+                if not description:
+                    raise ValueError("vision response has no academic_description")
 
-        except Exception as e:
-            logger.error("Slide vision extraction failed: %s", e)
-            return SlideVisionDTO(display_page_number=-1, academic_description="")
+                return SlideVisionDTO(
+                    display_page_number=parsed.get("display_page_number", -1),
+                    academic_description=description,
+                )
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Slide vision attempt %d/%d failed: %s",
+                    attempt,
+                    VISION_MAX_ATTEMPTS,
+                    e,
+                )
+
+        raise IngestionStageError(
+            SLIDE_VISION_FAILED,
+            f"Slide interpretation failed after {VISION_MAX_ATTEMPTS} attempts: "
+            f"{last_error}",
+        ) from last_error
 
     def merge_page_content_and_image_interpretation(
         self, page_content: str, image_interpretation: str
@@ -563,52 +598,3 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
         return response.contents[0].text_content
-
-    def delete_old_lectures(
-        self,
-        lecture_units_slides: list[LectureUnitPageDTO],
-        artemis_base_url: str,
-    ):
-        """
-        Delete the lecture unit from the database
-        """
-        try:
-            for lecture_unit in lecture_units_slides:
-                if self.delete_lecture_unit(
-                    lecture_unit.course_id,
-                    lecture_unit.lecture_id,
-                    lecture_unit.lecture_unit_id,
-                    artemis_base_url,
-                ):
-                    logger.info("Lecture deleted successfully")
-                else:
-                    logger.error("Failed to delete lecture")
-            self.callback.update()
-        except Exception as e:
-            logger.error("Error deleting lecture unit: %s", e)
-            self.callback.fail("Error while removing old slides")
-            return False
-
-    def delete_lecture_unit(self, course_id, lecture_id, lecture_unit_id, base_url):
-        """
-        Delete the lecture from the database
-        """
-        try:
-            self.collection.data.delete_many(
-                where=Filter.by_property(
-                    LectureUnitPageChunkSchema.BASE_URL.value
-                ).equal(base_url)
-                & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
-                    course_id
-                )
-                & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
-                    lecture_id
-                )
-                & Filter.by_property(
-                    LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
-                ).equal(lecture_unit_id)
-            )
-            return True
-        except Exception as e:
-            logger.error("Error deleting lecture unit: %s", e, exc_info=True)
-            return False

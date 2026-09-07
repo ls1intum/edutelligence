@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from iris.common.ingestion_errors import IngestionStageError
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.domain.data.metrics.transcription_dto import (
@@ -198,6 +199,15 @@ class LectureIngestionUpdatePipeline(Pipeline):
             ):
                 self._run_ingestion(callback, initial_properties)
 
+        except IngestionStageError as e:
+            logger.error(
+                "[Lecture %d] Pipeline failed with code %s: %s",
+                self.dto.lecture_unit.lecture_unit_id,
+                e.error_code,
+                e,
+                exc_info=True,
+            )
+            callback.fail(str(e), exception=e, code=e.error_code, tokens=e.tokens)
         except Exception as e:
             logger.error(
                 "[Lecture %d] Pipeline failed: %s",
