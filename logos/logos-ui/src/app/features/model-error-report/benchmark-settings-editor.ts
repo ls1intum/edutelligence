@@ -2,7 +2,7 @@ import { Component, computed, effect, inject, input, model, output, signal } fro
 import { ModelBenchmarkPair } from '../../shared/models/provider.model';
 import { FormsModule } from '@angular/forms';
 import { ModelManagementService } from '../../core/services/model-management.service';
-import { BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES, servingValidationErrors, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
+import { benchmarkErrorMessage, BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES, servingValidationErrors, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
 
 @Component({
   selector: 'app-benchmark-settings-editor', standalone: true, imports: [FormsModule],
@@ -87,7 +87,7 @@ export class BenchmarkSettingsEditor {
       const limits = await this.service.getBenchmarkWorkerLimits(pair.model_provider_id);
       if (version === this.limitsVersion) this.limits.set(limits);
     } catch (error: any) {
-      if (version === this.limitsVersion) this.limitsError.set(error?.error?.detail ?? error?.error?.error ?? 'Could not load worker limits.');
+      if (version === this.limitsVersion) this.limitsError.set(benchmarkErrorMessage(error, 'Could not load worker limits.'));
     } finally {
       if (version === this.limitsVersion) this.limitsLoading.set(false);
     }
@@ -131,7 +131,7 @@ export class BenchmarkSettingsEditor {
           : meta.text_columns.includes('question') ? 'question' : meta.text_columns[0] }));
       this.results.set([]);
     } catch (error: any) {
-      if (version === this.metadataVersion) this.error.set(error?.error?.detail ?? error?.error?.error ?? 'Could not inspect this dataset. Choose a public dataset with a text column.');
+      if (version === this.metadataVersion) this.error.set(benchmarkErrorMessage(error, 'Could not inspect this dataset. Choose a public dataset with a text column.'));
     } finally { if (version === this.metadataVersion) this.loading.set(false); }
   }
 

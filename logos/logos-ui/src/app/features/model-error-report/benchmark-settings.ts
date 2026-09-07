@@ -122,3 +122,10 @@ export function servingValidationErrors(settings: BenchmarkSettings, limits: Ben
   }
   return errors;
 }
+
+/** FastAPI errors can be wrapped by the webservice's structured error envelope. */
+export function benchmarkErrorMessage(error: unknown, fallback: string): string {
+  const body = (error as any)?.error;
+  const candidates = [body?.detail, body?.error?.message, body?.error?.detail, body?.error, body?.message];
+  return candidates.find(value => typeof value === 'string' && value.trim()) ?? fallback;
+}

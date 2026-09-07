@@ -1,3 +1,4 @@
+import { benchmarkErrorMessage } from './benchmark-settings';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
@@ -89,5 +90,14 @@ describe('Worker-specific benchmark limits', () => {
   it('does not invent GPU availability when telemetry is missing', () => {
     expect(servingValidationErrors(DEFAULT_BENCHMARK_SETTINGS, null)).toEqual([]);
     expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: 1 } }, null)[0]).toContain('unavailable');
+  });
+});
+
+
+describe('benchmarkErrorMessage', () => {
+  it('shows structured worker errors and never renders objects as text', () => {
+    expect(benchmarkErrorMessage({ error: { error: { message: 'Worker is offline.' } } }, 'Unavailable')).toBe('Worker is offline.');
+    expect(benchmarkErrorMessage({ error: { detail: 'Unknown dataset' } }, 'Unavailable')).toBe('Unknown dataset');
+    expect(benchmarkErrorMessage({ error: { error: { code: 'OFFLINE' } } }, 'Unavailable')).toBe('Unavailable');
   });
 });
