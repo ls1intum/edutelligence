@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from iris.common.boot_id import BOOT_ID
+
 
 class ServiceStatus(str, Enum):
     UP = "UP"  # module up (ui: 🟢)
@@ -27,4 +29,5 @@ class IrisHealthResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     is_healthy: bool = Field(alias="isHealthy")
+    boot_id: str = Field(default=BOOT_ID, alias="bootId")
     modules: dict[str, ModuleStatus] = Field(default_factory=dict)
