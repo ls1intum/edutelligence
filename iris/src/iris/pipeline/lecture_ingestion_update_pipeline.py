@@ -17,6 +17,7 @@ from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
+from iris.pipeline.ingestion_audit import IngestionAudit
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
 from iris.pipeline.lecture_update_lock import lecture_update_lock
@@ -451,6 +452,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit=lecture_unit_dto,
             initial_properties=initial_properties,
         )
+
+        # FINISHED is a verified claim: read back the index and compare it
+        # against the request inputs before certifying the run.
+        IngestionAudit.for_client(client).verify(self.dto)
+
         callback.finish(
             display_page_numbers=self.dto.lecture_unit.display_page_numbers,
             tokens=tokens,
