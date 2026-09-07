@@ -2968,3 +2968,86 @@ async def test_impossible_parallelism_rejected_before_restart(tp, pp, pool) -> N
     with pytest.raises(ValueError, match="requires .* GPUs"):
         await manager.reconfigure_lane("lane", updates, require_idle=True)
     manager._restart_lane_unlocked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tp_restart_refreshes_released_vram_and_resizes_per_rank_cache(monkeypatch) -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        residency_source="calibrated",
+        tensor_parallel_size=2,
+        loaded_vram_mb=15988,
+        base_residency_mb=15988,
+        kv_budget_mb=4096,
+    )
+    current = LaneConfig(
+        model="org/model",
+        vllm=True,
+        gpu_devices="0,1",
+        vllm_config=VllmConfig(tensor_parallel_size=2, kv_cache_memory_bytes="4G"),
+    )
+    old = _StubHandle(current)
+    free = 8000
+
+    async def refresh():
+        nonlocal free
+        assert old.destroyed
+        free = 13000
+
+    async def snapshot():
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id=f"gpu{i}", kind="nvidia", memory_total_mb=16384, memory_free_mb=free, extra={"index": i}
+                )
+                for i in range(2)
+            ],
+        )
+
+    manager = LaneManager(
+        OllamaConfig(),
+        model_profiles=profiles,
+        gpu_device_count=lambda: 2,
+        gpu_snapshot=snapshot,
+        gpu_force_poll=refresh,
+    )
+    manager._handles["lane"] = old
+    manager._port_alloc._used["lane"] = 15000
+    new = MagicMock(init=AsyncMock(), spawn=AsyncMock(), destroy=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: new)
+    requested = current.model_copy(
+        update={
+            "gpu_devices": "",
+            "auto_tensor_parallel": False,
+            "vllm_config": current.vllm_config.model_copy(update={"tensor_parallel_size": 1}),
+        }
+    )
+    await manager._restart_lane_unlocked("lane", requested)
+    placed = new.spawn.await_args.args[0]
+    assert placed.vllm_config.tensor_parallel_size == 1
+    assert placed.gpu_devices in {"0", "1"}
+    assert manager._estimate_lane_vram_mb(placed) == 11892
+    assert manager._handles["lane"] is new
+
+
+@pytest.mark.asyncio
+async def test_failed_restart_placement_removes_dead_lane_bookkeeping() -> None:
+    lane = LaneConfig(model="org/model", vllm=True)
+    old = _StubHandle(lane)
+    manager = _manager_with_handles({"lane": old})
+    manager._port_alloc._used["lane"] = 15000
+    manager._active_requests["lane"] = 0
+    manager._starting_deadlines["lane"] = 123
+    manager._auto_place_gpu_devices = AsyncMock(side_effect=RuntimeError("No GPU fits"))
+    with pytest.raises(RuntimeError, match="No GPU fits"):
+        await manager._restart_lane_unlocked("lane", lane)
+    assert old.destroyed and old.closed
+    assert "lane" not in manager._handles
+    assert manager._port_alloc.get_port("lane") is None
+    assert "lane" not in manager._active_requests
+    assert "lane" not in manager._starting_deadlines
