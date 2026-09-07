@@ -538,7 +538,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly loading = signal(true);
   readonly loadError = signal(false);
 
-  readonly activeTab = signal<ModelErrorTab>('complete_logs');
+  readonly activeTab = signal<ModelErrorTab>('error_report');
 
   private readonly expandedErrors = signal<ReadonlySet<string>>(new Set());
 
