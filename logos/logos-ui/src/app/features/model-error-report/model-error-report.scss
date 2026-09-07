@@ -701,10 +701,10 @@
 }
 
 .reason-badge--unsupported {
-  color: rgb(var(--color-warning));
+  color: rgb(var(--color-error));
   background:
     rgb(
-      var(--color-warning)
+      var(--color-error)
       / var(--opacity-faint)
     );
 }
@@ -719,10 +719,10 @@
 }
 
 .reason-badge--observed {
-  color: rgb(var(--color-accent-cyan));
+  color: rgb(var(--color-error));
   background:
     rgb(
-      var(--color-accent-cyan)
+      var(--color-error)
       / var(--opacity-faint)
     );
 }
