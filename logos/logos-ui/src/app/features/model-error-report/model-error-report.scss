@@ -5,6 +5,10 @@
 // ==========================================================================
 
 .model-error-report {
+  // One type scale for log content, benchmark data and their controls.
+  --model-detail-font-family: 'JetBrains Mono', monospace;
+  --model-detail-font-size: var(--font-size-sm);
+  --model-detail-heading-size: var(--font-size-base);
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -148,6 +152,14 @@
   min-height: 400px;
 }
 
+.tab-content--technical {
+  font-family: var(--model-detail-font-family);
+  font-size: var(--model-detail-font-size);
+  line-height: var(--line-height-normal);
+
+  button, input, select, textarea, code, pre { font-family: inherit; }
+}
+
 // ==========================================================================
 // Performance
 // ==========================================================================
@@ -166,14 +178,14 @@
 
   h2 {
     color: rgb(var(--color-typography-100));
-    font-size: var(--font-size-base);
+    font-size: var(--model-detail-heading-size);
     font-weight: var(--font-weight-semibold);
   }
 
   p {
     margin-top: 3px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 }
 
@@ -182,7 +194,7 @@
   align-items: center;
   gap: 7px;
   color: rgb(var(--color-typography-500));
-  font-size: var(--font-size-sm);
+  font-size: var(--model-detail-font-size);
   font-weight: var(--font-weight-medium);
 
   i {
@@ -225,14 +237,14 @@
 
   h3 {
     color: rgb(var(--color-typography-100));
-    font-size: var(--font-size-base);
+    font-size: var(--model-detail-heading-size);
     font-weight: var(--font-weight-semibold);
   }
 
   p {
     margin-top: 4px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 }
 
@@ -242,7 +254,7 @@
   border-radius: 999px;
   background: rgb(var(--color-accent-green) / var(--opacity-soft));
   color: rgb(var(--color-accent-green));
-  font-size: var(--font-size-sm);
+  font-size: var(--model-detail-font-size);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -264,7 +276,7 @@
   strong {
     margin-bottom: 4px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
     font-weight: var(--font-weight-semibold);
     letter-spacing: var(--letter-spacing-wide);
   }
@@ -274,7 +286,7 @@
     justify-content: space-between;
     gap: 8px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 
   b {
@@ -286,7 +298,7 @@
 .performance-card__footer {
   margin-top: 18px;
   color: rgb(var(--color-typography-500));
-  font-size: var(--font-size-sm);
+  font-size: var(--model-detail-font-size);
 }
 
 @media (max-width: 1100px) {
@@ -767,7 +779,7 @@
 }
 
 .log-selector__label {
-  font-size: var(--font-size-base);
+  font-size: var(--model-detail-heading-size);
   font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-700));
 }
@@ -843,8 +855,8 @@
   overflow: auto;
   background: rgb(var(--color-surface-0));
   color: rgb(var(--color-typography-100));
-  font-family: 'JetBrains Mono', monospace;
-  font-size: var(--font-size-sm);
+  font-family: var(--model-detail-font-family);
+  font-size: var(--model-detail-font-size);
   line-height: var(--line-height-normal);
 }
 
