@@ -217,11 +217,10 @@
   gap: 20px;
 }
 
-.performance-card {
-  @include glass-surface;
+.performance-card,
+.logs-panel { @include glass-surface; }
 
-  padding: 24px;
-}
+.performance-card { padding: 24px; }
 
 .performance-card__header {
   display: flex;
@@ -742,10 +741,7 @@
 // ==========================================================================
 
 .logs-panel {
-  @include glass-surface;
-
   padding: 12px;
-  border-radius: 8px;
   display: flex;
   flex-direction: column;
   gap: 12px;
