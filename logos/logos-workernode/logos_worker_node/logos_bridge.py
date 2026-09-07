@@ -838,6 +838,7 @@ class LogosBridgeClient:
         persist: bool = True,
         gpu_devices: str = "",
         kv_cache_dtype: str = "",
+        dtype: str = "",
         revision: str = "",
         tensor_parallel_size: int = 1,
     ) -> dict[str, Any]:
@@ -865,6 +866,11 @@ class LogosBridgeClient:
         any — the HF-derived KV estimate otherwise uses the model's own
         torch_dtype, which can be double a configured fp8 KV cache's real
         footprint and falsely fail the min-KV check near the VRAM edge.
+
+        ``dtype`` is the plan's ``--dtype`` override, if explicit. With
+        ``kv_cache_dtype`` blank/"auto", vLLM sizes the KV cache off this
+        effective model dtype (see resolve_effective_dtype), not the raw
+        repo torch_dtype — else a float32 repo served at float16 is 2x'd.
 
         ``revision`` is the plan's ``--revision`` pin, if any (see
         calibration.extract_revision_arg). The Hub calls otherwise default
@@ -898,6 +904,7 @@ class LogosBridgeClient:
             fetch_hf_model_metadata,
             kv_bytes_for_dtype,
             min_feasible_tp,
+            resolve_effective_dtype,
         )
 
         model_profiles = self._app.state.model_profiles
@@ -1022,15 +1029,24 @@ class LogosBridgeClient:
         # must never widen the search beyond what's physically available.
         configured_tp = tensor_parallel_size if 1 <= tensor_parallel_size <= len(relevant_snap) else None
 
-        # kv_per_token_bytes is cached under the model's own dtype; a plan's
-        # --kv-cache-dtype override must be applied here, or the min-KV
-        # check uses double the real footprint. "auto" means "use the
-        # model's dtype" though — not a concrete one, so it must skip.
-        is_explicit_override = bool(kv_cache_dtype) and kv_cache_dtype.strip().lower() != "auto"
+        # kv_per_token_bytes is cached under the repo's raw torch_dtype; an
+        # explicit --kv-cache-dtype must override it outright, or the
+        # min-KV check uses double the real footprint. Blank/"auto" instead
+        # defers to the plan's --dtype, when explicit — vLLM sizes "auto"
+        # KV cache off that effective model dtype, not the raw repo one.
+        # Neither override set: keep the cached (repo-dtype) value as-is.
+        has_kv_geometry = hf_meta.num_hidden_layers and hf_meta.num_key_value_heads and hf_meta.kv_head_dim
+        is_explicit_kv_override = bool(kv_cache_dtype) and kv_cache_dtype.strip().lower() != "auto"
+        is_explicit_plan_dtype = bool(dtype) and dtype.strip().lower() != "auto"
         kv_per_token_bytes = hf_meta.kv_per_token_bytes
-        if is_explicit_override and hf_meta.num_hidden_layers and hf_meta.num_key_value_heads and hf_meta.kv_head_dim:
+        if is_explicit_kv_override and has_kv_geometry:
             kv_per_token_bytes = kv_bytes_for_dtype(
                 hf_meta.num_hidden_layers, hf_meta.num_key_value_heads, hf_meta.kv_head_dim, kv_cache_dtype
+            )
+        elif is_explicit_plan_dtype and has_kv_geometry:
+            effective_dtype = resolve_effective_dtype(hf_meta.torch_dtype, dtype)
+            kv_per_token_bytes = kv_bytes_for_dtype(
+                hf_meta.num_hidden_layers, hf_meta.num_key_value_heads, hf_meta.kv_head_dim, effective_dtype
             )
 
         min_kv_mb = 0.0
@@ -1137,6 +1153,7 @@ class LogosBridgeClient:
             model_name,
             gpu_devices=str(plan.get("gpu_devices") or ""),
             kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+            dtype=str(plan.get("dtype") or ""),
             revision=extract_revision_arg(plan.get("extra_args")) or "",
             tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
         )
@@ -1575,6 +1592,7 @@ class LogosBridgeClient:
                     model_name,
                     gpu_devices=str(plan.get("gpu_devices") or ""),
                     kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+                    dtype=str(plan.get("dtype") or ""),
                     revision=extract_revision_arg(plan.get("extra_args")) or "",
                     tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
                 )

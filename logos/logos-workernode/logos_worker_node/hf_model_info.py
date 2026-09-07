@@ -70,6 +70,11 @@ class HfModelMetadata:
     # the config's own torch_dtype baked into kv_per_token_bytes above.
     num_hidden_layers: int | None = None
     kv_head_dim: float | None = None
+    # config.json's raw torch_dtype string — kept separately so callers can
+    # resolve vLLM's effective model dtype (see resolve_effective_dtype)
+    # instead of trusting kv_per_token_bytes' baked-in assumption that the
+    # repo's own torch_dtype is what actually gets loaded.
+    torch_dtype: str | None = None
     max_context_length: int | None = None
     # config.json's quantization_config.quant_method (e.g. "awq", "gptq").
     # This module just extracts the raw string; logos_bridge.py checks it
@@ -93,6 +98,7 @@ _HF_METADATA_VALUE_TYPES: dict[str, tuple[type, ...]] = {
     "num_key_value_heads": (int,),
     "num_hidden_layers": (int,),
     "kv_head_dim": (int, float),
+    "torch_dtype": (str,),
     "max_context_length": (int,),
     "quantization_method": (str,),
     "fetched_at": (int, float),
@@ -176,6 +182,20 @@ def kv_bytes_for_dtype(
     return int(2 * num_hidden_layers * num_key_value_heads * head_dim * dtype_bytes)
 
 
+def resolve_effective_dtype(config_dtype: str | None, plan_dtype: str | None) -> str:
+    """Mirrors vLLM's own ``--dtype`` resolution (config.py's
+    ``_get_and_verify_dtype``): an explicit plan dtype wins outright;
+    "auto"/blank falls back to the repo's torch_dtype, except float32
+    repos default to float16, since vLLM never actually serves fp32."""
+    plan = (plan_dtype or "").strip().lower()
+    if plan and plan != "auto":
+        return plan
+    config = (config_dtype or "").strip().lower()
+    if config in ("float32", "fp32", ""):
+        return "float16"
+    return config
+
+
 def _derive_kv_per_token_bytes(config: dict[str, Any], kv_cache_dtype_override: str | None) -> int | None:
     geometry = _kv_geometry(config)
     if geometry is None:
@@ -254,6 +274,7 @@ def _fetch_uncached(
     num_key_value_heads: int | None = None
     num_hidden_layers: int | None = None
     kv_head_dim: float | None = None
+    torch_dtype: str | None = None
     max_context_length: int | None = None
     quantization_method: str | None = None
     try:
@@ -268,6 +289,8 @@ def _fetch_uncached(
         kv_geometry = _kv_geometry(config)
         if kv_geometry is not None:
             num_hidden_layers, num_key_value_heads, kv_head_dim = kv_geometry
+        raw_torch_dtype = _get_config_field(config, "torch_dtype")
+        torch_dtype = str(raw_torch_dtype) if raw_torch_dtype else None
         max_context_length = _effective_max_context_length(config, _get_config_field(config, "max_position_embeddings"))
         quant_cfg = _get_config_field(config, "quantization_config")
         if isinstance(quant_cfg, dict):
@@ -298,6 +321,7 @@ def _fetch_uncached(
         num_key_value_heads=num_key_value_heads,
         num_hidden_layers=num_hidden_layers,
         kv_head_dim=kv_head_dim,
+        torch_dtype=torch_dtype,
         max_context_length=max_context_length,
         quantization_method=quantization_method,
         fetched_at=time.time(),
