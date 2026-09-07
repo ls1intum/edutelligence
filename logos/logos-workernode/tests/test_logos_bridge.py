@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1091,6 +1092,972 @@ async def test_session_frees_calibrating_slice_before_calibrating(tmp_path, monk
     app.state.lane_manager.end_calibration_session.assert_called_once()
 
 
+# ── HF compatibility precheck ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_skips_model_whose_weights_dont_fit(tmp_path, monkeypatch):
+    """A model whose HF-reported weights exceed free VRAM at every TP the
+    hardware supports must never reach calibrate_with_tp_escalation."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["too/big-for-this-node"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=200 * 1024 * 1024 * 1024,  # 200 GB — doesn't fit anywhere
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    calibrate_called = False
+
+    def _fake_calibrate(plan, **kwargs):
+        nonlocal calibrate_called
+        calibrate_called = True
+        raise AssertionError("calibrate_with_tp_escalation must not run for an infeasible model")
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert calibrate_called is False
+    events = [(e.event, e.model, e.details) for e in app.state.lane_manager._event_log]
+    assert any(
+        event == "calibration_model_skipped"
+        and model == "too/big-for-this-node"
+        and REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS in (details or "")
+        for event, model, details in events
+    )
+    profile = app.state.model_profiles.get_profile("too/big-for-this-node")
+    assert profile is not None
+    assert profile.calibration_unsupported is True
+    assert profile.calibration_unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatch):
+    """A model whose HF-reported weights fit gets _hf_weight_bytes/_hf_max_tp_ceiling
+    injected into the plan, and its profile is seeded with the HF estimate."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["fits/on-this-node"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,  # 4 GB — fits easily
+            kv_per_token_bytes=1024,
+            max_context_length=8192,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=4200.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert seen_plans[0]["_hf_weight_bytes"] == 4 * 1024 * 1024 * 1024
+    assert seen_plans[0]["_hf_max_tp_ceiling"] == 1
+
+    # A successful calibration overwrites the HF estimate with the real
+    # measurement, but the HF-only fields (never measured by calibration)
+    # survive via merge_profile.
+    profile = app.state.model_profiles.get_profile("fits/on-this-node")
+    assert profile is not None
+    assert profile.residency_source == "calibrated"
+    assert profile.base_residency_mb == 4200.0
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_failure_does_not_block_calibration(tmp_path, monkeypatch):
+    """A network failure, gated repo, or unknown model must behave exactly
+    as if this feature did not exist: proceed, no plan mutation, no skip."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["unknown/gated-model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:gated-repo"),
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=9999.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert "_hf_weight_bytes" not in seen_plans[0]
+    assert "_hf_max_tp_ceiling" not in seen_plans[0]
+    events = [e.event for e in app.state.lane_manager._event_log]
+    assert "calibration_model_skipped" not in events
+    assert "calibration_model_completed" in events
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_warns_on_persistent_fetch_failure(tmp_path, monkeypatch, caplog):
+    """Not-found/gated already warn via the calibration loop's skip
+    event. Any other fetch failure has no such signal and stays
+    silent at debug level forever — this must warn on its own."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await client._execute_command("run_compatibility_precheck", {"model": "org/flaky-network"})  # noqa: SLF001
+
+    assert any("HF metadata unavailable" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_no_warning_for_not_found_or_gated(tmp_path, monkeypatch, caplog):
+    """Those two already warn (with more specific context) via the
+    calibration loop's own skip-event logging — this must not double-log."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    for source in ("error:model-not-found-or-unauthorized", "error:model-gated"):
+        monkeypatch.setattr(
+            "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+            lambda *a, source=source, **k: HfModelMetadata(source=source),
+        )
+        with caplog.at_level(logging.WARNING):
+            await client._execute_command("run_compatibility_precheck", {"model": "org/some-model"})  # noqa: SLF001
+        assert not any("HF metadata unavailable" in r.message for r in caplog.records)
+        caplog.clear()
+
+
+# ── Standalone compatibility precheck (run_compatibility_precheck RPC) ────────
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, monkeypatch):
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    response = await client._execute_command("run_compatibility_precheck", {})  # noqa: SLF001
+    assert response["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monkeypatch):
+    """The standalone RPC is callable outside any calibration session — no
+    session needs to be started, no lanes are touched."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,
+            kv_per_token_bytes=1024,
+            max_context_length=8192,
+            quantization_method="awq",
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["model"] == "org/model"
+    assert response["fit_tp_idle"] == 1
+    assert response["fit_tp_current"] == 1
+    assert response["unsupported_reason"] is None
+    assert response["quantization_method"] == "awq"
+    # No calibration session, no lanes touched — the app fixture's destroy_all
+    # mock must never have been called.
+    app.state.lane_manager.destroy_all.assert_not_awaited()
+
+    # And it seeded the profile, exactly like the session-path precheck does.
+    profile = app.state.model_profiles.get_profile("org/model")
+    assert profile is not None
+    assert profile.residency_source == "hf"
+    assert profile.kv_per_token_bytes == 1024
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_skips_nonexistent_repo_without_querying_vram(tmp_path, monkeypatch):
+    """A nonexistent-or-unauthorized HF repo can never work right now — skip
+    immediately, without even querying GPU VRAM. But the Hub gives the
+    identical response for a private repo this token just can't see, so
+    this must stay a candidate, not a permanent verdict (like gating)."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import is_model_unsupported
+    from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/does-not-exist"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-not-found-or-unauthorized"),
+    )
+    gpu_query = MagicMock(side_effect=AssertionError("must not query VRAM for a nonexistent repo"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", gpu_query)
+
+    response = await client._execute_command(  # noqa: SLF001
+        "run_compatibility_precheck", {"model": "org/does-not-exist"}
+    )
+
+    assert response["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+    gpu_query.assert_not_called()
+    profile = app.state.model_profiles.get_profile("org/does-not-exist")
+    assert profile is None or profile.calibration_unsupported is not True
+    assert client._list_uncalibrated_models() == ["org/does-not-exist"]  # noqa: SLF001
+
+    # Never lands in the authoritative registry either — a token added
+    # later must let a private-but-real model calibrate normally.
+    log_dir = tmp_path / "calibration_logs"
+    assert is_model_unsupported(log_dir, "org/does-not-exist") is None
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_path, monkeypatch, caplog):
+    """A profile-store write failure must only discard that precheck's
+    persistence, never propagate. The calibration loop that calls this
+    has no try/except around it — an uncaught exception here would
+    abort every remaining model that session, not just skip this one."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    def _broken_write(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app.state.model_profiles, "mark_calibration_unsupported", _broken_write)
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command("run_compatibility_precheck", {"model": "org/too-big"})  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["unsupported_reason"] == "insufficient-vram-for-weights"
+    assert any("failed to persist result" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path, monkeypatch):
+    """A gated model must NOT be marked calibration_unsupported: that flag
+    drops it out of _list_uncalibrated_models's candidate list, so it
+    would never be rechecked once an admin adds a working HF_TOKEN. It
+    must be skipped this attempt but stay eligible for every future session."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_MODEL_GATED, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/gated-model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-gated"),
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/gated-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] == REASON_MODEL_GATED
+    profile = app.state.model_profiles.get_profile("org/gated-model")
+    assert profile is None or profile.calibration_unsupported is not True
+    assert client._list_uncalibrated_models() == ["org/gated-model"]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_warns_but_never_blocks_unrecognized_quantization(
+    tmp_path, monkeypatch, caplog
+):
+    """A quantization method vLLM doesn't recognize is informational
+    only — never marked unsupported, never skipped, VRAM still queried.
+    The registry can miss a method for reasons unrelated to the model
+    (e.g. a plugin not loaded here) — the real load attempt decides."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="some-future-method", source="hf"
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command(  # noqa: SLF001
+            "run_compatibility_precheck", {"model": "org/future-quant-model"}
+        )
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    profile = app.state.model_profiles.get_profile("org/future-quant-model")
+    assert profile is None or profile.calibration_unsupported is not True
+    assert any("not found in the installed vLLM's registry" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_proceeds_for_known_quantization_method(tmp_path, monkeypatch):
+    """A quantization method the registry does recognize must not block
+    anything — the rest of the precheck runs normally."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_empty_registry_fails_open(tmp_path, monkeypatch):
+    """An empty (but non-None) registry list is not proof the method is
+    unsupported — treat it the same as a failed query, or a corrupted/
+    empty baked file would permanently mark every quantized model as
+    unsupported the moment it's checked."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    profile = app.state.model_profiles.get_profile("org/awq-model")
+    assert profile is None or profile.calibration_unsupported is not True
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_quantization_match_is_case_insensitive(tmp_path, monkeypatch):
+    """HF config.json is arbitrary user-uploaded JSON — "AWQ" vs "awq" (or
+    stray whitespace) must not read as a mismatch and wrongly, permanently
+    block a model that would actually load fine."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method=" AWQ ", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["AWQ", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_registry_query_failure_fails_open(tmp_path, monkeypatch, caplog):
+    """A failed registry query must never block a model — fail-open,
+    same as every other best-effort step here. Must still warn, not
+    stay silent at debug — a persistently broken install shouldn't
+    quietly turn this check into a no-op."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+
+    def _raise(*a, **k):
+        raise OSError("vllm venv not found")
+
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", _raise)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command(
+            "run_compatibility_precheck", {"model": "org/awq-model"}
+        )  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    assert any("quantization registry query failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_vllm_quant_methods_cached_across_precheck_calls(tmp_path, monkeypatch):
+    """The registry only changes on a vLLM upgrade, which restarts this
+    process anyway — a successful lookup must be reused for the rest of the
+    client's lifetime, not re-queried (and re-paying vLLM's torch import
+    cost) for every quantized model checked."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    registry_query = MagicMock(return_value=["awq", "gptq", "fp8"])
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", registry_query)
+
+    await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model-1"})  # noqa: SLF001
+    await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model-2"})  # noqa: SLF001
+
+    registry_query.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, monkeypatch):
+    """A model that fits on an empty node but not around today's live
+    traffic is reported as such WITHOUT being marked permanently unsupported
+    — daytime congestion isn't a permanent node property. A model too big
+    even for an empty node IS marked unsupported — that's a real verdict."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import is_model_unsupported
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+    log_dir = tmp_path / "calibration_logs"
+
+    # 10 GB of weights: fits on an empty 24 GB GPU (total_mb), but not
+    # alongside 20 GB already in live use (free_mb only 4 GB).
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 20000.0, "free_mb": 4000.0}},
+    )
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["fit_tp_idle"] == 1  # fits comfortably on an empty node
+    assert response["fit_tp_current"] is None  # doesn't fit around today's live load
+    assert response["unsupported_reason"] is None
+    profile = app.state.model_profiles.get_profile("org/model")
+    assert profile.calibration_unsupported is not True
+    assert is_model_unsupported(log_dir, "org/model") is None
+
+    # 200 GB of weights: doesn't fit even on an empty node — real
+    # verdict this time.
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/too-big"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+    profile = app.state.model_profiles.get_profile("org/too-big")
+    assert profile.calibration_unsupported is True
+
+    # Must also land in the authoritative registry — see the model-not-found
+    # test's comment for why a profile-only flag isn't enough.
+    entry = is_model_unsupported(log_dir, "org/too-big")
+    assert entry is not None
+    assert entry.reason_code == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_ignores_leftover_gpu_outside_auto_slice(tmp_path, monkeypatch):
+    """5 physical GPUs: the auto slice is the largest power-of-two
+    prefix (indices 0-3) — GPU 4 is never touched. A weak leftover GPU 4
+    must not sink the estimate for the slice actually used, falsely
+    permanent-blacklisting a model that fits fine where it would run."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            1: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            2: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            4: {"total_mb": 2000.0, "used_mb": 0.0, "free_mb": 2000.0},  # weak leftover
+        },
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["per_gpu_total_mb"] == 24000.0  # not dragged down to 2000 by GPU 4
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_devices(tmp_path, monkeypatch):
+    """A plan pinned to specific GPUs (config.yml gpu_devices) must be
+    evaluated against exactly those GPUs — a weak GPU elsewhere on the
+    node, excluded from the pin, must not sink the estimate for a
+    selection that will never actually touch it."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 2000.0, "used_mb": 0.0, "free_mb": 2000.0},  # weak, excluded by the pin
+            1: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            2: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+        },
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/model", gpu_devices="1,2,3")  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["per_gpu_total_mb"] == 24000.0
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_path, monkeypatch):
+    """The standalone RPC has no session plan to read gpu_devices or
+    kv_cache_dtype from — it must look the model up in config.yml itself.
+    Without that, a pinned model is evaluated against the wrong (default)
+    slice and can be falsely blacklisted from a leftover GPU its pin was
+    meant to avoid, and a configured fp8 KV cache looks twice its size."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    config_path = tmp_path / "config.yml"
+    config_path.touch()
+    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.plans_from_config",
+        lambda _p: [
+            {
+                "model": "org/model",
+                "gpu_devices": "1,2,3",
+                "kv_cache_dtype": "fp8",
+                "extra_args": ["--revision", "abc123"],
+                "tensor_parallel_size": 3,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=10 * 1024 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 2,  # bf16 (2 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 2000.0, "used_mb": 0.0, "free_mb": 2000.0},  # weak, excluded by the pin
+            1: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            2: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+        },
+    )
+    calls: list[dict] = []
+    real_precheck = client._run_hf_compatibility_precheck  # noqa: SLF001
+
+    async def _spy(*args, **kwargs):
+        calls.append(kwargs)
+        return await real_precheck(*args, **kwargs)
+
+    monkeypatch.setattr(client, "_run_hf_compatibility_precheck", _spy)
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["per_gpu_total_mb"] == 24000.0
+    assert calls[0]["gpu_devices"] == "1,2,3"
+    assert calls[0]["kv_cache_dtype"] == "fp8"
+    assert calls[0]["revision"] == "abc123"
+    assert calls[0]["tensor_parallel_size"] == 3
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_applies_kv_cache_dtype_override(tmp_path, monkeypatch):
+    """kv_per_token_bytes is derived from the model's own torch_dtype
+    (bf16 here) — a plan's --kv-cache-dtype override (e.g. fp8) must be
+    applied before the min-KV check, or a configured fp8 KV cache looks
+    twice its real size and can falsely fail near the VRAM boundary."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_MIN_KV, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=900 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 2,  # bf16 (2 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 1200.0, "used_mb": 0.0, "free_mb": 1200.0}},
+    )
+
+    # No override: the bf16-derived KV footprint pushes it over the edge.
+    response = await client._run_hf_compatibility_precheck("org/model", persist=False)  # noqa: SLF001
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+    # The plan's fp8 override halves the KV footprint — now it fits.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, kv_cache_dtype="fp8"
+    )
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+    # The persisted profile must also carry the effective (fp8) value —
+    # not hf_meta's raw bf16 one, which calibration.py's own KV-ceiling
+    # narrowing would otherwise use to (again) double the real budget.
+    await client._run_hf_compatibility_precheck("org/model", kv_cache_dtype="fp8")  # noqa: SLF001
+    profile = app.state.model_profiles.get_profile("org/model")
+    assert profile.kv_per_token_bytes == 2 * 32 * 8 * 128 * 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_forwards_revision_to_hf_fetch(tmp_path, monkeypatch):
+    """A plan pinned via extra_args=['--revision', ...] must be looked up
+    at that exact revision, not the repo's default branch — otherwise the
+    precheck can judge a model against an unrelated checkpoint's weights
+    and config, permanently excluding it (or wrongly clearing it) on a
+    false basis."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    calls: list[dict] = []
+
+    def _fake_fetch(*args, **kwargs):
+        calls.append(kwargs)
+        return HfModelMetadata(weight_bytes=1024, source="hf")
+
+    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", _fake_fetch)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    await client._run_hf_compatibility_precheck("org/model", persist=False, revision="v1.0-small")  # noqa: SLF001
+
+    assert calls[0]["revision"] == "v1.0-small"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_checks_configured_non_power_of_two_tp(tmp_path, monkeypatch):
+    """Regression: 3 pinned GPUs round down to a power-of-2 hardware max
+    of tp=2, so the automatic search alone never tries tp=3 — even though
+    calibrate_with_tp_escalation probes an operator-pinned tp directly
+    regardless of parity. Without threading tensor_parallel_size through,
+    a model that only fits at tp=3 gets permanently marked unsupported
+    before its valid configuration is ever tried."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    # 30 GB weights: 15 GB/GPU at tp=2 doesn't fit a 12 GB budget; 10
+    # GB/GPU at tp=3 does.
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=30 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+            1: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+            2: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+        },
+    )
+
+    # Without the pinned tp, only tp=1,2 are tried — falsely unsupported.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, gpu_devices="0,1,2"
+    )
+    assert response["unsupported_reason"] is not None
+
+    # With the pinned tp=3 checked too, it's recognized as feasible.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, gpu_devices="0,1,2", tensor_parallel_size=3
+    )
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 3
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_kv_cache_dtype_auto_keeps_model_dtype(tmp_path, monkeypatch):
+    """ "auto" is vLLM's own value for "use the model's dtype" — not a
+    concrete dtype name. Recomputing it through the 2-byte fallback would
+    silently discard a correctly-derived non-2-byte estimate (fp32 here)
+    and wrongly report an oversized model as compatible."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_MIN_KV, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=10 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 4,  # fp32 (4 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 400.0, "used_mb": 0.0, "free_mb": 400.0}},
+    )
+
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, kv_cache_dtype="auto"
+    )
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──
 
 
@@ -1520,6 +2487,7 @@ async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
     result. One lost measurement is recoverable; the file is not."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
@@ -1535,6 +2503,10 @@ async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
     profiles_path.write_text("model_profiles:\n  org/other: {unterminated\n")
     corrupt = profiles_path.read_text()
 
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
     monkeypatch.setattr(
         "logos_worker_node.calibration.calibrate_with_tp_escalation",
         lambda plan, **kwargs: CalibrationResult(
@@ -1565,6 +2537,7 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
     disk size recorded elsewhere — survive the write."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult, load_existing_profiles, save_profiles
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
@@ -1585,6 +2558,10 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
         },
     )
 
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
     monkeypatch.setattr(
         "logos_worker_node.calibration.calibrate_with_tp_escalation",
         lambda plan, **kwargs: CalibrationResult(
