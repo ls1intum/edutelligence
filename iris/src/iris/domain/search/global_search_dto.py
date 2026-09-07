@@ -163,6 +163,9 @@ class GlobalSearchRequestDTO(BaseModel):
     entity_candidates: list[EntityCandidateDTO] = Field(
         default_factory=list, alias="entityCandidates"
     )
+    # Optional course scope from the search UI's active course filter; the
+    # retrieval intersects it with the access context.
+    course_ids: list[int] | None = Field(default=None, alias="courseIds")
 
     @field_validator("query")
     @classmethod

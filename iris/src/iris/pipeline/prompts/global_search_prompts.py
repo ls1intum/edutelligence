@@ -85,8 +85,10 @@ Rules:
 student to it: the course name and the lecture/unit/exercise name in **bold**, plus any listed
 dates or details that help. Do not explain the topic beyond what the entry states.
 3. If several entries qualify, mention the best 1-2.
-4. If NO entry names or covers the asked topic, return null.
-5. Track which entries you used (1-based) in used_sources.
+4. Name the course and the material naturally. NEVER repeat the bracketed entry headers
+(such as "[Some Course — Course information]") or the words "Course information" in your answer.
+5. If NO entry names or covers the asked topic, return null.
+6. Track which entries you used (1-based) in used_sources.
 
 Respond with a valid JSON object only:
 {{"answer": "1-2 sentences IN THE LANGUAGE OF THE QUESTION", "used_sources": [1]}}

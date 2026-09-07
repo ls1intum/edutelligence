@@ -371,7 +371,10 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 client, local=dto.settings.is_local()
             )
             sources = retriever.search(
-                query=dto.query, limit=dto.limit, access_context=dto.access_context
+                query=dto.query,
+                limit=dto.limit,
+                course_ids=dto.course_ids,
+                access_context=dto.access_context,
             )
             logger.info(
                 "[global-search] answer=null  sources=%d  total_ms=%.0f  (LLM skipped)",
@@ -389,6 +392,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             intent=intent,
             access_context=dto.access_context,
             entity_candidates=dto.entity_candidates,
+            course_ids=dto.course_ids,
         )
         total_ms = (time.perf_counter() - started) * 1000
         if result.answer:

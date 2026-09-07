@@ -43,6 +43,11 @@ logger = get_logger(__name__)
 # (observed in the UI as a literal "Used_sources: [1, 3]" under the answer) or
 # at the end of its output when it drops the JSON envelope entirely. Matches
 # variants like "Used_sources: [1, 3]" / "used sources [2]" at end of text.
+# The navigate prompt's context labels entities as "[<course> — Course
+# information]"; small models occasionally echo the label into prose. The
+# suffix is presentation, never content — strip it defensively.
+_HEADER_ECHO_RE = re.compile(r"\s*[—-]\s*Course information\b")
+
 _TRAILING_USED_SOURCES_RE = re.compile(
     r"\s*used[_ ]?sources\s*:?\s*\[(?P<indices>[^\]]*)\]\s*\.?\s*$",
     re.IGNORECASE,
@@ -116,6 +121,8 @@ def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[i
     student may actually see.
     """
     answer, used_indices = _extract_answer(raw, num_sources)
+    if answer:
+        answer = _HEADER_ECHO_RE.sub("", answer)
     answer = _sanitize_and_suppress(answer, used_indices)
     return answer, used_indices
 
@@ -313,6 +320,7 @@ class GlobalSearchPipeline(SubPipeline):
         intent: SearchIntent | None = None,
         access_context: AccessContext | None = None,
         entity_candidates: list[EntityCandidateDTO] | None = None,
+        course_ids: list[int] | None = None,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
@@ -336,12 +344,17 @@ class GlobalSearchPipeline(SubPipeline):
         logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
         if intent == SearchIntent.SKIP_AI:
             sources = self.retriever.search(
-                query=query, limit=limit, access_context=access_context
+                query=query,
+                limit=limit,
+                course_ids=course_ids,
+                access_context=access_context,
             )
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
         entity_sources = self._render_entity_sources(entity_candidates)
-        sources = self._retrieve_sources(query, limit, access_context, entity_sources)
+        sources = self._retrieve_sources(
+            query, limit, access_context, entity_sources, course_ids
+        )
         if not sources:
             logger.info("[global-search] outcome=no_sources query=%r", query[:120])
             return GlobalSearchResponseDTO(answer=None, sources=[])
@@ -442,6 +455,7 @@ class GlobalSearchPipeline(SubPipeline):
         limit: int,
         access_context: AccessContext | None = None,
         entity_sources: list[EntitySourceDTO] | None = None,
+        course_ids: list[int] | None = None,
     ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
         """Candidate retrieval with the instruct query embedding.
 
@@ -456,6 +470,7 @@ class GlobalSearchPipeline(SubPipeline):
             query=query,
             limit=limit,
             alpha=0.5,
+            course_ids=course_ids,
             auto_cut=True,
             access_context=access_context,
             entity_sources=entity_sources,
@@ -468,6 +483,7 @@ class GlobalSearchPipeline(SubPipeline):
                 query=query,
                 limit=limit,
                 alpha=0.1,
+                course_ids=course_ids,
                 auto_cut=True,
                 access_context=access_context,
                 entity_sources=entity_sources,

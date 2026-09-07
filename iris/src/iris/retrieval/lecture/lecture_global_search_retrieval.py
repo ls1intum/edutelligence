@@ -83,7 +83,7 @@ _RERANK_MAX_CANDIDATES = 60
 # Entity candidates (pre-fetched by Artemis, rendered as cards) always enter
 # the rerank slice: their pre-rerank scores are meaningless, so they cannot
 # compete for slice slots on fused ordering.
-_MAX_ENTITY_CANDIDATES = 15
+_MAX_ENTITY_CANDIDATES = 25
 # Post-floor representation guarantee: the best above-floor hits of each kind
 # keep a context slot even when the other kind sweeps the top-K. Entity cards
 # are 1-2 lines (cheap context) and entity titles are ambiguous across types

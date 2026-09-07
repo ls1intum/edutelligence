@@ -6,6 +6,9 @@ UI leak, dropped JSON envelopes, LaTeX-backslash JSON breakage, ungrounded
 and refusal answers.
 """
 
+import json
+
+from iris.domain.search.global_search_dto import GlobalSearchRequestDTO
 from iris.pipeline.global_search_pipeline import parse_answer_response
 
 
@@ -134,3 +137,27 @@ def test_ungrounded_short_answer_is_suppressed():
     answer, used = parse_answer_response('{"answer": "Yes.", "used_sources": []}', 5)
     assert answer is None
     assert used == set()
+
+
+def test_leaked_context_header_suffix_is_stripped():
+    raw = json.dumps(
+        {
+            "answer": "Please see **Test course — Course information** for the channel.",
+            "used_sources": [1],
+        }
+    )
+    answer, _ = parse_answer_response(raw, 2)
+    assert answer == "Please see **Test course** for the channel."
+
+
+def test_course_ids_parse_on_the_ask_request():
+    dto = GlobalSearchRequestDTO(
+        query="q",
+        settings={
+            "authenticationToken": "t",
+            "artemisBaseUrl": "http://a",
+            "variant": "default",
+        },
+        courseIds=[14],
+    )
+    assert dto.course_ids == [14]
