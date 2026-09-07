@@ -24,6 +24,10 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 )
 from iris.domain.search.global_search_dto import GlobalSearchRequestDTO
 from iris.domain.search.search_intent_dto import SearchIntent
+from iris.domain.status.global_search_status_update_dto import (
+    GlobalSearchStatusUpdateDTO,
+)
+from iris.domain.status.run_state_dto import RunStateEnum
 from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_configuration import LlmConfigurationError
@@ -52,6 +56,7 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
 )
 from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.database import VectorDatabase
+from iris.web.status.partial_result_sender import PartialResultSender
 from iris.web.status.status_update import (
     AutonomousTutorCallback,
     ChatRunCallback,
@@ -383,12 +388,29 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
 
         callback.update()
         pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
-        result = pipeline(
-            query=dto.query,
-            limit=dto.limit,
-            intent=intent,
-            access_context=dto.access_context,
-        )
+        sender = None
+        if getattr(dto.settings, "stream_response", False):
+            sender = PartialResultSender(
+                callback.url,
+                dto.settings.authentication_token,
+                status_dto_factory=lambda text, seq: GlobalSearchStatusUpdateDTO(
+                    run_state=RunStateEnum.RUNNING,
+                    partial_result=text,
+                    partial_seq=seq,
+                ),
+            )
+            sender.start()
+        try:
+            result = pipeline(
+                query=dto.query,
+                limit=dto.limit,
+                intent=intent,
+                access_context=dto.access_context,
+                stream_handler=sender.on_delta if sender else None,
+            )
+        finally:
+            if sender is not None:
+                sender.stop()
         total_ms = (time.perf_counter() - started) * 1000
         if result.answer:
             logger.info(

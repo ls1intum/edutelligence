@@ -69,6 +69,41 @@ def _location_label(source: LectureSearchResultDTO) -> str:
 
 _CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
 
+# Literal the model outputs INSTEAD of an answer when the sources cannot answer
+# the question (plain-text contract; measured 8/8 discipline on nano).
+_NO_ANSWER_SENTINEL = "!none!"
+
+
+class _SentinelGateStreamHandler:
+    """Buffer streamed deltas until the output can no longer be the !none!
+    sentinel, so a no-answer run never flashes text at the student. Same
+    pattern as the chat guide's ok-sentinel gate. ``None`` deltas (provider
+    retry) reset the stream downstream as well once streaming started."""
+
+    def __init__(self, downstream):
+        self._downstream = downstream
+        self._buffer = ""
+        self._streaming = False
+
+    def __call__(self, delta):
+        if delta is None:
+            self._buffer = ""
+            if self._streaming:
+                self._downstream(None)
+            return
+        if self._streaming:
+            self._downstream(delta)
+            return
+        self._buffer += delta
+        stripped = self._buffer.strip()
+        if stripped.startswith(_NO_ANSWER_SENTINEL):
+            return  # it IS the sentinel — never stream it
+        if _NO_ANSWER_SENTINEL.startswith(stripped):
+            return  # could still become the sentinel — keep holding
+        self._downstream(self._buffer)
+        self._buffer = ""
+        self._streaming = True
+
 
 def sanitize_citation_markers(
     answer: str | None, num_sources: int
@@ -153,6 +188,9 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     trailing "Used_sources: [..]" line (recovering attribution), raw text
     with all sources as the last resort."""
     cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+    # Plain-text contract: the sentinel is the honest "cannot answer" state.
+    if cleaned.rstrip(".").strip().casefold() == _NO_ANSWER_SENTINEL:
+        return None, set()
     parsed = _try_parse_json(cleaned)
     if parsed is None:
         # Salvage: the JSON envelope may be embedded in surrounding prose.
@@ -196,11 +234,16 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
         )
         return answer, used_indices
 
-    logger.warning(
-        "[global-search] outcome=parse_failed raw_len=%d raw=%r — "
-        "returning raw text as answer with all sources",
+    # Plain-text answer with inline markers: the markers ARE the attribution
+    # (the caller unions them in); attaching all sources here would overrule
+    # them with the whole pool.
+    if _CITATION_MARKER_RE.search(cleaned):
+        return cleaned or None, set()
+
+    logger.info(
+        "[global-search] outcome=plain_text_no_markers raw_len=%d — "
+        "returning text with all sources attached",
         len(raw),
-        raw[:300],
     )
     return cleaned or None, set(range(num_sources))
 
@@ -287,9 +330,10 @@ class GlobalSearchPipeline(SubPipeline):
             embedding_model,
         )
 
-        answer_completion_args = CompletionArguments(
-            response_format="JSON", max_tokens=600
-        )
+        # Plain-text output (markers carry the attribution, !none! carries the
+        # no-answer state) — a JSON envelope would make streamed partials
+        # unrenderable fragments.
+        answer_completion_args = CompletionArguments(max_tokens=600)
         self.answer_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=answer_model),
             completion_args=answer_completion_args,
@@ -323,6 +367,7 @@ class GlobalSearchPipeline(SubPipeline):
         limit: int = 5,
         intent: SearchIntent | None = None,
         access_context: AccessContext | None = None,
+        stream_handler=None,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
@@ -359,7 +404,7 @@ class GlobalSearchPipeline(SubPipeline):
             )
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
-        raw = self._generate_answer(query, grounded_sources)
+        raw = self._generate_answer(query, grounded_sources, stream_handler)
         answer, used_indices = parse_answer_response(raw, len(grounded_sources))
         used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
         # Markers referenced the context numbering; the response carries only
@@ -424,18 +469,34 @@ class GlobalSearchPipeline(SubPipeline):
         return sources
 
     def _generate_answer(
-        self, query: str, grounded_sources: list[LectureSearchResultDTO]
+        self,
+        query: str,
+        grounded_sources: list[LectureSearchResultDTO],
+        stream_handler=None,
     ) -> str:
-        """Invoke the answer LLM on the numbered, metadata-tagged context."""
+        """Invoke the answer LLM on the numbered, metadata-tagged context.
+
+        With a ``stream_handler``, deltas stream through the sentinel gate so
+        partial answers reach the client while the model generates; markers in
+        partials stream raw and the client renders them progressively. The
+        terminal update still carries the sanitized, renumbered answer.
+        """
         context = "\n\n".join(
             f"[{i + 1}] [{s.course.name} — {s.lecture.name}, "
             f"{_location_label(s)}]\n{s.snippet}"
             for i, s in enumerate(grounded_sources)
         )
         t_answer = time.perf_counter()
-        raw = (self.answer_prompt | self.answer_pipeline).invoke(
-            {"context": context, "query": query}
-        )
+        if stream_handler is not None:
+            self.answer_llm.completion_args.stream_handler = _SentinelGateStreamHandler(
+                stream_handler
+            )
+        try:
+            raw = (self.answer_prompt | self.answer_pipeline).invoke(
+                {"context": context, "query": query}
+            )
+        finally:
+            self.answer_llm.completion_args.stream_handler = None
         # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
         # exhausting max_tokens on reasoning and returning an empty message
         # (finish_reason=length) — the call returns WITHOUT an exception.
