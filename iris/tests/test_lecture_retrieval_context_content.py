@@ -118,7 +118,6 @@ def test_fetch_context_content_suppresses_unreleased_unit():
 
 
 def test_current_view_content_carries_inline_citation_ids():
-    """Current-view content must remain citable without the retrieval tool."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     page_chunk = _make_page_chunk(3, "Page 3 content")
@@ -153,8 +152,6 @@ def test_current_view_content_carries_inline_citation_ids():
         "lecture unit Test Unit (lecture unit ID: 1). "
         "The transcript at this point:\n---\nTranscript 45-55\nCitation id: [cite:2]\n---",
     ]
-    # Both handles resolve to full markers, so the viewed content stays citable
-    # even though the lecture retrieval tool never ran.
     rendered = state.citation_registry.render("[cite:1]|[cite:2]", final=True)
     slide_marker, transcript_marker = rendered.split("|")
     assert slide_marker.startswith(f"[cite:L:{page_chunk.lecture_unit_id}:3:")
@@ -216,8 +213,6 @@ def test_position_omitted_when_material_not_ingested():
 
     blocks = pipeline._build_current_view(state)
 
-    # Without ingested content there is no position to describe and nothing to
-    # register for citations.
     assert blocks == []
     assert not state.citation_registry.has_sources
 
@@ -257,7 +252,6 @@ def test_only_ingested_positions_are_described():
 
 
 def test_each_viewed_position_remains_separately_described():
-    """Two viewed pages remain separate prompt blocks with distinct ids."""
     pipeline = ChatPipeline.__new__(ChatPipeline)
 
     retriever = MagicMock()

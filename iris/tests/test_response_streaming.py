@@ -1,3 +1,4 @@
+import contextvars
 import threading
 import time
 from types import SimpleNamespace
@@ -614,15 +615,12 @@ def test_partial_result_sender_clears_draft_on_reset_and_uses_run_state():
 
 
 def test_partials_are_posted_through_the_transform():
-    """Citation handles must be expanded before a draft reaches the client."""
     posts = []
 
     def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
         posts.append(json)
         return _Response(200)
 
-    # Stands in for CitationRegistry.render: hides the handle until the
-    # enrichment behind it is "ready", then expands it in place.
     ready = threading.Event()
 
     def transform(text, final=False):  # pylint: disable=unused-argument
@@ -639,9 +637,6 @@ def test_partials_are_posted_through_the_transform():
         sender.on_delta("Gradients flow.[cite:1]")
         _wait_until(lambda: len(posts) == 1)
 
-        # The enrichment finishing changes the rendered text without any new
-        # delta arriving, so the sender must re-run the transform each tick and
-        # de-duplicate on its output rather than on the raw buffer.
         ready.set()
         _wait_until(lambda: len(posts) == 2)
 
@@ -759,9 +754,6 @@ def test_reset_during_in_flight_post_still_clears_draft():
 
 
 def test_reset_during_transform_suppresses_the_superseded_draft():
-    # The transform runs outside the lock, so on_delta(None) can reset the
-    # stream while a draft is being rendered. That rendered text belongs to the
-    # old epoch and must not reach the client as a retracted flash.
     posts = []
     in_transform = threading.Event()
     release_transform = threading.Event()
@@ -786,7 +778,6 @@ def test_reset_during_transform_suppresses_the_superseded_draft():
         sender.start()
         sender.on_delta("Hello")
         assert in_transform.wait(1.0)
-        # Reset while "Hello" is still inside the transform.
         sender.on_delta(None)
         release_transform.set()
         time.sleep(0.1)
@@ -796,9 +787,6 @@ def test_reset_during_transform_suppresses_the_superseded_draft():
 
 
 def test_appended_delta_during_transform_still_posts_the_snapshot():
-    # Counterpart to the test above: an append is NOT staleness. A partial that
-    # raced with an incoming delta must still be posted, otherwise a busy stream
-    # would starve the client of partials entirely.
     posts = []
     in_transform = threading.Event()
     release_transform = threading.Event()
@@ -823,7 +811,6 @@ def test_appended_delta_during_transform_still_posts_the_snapshot():
         sender.start()
         sender.on_delta("Hello")
         assert in_transform.wait(1.0)
-        # More of the answer arrives while "Hello" is being transformed.
         sender.on_delta(" world")
         release_transform.set()
         _wait_until(lambda: any(p["partialResult"] == "Hello world" for p in posts))
@@ -832,6 +819,67 @@ def test_appended_delta_during_transform_still_posts_the_snapshot():
     partial_results = [post["partialResult"] for post in posts]
     assert "Hello" in partial_results
     assert "Hello world" in partial_results
+
+
+def test_transform_inherits_the_context_from_sender_creation():
+    posts = []
+    request_id = contextvars.ContextVar("test_request_id", default="missing")
+    request_id.set("request-1")
+    seen_contexts = []
+
+    def transform(text):
+        seen_contexts.append(request_id.get())
+        return text
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=transform,
+        )
+        request_id.set("changed-after-creation")
+        sender.start()
+        sender.on_delta("Hello")
+        _wait_until(lambda: len(posts) == 1)
+        sender.stop()
+
+    assert seen_contexts and set(seen_contexts) == {"request-1"}
+
+
+def test_transform_failure_is_retried_without_posting_raw_text():
+    posts = []
+    attempts = 0
+
+    def transform(text):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("temporary transform failure")
+        return text.replace("[cite:1]", "[cite:L:42:7:::K:S]")
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=transform,
+        )
+        sender.start()
+        sender.on_delta("Text.[cite:1]")
+        _wait_until(lambda: len(posts) == 1)
+        sender.stop()
+
+    assert attempts >= 2
+    assert [post["partialResult"] for post in posts] == ["Text.[cite:L:42:7:::K:S]"]
 
 
 def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
@@ -888,8 +936,6 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     title_pipeline.tokens = None
     pipeline.session_title_pipeline = title_pipeline
 
-    # No enricher: the citation registry still hands out and expands handles,
-    # it just leaves keyword/summary empty instead of calling a model.
     pipeline.citation_enricher = None
 
     suggestion_pipeline = MagicMock(return_value=["suggestion 1"])
@@ -1006,8 +1052,6 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
     assert created_args[0].stream_handler == sender.on_delta
-    # Partials go through the citation registry so handles the model writes are
-    # expanded into markers before the draft reaches the client.
     assert sender.transform is not None
     assert events.index("sender.start") < events.index("sender.stop")
     assert events.index("sender.stop") < events.index("callback.finish")

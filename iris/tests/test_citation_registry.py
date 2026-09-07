@@ -1,11 +1,4 @@
-"""Tests for inline citations.
-
-The answer model writes short handles (``[cite:3]``) while it streams; the
-registry expands them into the markers the client turns into bubbles. What
-matters here is that the client never sees a broken or bogus marker, and that a
-handle whose enrichment is still running simply appears a moment later instead
-of holding the answer back.
-"""
+"""Tests for inline citation registration and enrichment."""
 
 # pylint: skip-file
 
@@ -27,8 +20,6 @@ from iris.pipeline.shared.citation_registry import (
 
 
 class _StubEnricher:
-    """Enricher whose calls can be released one at a time."""
-
     def __init__(self, gate: threading.Event | None = None):
         self.gate = gate
         self.summary_calls: list[str] = []
@@ -84,7 +75,6 @@ def test_faq_marker_leaves_page_and_timestamps_empty():
 
 
 def test_invented_handle_is_dropped():
-    """A handle with no source behind it can never become a bubble."""
     registry = CitationRegistry(_StubEnricher())
     _register_lecture(registry)
 
@@ -98,7 +88,6 @@ def test_pending_enrichment_is_hidden_in_partials_and_appears_later():
     registry = CitationRegistry(enricher)
     handle = _register_lecture(registry)
 
-    # First partial: enrichment has just been kicked off and cannot be ready.
     assert registry.render(f"Gradients flow.{handle}") == "Gradients flow."
 
     gate.set()
@@ -142,13 +131,7 @@ def test_final_render_waits_for_enrichment():
     registry.close()
 
 
-def test_close_waits_for_a_running_worker_and_stops_its_second_call():
-    """A worker already inside a model call cannot be cancelled, only awaited.
-
-    ``close()`` runs in the pipeline's ``finally`` block. A worker that passed
-    the closed check just before that must not keep calling the model on its
-    own afterwards.
-    """
+def test_close_returns_while_a_running_worker_stops_before_its_second_call():
     entered_keyword = threading.Event()
     release_keyword = threading.Event()
     summary_calls: list[str] = []
@@ -166,35 +149,18 @@ def test_close_waits_for_a_running_worker_and_stops_its_second_call():
     registry = CitationRegistry(_BlockingKeywordEnricher())
     handle = _register_lecture(registry)
 
-    # Kick enrichment off and wait until the worker is inside its first call.
     registry.render(f"Gradients flow.{handle}")
     assert entered_keyword.wait(timeout=5)
 
-    close_returned = threading.Event()
+    started = time.monotonic()
+    registry.close()
+    elapsed = time.monotonic() - started
 
-    def run_close() -> None:
-        registry.close()
-        close_returned.set()
-
-    closer = threading.Thread(target=run_close)
-    closer.start()
-
-    # Hold the keyword call until close() has actually flipped the flag, so the
-    # worker is guaranteed to be mid-flight rather than merely scheduled.
-    deadline = time.monotonic() + 5
-    while not registry._is_closed() and time.monotonic() < deadline:
-        time.sleep(0.001)
     assert registry._is_closed()
-
-    # The worker is still parked inside its model call, so close() cannot have
-    # come back yet -- this is what "waits for in-flight workers" means.
-    assert not close_returned.is_set()
+    assert elapsed < 1
 
     release_keyword.set()
-    assert close_returned.wait(timeout=5)
-    closer.join(timeout=1)
-
-    # And the worker skipped the second call instead of issuing it.
+    registry._enrichment_futures[1].result(timeout=5)
     assert summary_calls == []
 
 
@@ -202,14 +168,60 @@ def test_partially_typed_handle_is_hidden_until_complete():
     registry = CitationRegistry(_StubEnricher())
     _register_lecture(registry)
 
-    # Every prefix the model can be in the middle of typing.
     for fragment in ("[", "[c", "[ci", "[cit", "[cite", "[cite:", "[cite:1"):
         assert registry.render(f"Gradients flow.{fragment}") == "Gradients flow."
     registry.close()
 
 
+def test_final_render_preserves_ambiguous_trailing_handle_prefixes():
+    registry = CitationRegistry(_StubEnricher())
+    _register_lecture(registry)
+
+    for fragment in ("[", "[c", "[ci", "[cit"):
+        text = f"Gradients flow.{fragment}"
+        assert registry.render(text, final=True) == text
+    registry.close()
+
+
+def test_final_render_drops_unambiguous_trailing_handle_fragments():
+    registry = CitationRegistry(_StubEnricher())
+    _register_lecture(registry)
+
+    for fragment in ("[cite", "[cite:", "[cite:1", "[cite:123"):
+        assert registry.render(f"Gradients flow.{fragment}", final=True) == (
+            "Gradients flow."
+        )
+    registry.close()
+
+
+def test_final_render_gives_up_on_a_stuck_enrichment():
+    release = threading.Event()
+
+    class _StuckEnricher:
+        def generate_keyword(self, content, language_instruction):
+            release.wait(timeout=5)
+            return "Topic1", []
+
+        def generate_summary(self, content, language_instruction):
+            return "Summary", []
+
+    registry = CitationRegistry(_StuckEnricher())
+    handle = _register_lecture(registry)
+
+    with patch(
+        "iris.pipeline.shared.citation_registry._FINAL_CITATION_WAIT_SECONDS", 0.05
+    ):
+        started = time.monotonic()
+        rendered = registry.render(f"Gradients flow.{handle}", final=True)
+        elapsed = time.monotonic() - started
+
+    assert rendered == "Gradients flow.[cite:L:42:7::::]"
+    assert elapsed < 2
+    release.set()
+    registry.close()
+
+
 def test_final_render_keeps_unrelated_brackets():
-    """Only citation-shaped text is touched; ordinary brackets survive."""
     registry = CitationRegistry(_StubEnricher())
 
     assert registry.render("Cost is 5 [USD]", final=True) == "Cost is 5 [USD]"
@@ -218,7 +230,6 @@ def test_final_render_keeps_unrelated_brackets():
 
 
 def test_same_source_registered_twice_shares_one_handle():
-    """The viewed slide and the same chunk from RAG must not become two bubbles."""
     registry = CitationRegistry(_StubEnricher())
 
     first = registry.register(CITE_TYPE_LECTURE, 42, "Content", page=7, dedup_key="u-1")
@@ -231,7 +242,6 @@ def test_same_source_registered_twice_shares_one_handle():
 
 
 def test_registry_without_enricher_renders_empty_fields():
-    """Pipelines that do not cite still render safely."""
     registry = CitationRegistry()
     handle = _register_lecture(registry)
 
@@ -240,15 +250,11 @@ def test_registry_without_enricher_renders_empty_fields():
 
 
 class _FakeChatModel(GenericFakeChatModel):
-    """Real Runnable so ``prompt | llm | StrOutputParser()`` works end to end."""
-
     tokens: TokenUsageDTO | None = None
 
     def __init__(self, request_handler=None, completion_args=None, **kwargs):
         del request_handler, completion_args
         super().__init__(messages=cycle(["  Backpropagation  "]), **kwargs)
-        # IrisLangchainChatModel records the usage of its last call here as a
-        # single DTO -- not a list, and None when nothing was reported.
         self.tokens = TokenUsageDTO(
             model_info="nano", numInputTokens=10, numOutputTokens=2
         )
@@ -263,7 +269,6 @@ def _make_enricher() -> CitationEnricher:
 
 
 def test_enrichment_reaches_the_rendered_marker_through_the_real_enricher():
-    """End-to-end over the real enricher: the marker must not stay empty."""
     enricher = _make_enricher()
     registry = CitationRegistry(enricher)
     handle = _register_lecture(registry)
@@ -281,4 +286,45 @@ def test_enrichment_reaches_the_rendered_marker_through_the_real_enricher():
         token.pipeline == PipelineEnum.IRIS_CITATION_PIPELINE
         for token in registry.tokens
     )
+    registry.close()
+
+
+def test_tokens_from_a_call_finishing_after_close_can_be_drained():
+    release = threading.Event()
+    token = TokenUsageDTO(model_info="nano", numInputTokens=3, numOutputTokens=1)
+
+    class _SlowEnricher:
+        def generate_keyword(self, content, language_instruction):
+            release.wait(timeout=5)
+            return "Topic", [token]
+
+        def generate_summary(self, content, language_instruction):
+            return "Summary", []
+
+    registry = CitationRegistry(_SlowEnricher())
+    handle = _register_lecture(registry)
+    with patch(
+        "iris.pipeline.shared.citation_registry._FINAL_CITATION_WAIT_SECONDS", 0.05
+    ):
+        registry.render(handle, final=True)
+
+    assert registry.drain_tokens() == []
+    release.set()
+    registry.close()
+    registry._enrichment_futures[1].result(timeout=5)
+    assert registry.drain_tokens() == [token]
+    assert registry.drain_tokens() == []
+
+
+def test_thread_start_failure_renders_citation_without_enrichment():
+    registry = CitationRegistry(_StubEnricher())
+    handle = _register_lecture(registry)
+
+    with patch(
+        "iris.pipeline.shared.citation_registry.threading.Thread.start",
+        side_effect=RuntimeError("thread limit reached"),
+    ):
+        rendered = registry.render(handle, final=True)
+
+    assert rendered == "[cite:L:42:7::::]"
     registry.close()

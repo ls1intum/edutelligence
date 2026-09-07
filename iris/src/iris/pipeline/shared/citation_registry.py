@@ -20,21 +20,15 @@ from iris.llm.llm_configuration import resolve_model
 
 logger = get_logger(__name__)
 
-# The handle the answer model writes inline, e.g. ``[cite:3]``.
 CITATION_HANDLE_PATTERN = re.compile(r"\[cite:(\d+)\]")
-
-# Hide a trailing partial handle like ``[cit`` in streamed drafts.
 TRAILING_HANDLE_FRAGMENT_PATTERN = re.compile(r"\[(?:c(?:i(?:t(?:e(?::\d*)?)?)?)?)?$")
+TRAILING_FINAL_HANDLE_FRAGMENT_PATTERN = re.compile(r"\[cite(?::\d*)?$")
 
 CITE_TYPE_LECTURE = "L"
 CITE_TYPE_FAQ = "F"
 
-# Config key under ``llm_configuration``; renaming it breaks deployed setups.
 _PIPELINE_ID = "citation_pipeline"
-
-# How long ``close()`` waits for workers whose model call is already in flight.
-# Bounded so a hanging completion cannot pin the request thread.
-_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+_FINAL_CITATION_WAIT_SECONDS = 5.0
 
 
 def _format_part(value) -> str:
@@ -93,7 +87,6 @@ class CitationEnricher:
         return self._invoke(prompt, {"Paragraph": content})
 
     def _invoke(self, prompt, variables) -> tuple[str, list[TokenUsageDTO]]:
-        # ``IrisLangchainChatModel`` stores token usage on the instance.
         llm = IrisLangchainChatModel(
             request_handler=self._request_handler,
             completion_args=self._completion_args,
@@ -147,8 +140,6 @@ class CitationRegistry:
         with self._lock:
             return bool(self._sources)
 
-    # -- registration ----------------------------------------------------
-
     def register(
         self,
         cite_type: str,
@@ -184,8 +175,6 @@ class CitationRegistry:
             self._sources[number] = source
         return f"[cite:{number}]"
 
-    # -- rendering -------------------------------------------------------
-
     def render(self, text: str, *, final: bool = False) -> str:
         """Expand the handles in ``text`` into full citation markers."""
         if not text:
@@ -197,9 +186,12 @@ class CitationRegistry:
         rendered = CITATION_HANDLE_PATTERN.sub(
             lambda match: self._render_handle(int(match.group(1)), final), text
         )
-        if not final:
-            rendered = TRAILING_HANDLE_FRAGMENT_PATTERN.sub("", rendered)
-        return rendered
+        fragment_pattern = (
+            TRAILING_FINAL_HANDLE_FRAGMENT_PATTERN
+            if final
+            else TRAILING_HANDLE_FRAGMENT_PATTERN
+        )
+        return fragment_pattern.sub("", rendered)
 
     def _await_enrichment(self, text: str) -> None:
         with self._lock:
@@ -208,8 +200,16 @@ class CitationRegistry:
                 for number in _handle_numbers(text)
                 if number in self._enrichment_futures
             ]
-        if pending:
-            wait(pending)
+        if not pending:
+            return
+        _, still_running = wait(pending, timeout=_FINAL_CITATION_WAIT_SECONDS)
+        if still_running:
+            logger.warning(
+                "Citation enrichment unfinished after %ss; rendering %d citation(s) "
+                "without keyword and summary",
+                _FINAL_CITATION_WAIT_SECONDS,
+                len(still_running),
+            )
 
     def _render_handle(self, number: int, final: bool) -> str:
         with self._lock:
@@ -245,18 +245,16 @@ class CitationRegistry:
                 )
 
     def _run_enrichment(self, content: str) -> tuple[str, str]:
-        if self._is_closed():
+        enricher = self._enricher
+        if enricher is None or self._is_closed():
             return "", ""
-        keyword, keyword_tokens = self._enricher.generate_keyword(
+        keyword, keyword_tokens = enricher.generate_keyword(
             content, self._language_instruction
         )
         self._record_tokens(keyword_tokens)
-        # ``close()`` can land while the call above is in flight. Bail out here
-        # instead of spending a second completion whose result is discarded —
-        # this also halves how long ``close()`` has to wait for us.
         if self._is_closed():
             return "", ""
-        summary, summary_tokens = self._enricher.generate_summary(
+        summary, summary_tokens = enricher.generate_summary(
             content, self._language_instruction
         )
         self._record_tokens(summary_tokens)
@@ -270,37 +268,21 @@ class CitationRegistry:
         with self._lock:
             self.tokens.extend(tokens)
 
-    def close(self) -> None:
-        """Stop enrichment for this run and wait for in-flight workers.
+    def drain_tokens(self) -> list[TokenUsageDTO]:
+        """Return newly recorded token usage exactly once."""
+        with self._lock:
+            tokens = self.tokens.copy()
+            self.tokens.clear()
+        return tokens
 
-        Setting the flag alone only stops workers that have not reached their
-        first model call yet. A running completion cannot be cancelled --
-        ``Future.cancel()`` is useless once the worker started -- so we also
-        wait for the ones already past that check, otherwise they would keep
-        calling the model after the pipeline is done with them. The wait is
-        bounded: a hanging completion must not pin the request thread.
-        Idempotent.
-        """
+    def close(self) -> None:
+        """Stop starting enrichment work for this run."""
         with self._lock:
             self._closed = True
-            pending = [
-                future
-                for future in self._enrichment_futures.values()
-                if not future.done()
-            ]
-        if not pending:
-            return
-        _, still_running = wait(pending, timeout=_SHUTDOWN_TIMEOUT_SECONDS)
-        if still_running:
-            logger.warning(
-                "Citation enrichment still running %ss after close (%d worker(s))",
-                _SHUTDOWN_TIMEOUT_SECONDS,
-                len(still_running),
-            )
 
 
 def _run_in_thread(fn, *args) -> Future:
-    """Start ``fn`` on a daemon thread."""
+    """Run enrichment in a dedicated daemon thread."""
     future: Future = Future()
     context = contextvars.copy_context()
 
@@ -309,10 +291,19 @@ def _run_in_thread(fn, *args) -> Future:
             return
         try:
             future.set_result(context.run(fn, *args))
-        except BaseException as error:  # pylint: disable=broad-except
+        except Exception as error:  # pylint: disable=broad-except
+            logger.warning("Citation enrichment failed, using empty fields: %s", error)
+            future.set_result(("", ""))
+        except BaseException as error:  # pragma: no cover - thread boundary
             future.set_exception(error)
 
-    threading.Thread(target=run, daemon=True, name="citation-enrichment").start()
+    try:
+        threading.Thread(target=run, daemon=True, name="citation-enrichment").start()
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning(
+            "Could not start citation enrichment, using empty fields: %s", error
+        )
+        future.set_result(("", ""))
     return future
 
 
@@ -325,6 +316,5 @@ def _future_value(future: Future) -> tuple[str, str]:
         if not result:
             return "", ""
         return result
-    except Exception as error:
-        logger.warning("Citation enrichment failed, using empty fields: %s", error)
+    except Exception:
         return "", ""

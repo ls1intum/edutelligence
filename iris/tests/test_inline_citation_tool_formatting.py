@@ -1,9 +1,4 @@
-"""The retrieval tools must show the model a handle for what it can cite.
-
-These pin the contract, not the layout: every citable paragraph carries a
-handle, the handles are distinct per paragraph, and content that is not citable
-(lecture unit segments) carries none.
-"""
+"""Tests for citation handles in retrieval tool output."""
 
 # pylint: skip-file
 
@@ -63,8 +58,6 @@ def test_lecture_tool_shows_a_handle_for_every_citable_paragraph():
 
     result = tool()
 
-    # The slide chunk and the transcript segment are citable and get their own
-    # handle each; the segment summary is not citable and gets none.
     assert "Page: 3, Citation id: [cite:1]" in result
     assert "Page: 3, Citation id: [cite:2]" in result
     assert result.count("Citation id:") == 2
@@ -72,7 +65,6 @@ def test_lecture_tool_shows_a_handle_for_every_citable_paragraph():
 
 
 def test_lecture_tool_omits_handles_without_a_registry():
-    """Pipelines that do not cite must see the untouched tool output."""
     lecture_content = SimpleNamespace(
         lecture_unit_page_chunks=[
             SimpleNamespace(
@@ -113,7 +105,6 @@ def test_faq_formatting_appends_the_citation_handle():
         citation_registry=CitationRegistry(),
     )
 
-    # The handle sits outside the FAQ's own brackets so they do not nest.
     assert result == (
         "[FAQ ID: 4, FAQ Question: When is the exam?, FAQ Answer: On March 3.]"
         " Citation id: [cite:1]"

@@ -755,6 +755,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             with timed_span(pipeline_name, "post_agent_hook", start_time):
                 self.post_agent_hook(state)
 
+            state.citation_registry.close()
+
             # A session title generated after the final result was sent still
             # needs to reach the client; attach it to the trailing callback.
             deferred_title = (
@@ -766,6 +768,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             # 8. Wait for the memory creation to finish if enabled
             if state.memiris_memory_creation_thread:
                 state.memiris_memory_creation_thread.join()
+
+            for token in state.citation_registry.drain_tokens():
+                self._track_tokens(state, token)
+
+            if state.memiris_memory_creation_thread:
                 state.callback.finish(
                     created_memories=state.memiris_memory_creation_storage,
                     session_title=deferred_title,
@@ -785,7 +792,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 len(state.tools),
             )
         finally:
-            # Release citation workers even if the agent loop failed.
             state.citation_registry.close()
             # Clean up tracing context to prevent memory leaks
             clear_current_context()

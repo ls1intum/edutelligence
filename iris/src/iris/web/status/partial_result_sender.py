@@ -1,5 +1,6 @@
 """Ephemeral partial-result status callback sender."""
 
+import contextvars
 from threading import Event, Lock, Thread
 from typing import Callable, Optional
 
@@ -47,6 +48,7 @@ class PartialResultSender(Thread):
         self.run_id = run_id
         self.interval_seconds = interval_seconds
         self._transform = transform
+        self._context = contextvars.copy_context()
         self._lock = Lock()
         self._stop_event = Event()
         self._accumulated = ""
@@ -88,6 +90,9 @@ class PartialResultSender(Thread):
             )
 
     def run(self) -> None:
+        self._context.run(self._run_loop)
+
+    def _run_loop(self) -> None:
         while not self._stop_event.wait(self.interval_seconds):
             payload_info = self._next_payload()
             if payload_info is None:
@@ -104,21 +109,17 @@ class PartialResultSender(Thread):
             raw = self._accumulated
             epoch = self._epoch
 
-        # Transform outside the lock.
-        text = self._transform(raw) if self._transform is not None else raw
+        try:
+            text = self._transform(raw) if self._transform is not None else raw
+        except Exception as exc:  # pragma: no cover - defensive thread boundary
+            self._handle_failure(None, exc)
+            return None
 
         with self._lock:
             if self._stopped_permanently:
                 return None
 
-            # on_delta(None) reset the stream while we were transforming: what we
-            # just rendered belongs to a superseded epoch, so drop it rather than
-            # flash a retracted draft at the client. Only the epoch is compared,
-            # never ``raw`` itself: during active streaming deltas keep arriving,
-            # and treating an appended delta as staleness would suppress nearly
-            # every partial exactly when partials matter. Posting a slightly
-            # older prefix is what a snapshot sender does -- the next tick
-            # carries the newer text, and partialSeq keeps the order.
+            # Resets invalidate the snapshot; ordinary appended deltas do not.
             if epoch != self._epoch:
                 return None
 

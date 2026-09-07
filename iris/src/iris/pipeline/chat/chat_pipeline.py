@@ -309,10 +309,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
 
-            # Add citations if applicable
             with timed_span("ChatPipeline", "citations", state.start_time):
                 result = state.citation_registry.render(result, final=True)
-                for token in state.citation_registry.tokens:
+                for token in state.citation_registry.drain_tokens():
                     self._track_tokens(state, token)
             state.result = result
             # Snapshot for title generation: the same post-citation, pre-MCQ
