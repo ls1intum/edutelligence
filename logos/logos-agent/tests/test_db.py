@@ -429,6 +429,11 @@ class TestClaimingOnOneBranch:
             self.pending: dict[int, str] = {}
             self.held_rows: list[int] = []
             self.held_advisory: list[asyncio.Lock] = []
+            # The branches this transaction took the advisory lock for. The
+            # claim is bound to this set: a branch locked here is a branch the
+            # peek named, so a row claiming it is safe to admit beside nobody
+            # else; a branch not in it must not be admitted.
+            self.locked_branches: set[str] = set()
             self.done = False
 
         async def __aenter__(self):
@@ -503,6 +508,7 @@ class TestClaimingOnOneBranch:
             if sql.startswith("SELECT pg_advisory_xact_lock"):
                 if "logos-agent-branch" in sql:
                     lock = self.model.branch_lock(params["branch"])
+                    self.locked_branches.add(params["branch"])
                 else:
                     lock = self.model.admission_lock
                 await lock.acquire()
@@ -514,6 +520,16 @@ class TestClaimingOnOneBranch:
             if sql.startswith("SELECT s.id, s.branch_name FROM agent_sessions"):
                 rows = self._candidates(params.get("include_triggered", True))
                 if "FOR UPDATE" in sql:
+                    # The claim is bound to the branch set this transaction
+                    # locked from the peek: a row that became claimable after
+                    # the peek and names a branch nobody locked is refused
+                    # here and left to the next pass, not admitted beside a
+                    # concurrent claimant on that branch.
+                    rows = [
+                        row
+                        for row in rows
+                        if row.get("branch_name") is None or row.get("branch_name") in self.locked_branches
+                    ]
                     rows = [row for row in rows if self._lock_row(row)]
                 return TestClaimingOnOneBranch._Result(
                     [{"id": row["id"], "branch_name": row.get("branch_name")} for row in rows]
@@ -660,6 +676,118 @@ class TestClaimingOnOneBranch:
         on_branch = [session_id for session_id in (1, 2) if model.sessions[session_id]["status"] == "starting"]
         assert len(on_branch) == 1
         taken = [row["id"] for row in first + second]
+        assert len(taken) == len(set(taken))
+
+    @classmethod
+    def _window_model(cls):
+        # feature/x is claimable from the start. feature/y has one queued row
+        # per workspace, each blocked behind an occupying neighbour, so the
+        # batch peek does not see the branch and locks nothing for it. The
+        # blockers finishing between peek and claim is the READ COMMITTED
+        # window: claimable rows on a branch nobody in this pass locked.
+        return cls._Model(
+            [
+                cls._row(
+                    id=1,
+                    workspace_id=1,
+                    branch_name="feature/x",
+                    status="queued",
+                    priority=80,
+                    created_at="2026-09-04T10:00:00",
+                ),
+                cls._row(
+                    id=4,
+                    workspace_id=4,
+                    branch_name="feature/y",
+                    status="queued",
+                    priority=70,
+                    created_at="2026-09-04T10:00:00",
+                ),
+                cls._row(
+                    id=5,
+                    workspace_id=5,
+                    branch_name="feature/y",
+                    status="queued",
+                    priority=70,
+                    created_at="2026-09-04T10:00:00",
+                ),
+                cls._row(
+                    id=6,
+                    workspace_id=4,
+                    branch_name=None,
+                    status="running",
+                    priority=50,
+                    created_at="2026-09-04T09:00:00",
+                ),
+                cls._row(
+                    id=7,
+                    workspace_id=5,
+                    branch_name=None,
+                    status="running",
+                    priority=50,
+                    created_at="2026-09-04T09:00:00",
+                ),
+            ]
+        )
+
+    @classmethod
+    def _patch_with_window(cls, monkeypatch, model):
+        # Fire the window the moment a pass takes its first branch lock —
+        # after its peek named the lock set, before its claim re-checks. The
+        # feature/y blockers commit then, as a concurrent pass would, leaving
+        # claimable rows on a branch this pass never locked.
+        fired = False
+
+        class _WindowedTransaction(cls._Transaction):
+            async def execute(self, sql, params=None):
+                result = await super().execute(sql, params)
+                nonlocal fired
+                statement = " ".join(str(sql).split())
+                if (
+                    not fired
+                    and statement.startswith("SELECT pg_advisory_xact_lock")
+                    and "logos-agent-branch" in statement
+                ):
+                    fired = True
+                    model.sessions[6]["status"] = "finished"
+                    model.sessions[7]["status"] = "finished"
+                return result
+
+        monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: _WindowedTransaction(model)))
+
+    async def test_a_branch_that_becomes_claimable_in_the_window_is_deferred(self, monkeypatch):
+        # The batch peeks, sees only feature/x, and locks it. The moment it
+        # takes that lock, the feature/y blockers finish — claimable rows on a
+        # branch the batch never locked. The claim is bound to the locked set,
+        # so the batch takes feature/x and leaves both feature/y rows queued
+        # for the next pass, instead of admitting a branch it does not hold.
+        model = self._window_model()
+        self._patch_with_window(monkeypatch, model)
+
+        claimed = await db.claim_queued_sessions(10)
+
+        assert {row["id"] for row in claimed} == {1}
+        assert model.sessions[4]["status"] == "queued"
+        assert model.sessions[5]["status"] == "queued"
+
+    async def test_the_window_never_puts_two_sessions_on_a_branch(self, monkeypatch):
+        # A single claim races the batch for a feature/y row the window just
+        # opened. Whatever the interleaving, a branch never ends the pass with
+        # two sessions starting on it.
+        model = self._window_model()
+        self._patch_with_window(monkeypatch, model)
+
+        batch, single = await asyncio.gather(db.claim_queued_sessions(10), db.claim_session(4))
+
+        starting = [row for row in model.sessions.values() if row["status"] == "starting"]
+        per_branch: dict[str, int] = {}
+        for row in starting:
+            branch = row.get("branch_name")
+            if branch is not None:
+                per_branch[branch] = per_branch.get(branch, 0) + 1
+        assert all(count == 1 for count in per_branch.values())
+        # Nothing was claimed twice, whoever won what.
+        taken = [row["id"] for row in batch] + ([single["id"]] if single else [])
         assert len(taken) == len(set(taken))
 
     @classmethod

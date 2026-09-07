@@ -1274,10 +1274,19 @@ async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -
     can each select one. The peek therefore names every branch the pass
     may touch, and those advisory locks are taken — sorted, so two passes
     locking different sets cannot deadlock — before the claim re-checks
-    everything under the row locks. The claim selects *every* candidate,
-    not `limit`: dedup happens before the limit, so a second session of one
-    branch spends no slot the platform would never admit it to, and null
-    branches keep every slot they earn.
+    everything under the row locks.
+
+    The claim is bound to the branch set the peek named: it re-evaluates the
+    predicate on fresh data, and a row that becomes claimable *after* the peek
+    can name a branch this transaction never locked. Letting it through would
+    admit two sessions to one branch, so the claim only takes null branches
+    and the branches it already locked; a branch that appeared in the gap is
+    left to the next pass.
+
+    The claim selects *every* such candidate, not `limit`: dedup happens
+    before the limit, so a second session of one branch spends no slot the
+    platform would never admit it to, and null branches keep every slot they
+    earn.
     """
     if limit <= 0:
         return []
@@ -1313,7 +1322,12 @@ async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -
             .mappings()
             .all()
         )
-        for branch in sorted({c["branch_name"] for c in candidates if c["branch_name"] is not None}):
+        # Every branch the pass may touch, named by the peek and locked before
+        # the claim re-checks. The peek is a snapshot: under READ COMMITTED a
+        # row can become claimable after it runs, so the set locked here is the
+        # set the claim below is allowed to reach.
+        locked_branches = sorted({c["branch_name"] for c in candidates if c["branch_name"] is not None})
+        for branch in locked_branches:
             await db.execute(
                 text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-branch:' || :branch))"),
                 {"branch": branch},
@@ -1324,10 +1338,21 @@ async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -
                     text(
                         "SELECT s.id, s.branch_name FROM agent_sessions s WHERE "
                         + _CLAIMABLE
+                        # Only branches this transaction locked, or none. The
+                        # claim re-evaluates the predicate on fresh data, and a
+                        # row that became claimable after the peek can name a
+                        # branch nobody in this pass locked — admitting it would
+                        # put two sessions on one branch. Such a row is left to
+                        # the next pass, not claimed beside a concurrent claimant.
+                        # The CAST, not a `::` cast: asyncpg mis-parses a
+                        # parameter directly followed by `::`, and the set is
+                        # empty on the common branch-free pass, so the type
+                        # must be given.
+                        + " AND (s.branch_name IS NULL OR s.branch_name = ANY(CAST(:locked_branches AS text[])))"
                         + " ORDER BY s.priority DESC, s.created_at, s.id"
                         + " FOR UPDATE OF s SKIP LOCKED"
                     ),
-                    params,
+                    {**params, "locked_branches": locked_branches},
                 )
             )
             .mappings()
