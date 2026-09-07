@@ -82,11 +82,32 @@
   <details>
     <summary>vLLM settings for the next run</summary>
     <p>Applies to the selected Logos worker before the benchmark and may reload the model. Changed settings remain active afterwards. Empty fields keep the current worker value.</p>
+    @if (pair()?.provider_type === 'logosnode') {
+      <p>{{ pair()!.provider_name }}: {{ limits()?.gpu_count ?? 'unknown' }} GPUs available for this model.
+        Limits include GPU assignments. Model architecture and available memory can impose additional restrictions.</p>
+      <button type="button" (click)="loadLimits()" [disabled]="limitsLoading()">{{ limitsLoading() ? 'Loading limits…' : 'Reload worker limits' }}</button>
+      @if (limitsError()) { <p role="alert" class="settings-error">{{ limitsError() }}</p> }
+    }
+    @for (message of validationErrors(); track message) { <p role="alert" class="settings-error">{{ message }}</p> }
     <button type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">Keep current worker settings</button>
     <div class="settings-grid">
       @for (field of fields; track field.key) {
         <label>{{ field.label }}
-          @if (field.type === 'boolean') {
+          @if (field.key === 'tensor_parallel_size' || field.key === 'pipeline_parallel_size') {
+            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)"
+              [disabled]="limits()?.gpu_count == null || limitsLoading()">
+              <option [ngValue]="''">Keep current ({{ limits()?.current?.[field.key] ?? 'auto' }})</option>
+              @if (settings().serving_overrides[field.key] != null && !parallelOptions(field.key).includes(+$any(settings().serving_overrides[field.key]))) {
+                <option [ngValue]="settings().serving_overrides[field.key]" disabled>{{ settings().serving_overrides[field.key] }} — unavailable</option>
+              }
+              @for (value of parallelOptions(field.key); track value) { <option [ngValue]="value">{{ value }}</option> }
+            </select>
+          } @else if (choices[field.key]) {
+            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
+              <option [ngValue]="''">Keep current</option>
+              @for (value of choices[field.key]; track value) { <option [ngValue]="value">{{ value }}</option> }
+            </select>
+          } @else if (field.type === 'boolean') {
             <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
               <option [ngValue]="''">Keep current</option><option [ngValue]="true">Enabled</option><option [ngValue]="false">Disabled</option>
             </select>

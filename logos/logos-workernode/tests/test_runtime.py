@@ -56,7 +56,9 @@ def _make_app(lanes):
     )
     # build_runtime_status reads engines.vllm.disable_sleep_mode for the
     # worker-wide sleep-mode kill switch reported in WorkerRuntimeStatus.
-    engines_cfg = SimpleNamespace(vllm=SimpleNamespace(disable_sleep_mode=False))
+    engines_cfg = SimpleNamespace(
+        vllm=SimpleNamespace(disable_sleep_mode=False), ollama=SimpleNamespace(gpu_devices="all")
+    )
     state = SimpleNamespace(
         config=SimpleNamespace(worker=worker_cfg, engines=engines_cfg),
         lane_manager=_LaneManager(lanes),

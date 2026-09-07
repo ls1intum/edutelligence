@@ -326,6 +326,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkSampleSize = signal(5);
   readonly benchmarkSettings = signal<BenchmarkSettings>({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: {} });
   readonly benchmarkSettingsValid = signal(true);
+  readonly selectedBenchmarkPairId = signal<number | null>(null);
+  readonly selectedBenchmarkPair = computed<ModelBenchmarkPair | null>(() => this.benchmarkPairs().find(
+    pair => pair.model_provider_id === this.selectedBenchmarkPairId(),
+  ) ?? this.benchmarkPairs()[0] ?? null);
+
 
   useBenchmarkConfiguration(benchmark: ModelProviderBenchmark): void {
     this.benchmarkSettings.set(settingsFromBenchmark(benchmark));
@@ -645,7 +650,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
-    if (!this.benchmarkSettingsValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+    if ((this.selectedBenchmarkPair() && this.selectedBenchmarkPair()!.model_provider_id !== pair.model_provider_id) || !this.benchmarkSettingsValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
       return;
     }
     const settings = structuredClone(this.benchmarkSettings());

@@ -75,3 +75,50 @@ export function settingsFromBenchmark(benchmark: ModelProviderBenchmark): Benchm
     serving_overrides: overrides,
   };
 }
+
+export interface BenchmarkWorkerLimits {
+  gpu_count: number | null;
+  gpu_memory_bytes: number | null;
+  current: Record<string, unknown>;
+}
+
+export const SERVING_CHOICES: Record<string, readonly string[]> = {
+  dtype: ['auto', 'float16', 'bfloat16', 'float32', 'half', 'float'],
+  kv_cache_dtype: ['auto', 'fp8', 'fp8_e4m3', 'fp8_e5m2'],
+};
+
+export function servingValidationErrors(settings: BenchmarkSettings, limits: BenchmarkWorkerLimits | null): string[] {
+  const overrides = settings.serving_overrides;
+  if (!Object.keys(overrides).length) return [];
+  const errors: string[] = [];
+  for (const field of SERVING_FIELDS) {
+    const value = overrides[field.key];
+    if (value == null) continue;
+    if (field.type === 'number') {
+      const n = Number(value);
+      const max = 'max' in field ? field.max : null;
+      if (!Number.isFinite(n) || n < field.min || (max != null && n > max) || (!('step' in field) && !Number.isInteger(n))) {
+        errors.push(`${field.label}: enter ${'step' in field ? 'a number' : 'an integer'} from ${field.min}${max == null ? '' : ` to ${max}`}.`);
+      }
+    }
+    const choices = SERVING_CHOICES[field.key];
+    if (choices && !choices.includes(String(value))) errors.push(`${field.label}: choose a supported value.`);
+  }
+  if (limits?.gpu_count == null) return [...errors, 'Worker GPU limits are unavailable. Reload the limits before changing vLLM settings.'];
+  if (limits.gpu_count === 0) return [...errors, 'No NVIDIA GPUs are available for this model on the selected worker.'];
+  const effective = { ...limits.current, ...overrides };
+  const tp = Number(effective['tensor_parallel_size'] ?? 1);
+  const pp = Number(effective['pipeline_parallel_size'] ?? 1);
+  if (tp * pp > limits.gpu_count) errors.push(`TP ${tp} × PP ${pp} requires ${tp * pp} GPUs; this worker provides ${limits.gpu_count} for this model.`);
+  const sequences = Number(effective['max_num_seqs'] ?? 0);
+  const batched = Number(effective['max_num_batched_tokens'] ?? 0);
+  if (sequences > 0 && batched > 0 && batched < sequences) errors.push('Max batched tokens must be at least max sequences.');
+  const cache = String(overrides['kv_cache_memory_bytes'] ?? '');
+  if (cache) {
+    const match = /^(\d+(?:\.\d+)?)([KMG]?)$/i.exec(cache);
+    const bytes = match ? Number(match[1]) * ({ K: 1024, M: 1024 ** 2, G: 1024 ** 3 }[match[2].toUpperCase()] ?? 1) : NaN;
+    if (!Number.isFinite(bytes) || bytes <= 0) errors.push('KV cache memory: use a positive byte count or a value such as 512M or 4G.');
+    else if (limits.gpu_memory_bytes != null && bytes >= limits.gpu_memory_bytes) errors.push('KV cache memory must be smaller than GPU memory; model weights also need space.');
+  }
+  return errors;
+}

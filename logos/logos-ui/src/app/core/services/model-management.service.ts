@@ -1,5 +1,5 @@
 import { Injectable, inject } from '@angular/core';
-import { BenchmarkSettings, DatasetMetadata, DEFAULT_BENCHMARK_SETTINGS } from '../../features/model-error-report/benchmark-settings';
+import { BenchmarkSettings, BenchmarkWorkerLimits, DatasetMetadata, DEFAULT_BENCHMARK_SETTINGS } from '../../features/model-error-report/benchmark-settings';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
@@ -33,6 +33,12 @@ export class ModelManagementService {
         },
       ),
     );
+  }
+
+  getBenchmarkWorkerLimits(modelProviderId: number): Promise<BenchmarkWorkerLimits> {
+    return firstValueFrom(this.http.post<BenchmarkWorkerLimits>(
+      '/api/logosdb/model_benchmarks/limits', { model_provider_id: modelProviderId },
+    ));
   }
 
   searchBenchmarkDatasets(query: string): Promise<{ datasets: { id: string }[] }> {

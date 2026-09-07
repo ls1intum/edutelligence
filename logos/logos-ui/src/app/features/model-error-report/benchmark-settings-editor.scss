@@ -33,3 +33,5 @@ a:focus-visible, .dataset-preview__rows:focus-visible { outline: 2px solid rgb(v
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 720px) { .settings-grid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .dataset-preview__row dl { grid-template-columns: 1fr; } }
+
+select:disabled { opacity: 0.65; }

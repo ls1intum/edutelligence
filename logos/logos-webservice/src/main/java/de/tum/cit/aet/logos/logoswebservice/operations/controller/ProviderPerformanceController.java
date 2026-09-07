@@ -117,6 +117,18 @@ public class ProviderPerformanceController {
         return settings;
     }
 
+    @PostMapping("/model_benchmarks/limits")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> benchmarkLimits(@RequestBody Map<String, Object> body) {
+        try {
+            return orchestratorWorkerAdminClient.benchmarkLimits(body);
+        } catch (HttpStatusCodeException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(orchestratorError(e));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(503).body(Map.of("error", "Worker limits are unavailable"));
+        }
+    }
+
     @PostMapping("/model_benchmarks/datasets/search")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> searchDatasets(@RequestBody Map<String, Object> body) {

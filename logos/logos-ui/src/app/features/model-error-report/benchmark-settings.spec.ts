@@ -66,3 +66,28 @@ describe('Benchmark settings editor values', () => {
     expect(editor.settings().serving_overrides['tensor_parallel_size']).toBeUndefined();
   });
 });
+
+import { servingValidationErrors } from './benchmark-settings';
+
+describe('Worker-specific benchmark limits', () => {
+  const limits = { gpu_count: 2, gpu_memory_bytes: 24 * 1024 ** 3, current: { tensor_parallel_size: 1 } };
+  it.each([38, 3, 1.5, 0])('rejects TP=%s on a two-GPU worker', tp => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: tp } }, limits).length).toBeGreaterThan(0);
+  });
+  it('allows TP=3 when the selected worker has three GPUs', () => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: 3 } }, { ...limits, gpu_count: 3 })).toEqual([]);
+  });
+  it('rejects combinations that oversubscribe GPUs and respects current values', () => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { pipeline_parallel_size: 2 } }, { ...limits, current: { tensor_parallel_size: 2 } })[0]).toContain('requires 4 GPUs');
+  });
+  it.each([
+    { kv_cache_memory_bytes: '999G' }, { kv_cache_memory_bytes: '0' }, { kv_cache_memory_bytes: '1GB' },
+    { max_num_batched_tokens: 8, max_num_seqs: 32 }, { dtype: 'invalid' }, { gpu_memory_utilization: 5 },
+  ])('rejects invalid serving values %j', overrides => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: overrides }, limits).length).toBeGreaterThan(0);
+  });
+  it('does not invent GPU availability when telemetry is missing', () => {
+    expect(servingValidationErrors(DEFAULT_BENCHMARK_SETTINGS, null)).toEqual([]);
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: 1 } }, null)[0]).toContain('unavailable');
+  });
+});

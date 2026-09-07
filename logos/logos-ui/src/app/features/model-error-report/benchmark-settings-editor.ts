@@ -1,7 +1,8 @@
-import { Component, computed, effect, inject, model, output, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, model, output, signal } from '@angular/core';
+import { ModelBenchmarkPair } from '../../shared/models/provider.model';
 import { FormsModule } from '@angular/forms';
 import { ModelManagementService } from '../../core/services/model-management.service';
-import { BenchmarkSettings, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
+import { BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES, servingValidationErrors, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
 
 @Component({
   selector: 'app-benchmark-settings-editor', standalone: true, imports: [FormsModule],
@@ -10,6 +11,14 @@ import { BenchmarkSettings, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK
 export class BenchmarkSettingsEditor {
   private service = inject(ModelManagementService);
   readonly settings = model<BenchmarkSettings>({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: {} });
+  readonly pair = input<ModelBenchmarkPair | null>(null);
+  readonly limits = signal<BenchmarkWorkerLimits | null>(null);
+  readonly limitsLoading = signal(false);
+  readonly limitsError = signal<string | null>(null);
+  readonly choices = SERVING_CHOICES;
+  readonly validationErrors = computed(() => servingValidationErrors(this.settings(), this.limits()));
+  private limitsVersion = 0;
+  private limitsPairId: number | null = null;
   readonly validChange = output<boolean>();
   readonly fields: readonly { key: string; label: string; type: string; min?: number; max?: number; step?: number }[] = SERVING_FIELDS;
   readonly query = signal('gsm8k');
@@ -38,6 +47,13 @@ export class BenchmarkSettingsEditor {
 
   constructor() {
     effect(() => {
+      const pair = this.pair();
+      const id = pair?.model_provider_id ?? null;
+      if (id === this.limitsPairId) return;
+      this.limitsPairId = id;
+      void this.loadLimits(pair);
+    });
+    effect(() => {
       const s = this.settings();
       const integer = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
       const validNumbers = this.fields.every(field => {
@@ -47,7 +63,7 @@ export class BenchmarkSettingsEditor {
         return Number.isFinite(n) && n >= (field.min ?? 0) && (field.max == null || n <= field.max)
           && (field.step != null || Number.isInteger(n));
       });
-      this.validChange.emit(!this.loading() && !this.jsonError() && validNumbers
+      this.validChange.emit(!this.loading() && !this.jsonError() && validNumbers && this.validationErrors().length === 0
         && integer(s.max_output_tokens, 1, 4096) && integer(s.concurrency, 1, 32) && integer(s.seed, 0, 2147483647)
         && Boolean(s.dataset && s.subset && s.split && s.text_column));
     });
@@ -58,6 +74,31 @@ export class BenchmarkSettingsEditor {
         void this.inspectDataset(s.dataset, s.subset, s.split);
       }
     });
+  }
+
+  async loadLimits(pair = this.pair()): Promise<void> {
+    const version = ++this.limitsVersion;
+    this.limits.set(null);
+    this.limitsError.set(null);
+    this.limitsLoading.set(false);
+    if (!pair || pair.provider_type !== 'logosnode') return;
+    this.limitsLoading.set(true);
+    try {
+      const limits = await this.service.getBenchmarkWorkerLimits(pair.model_provider_id);
+      if (version === this.limitsVersion) this.limits.set(limits);
+    } catch (error: any) {
+      if (version === this.limitsVersion) this.limitsError.set(error?.error?.detail ?? error?.error?.error ?? 'Could not load worker limits.');
+    } finally {
+      if (version === this.limitsVersion) this.limitsLoading.set(false);
+    }
+  }
+
+  parallelOptions(key: string): number[] {
+    const count = this.limits()?.gpu_count ?? 0;
+    const otherKey = key === 'tensor_parallel_size' ? 'pipeline_parallel_size' : 'tensor_parallel_size';
+    const other = Number(this.settings().serving_overrides[otherKey] ?? this.limits()?.current[otherKey] ?? 1);
+    const max = Number.isInteger(other) && other > 0 ? Math.min(64, Math.floor(count / other)) : 0;
+    return Array.from({ length: max }, (_, i) => i + 1);
   }
 
   update<K extends keyof BenchmarkSettings>(key: K, value: BenchmarkSettings[K]): void {

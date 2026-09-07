@@ -143,17 +143,18 @@ def _configured_planner():
     def snapshot(config):
         return {
             "runtime": {
+                "devices": {"nvidia_smi_available": True, "devices": [{"kind": "nvidia"}, {"kind": "nvidia"}]},
                 "lanes": [
                     {
                         "lane_id": target.lane_id,
                         "model": target.model_name,
                         "lane_config": {"vllm": True, "vllm_config": config},
                     }
-                ]
+                ],
             }
         }
 
-    planner._registry.peek_runtime_snapshot.side_effect = [snapshot(current), snapshot(updated)]
+    planner._registry.peek_runtime_snapshot.side_effect = [snapshot(current), snapshot(current), snapshot(updated)]
     planner._registry.send_command = AsyncMock(return_value={"lane_config": {"vllm_config": updated}})
     return planner, ServingOverrides(tensor_parallel_size=2), updated
 
@@ -249,7 +250,7 @@ async def test_configured_benchmark_rejects_worker_override_without_polling():
     }
     with pytest.raises(RuntimeError, match="tensor_parallel_size: requested 2, reported 1"):
         await planner.prepare_configured_benchmark_lane(7, "org/model", overrides)
-    assert planner._registry.peek_runtime_snapshot.call_count == 1
+    assert planner._registry.peek_runtime_snapshot.call_count == 2
     planner._unmark_lane_cold.assert_called_once_with(7, "model-lane")
 
 

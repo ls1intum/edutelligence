@@ -816,11 +816,31 @@ class LaneManager:
             if not changed:
                 return await self._get_status_unlocked(lane_id)
 
-            requested_tp = (updates.get("vllm_config") or {}).get("tensor_parallel_size")
-            if current.vllm_config is not None and requested_tp is not None:
-                if requested_tp != current.vllm_config.tensor_parallel_size:
+            parallel_changed = False
+            if current.vllm_config is not None and current_data.get("vllm_config"):
+                requested_vllm = VllmConfig(**current_data["vllm_config"])
+                parallel_changed = (
+                    requested_vllm.tensor_parallel_size != current.vllm_config.tensor_parallel_size
+                    or requested_vllm.parallel_gpu_count != current.vllm_config.parallel_gpu_count
+                )
+                if parallel_changed:
                     current_data["auto_tensor_parallel"] = False
+                    # Automatic placement belongs to the old parallel topology.
+                    # Static operator pins remain authoritative.
+                    if lane_id not in self._static_lane_ids:
+                        current_data["gpu_devices"] = ""
             new_lc = LaneConfig(**current_data)
+            if parallel_changed:
+                available = self._gpu_device_count()
+                pool = self._global_config.gpu_devices
+                if pool and pool.lower() != "all":
+                    available = min(available, len(set(self._parse_gpu_selector(pool))))
+                required = new_lc.vllm_config.parallel_gpu_count
+                if required > available:
+                    raise ValueError(
+                        f"Tensor × pipeline parallel size requires {required} GPUs, "
+                        f"but this worker provides only {available}."
+                    )
             self._validate_vllm_runtime_requirements([new_lc])
             # Benchmark settings include spawn-time options such as KV cache size
             # that the planner's automatic tuning deliberately excludes.
@@ -1822,7 +1842,7 @@ class LaneManager:
             # lane may only take the leftover GPUs (issue #592).
             held = set(self._calibration_gpu_subset)
             allowed_rows = [row for row in allowed_rows if int(row["index"]) not in held]
-        tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
+        tp_size = lane_config.vllm_config.parallel_gpu_count
         if len(allowed_rows) < tp_size:
             if self._calibration_gpu_subset:
                 # Fail fast rather than fall back to cuda:0 (a held slice GPU):

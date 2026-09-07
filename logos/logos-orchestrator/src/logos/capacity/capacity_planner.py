@@ -1128,6 +1128,11 @@ class CapacityPlanner:
     ) -> bool:
         """Reload an idle vLLM lane and wait for its new configuration to be reported."""
         from logos.benchmarks.guidellm_runner import apply_serving_overrides
+        from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
+
+        validate_worker_overrides(
+            overrides, worker_limits(self._registry.peek_runtime_snapshot(provider_id), model_name)
+        )
 
         if not await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds):
             return False
@@ -1149,6 +1154,7 @@ class CapacityPlanner:
             config = (lane or {}).get("lane_config") or {}
             if not config.get("vllm"):
                 raise RuntimeError("Serving overrides require an existing vLLM lane on this worker")
+            validate_worker_overrides(overrides, worker_limits(snapshot, model_name))
             current = config.get("vllm_config") or {}
             updated = apply_serving_overrides(current, overrides)
             if updated == current:

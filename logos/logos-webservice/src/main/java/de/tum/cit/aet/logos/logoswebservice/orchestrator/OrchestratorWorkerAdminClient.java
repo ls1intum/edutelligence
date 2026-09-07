@@ -69,6 +69,10 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/model_benchmarks/datasets/" + operation, body);
     }
 
+    public ResponseEntity<Map> benchmarkLimits(Map<String, Object> body) {
+        return post("/internal/model_benchmarks/limits", body);
+    }
+
     public ResponseEntity<Map> cancelModelBenchmark(int jobId) {
         return post("/internal/model_benchmarks/jobs/" + jobId + "/cancel", Map.of());
     }

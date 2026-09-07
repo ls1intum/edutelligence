@@ -46,6 +46,22 @@ class ProviderPerformanceControllerTest {
     @MockitoBean OrchestratorWorkerAdminClient orchestratorWorkerAdminClient;
 
     @Test
+    void benchmarkLimits_returnsWorkerGpuCount() throws Exception {
+        when(orchestratorWorkerAdminClient.benchmarkLimits(Map.of("model_provider_id", 31)))
+            .thenReturn(ResponseEntity.ok(Map.of("gpu_count", 2, "current", Map.of("tensor_parallel_size", 1))));
+        mvc.perform(post("/logosdb/model_benchmarks/limits").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"model_provider_id\":31}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.gpu_count").value(2));
+    }
+
+    @Test
+    void benchmarkLimits_requiresAuthentication() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/limits")
+                .contentType("application/json").content("{\"model_provider_id\":31}"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void providerPerformance_returnsMetricsPerProviderModelPair() throws Exception {
         mvc.perform(post("/logosdb/provider_performance")
                 .with(TestJwt.logosAdmin())

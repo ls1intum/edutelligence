@@ -13,7 +13,7 @@ class ServingOverrides(BaseModel):
     pipeline_parallel_size: int | None = Field(default=None, ge=1, le=64)
     kv_cache_dtype: Literal["auto", "fp8", "fp8_e4m3", "fp8_e5m2"] | None = None
     kv_cache_memory_bytes: str | None = Field(
-        default=None, max_length=32, pattern=r"^(?:[0-9]+(?:[.][0-9]+)?[KMGTPkmgpt]?[iI]?[bB]?)?$"
+        default=None, max_length=32, pattern=r"^(?:[0-9]+(?:[.][0-9]+)?[KMGkmg]?)?$"
     )
     max_num_seqs: int | None = Field(default=None, ge=0, le=65536)
     max_num_batched_tokens: int | None = Field(default=None, gt=0)

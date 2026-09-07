@@ -43,6 +43,7 @@ from logos.benchmarks.guidellm_runner import (
     run_benchmark_job,
 )
 from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
+from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
@@ -2487,6 +2488,23 @@ async def internal_benchmark_dataset_metadata(data: _DatasetMetadataRequest, req
     return await dataset_metadata(data.dataset, data.subset, data.split)
 
 
+class _BenchmarkLimitsRequest(BaseModel):
+    model_provider_id: int = Field(gt=0)
+
+
+@app.post("/internal/model_benchmarks/limits", tags=["admin"])
+async def internal_benchmark_worker_limits(data: _BenchmarkLimitsRequest, request: Request):
+    _require_internal_secret(request)
+    with DBManager() as db:
+        target = db.get_model_provider_benchmark_target(data.model_provider_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Provider-model pair not found")
+    snapshot = _logosnode_registry.peek_runtime_snapshot(int(target["provider_id"]))
+    if not _logosnode_snapshot_is_connected(snapshot):
+        raise HTTPException(status_code=503, detail="Worker is offline. Hardware limits are unavailable.")
+    return worker_limits(snapshot, str(target["model_name"]))
+
+
 @app.post("/internal/model_benchmarks/run", tags=["admin"])
 async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
     """Queue a configured GuideLLM run for one exact provider-model pair."""
@@ -2541,6 +2559,10 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
                 raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
 
         model_name = str(target["model_name"])
+        try:
+            validate_worker_overrides(data.serving_overrides, worker_limits(runtime_snapshot, model_name))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
         job_payload = {
             "model_provider_id": data.model_provider_id,
