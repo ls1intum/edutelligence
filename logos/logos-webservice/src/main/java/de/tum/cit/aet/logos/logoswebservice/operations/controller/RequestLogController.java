@@ -65,6 +65,16 @@ public class RequestLogController {
             start, end, userId, teamId, status, cursorTs, cursorId, limit, true));
     }
 
+    /** Payloads are excluded from the feed and fetched explicitly for one row. */
+    @PostMapping("/request_payloads")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> requestPayloads(@RequestBody Map<String, Object> body) {
+        if (!(body.get("request_id") instanceof String requestId) || requestId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "request_id must be a non-empty string"));
+        }
+        return ResponseEntity.ok(requestLogService.getRequestPayloads(requestId));
+    }
+
     @PostMapping("/request_logs")
     public ResponseEntity<?> requestLogs(@RequestAttribute("authContext") AuthContext auth,
                                          @RequestBody Map<String, Object> body) {
