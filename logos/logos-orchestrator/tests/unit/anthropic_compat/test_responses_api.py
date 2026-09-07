@@ -229,3 +229,29 @@ def test_failed_response_becomes_an_error_event():
     events = _events(out)
     assert events[-1][0] == "error"
     assert events[-1][1]["error"]["message"] == "rate limited"
+
+
+def test_string_error_field_keeps_the_upstream_message():
+    # The spec says `error` is an object, but upstreams do send a bare string;
+    # dropping that shape would replace the real cause with the fallback.
+    translator = ResponsesStreamTranslator("m")
+    translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    out = translator.feed(_sse("error", {"error": "quota exhausted"}))
+    assert _events(out)[-1][1]["error"]["message"] == "quota exhausted"
+
+
+def test_error_without_a_usable_message_falls_back():
+    translator = ResponsesStreamTranslator("m")
+    translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    out = translator.feed(_sse("error", {"error": {}}))
+    assert _events(out)[-1][1]["error"]["message"] == "upstream stream error"
+
+
+def test_multibyte_character_split_across_chunks_survives():
+    translator = ResponsesStreamTranslator("m")
+    translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    frame = json.dumps({"output_index": 0, "delta": "Größe 🎉"}, ensure_ascii=False)
+    raw = f"event: response.output_text.delta\ndata: {frame}\n\n".encode()
+    split = raw.index("ö".encode()) + 1  # mid-character
+    out = translator.feed(raw[:split]) + translator.feed(raw[split:])
+    assert "".join(d["delta"]["text"] for n, d in _events(out) if n == "content_block_delta") == "Größe 🎉"

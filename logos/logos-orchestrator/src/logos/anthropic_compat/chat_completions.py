@@ -78,6 +78,10 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
     if payload.get("stop_sequences"):
         result["stop"] = payload["stop_sequences"]
     if payload.get("stream") is not None:
+        # Only the switch itself. ``stream_options.include_usage`` — which a
+        # chat/completions upstream needs before it reports token counts — is
+        # added by ``Executor._streaming_payload`` for every non-Responses
+        # forward URL, which is where a translated Messages request goes.
         result["stream"] = payload["stream"]
 
     tools = anthropic_tools(payload.get("tools"))

@@ -257,3 +257,91 @@ async def test_disabled_service_never_touches_the_database(monkeypatch):
     service._enabled = False
     await service.start()
     assert DummyDB.instances == []
+
+
+@pytest.mark.asyncio
+async def test_a_cleartext_upstream_never_receives_the_key(monkeypatch):
+    # An http:// provider with a key would put that key on the wire in the
+    # clear; the benchmark path refuses the same combination.
+    called = []
+    service = _run(
+        monkeypatch,
+        [_provider(base_url="http://upstream.example/v1")],
+        lambda url, headers: called.append(url) or LOGOS_LISTING,
+    )
+    await service.run_once()
+    assert called == []
+    assert all(not db.synced for db in DummyDB.instances)
+
+
+@pytest.mark.asyncio
+async def test_loopback_http_is_still_allowed(monkeypatch):
+    # Local development runs the upstream on localhost over plain HTTP.
+    called = []
+    service = _run(
+        monkeypatch,
+        [_provider(base_url="http://localhost:8080/v1")],
+        lambda url, headers: called.append(url) or LOGOS_LISTING,
+    )
+    await service.run_once()
+    assert called == ["http://localhost:8080/v1/models"]
+
+
+@pytest.mark.asyncio
+async def test_an_unauthenticated_cleartext_upstream_is_synced(monkeypatch):
+    # Nothing secret goes over the wire, so the transport rule does not apply.
+    called = []
+    service = _run(
+        monkeypatch,
+        [_provider(base_url="http://upstream.example/v1", api_key=None)],
+        lambda url, headers: called.append(url) or LOGOS_LISTING,
+    )
+    await service.run_once()
+    assert called == ["http://upstream.example/v1/models"]
+
+
+@pytest.mark.asyncio
+async def test_start_returns_before_the_first_sync_completes(monkeypatch):
+    """Startup readiness must not wait on the upstreams.
+
+    run_once() contacts every provider in turn with a request timeout each, so
+    one unreachable upstream would otherwise hold up the orchestrator.
+    """
+    import asyncio
+
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def blocking_run_once():
+        started.set()
+        await release.wait()
+
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+    service.run_once = blocking_run_once
+
+    await service.start()  # must not block on the pass below
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert not release.is_set()
+
+    release.set()
+    await service.stop()
+
+
+def test_malformed_env_values_fall_back_to_the_defaults(monkeypatch):
+    # Both settings are read at import time, so a typo would otherwise stop the
+    # orchestrator from starting at all.
+    monkeypatch.setenv("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", "not-a-number")
+    assert cloud_model_sync._env_number("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", 900, minimum=1) == 900
+
+
+def test_non_positive_env_values_are_clamped(monkeypatch):
+    # A zero interval would spin the loop; a zero timeout would fail every fetch.
+    monkeypatch.setenv("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", "0")
+    assert cloud_model_sync._env_number("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", 900, minimum=1) == 1
+    monkeypatch.setenv("LOGOS_CLOUD_MODEL_SYNC_TIMEOUT_S", "-5")
+    assert cloud_model_sync._env_number("LOGOS_CLOUD_MODEL_SYNC_TIMEOUT_S", 30.0, minimum=0.1) == 0.1
+
+
+def test_unset_env_keeps_the_default(monkeypatch):
+    monkeypatch.delenv("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", raising=False)
+    assert cloud_model_sync._env_number("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", 900, minimum=1) == 900

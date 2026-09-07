@@ -269,10 +269,20 @@ class ResponsesStreamTranslator:
         event = name or str(frame.get("type") or "")
 
         if event in ("response.failed", "error"):
-            error = frame.get("error") if isinstance(frame.get("error"), dict) else {}
+            # ``error`` is an object in the spec, but upstreams do send a bare
+            # string; dropping that shape would replace the real cause with the
+            # generic fallback. Same tolerance as the chat/completions
+            # translator.
+            raw_error = frame.get("error")
+            error = raw_error if isinstance(raw_error, dict) else {}
             response = frame.get("response") if isinstance(frame.get("response"), dict) else {}
             nested = response.get("error") if isinstance(response.get("error"), dict) else {}
-            message = error.get("message") or nested.get("message") or "upstream stream error"
+            message = (
+                error.get("message")
+                or (raw_error if isinstance(raw_error, str) else None)
+                or nested.get("message")
+                or "upstream stream error"
+            )
             return self.error(str(message))
 
         if event == "response.created":

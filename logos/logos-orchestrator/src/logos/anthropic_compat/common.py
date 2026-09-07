@@ -17,6 +17,7 @@ protocol-correct Anthropic one.
 
 from __future__ import annotations
 
+import codecs
 import json
 import re
 import secrets
@@ -287,14 +288,20 @@ class SSEDecoder:
     ``(event_name, data)`` pairs; ``event_name`` is ``None`` for streams that
     omit the ``event:`` line, which is how chat/completions frames its events
     (the Responses API names every one of them).
+
+    A byte boundary can also fall inside a multi-byte character — one "ü" or
+    one emoji split across two chunks — so decoding is incremental too.
+    Decoding each chunk on its own would turn those into replacement
+    characters before the translation ever sees them.
     """
 
     def __init__(self) -> None:
         self._buffer = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def feed(self, chunk: Any) -> List[Tuple[Optional[str], str]]:
         if isinstance(chunk, bytes):
-            chunk = chunk.decode("utf-8", errors="replace")
+            chunk = self._decoder.decode(chunk)
         self._buffer += str(chunk or "")
         events: List[Tuple[Optional[str], str]] = []
         while True:

@@ -32,14 +32,35 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import cloud_auth_header
 
 logger = logging.getLogger(__name__)
 
-SYNC_INTERVAL_S = int(os.getenv("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", str(15 * 60)))
+
+def _env_number(name: str, default: float, minimum: float) -> float:
+    """A positive numeric setting from the environment, or its default.
+
+    Both settings are read at import time, so a malformed value would
+    otherwise raise before the orchestrator can start — and a non-positive one
+    would spin the sync loop without a delay, or time every fetch out
+    instantly. Same fail-soft convention as ``_env_int`` in ``main``.
+    """
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring non-numeric %s=%r; using %s", name, raw, default)
+        return default
+    return max(value, minimum)
+
+
+SYNC_INTERVAL_S = int(_env_number("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", 15 * 60, minimum=1))
 SYNC_ENABLED = os.getenv("LOGOS_CLOUD_MODEL_SYNC_ENABLED", "true").lower() == "true"
-REQUEST_TIMEOUT_S = float(os.getenv("LOGOS_CLOUD_MODEL_SYNC_TIMEOUT_S", "30"))
+REQUEST_TIMEOUT_S = _env_number("LOGOS_CLOUD_MODEL_SYNC_TIMEOUT_S", 30.0, minimum=0.1)
 
 # Context-window fields, in the order they are consulted. The first three are
 # what a Logos upstream publishes (see ``_model_context_fields`` in main.py);
@@ -151,12 +172,18 @@ class CloudModelSyncService:
         self._task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
+        """Schedule the sync; returns immediately.
+
+        The initial pass runs inside the tracked task rather than inline: it
+        contacts every configured provider in turn, so one slow or unreachable
+        upstream would otherwise hold up orchestrator readiness by a full
+        request timeout each. Nothing is lost by not waiting — the catalogue
+        and the context windows both live in the database, so what the last
+        run stored is already being served while this pass refreshes it.
+        """
         if not self._enabled:
             logger.info("Cloud model sync disabled (LOGOS_CLOUD_MODEL_SYNC_ENABLED=false)")
             return
-        # Initial sync runs inline so the catalogue and its context windows are
-        # fresh before the first request; failures are logged, never fatal.
-        await self.run_once()
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -170,11 +197,11 @@ class CloudModelSyncService:
 
     async def _loop(self) -> None:
         while True:
-            await asyncio.sleep(self._interval_s)
             try:
                 await self.run_once()
             except Exception:  # noqa: BLE001
                 logger.exception("Cloud model sync cycle failed")
+            await asyncio.sleep(self._interval_s)
 
     async def run_once(self) -> None:
         """Sync every eligible cloud provider once. Never raises."""
@@ -218,6 +245,17 @@ class CloudModelSyncService:
         headers = {"Accept": "application/json"}
         auth = cloud_auth_header(provider.get("auth_name"), provider.get("auth_format"), provider.get("api_key"))
         if auth is not None:
+            # Never put a provider key on the wire in the clear. Same rule the
+            # benchmark path applies to the same credentials: HTTPS, or plain
+            # HTTP on loopback only. An unauthenticated upstream is unaffected.
+            if not credential_transport_is_secure(url):
+                logger.warning(
+                    "Cloud model sync: provider %s (%s) skipped — its credentials require HTTPS "
+                    "(plain HTTP is allowed only on loopback)",
+                    pid,
+                    name,
+                )
+                return False, False
             headers[auth[0]] = auth[1]
 
         try:

@@ -375,3 +375,24 @@ def test_midstream_failure_becomes_an_anthropic_error_event():
     # read as a completed turn.
     assert [name for name, _ in events] == ["content_block_stop", "error"]
     assert events[-1][1]["error"]["message"] == "connection reset"
+
+
+def test_multibyte_character_split_across_chunks_survives():
+    # A transport chunk can end in the middle of a UTF-8 character. Decoding
+    # each chunk on its own turns "ü" into replacement characters before the
+    # translation ever sees it. Upstreams that emit raw UTF-8 rather than
+    # \u-escapes (vLLM among them) are what makes this reachable.
+    translator = ChatCompletionsStreamTranslator("m")
+    frame = json.dumps({"id": "c", "model": "m", "choices": [{"delta": {"content": "Grüße 🎉"}}]}, ensure_ascii=False)
+    raw = f"data: {frame}\n\n".encode()
+    split = raw.index("ü".encode()) + 1  # mid-character
+    out = translator.feed(raw[:split]) + translator.feed(raw[split:]) + translator.finish()
+    assert "".join(e[1]["delta"]["text"] for e in _events(out) if e[0] == "content_block_delta") == "Grüße 🎉"
+
+
+def test_streaming_switch_is_forwarded_without_stream_options():
+    # include_usage is added by Executor._streaming_payload for every
+    # non-Responses forward URL; setting it here too would only duplicate it.
+    result = to_chat_completions({"model": "m", "max_tokens": 8, "messages": [], "stream": True})
+    assert result["stream"] is True
+    assert "stream_options" not in result
