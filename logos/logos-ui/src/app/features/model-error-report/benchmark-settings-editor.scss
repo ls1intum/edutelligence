@@ -1,0 +1,19 @@
+.settings-editor { padding: 16px; border-bottom: 1px solid rgb(var(--color-outline-200)); }
+h4 { margin: 0; color: rgb(var(--color-typography-100)); }
+p { margin: 8px 0 14px; color: rgb(var(--color-typography-500)); font-size: var(--font-size-sm); }
+.settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+label { display: flex; flex-direction: column; gap: 5px; min-width: 0; color: rgb(var(--color-typography-100)); font-size: var(--font-size-sm); }
+input, select, textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid rgb(var(--color-outline-200)); border-radius: 6px; color: rgb(var(--color-typography-100)); background: rgb(var(--color-surface-0)); font: inherit; }
+input.ng-invalid { border-color: rgb(var(--color-error)); }
+button { padding: 8px 12px; border: 1px solid rgb(var(--color-outline-200)); border-radius: 6px; color: rgb(var(--color-primary-500)); background: rgb(var(--color-surface-0)); font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
+button:disabled, input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid rgb(var(--color-primary-500)); outline-offset: 2px; }
+.dataset-search, .selected-dataset { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.dataset-search label { flex: 1; min-width: 200px; }
+.selected-dataset { align-items: center; justify-content: space-between; margin-top: 12px; }
+.selected-dataset strong { overflow-wrap: anywhere; }
+.dataset-results { display: grid; gap: 4px; max-height: 200px; overflow: auto; margin-top: 8px; }
+.dataset-results button { text-align: left; overflow-wrap: anywhere; }
+summary { padding: 8px 0; cursor: pointer; color: rgb(var(--color-typography-100)); font-size: var(--font-size-sm); }
+.settings-error { color: rgb(var(--color-error)); }
+@media (max-width: 720px) { .settings-grid { grid-template-columns: 1fr; } }
