@@ -409,3 +409,25 @@
   .performance-glossary summary small,
   .benchmark-configuration summary small { display: none; }
 }
+
+.benchmark-cancel-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  min-height: 34px;
+  min-width: 110px;
+  margin-top: 6px;
+  padding: 6px 12px;
+  border: 1px solid rgb(var(--color-error) / var(--opacity-border));
+  border-radius: 7px;
+  background: transparent;
+  color: rgb(var(--color-error));
+  font: inherit;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:disabled { cursor: wait; opacity: 0.6; }
+  &:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+}

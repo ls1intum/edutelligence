@@ -315,6 +315,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkPairs = signal<readonly ModelBenchmarkPair[]>([]);
   readonly benchmarkRuns = signal<readonly ModelBenchmarkRun[]>([]);
   readonly performanceLoading = signal(false);
+  private performanceRequestVersion = 0;
   readonly performanceError = signal(false);
   readonly benchmarkStartingPairId = signal<number | null>(null);
   readonly benchmarkCancellingJobId = signal<number | null>(null);
@@ -597,6 +598,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     if (modelId == null) {
       return;
     }
+    const requestVersion = ++this.performanceRequestVersion;
+    this.clearPerformancePoll();
 
     if (!silent) {
       this.performanceLoading.set(true);
@@ -605,26 +608,28 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
     try {
       const response = await this.modelService.getBenchmarks(modelId);
+      if (this.destroyed || requestVersion !== this.performanceRequestVersion) return;
       this.performance.set(response.benchmarks);
       this.benchmarkPairs.set(response.pairs ?? []);
       this.benchmarkRuns.set(response.runs ?? []);
     } catch {
-      if (!silent) {
+      if (this.destroyed || requestVersion !== this.performanceRequestVersion) return;
+      if (!silent || this.performanceLoading()) {
         this.performance.set([]);
         this.benchmarkPairs.set([]);
         this.benchmarkRuns.set([]);
         this.performanceError.set(true);
       }
     } finally {
-      if (!silent) {
+      if (!this.destroyed && requestVersion === this.performanceRequestVersion) {
         this.performanceLoading.set(false);
+        this.schedulePerformancePoll();
       }
-      this.schedulePerformancePoll();
     }
   }
 
   async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
-    if (this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+    if (this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
       return;
     }
     const confirmed = window.confirm(
@@ -652,6 +657,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   async cancelBenchmark(run: ModelBenchmarkRun): Promise<void> {
+    if (this.benchmarkCancellingJobId() !== null || !this.isBenchmarkActive(run)) return;
     this.benchmarkCancellingJobId.set(run.id);
     this.benchmarkStartError.set(null);
     try {

@@ -525,14 +525,15 @@
                           {{ benchmarkStatusLabel(run) }}
                         </span>
                         @if (run.status === 'failed' && run.error_message) {
-                          <small>{{ run.error_message }}</small>
+                          <small [attr.title]="run.error_message">{{ run.error_message }}</small>
                         }
                         @if (isBenchmarkActive(run)) {
                           <button
-                            class="benchmark-delete-button"
+                            class="benchmark-cancel-button"
                             type="button"
                             (click)="cancelBenchmark(run)"
-                            [disabled]="benchmarkCancellingJobId() === run.id"
+                            [disabled]="benchmarkCancellingJobId() !== null"
+                            [attr.aria-label]="'Cancel benchmark on ' + pair.provider_name"
                           >
                             {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Cancel' }}
                           </button>
@@ -549,7 +550,7 @@
                       class="benchmark-run-button"
                       type="button"
                       (click)="startBenchmark(pair)"
-                      [disabled]="benchmarkStartingPairId() === pair.model_provider_id || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
+                      [disabled]="benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
                       [attr.title]="!pair.endpoint_configured
                         ? 'Configure the provider endpoint first'
                         : 'Run benchmark on ' + pair.provider_name + ' · ' + pair.model_name + ' · ' + benchmarkSampleLabel()"
