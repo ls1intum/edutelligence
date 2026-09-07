@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Informational-only reason code (CUDA OOM, HF network blips, NCCL
+         handshake failures, port conflicts, …) surfaced by the worker for
+         display in the Model Error Report UI. Unlike unsupported_reason /
+         node_unhealthy_reason this never gates blacklisting or node
+         health — it's purely a "what was last observed" label. -->
+    <changeSet id="024-calibration-probe-logs-observed-reason" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="calibration_probe_logs" columnName="observed_reason"/></not>
+        </preConditions>
+        <addColumn tableName="calibration_probe_logs">
+            <column name="observed_reason" type="text"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="calibration_probe_logs" columnName="observed_reason"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

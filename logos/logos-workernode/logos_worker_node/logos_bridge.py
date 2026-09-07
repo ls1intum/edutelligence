@@ -948,6 +948,8 @@ class LogosBridgeClient:
                     "error": result.error,
                     "unsupported_reason": result.unsupported_reason,
                     "node_unhealthy_reason": result.node_unhealthy_reason,
+                    "observed_reason": result.observed_reason,
+                    "stages": result.stages,
                     "tensor_parallel_size": result.tensor_parallel_size,
                     "gpu_devices": result.gpu_devices,
                     "kv_cache_sent_mb": round(result.kv_cache_sent_mb, 1),

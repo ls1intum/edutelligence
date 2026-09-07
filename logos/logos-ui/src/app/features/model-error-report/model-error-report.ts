@@ -26,7 +26,6 @@ import {
   ModelProviderBenchmark,
 } from '../../shared/models/provider.model';
 
-import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import {
   benchmarkConfigurationRows,
@@ -59,25 +58,19 @@ interface ChecklistItem {
   readonly errorMessage?: string;
   readonly errorDetail?: string;
   readonly scope?: ErrorScope;
+  readonly reasonKind?: AuthoritativeReasonKind;
+  readonly reasonCode?: string;
 }
 
-interface ModelProcessDefinition {
-  readonly id: number;
-  readonly process: string;
-  readonly checklist: string;
-}
 
-interface ModelProcess {
-  readonly id: number;
-  readonly process: string;
-  readonly status: 'success' | 'failure';
-  readonly checklist: string;
-  readonly items: readonly ChecklistItem[];
-}
+type AuthoritativeReasonKind = 'unsupported' | 'node_unhealthy' | 'observed';
 
-interface CalibrationStage {
-  readonly name: string;
-  readonly successPatterns: readonly RegExp[];
+interface AuthoritativeReason {
+  readonly kind: AuthoritativeReasonKind;
+  readonly code: string;
+  readonly label: string;
+  readonly description: string;
+  readonly domain?: string;
 }
 
 interface CalibrationStageResult {
@@ -85,6 +78,8 @@ interface CalibrationStageResult {
   readonly status: CalibrationStatus;
   readonly errorMessage?: string;
   readonly errorDetail?: string;
+  readonly reasonKind?: AuthoritativeReasonKind;
+  readonly reasonCode?: string;
 }
 
 interface CalibrationProbeResult {
@@ -93,6 +88,8 @@ interface CalibrationProbeResult {
   readonly stages: readonly CalibrationStageResult[];
   readonly errorMessage?: string;
   readonly errorDetail?: string;
+  readonly reasonKind?: AuthoritativeReasonKind;
+  readonly reasonCode?: string;
 }
 
 interface CalibrationError {
@@ -114,6 +111,15 @@ interface ModelLog {
   readonly modelName: string;
 }
 
+interface BackendStageResult {
+  readonly name: string;
+  readonly status: CalibrationStatus;
+  readonly reason_kind?: AuthoritativeReasonKind | null;
+  readonly reason_code?: string | null;
+  readonly generic_error_message?: string | null;
+  readonly generic_error_detail?: string | null;
+}
+
 interface BackendCalibrationLog {
   readonly provider_id: number;
   readonly provider_name: string;
@@ -121,6 +127,10 @@ interface BackendCalibrationLog {
   readonly probe_command: string | null;
   readonly error: string | null;
   readonly log_text: string | null;
+  readonly unsupported_reason: string | null;
+  readonly node_unhealthy_reason: string | null;
+  readonly observed_reason: string | null;
+  readonly stages: readonly BackendStageResult[] | null;
   readonly recorded_at: string | null;
   readonly updated_at: string;
 }
@@ -133,102 +143,282 @@ interface BenchmarkGroup {
 
 
 // ==========================================================================
-// Process Definitions
+// Worker Reason Codes
+//
+// Mirrors logos-workernode/logos_worker_node/calibration.py
+// _FATAL_LOAD_ERROR_PATTERNS / _NODE_LEVEL_TRANSIENT_PATTERNS. Keep in
+// sync by hand when patterns are added/changed worker-side — there is no
+// shared codegen between Python and TS.
 // ==========================================================================
 
-const PROCESS_DEFINITIONS: readonly ModelProcessDefinition[] = [
-  {
-    id: 1,
-    process: 'Download',
-    checklist: 'Download',
-  },
-  {
-    id: 2,
-    process: 'Initialization',
-    checklist: 'Initialization',
-  },
-];
+// Mirrors calibration.py's _DOMAIN_* ids — the deployment failure domains
+// that ARE the stage checklist now (see CALIBRATION_DOMAINS below). Keep
+// in sync by hand; no shared codegen between Python and TS.
+const DOMAIN_NODE_PREFLIGHT = 'node_preflight';
+const DOMAIN_MODEL_RESOLUTION = 'model_resolution';
+const DOMAIN_ENGINE_INIT = 'engine_init';
+const DOMAIN_MULTI_GPU_COORDINATION = 'multi_gpu_coordination';
+const DOMAIN_WEIGHT_LOADING = 'weight_loading';
+const DOMAIN_KV_CACHE_FIT = 'kv_cache_fit';
+const DOMAIN_SERVER_START = 'server_start';
 
+interface ReasonDescription {
+  readonly label: string;
+  readonly description: string;
+  // Which failure domain (see above) this reason attaches to when the UI
+  // has to classify a raw log itself (backend-supplied `stages` already
+  // carry their own attachment and ignore this). undefined = no single
+  // deterministic point — resolved positionally instead, same convention
+  // as calibration.py's Pattern.domain=None.
+  readonly domain?: string;
+}
+
+const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
+  'invalid-repo-id': {
+    label: 'Invalid repository ID',
+    description:
+      'vLLM cannot resolve the model name to a Hugging Face ' +
+      'repository or a local directory with config.json.',
+    domain: DOMAIN_MODEL_RESOLUTION,
+  },
+  'gated-repo-no-token': {
+    label: 'Gated repository, no HF token',
+    description:
+      'Hugging Face flags this repository as gated and the worker ' +
+      'has no (or an insufficient) HF token.',
+    domain: DOMAIN_MODEL_RESOLUTION,
+  },
+  'unsupported-architecture': {
+    label: 'Unsupported architecture',
+    description:
+      'The installed vLLM build does not implement this model\'s ' +
+      'architecture.',
+    domain: DOMAIN_ENGINE_INIT,
+  },
+  'requires-trust-remote-code': {
+    label: 'Requires trust_remote_code',
+    description:
+      'This repository ships custom modeling code and requires ' +
+      'trust_remote_code=True, which is not auto-enabled.',
+    domain: DOMAIN_MODEL_RESOLUTION,
+  },
+  'unsupported-quantization': {
+    label: 'Unsupported quantization method',
+    description:
+      'The installed vLLM build does not support this model\'s ' +
+      'quantization method on this hardware.',
+    domain: DOMAIN_ENGINE_INIT,
+  },
+};
+
+const NODE_UNHEALTHY_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
+  'filesystem-eio': {
+    label: 'Filesystem I/O error',
+    description:
+      'Filesystem reads are failing with EIO. The backing storage ' +
+      'on this node is degraded or disconnected.',
+    // Can hit at any disk access — resolved positionally (domain omitted).
+  },
+  'filesystem-readonly': {
+    label: 'Filesystem remounted read-only',
+    description:
+      'The kernel remounted this node\'s filesystem read-only ' +
+      'after I/O errors.',
+    // Same reasoning as filesystem-eio above.
+  },
+  'disk-space-exhausted': {
+    label: 'Disk space exhausted',
+    description: 'The node\'s disk is full — nothing can be written.',
+    // Same reasoning as filesystem-eio above.
+  },
+  'cuda-device-not-detected': {
+    label: 'No GPU detected',
+    description: 'No CUDA-capable device is visible to vLLM on this node.',
+    domain: DOMAIN_NODE_PREFLIGHT,
+  },
+  'cuda-driver-runtime-mismatch': {
+    label: 'CUDA driver/runtime mismatch',
+    description:
+      'The installed NVIDIA driver is older than the CUDA runtime ' +
+      'vLLM requires on this node.',
+    domain: DOMAIN_NODE_PREFLIGHT,
+  },
+};
+
+const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
+  'cuda-oom': {
+    label: 'CUDA out of memory (observed)',
+    description:
+      'The GPU ran out of memory on the last failing probe. Non-blocking ' +
+      '— the kv-cache search retries with a smaller budget automatically.',
+    // Can hit during weight loading OR kv-cache reservation — resolved
+    // positionally (domain omitted).
+  },
+  'cuda-runtime-error': {
+    label: 'CUDA runtime error (observed)',
+    description:
+      'A CUDA runtime error occurred on the last failing probe (not ' +
+      'out-of-memory — see the full log for specifics, e.g. "unspecified ' +
+      'launch failure"). Often a driver, kernel, or multi-GPU sync crash.',
+    // Can hit at essentially any point CUDA kernels run — resolved
+    // positionally (domain omitted), same as cuda-oom.
+  },
+  'hf-network-timeout': {
+    label: 'Hugging Face network timeout (observed)',
+    description:
+      'A Hugging Face Hub request timed out on the last failing probe. ' +
+      'Usually transient.',
+    domain: DOMAIN_MODEL_RESOLUTION,
+  },
+  'hf-rate-limited': {
+    label: 'Hugging Face rate limited (observed)',
+    description:
+      'Hugging Face Hub rate-limited the download on the last failing ' +
+      'probe. Usually transient.',
+    domain: DOMAIN_MODEL_RESOLUTION,
+  },
+  'nccl-handshake-failure': {
+    label: 'NCCL handshake failure (observed)',
+    description:
+      'NCCL failed to establish communication between vLLM ranks on ' +
+      'the last failing probe. Often transient.',
+    domain: DOMAIN_MULTI_GPU_COORDINATION,
+  },
+  'port-in-use': {
+    label: 'Port already in use (observed)',
+    description:
+      'The port vLLM tried to bind was still held by a prior process ' +
+      'on the last failing probe. Usually resolves on retry.',
+    domain: DOMAIN_SERVER_START,
+  },
+};
+
+function lookupReason(
+  kind: AuthoritativeReasonKind,
+  code: string
+): ReasonDescription {
+  const table =
+    kind === 'unsupported'
+      ? UNSUPPORTED_REASON_DESCRIPTIONS
+      : kind === 'node_unhealthy'
+      ? NODE_UNHEALTHY_REASON_DESCRIPTIONS
+      : OBSERVED_REASON_DESCRIPTIONS;
+
+  return (
+    table[code] ?? {
+      label: code,
+      description:
+        `Worker reported reason code "${code}", which the UI does ` +
+        'not yet recognize (frontend out of date with calibration.py?).',
+    }
+  );
+}
 
 // ==========================================================================
-// Calibration Stages
+// Calibration Domains
+//
+// Mirrors calibration.py's _CALIBRATION_DOMAINS — 7 failure-domain
+// checklist rows, replacing the old flat log-line-driven stage list.
+// Each domain's completion is proven by ANY of its completionPatterns
+// matching; a domain with none (nodePreflight, multiGpuCoordination) is
+// inferred complete once a LATER domain's pattern matches instead. See
+// calibration.py for the full design rationale — this is the regex
+// FALLBACK path only (successful nodes, legacy data, a worker not yet
+// upgraded); a worker-supplied `stages` array is always preferred when
+// present (see buildProbeResultFromBackendStages).
+//
+// One difference from the Python source of truth: `requires: 'multi_gpu'`
+// can't be evaluated here (the frontend has no per-attempt
+// tensor_parallel_size), so multiGpuCoordination is always included in
+// this fallback path — for a real tp=1 deployment it will typically just
+// show as an (inferred) success, which is a harmless overstatement, not
+// a wrong failure.
+//
+// Extending this: add a CalibrationDomain entry here AND a matching
+// domain= tag on the relevant entry in UNSUPPORTED_REASON_DESCRIPTIONS /
+// NODE_UNHEALTHY_REASON_DESCRIPTIONS / OBSERVED_REASON_DESCRIPTIONS above
+// — same two-step process as calibration.py.
 // ==========================================================================
 
-const CALIBRATION_STAGES: readonly CalibrationStage[] = [
+interface CalibrationDomainDef {
+  readonly id: string;
+  readonly label: string;
+  readonly completionPatterns: readonly RegExp[];
+}
+
+const CALIBRATION_DOMAINS: readonly CalibrationDomainDef[] = [
   {
-    name: 'Model Identification',
-    successPatterns: [
-      /non-default args:/,
-    ],
+    id: DOMAIN_NODE_PREFLIGHT,
+    label: 'Node Preflight',
+    completionPatterns: [],
   },
   {
-    name: 'Model Download',
-    successPatterns: [
-      /non-default args:/,
-    ],
+    id: DOMAIN_MODEL_RESOLUTION,
+    label: 'Model Resolution & Download',
+    completionPatterns: [/non-default args:/],
   },
   {
-    name: 'Initialized vLLM engine',
-    successPatterns: [
-      /Initializing a V1 LLM engine/,
-    ],
+    id: DOMAIN_ENGINE_INIT,
+    label: 'Engine Initialization',
+    completionPatterns: [/Initializing a V1 LLM engine/],
   },
   {
-    name: 'Downloaded Weights',
-    successPatterns: [
-      /Time spent downloading weights/,
-    ],
+    id: DOMAIN_MULTI_GPU_COORDINATION,
+    label: 'Multi-GPU Coordination',
+    completionPatterns: [],
   },
   {
-    name: 'Loaded Safetensor Checkpoints',
-    successPatterns: [
-      /Loading safetensors checkpoint shards:\s*100%\s*Completed/,
-    ],
+    id: DOMAIN_WEIGHT_LOADING,
+    label: 'Weight Loading',
+    completionPatterns: [/Model loading took/],
   },
   {
-    name: 'Loaded Weights',
-    successPatterns: [
-      /Loading weights took/,
-    ],
+    id: DOMAIN_KV_CACHE_FIT,
+    label: 'KV-Cache Memory Fit',
+    completionPatterns: [/reserved .* memory for KV Cache/],
   },
   {
-    name: 'Loaded Model',
-    successPatterns: [
-      /Model loading took/,
-    ],
-  },
-  {
-    name: 'Completed Warmup Run',
-    successPatterns: [
-      /Initial profiling\/warmup run took/,
-    ],
-  },
-  {
-    name: 'Reserved KV-Cache Memory',
-    successPatterns: [
-      /reserved .* memory for KV Cache/,
-    ],
-  },
-  {
-    name: 'Engine Core Started',
-    successPatterns: [
-      /GPU KV cache size:/,
-    ],
-  },
-  {
-    name: 'Start vLLM Server',
-    successPatterns: [
+    id: DOMAIN_SERVER_START,
+    label: 'Server Start',
+    completionPatterns: [
       /Starting vLLM server on/,
-    ],
-  },
-  {
-    name: 'Deployment Success',
-    successPatterns: [
       /Application startup complete\./,
       /"GET \/health HTTP\/1\.1"\s+200\s+OK/,
     ],
   },
 ];
+
+// Lines confirmed, against real production logs, to be benign vLLM
+// fallback/informational messages that happen to be tagged at ERROR log
+// level — NOT failures. Mirrors
+// _GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES in calibration.py. Without
+// this, getCalibrationError (which takes the FIRST line matching its
+// patterns) picks these over the actual root cause further down the log.
+const GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES: readonly string[] = [
+  // FA2 requires compute capability >= 8; vLLM logs this at ERROR level
+  // then gracefully falls back to TRITON_ATTN/FLEX_ATTENTION and
+  // continues — confirmed benign against two real logs, one of which
+  // completed successfully with this exact line present (2026-09-07).
+  'Cannot use FA version 2 is not supported',
+  // vLLM's optional-dependency soft-check (_has_module in
+  // vllm/utils/import_utils.py) logs a full WARNING-level traceback for
+  // ANY optional module that fails to import (numba confirmed benign in
+  // a real log where calibration succeeded, 2026-09-07) — by design it
+  // never fails calibration. vLLM tags every physical line of the dump
+  // with the same "[import_utils.py:<N>]" source location, so matching
+  // that prefix (not a version-specific line number) covers the WHOLE
+  // block, including lines deep in the trace (e.g. "raise ImportError")
+  // that a narrower, opening-line-only needle would miss.
+  '[import_utils.py:',
+];
+
+// Deliberately tight (not e.g. 5+): a wide window risks suppressing a
+// genuinely unrelated real error that happens to occur near a benign
+// marker. 1 is the minimum that covers both confirmed cases above — the
+// marker is either ON the matched line itself (FA2) or exactly one line
+// before it (numba's "Traceback (most recent call last):" immediately
+// follows its "failed to import" line).
+const GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW = 1;
 
 
 @Component({
@@ -240,7 +430,6 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
     NgClass,
     ScrollingModule,
     ErrorMessageComponent,
-    DataTableComponent,
   ],
 
   templateUrl: './model-error-report.html',
@@ -274,8 +463,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   readonly activeTab = signal<ModelErrorTab>('complete_logs');
 
-  readonly expandedProcess = signal<number[]>([]);
-
   private readonly expandedErrors = signal<ReadonlySet<string>>(new Set());
 
   readonly selectedLogProviderId = signal<number | null>(null);
@@ -308,8 +495,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   readonly highlightedErrorNode =
     signal<number | null>(null);
-
-  readonly processesLoading = signal(false);
 
   readonly performance = signal<readonly ModelProviderBenchmark[]>([]);
   readonly benchmarkPairs = signal<readonly ModelBenchmarkPair[]>([]);
@@ -352,6 +537,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   // ==========================================================================
 
   readonly tabs: readonly ModelErrorTab[] = [
+    'error_report',
     'complete_logs',
     'performance',
   ];
@@ -458,35 +644,18 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
 
   // ==========================================================================
-  // Process Data
+  // Checklist Data
   // ==========================================================================
 
-  readonly processes =
-    computed<readonly ModelProcess[]>(() => {
+  // Flat list of failure-domain checklist rows (see CALIBRATION_DOMAINS) —
+  // no grouping layer above this; each domain is its own top-level row.
+  readonly checklistItems =
+    computed<readonly ChecklistItem[]>(() => {
       if (!this.model()) {
         return [];
       }
 
-      return PROCESS_DEFINITIONS.map(definition => {
-        const items =
-          this.getCalibrationChecklistItems(
-            definition.process
-          );
-
-        const hasFailure = items.some(
-          item => item.status === 'failure'
-        );
-
-        return {
-          id: definition.id,
-          process: definition.process,
-          checklist: definition.checklist,
-          status: hasFailure
-            ? 'failure'
-            : 'success',
-          items,
-        };
-      });
+      return this.getCalibrationChecklistItems();
     });
 
 
@@ -547,8 +716,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         this.selectedLogProviderId.set(logs[0].providerId);
       }
 
-      this.expandFailedProcesses();
-
     } catch {
       this.loadError.set(true);
     } finally {
@@ -582,7 +749,16 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
       this.calibrationResults.set(
         logs.map(log =>
-          this.parseCalibrationResult(log.provider_id, log.provider_name, log.log_text ?? '', log.success)
+          this.parseCalibrationResult(
+            log.provider_id,
+            log.provider_name,
+            log.log_text ?? '',
+            log.success,
+            log.unsupported_reason,
+            log.node_unhealthy_reason,
+            log.observed_reason,
+            log.stages
+          )
         )
       );
 
@@ -849,22 +1025,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     return typeof value === 'object' && value !== null;
   }
 
-  toggleProcess(id: number): void {
-    this.expandedProcess.update(current => {
-      if (current.includes(id)) {
-        return current.filter(
-          processId => processId !== id
-        );
-      }
-
-      return [...current, id];
-    });
-  }
-
-  isExpanded(id: number): boolean {
-    return this.expandedProcess().includes(id);
-  }
-
   toggleError(name: string): void {
     this.expandedErrors.update(current => {
       const next = new Set(current);
@@ -936,17 +1096,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       this.scrollToHighlightedError();
     });
   }
-
-  private expandFailedProcesses(): void {
-    this.expandedProcess.set(
-      this.processes()
-        .filter(
-          process => process.status === 'failure'
-        )
-        .map(process => process.id)
-    );
-  }
-
 
   // ==========================================================================
   // Scope
@@ -1053,12 +1202,109 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   // Log Parsing
   // ==========================================================================
 
+  // Precedence mirrors the worker's own override rule
+  // (_override_error_if_unsupported, calibration.py:1650-1667): a
+  // degraded node invalidates every measurement in the run, so
+  // node_unhealthy wins over unsupported when both are somehow set.
+  private resolveAuthoritativeReason(
+    unsupportedReason: string | null,
+    nodeUnhealthyReason: string | null,
+    observedReason: string | null
+  ): AuthoritativeReason | undefined {
+    if (nodeUnhealthyReason) {
+      return {
+        kind: 'node_unhealthy',
+        code: nodeUnhealthyReason,
+        ...lookupReason('node_unhealthy', nodeUnhealthyReason),
+      };
+    }
+    if (unsupportedReason) {
+      return {
+        kind: 'unsupported',
+        code: unsupportedReason,
+        ...lookupReason('unsupported', unsupportedReason),
+      };
+    }
+    if (observedReason) {
+      return {
+        kind: 'observed',
+        code: observedReason,
+        ...lookupReason('observed', observedReason),
+      };
+    }
+    return undefined;
+  }
+
+  // Backend-supplied stage-by-stage checklist for the deciding failed
+  // probe (see _classify_calibration_stages, calibration.py) — when
+  // present, the worker is authoritative and no log_text parsing is
+  // needed at all. Only ever set for failed calibrations (see the
+  // scope note in model-error-report's implementation plan).
+  private buildProbeResultFromBackendStages(
+    backendStages: readonly BackendStageResult[]
+  ): CalibrationProbeResult {
+    const stages: CalibrationStageResult[] = backendStages.map(stage => {
+      if (stage.status !== 'failure') {
+        return { name: stage.name, status: stage.status };
+      }
+
+      const reasonKind = stage.reason_kind ?? undefined;
+      const reasonCode = stage.reason_code ?? undefined;
+      const resolved =
+        reasonKind && reasonCode
+          ? lookupReason(reasonKind, reasonCode)
+          : undefined;
+
+      return {
+        name: stage.name,
+        status: 'failure',
+        errorMessage: resolved?.label ?? stage.generic_error_message ?? undefined,
+        errorDetail: resolved?.description ?? stage.generic_error_detail ?? undefined,
+        reasonKind,
+        reasonCode,
+      };
+    });
+
+    const failedStage = stages.find(stage => stage.status === 'failure');
+
+    return {
+      probe: 1,
+      status: 'failure',
+      stages,
+      errorMessage: failedStage?.errorMessage,
+      errorDetail: failedStage?.errorDetail,
+      reasonKind: failedStage?.reasonKind,
+      reasonCode: failedStage?.reasonCode,
+    };
+  }
+
   private parseCalibrationResult(
     providerId: number,
     node: string,
     log: string,
-    success: boolean
+    success: boolean,
+    unsupportedReason: string | null = null,
+    nodeUnhealthyReason: string | null = null,
+    observedReason: string | null = null,
+    backendStages: readonly BackendStageResult[] | null = null
   ): NodeCalibrationResult {
+    if (backendStages && backendStages.length > 0) {
+      const probe = this.buildProbeResultFromBackendStages(backendStages);
+      return {
+        providerId,
+        node,
+        attempts: 1,
+        status: probe.status,
+        probes: [probe],
+      };
+    }
+
+    const authoritativeReason = this.resolveAuthoritativeReason(
+      unsupportedReason,
+      nodeUnhealthyReason,
+      observedReason
+    );
+
     const probeBlocks = log
       .split(/(?=\s*Calibration probe\s*[—-])/)
       .filter(block =>
@@ -1074,8 +1320,10 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       }
       const error = this.getCalibrationError(log);
       const errorMessage =
+        authoritativeReason?.label ??
         error?.summary ??
         'Calibration failed — log format not recognized, see Complete Logs for details.';
+      const errorDetail = authoritativeReason?.description ?? error?.detail;
       return {
         providerId,
         node,
@@ -1086,13 +1334,17 @@ export class ModelErrorReport implements OnInit, OnDestroy {
             probe: 1,
             status: 'failure',
             errorMessage,
-            errorDetail: error?.detail,
+            errorDetail,
+            reasonKind: authoritativeReason?.kind,
+            reasonCode: authoritativeReason?.code,
             stages: [
               {
-                name: CALIBRATION_STAGES[0].name,
+                name: CALIBRATION_DOMAINS[0].label,
                 status: 'failure',
                 errorMessage,
-                errorDetail: error?.detail,
+                errorDetail,
+                reasonKind: authoritativeReason?.kind,
+                reasonCode: authoritativeReason?.code,
               },
             ],
           },
@@ -1105,7 +1357,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         this.parseCalibrationProbe(
           index + 1,
           block,
-          success
+          success,
+          authoritativeReason
         )
     );
 
@@ -1141,55 +1394,33 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   private parseCalibrationProbe(
     probeNumber: number,
     block: string,
-    success: boolean
+    success: boolean,
+    authoritativeReason?: AuthoritativeReason
   ): CalibrationProbeResult {
-    const stages: CalibrationStageResult[] = [];
-
-    let firstFailedStageIndex = -1;
-
-    for (
-      let index = 0;
-      index < CALIBRATION_STAGES.length;
-      index++
-    ) {
-      const stage = CALIBRATION_STAGES[index];
-
-      const patternMatched =
-        stage.successPatterns.some(
-          pattern => pattern.test(block)
-        );
-
-      const successful =
-        stage.name === 'Deployment Success'
-          ? success && patternMatched
-          : patternMatched;
-
-      if (successful) {
-        stages.push({
-          name: stage.name,
-          status: 'success',
-        });
-
-        continue;
+    // A domain with no completion pattern of its own (Node Preflight,
+    // Multi-GPU Coordination) is inferred complete once a LATER domain's
+    // pattern matches — ports calibration.py's _classify_calibration_stages
+    // algorithm 1:1.
+    const completed = CALIBRATION_DOMAINS.map(domain =>
+      domain.completionPatterns.some(pattern => pattern.test(block))
+    );
+    for (let index = 0; index < CALIBRATION_DOMAINS.length; index++) {
+      if (CALIBRATION_DOMAINS[index].completionPatterns.length === 0) {
+        completed[index] = completed.slice(index + 1).some(Boolean);
       }
-
-      if (firstFailedStageIndex === -1) {
-        firstFailedStageIndex = index;
-      }
-
-      stages.push({
-        name: stage.name,
-        status: 'unknown',
-      });
     }
 
+    const stages: CalibrationStageResult[] = CALIBRATION_DOMAINS.map(
+      (domain, index) => ({
+        name: domain.label,
+        status: completed[index] ? 'success' : 'unknown',
+      })
+    );
+
+    const serverStartDomain = CALIBRATION_DOMAINS[CALIBRATION_DOMAINS.length - 1];
     const deploymentSuccessful =
       success &&
-      stages.some(
-        stage =>
-          stage.name === 'Deployment Success' &&
-          stage.status === 'success'
-      );
+      serverStartDomain.completionPatterns.some(pattern => pattern.test(block));
 
     if (deploymentSuccessful) {
       return {
@@ -1199,25 +1430,45 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       };
     }
 
-    if (firstFailedStageIndex !== -1) {
-      const error = this.getCalibrationError(block);
+    // A known reason's domain pinpoints the failing row more precisely
+    // than "first domain whose completion signal wasn't seen yet" —
+    // prefer it when declared, else fall back to the positional
+    // heuristic (correct for errors like CUDA OOM that can occur at
+    // more than one point — see CALIBRATION_DOMAINS' module note).
+    const mappedIndex = authoritativeReason?.domain
+      ? CALIBRATION_DOMAINS.findIndex(
+          domain => domain.id === authoritativeReason.domain
+        )
+      : -1;
+    const firstIncompleteIndex = completed.findIndex(done => !done);
+    const effectiveIndex =
+      mappedIndex !== -1 ? mappedIndex : firstIncompleteIndex;
 
-      const failedStage =
-        stages[firstFailedStageIndex];
+    if (effectiveIndex !== -1) {
+      const error = authoritativeReason
+        ? undefined
+        : this.getCalibrationError(block);
 
-      stages[firstFailedStageIndex] = {
-        ...failedStage,
+      const errorMessage = authoritativeReason?.label ?? error?.summary;
+      const errorDetail = authoritativeReason?.description ?? error?.detail;
+
+      stages[effectiveIndex] = {
+        ...stages[effectiveIndex],
         status: 'failure',
-        errorMessage: error?.summary,
-        errorDetail: error?.detail,
+        errorMessage,
+        errorDetail,
+        reasonKind: authoritativeReason?.kind,
+        reasonCode: authoritativeReason?.code,
       };
 
       return {
         probe: probeNumber,
         status: 'failure',
         stages,
-        errorMessage: error?.summary,
-        errorDetail: error?.detail,
+        errorMessage,
+        errorDetail,
+        reasonKind: authoritativeReason?.kind,
+        reasonCode: authoritativeReason?.code,
       };
     }
 
@@ -1235,20 +1486,40 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       .split('\n')
       .filter(line => line.trim().length > 0);
 
-    const errorIndex = lines.findIndex(line =>
-      /\b(?:ERROR|CRITICAL|FATAL|Exception|Traceback|ValueError|RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b/
-        .test(line)
+    // The trigger keyword (e.g. "Traceback") often lands on a different
+    // line than the marker that identifies a known-benign block (e.g.
+    // "Module numba was found but failed to import" one line above it)
+    // — check a small preceding window, not just the matched line
+    // itself. Mirrors _is_ignored in calibration.py.
+    const isIgnored = (index: number): boolean => {
+      const window = lines.slice(
+        Math.max(0, index - GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW),
+        index + 1
+      );
+      return window.some(windowLine =>
+        GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES.some(needle =>
+          windowLine.includes(needle)
+        )
+      );
+    };
+
+    const errorIndex = lines.findIndex(
+      (line, index) =>
+        /\b(?:ERROR|CRITICAL|FATAL|Exception|Traceback|ValueError|RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b/
+          .test(line) && !isIgnored(index)
     );
 
     const index =
       errorIndex !== -1
         ? errorIndex
-        : lines.findIndex(line => /\berror\s*:/i.test(line));
+        : lines.findIndex(
+            (line, i) => /\berror\s*:/i.test(line) && !isIgnored(i)
+          );
 
     if (index === -1) {
       return undefined;
     }
-    
+
     return {
       summary: lines[index],
       detail: lines.slice(index).join('\n'),
@@ -1260,26 +1531,26 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   // Checklist
   // ==========================================================================
 
-  private getCalibrationChecklistItems(
-    processName: string
-  ): ChecklistItem[] {
+  private getCalibrationChecklistItems(): ChecklistItem[] {
     const results = this.calibrationResults();
 
     if (!results.length) {
       return [];
     }
 
-    const stages =
-      this.getStagesForProcess(processName);
-
     const items: ChecklistItem[] = [];
 
-    for (const stage of stages) {
+    for (const stage of CALIBRATION_DOMAINS) {
       const successfulNodes: string[] = [];
       const failedNodes: string[] = [];
       const failures = new Map<
         string,
-        { nodes: string[]; detail?: string }
+        {
+          nodes: string[];
+          detail?: string;
+          reasonKind?: AuthoritativeReasonKind;
+          reasonCode?: string;
+        }
       >();
 
       for (const result of results) {
@@ -1288,7 +1559,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
             .map(probe =>
               probe.stages.find(
                 item =>
-                  item.name === stage.name
+                  item.name === stage.label
               )
             )
             .filter(
@@ -1321,7 +1592,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
             'Unknown calibration error';
 
           const entry =
-            failures.get(error) ?? { nodes: [], detail: stageResult.errorDetail };
+            failures.get(error) ?? {
+              nodes: [],
+              detail: stageResult.errorDetail,
+              reasonKind: stageResult.reasonKind,
+              reasonCode: stageResult.reasonCode,
+            };
 
           entry.nodes.push(result.node);
 
@@ -1343,7 +1619,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           [...failures.entries()][0] ?? [];
 
         items.push({
-          name: stage.name,
+          name: stage.label,
           status: 'failure',
           scope: {
             type: 'node',
@@ -1351,6 +1627,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           },
           errorMessage: firstError ?? 'Unknown calibration error',
           errorDetail: firstEntry?.detail,
+          reasonKind: firstEntry?.reasonKind,
+          reasonCode: firstEntry?.reasonCode,
         });
 
         continue;
@@ -1358,7 +1636,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
       if (uniqueSuccessfulNodes.length > 0) {
         items.push({
-          name: stage.name,
+          name: stage.label,
           status: 'success',
           scope: {
             type: 'node',
@@ -1371,21 +1649,4 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     return items;
   }
 
-  private getStagesForProcess(
-    processName: string
-  ): readonly CalibrationStage[] {
-    if (processName === 'Download') {
-      return CALIBRATION_STAGES.filter(
-        stage =>
-          stage.name === 'Model Identification' ||
-          stage.name === 'Model Download'
-      );
-    }
-
-    return CALIBRATION_STAGES.filter(
-      stage =>
-        stage.name !== 'Model Identification' &&
-        stage.name !== 'Model Download'
-    );
-  }
 }

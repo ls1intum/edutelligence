@@ -312,16 +312,6 @@
 }
 
 // ==========================================================================
-// Process Table
-// ==========================================================================
-
-.process-name {
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  color: rgb(var(--color-typography-100));
-}
-
-// ==========================================================================
 // Status Badges
 // ==========================================================================
 
@@ -364,25 +354,6 @@
       var(--color-error)
       / var(--opacity-border)
     );
-}
-
-// ==========================================================================
-// Expanded Process Content
-// ==========================================================================
-
-.expanded-row {
-  background:
-    rgb(var(--color-surface-50));
-  border-top:
-    1px solid
-    rgb(
-      var(--glass-stroke)
-      / var(--glass-stroke-opacity)
-    );
-}
-
-.expanded-content {
-  padding: 1rem 1.5rem 1.25rem 3.5rem;
 }
 
 // ==========================================================================
@@ -702,6 +673,50 @@
   color: rgb(var(--color-error));
   text-transform: uppercase;
   letter-spacing: var(--letter-spacing-wider);
+}
+
+.reason-badge {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wider);
+}
+
+.reason-badge--unsupported {
+  color: rgb(var(--color-warning));
+  background:
+    rgb(
+      var(--color-warning)
+      / var(--opacity-faint)
+    );
+}
+
+.reason-badge--node {
+  color: rgb(var(--color-error));
+  background:
+    rgb(
+      var(--color-error)
+      / var(--opacity-faint)
+    );
+}
+
+.reason-badge--observed {
+  color: rgb(var(--color-accent-cyan));
+  background:
+    rgb(
+      var(--color-accent-cyan)
+      / var(--opacity-faint)
+    );
+}
+
+.reason-explainer {
+  margin: 0 0 0.5rem;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
 }
 
 .error-box pre {
@@ -1060,11 +1075,6 @@
 @media (max-width: 768px) {
   .model-error-report {
     padding: 24px 16px 32px;
-  }
-
-  .expanded-content {
-    padding-left: 1rem;
-    padding-right: 1rem;
   }
 
   .error-box {
