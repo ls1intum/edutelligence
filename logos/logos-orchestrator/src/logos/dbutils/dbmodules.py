@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     Numeric,
@@ -29,7 +30,7 @@ class ThresholdLevel(enum.Enum):
     pipeline.py derives PRIVACY_ORDER from it and dbmanager.py derives the
     validation set, so a new level added here is known to router and
     registration at once. Mirrors the Postgres enum threshold_enum
-    (liquibase 000 + 014) and the webservice Java enum of the same name —
+    (liquibase 000 + 024) and the webservice Java enum of the same name —
     keep those in sync.
 
     The axis is "how much do we trust this deployment with our data".
@@ -232,6 +233,8 @@ class LogEntry(Base):
     azure_rate_remaining_tokens = Column(Integer)
     result_status = Column(Enum(ResultStatus, name="result_status_enum"))
     error_message = Column(Text)
+    settled_cost_micro_cents = Column(BigInteger)
+    cost_finalized = Column(Boolean, nullable=False, default=False)
 
     usage_tokens = relationship("UsageTokens")
     api_key = relationship("ApiKey")
@@ -262,7 +265,10 @@ class TokenPrice(Base):
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=True)
     provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=True)
-    price_per_k_token = Column(BigInteger, nullable=False)
+    price_per_k_unit = Column(BigInteger, nullable=False)
+    unit = Column(Text, nullable=False, server_default="token")
+    min_context_tokens = Column(BigInteger, nullable=False, server_default="0")
+    service_tier = Column(Text, nullable=False, server_default="default")
 
     token_type = relationship("TokenTypes")
 
@@ -323,3 +329,29 @@ class Job(Base):
     )
 
     api_key = relationship("ApiKey")
+
+
+class LatencyObservation(Base):
+    """Persistent EWMA state for the dynamic scheduler's LatencyStore.
+
+    Each row stores one EWMA keyed by (model_name, provider_id, tier).
+    ``tier`` is one of the ReadinessTier string values for load/wake overhead,
+    or the literal strings ``"ttft"``, ``"e2e"``, ``"prefill_per_token"``
+    for the per-model latency metrics.  The real provider_id is always stored.
+    """
+
+    __tablename__ = "latency_observations"
+    __table_args__ = (UniqueConstraint("model_name", "provider_id", "tier"),)
+
+    id = Column(Integer, primary_key=True)
+    model_name = Column(String, nullable=False)
+    provider_id = Column(Integer, nullable=False)
+    tier = Column(String, nullable=False)
+    ewma_value = Column(Float, nullable=False)
+    n = Column(Integer, nullable=False, default=1)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )

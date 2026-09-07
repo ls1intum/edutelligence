@@ -17,7 +17,7 @@
          logos-orchestrator/src/logos/dbutils/dbmodules.py (the single ordered
          definition the router and the provider validation derive from) and
          with the webservice Java enum of the same name. -->
-    <changeSet id="019-add-third-party-hardware-privacy-level" author="wasnertobias">
+    <changeSet id="024-add-third-party-hardware-privacy-level" author="wasnertobias">
         <sql>ALTER TYPE threshold_enum ADD VALUE IF NOT EXISTS 'THIRD_PARTY_HARDWARE';</sql>
         <rollback>
             <!-- Postgres cannot drop an enum value; an existing database keeps

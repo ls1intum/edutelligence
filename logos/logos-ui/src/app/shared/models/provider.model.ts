@@ -1,6 +1,6 @@
 export type ProviderType = 'logosnode' | 'cloud';
 export type CloudProviderType = 'azure' | 'openai' | 'anthropic' | 'gemini' | 'bedrock' | 'deepseek' | 'groq' | 'none';
-// Mirrors the Postgres enum threshold_enum (liquibase 000 + 014) and
+// Mirrors the Postgres enum threshold_enum (liquibase 000 + 024) and
 // ThresholdLevel in logos-orchestrator — keep in sync. THIRD_PARTY_HARDWARE
 // covers hardware outside operator control (e.g. a personal Mac MLX worker);
 // it orders below every cloud tier.

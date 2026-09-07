@@ -34,7 +34,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=1          # 2026-08-25
+CLAUDE_LOGOS_VERSION=2          # 2026-09-04
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -92,6 +92,11 @@ LOGOS_CONTEXT_FALLBACK="${LOGOS_CONTEXT_FALLBACK:-111200}"
 # window itself (vLLM charges input and output against one budget, so that is correct).
 # Asking for more than the cap therefore buys nothing and costs context — see the
 # arithmetic printed by --check.
+#
+# Lowering it is the one knob that makes a narrow window usable: on a window under
+# ~37000 tokens the default leaves less input room than Claude Code's own opening
+# prompt, and the session is refused before it starts (see the floor check below,
+# which prints the value that would fit).
 LOGOS_MAX_OUTPUT_TOKENS="${LOGOS_MAX_OUTPUT_TOKENS:-20000}"
 
 # Safety margin taken off the window before Claude Code is told about it. Claude Code
@@ -592,11 +597,6 @@ if [[ -z "$LOGOS_CONTEXT_HEADROOM" ]]; then
   (( LOGOS_CONTEXT_HEADROOM > 8192 )) && LOGOS_CONTEXT_HEADROOM=8192
 fi
 
-if (( LOGOS_CONTEXT_HEADROOM + LOGOS_MAX_OUTPUT_TOKENS >= LOGOS_CONTEXT_TOKENS )); then
-  die "context window $LOGOS_CONTEXT_TOKENS is too small for the \
-$LOGOS_MAX_OUTPUT_TOKENS-token output reservation plus $LOGOS_CONTEXT_HEADROOM headroom"
-fi
-
 # The number handed to Claude Code is the window MINUS the headroom and nothing else.
 # Claude Code subtracts its own output reservation — min(CLAUDE_CODE_MAX_OUTPUT_TOKENS,
 # 20000) — from whatever it is told, and then compacts 13000 tokens below that. So the
@@ -609,6 +609,38 @@ fi
 CONTEXT_FOR_CLI=$(( LOGOS_CONTEXT_TOKENS - LOGOS_CONTEXT_HEADROOM ))
 COMPACT_AT=$(( CONTEXT_FOR_CLI - LOGOS_MAX_OUTPUT_TOKENS - 13000 ))
 HARD_STOP_AT=$(( CONTEXT_FOR_CLI - LOGOS_MAX_OUTPUT_TOKENS - 3000 ))
+
+# ── Is there room for a session at all? ─────────────────────────────────────────
+# Claude Code's opening prompt — its system prompt plus the schemas of every tool
+# it carries — is around 13000 tokens before the user has typed anything, and none
+# of it is compactable: it is what makes the agent an agent. Since the output
+# reservation is charged against the same window, a narrow window can leave less
+# input room than that, and then the FIRST request of the session comes back as
+#
+#   This model's maximum context length is 32768 tokens. However, you requested
+#   20000 output tokens and your prompt contains at least 12769 input tokens
+#
+# with no way for the session to recover: there is nothing to compact yet. The
+# check that used to sit here only caught the arithmetic going negative
+# (headroom + reservation >= window), which a 32768-token window passes
+# comfortably while being unusable — 32768 - 20000 = 12768 tokens of input, one
+# token short of the opening prompt. So the floor is that prompt.
+#
+# It is recorded rather than acted on immediately, because --check exists to
+# diagnose exactly this: it prints the arithmetic and the way out, and only a real
+# start refuses to run.
+CLAUDE_CODE_BASE_PROMPT_TOKENS=13000
+CONTEXT_TOO_SMALL=0
+# What the reservation would have to be for the opening prompt to fit — measured
+# against the auto-compact point (13000) rather than the hard stop (3000), because
+# a value that only clears the hard stop leaves auto-compaction firing on every
+# turn, which is a working session in name only. Offered only when what is left is
+# still a usable reply length; below that the window itself is the problem and
+# pointing at the knob would be a dead end.
+AFFORDABLE_OUTPUT_TOKENS=$(( LOGOS_CONTEXT_TOKENS - LOGOS_CONTEXT_HEADROOM - 13000 - CLAUDE_CODE_BASE_PROMPT_TOKENS ))
+if (( HARD_STOP_AT < CLAUDE_CODE_BASE_PROMPT_TOKENS )); then
+  CONTEXT_TOO_SMALL=1
+fi
 
 # Group digits in threes. printf "%'d" would do this, but only under a locale
 # that defines a thousands separator — under LANG=C, which is what a login shell
@@ -634,8 +666,10 @@ context_report() {
   elif [[ "$CONTEXT_ORIGIN" == "cold" ]]; then
     printf 'context  : %s tokens, the maximum this model is served with\n' \
       "$(thousands "$LOGOS_CONTEXT_TOKENS")"
-    printf '           (no lane is up yet, so Logos reports no current size — the first\n'
-    printf '            request brings one up and it is sized against this number)\n'
+    printf '           (no lane is up yet, so Logos reports no current size. The first request\n'
+    printf '            brings one up, and how wide it comes up is decided then from whatever\n'
+    printf '            capacity is free — it can land well below this number, in which case\n'
+    printf '            that request is turned down and the next start sizes itself correctly)\n'
   else
     printf 'context  : %s tokens, using "%s" of what Logos offers\n' \
       "$(thousands "$LOGOS_CONTEXT_TOKENS")" "$CONTEXT_ORIGIN"
@@ -655,6 +689,27 @@ context_warnings() {
   if [[ -n "$KNOWN_MODEL_IDS" ]]; then
     printf 'warning  : %s is not served here. Known models: %s\n' \
       "$LOGOS_MODEL" "$KNOWN_MODEL_IDS"
+  fi
+  if (( CONTEXT_TOO_SMALL )); then
+    printf 'BLOCKED  : this window cannot host a Claude Code session.\n'
+    printf '           %s tokens of input are left after the %s reserved for replies and\n' \
+      "$(thousands "$HARD_STOP_AT")" "$(thousands "$LOGOS_MAX_OUTPUT_TOKENS")"
+    printf '           the %s of headroom, and Claude Code needs about %s of that for its own\n' \
+      "$(thousands "$LOGOS_CONTEXT_HEADROOM")" "$(thousands "$CLAUDE_CODE_BASE_PROMPT_TOKENS")"
+    printf '           system prompt and tool definitions — so the first request is rejected.\n'
+    if (( AFFORDABLE_OUTPUT_TOKENS >= 4096 )); then
+      printf '           Reserving less fits, at the cost of reply length:\n'
+      printf '             LOGOS_MAX_OUTPUT_TOKENS=%s claude-logos\n' "$AFFORDABLE_OUTPUT_TOKENS"
+    fi
+    printf '           Otherwise pick a model Logos serves with a wider window (at least %s);\n' \
+      "$(thousands "$(( CLAUDE_CODE_BASE_PROMPT_TOKENS + 20000 + 3000 + 1024 ))")"
+    printf '           the AI Tools page shows what each one gets.\n'
+  elif (( COMPACT_AT < CLAUDE_CODE_BASE_PROMPT_TOKENS )); then
+    printf 'warning  : this window is workable but tight — auto-compaction starts almost\n'
+    printf '           immediately, because %s tokens are left before it fires and the system\n' \
+      "$(thousands "$COMPACT_AT")"
+    printf '           prompt and tools already take about %s.\n' \
+      "$(thousands "$CLAUDE_CODE_BASE_PROMPT_TOKENS")"
   fi
   case "$LOGOS_MODEL" in
     claude-*|*"[1m]"*)
@@ -709,6 +764,16 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 
 # ── Launch ──────────────────────────────────────────────────────────────────────
+# A window too narrow for the opening prompt is refused here rather than handed to
+# Claude Code, whose first request would come back as a 400 from the worker that
+# reads like a bug in Logos. The report says what is left, what it costs and how
+# to get around it, so this is not a dead end — and --check above still prints all
+# of it without refusing anything.
+if (( CONTEXT_TOO_SMALL )); then
+  context_report >&2
+  die "refusing to start: see BLOCKED above"
+fi
+
 command -v claude >/dev/null 2>&1 || die "claude is not on your PATH — install Claude Code first"
 
 # Ask Logos to get the model ready before handing over. Backgrounded and

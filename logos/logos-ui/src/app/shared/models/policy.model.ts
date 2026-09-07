@@ -1,4 +1,4 @@
-// Mirrors the Postgres enum threshold_enum (liquibase 000 + 014) and
+// Mirrors the Postgres enum threshold_enum (liquibase 000 + 024) and
 // ThresholdLevel in logos-orchestrator — keep in sync.
 export type ThresholdLevel =
   | 'LOCAL'

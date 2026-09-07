@@ -20,6 +20,7 @@ The script:
      to approximate the Logos server overhead absent in direct-to-Ollama calls.
   5. Writes results in the same CSV/chart format as run_api_workload.py.
 """
+
 from __future__ import annotations
 
 import argparse

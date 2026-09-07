@@ -9,6 +9,7 @@ distributions from both configurations on a single chart.
 Usage:
     python3 tests/performance/plot_ollama_vs_vllm_3x.py
 """
+
 from __future__ import annotations
 
 import csv
