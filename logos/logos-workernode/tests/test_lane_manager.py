@@ -2882,3 +2882,46 @@ async def test_benchmark_reconfigure_unchanged_settings_allow_active_requests() 
     manager._get_status_unlocked = AsyncMock()
     await manager.reconfigure_lane("benchmark-lane", {"model": current.model}, require_idle=True)
     manager._restart_lane_unlocked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_tp1_survives_calibrated_tp2_and_config_roundtrip() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        engine="vllm", residency_source="calibrated", tensor_parallel_size=2, base_residency_mb=10000
+    )
+    manager = LaneManager(OllamaConfig(), model_profiles=profiles, gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 1}}
+    await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+    requested = manager._restart_lane_unlocked.await_args.args[1]
+    # Restarts and serialization must not reintroduce the calibrated TP=2.
+    persisted = LaneConfig.model_validate(requested.model_dump())
+    assert persisted.auto_tensor_parallel is False
+    assert manager._auto_tensor_parallel(persisted).vllm_config.tensor_parallel_size == 1
+    # Automatic lanes keep the existing calibrated-profile behavior.
+    automatic = persisted.model_copy(update={"auto_tensor_parallel": True})
+    assert manager._auto_tensor_parallel(automatic).vllm_config.tensor_parallel_size == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override", [{"gpu_memory_utilization": 0.7}, {"kv_cache_memory_bytes": "2G"}, {"enable_prefix_caching": False}]
+)
+async def test_benchmark_restarts_for_spawn_time_vllm_settings(override) -> None:
+    manager = LaneManager(OllamaConfig())
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    await manager.reconfigure_lane(
+        "benchmark-lane", {"vllm_config": {**current.vllm_config.model_dump(), **override}}, require_idle=True
+    )
+    manager._restart_lane_unlocked.assert_awaited_once()

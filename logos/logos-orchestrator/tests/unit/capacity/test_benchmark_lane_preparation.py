@@ -154,13 +154,18 @@ def _configured_planner():
         }
 
     planner._registry.peek_runtime_snapshot.side_effect = [snapshot(current), snapshot(updated)]
-    planner._registry.send_command = AsyncMock(return_value={})
+    planner._registry.send_command = AsyncMock(return_value={"lane_config": {"vllm_config": updated}})
     return planner, ServingOverrides(tensor_parallel_size=2), updated
 
 
 async def test_configured_benchmark_waits_for_worker_configuration():
     planner, overrides, updated = _configured_planner()
-    assert await planner.prepare_configured_benchmark_lane(7, "org/model", overrides) is True
+    stages = []
+    assert (
+        await planner.prepare_configured_benchmark_lane(7, "org/model", overrides, progress_callback=stages.append)
+        is True
+    )
+    assert stages == ["reconfiguring_worker", "waiting_for_model"]
     planner._registry.send_command.assert_awaited_once_with(
         7,
         "reconfigure_lane",
@@ -235,3 +240,22 @@ async def test_benchmark_reports_gpu_capacity_failure():
     with pytest.raises(RuntimeError, match="Could not make enough GPU capacity"):
         await CapacityPlanner._prepare_existing_lane(planner, 7, "org/model", target, 30, raise_on_failure=True)
     planner._registry.select_lane_for_model.assert_not_called()
+
+
+async def test_configured_benchmark_rejects_worker_override_without_polling():
+    planner, overrides, updated = _configured_planner()
+    planner._registry.send_command.return_value = {
+        "lane_config": {"vllm_config": {**updated, "tensor_parallel_size": 1}}
+    }
+    with pytest.raises(RuntimeError, match="tensor_parallel_size: requested 2, reported 1"):
+        await planner.prepare_configured_benchmark_lane(7, "org/model", overrides)
+    assert planner._registry.peek_runtime_snapshot.call_count == 1
+    planner._unmark_lane_cold.assert_called_once_with(7, "model-lane")
+
+
+async def test_configured_benchmark_reports_missing_status_confirmation():
+    planner, overrides, _ = _configured_planner()
+    with pytest.raises(RuntimeError, match="applied the vLLM settings but did not report them"):
+        await planner.prepare_configured_benchmark_lane(7, "org/model", overrides, timeout_seconds=0)
+    assert planner.prepare_benchmark_lane.await_count == 1
+    planner._unmark_lane_cold.assert_called_once_with(7, "model-lane")

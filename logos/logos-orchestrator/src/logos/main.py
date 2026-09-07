@@ -2583,11 +2583,20 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
 
     if worker_preparer is not None and data.serving_overrides.model_dump(exclude_none=True):
 
+        def report_preparation_stage(stage):
+            with DBManager() as db:
+                db.update_job_status(
+                    job_id,
+                    JobStatus.RUNNING.value,
+                    result_payload={"stage": stage, "started_samples": 0, "total_samples": data.samples},
+                )
+
         def worker_preparer():
             return _capacity_planner.prepare_configured_benchmark_lane(
                 provider_id,
                 model_name,
                 data.serving_overrides,
+                progress_callback=report_preparation_stage,
             )
 
     task = asyncio.create_task(

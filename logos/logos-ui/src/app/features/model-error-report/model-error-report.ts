@@ -710,6 +710,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     if (run.status === 'pending') return `Queued for ${run.request.provider_name}`;
     if (run.status === 'running') {
       if (run.result.stage === 'preparing_worker') return `Preparing ${run.request.provider_name}`;
+      if (run.result.stage === 'reconfiguring_worker') return `Applying vLLM settings on ${run.request.provider_name} · model may restart`;
+      if (run.result.stage === 'waiting_for_model') return `Waiting for the model on ${run.request.provider_name} to become ready`;
       if (run.result.stage === 'warming_up') return `Warming up ${run.request.provider_name}`;
       if (run.result.stage === 'benchmarking') {
         const started = run.result.started_samples ?? 0;

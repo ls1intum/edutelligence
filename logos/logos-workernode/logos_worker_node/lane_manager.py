@@ -816,9 +816,18 @@ class LaneManager:
             if not changed:
                 return await self._get_status_unlocked(lane_id)
 
+            requested_tp = (updates.get("vllm_config") or {}).get("tensor_parallel_size")
+            if current.vllm_config is not None and requested_tp is not None:
+                if requested_tp != current.vllm_config.tensor_parallel_size:
+                    current_data["auto_tensor_parallel"] = False
             new_lc = LaneConfig(**current_data)
             self._validate_vllm_runtime_requirements([new_lc])
-            if _lane_needs_restart(current, new_lc):
+            # Benchmark settings include spawn-time options such as KV cache size
+            # that the planner's automatic tuning deliberately excludes.
+            restart_needed = _lane_needs_restart(current, new_lc) or (
+                require_idle and current.vllm_config != new_lc.vllm_config
+            )
+            if restart_needed:
                 active = self._active_requests.get(lane_id, 0)
                 if require_idle and active > 0:
                     raise RuntimeError(
@@ -1431,6 +1440,8 @@ class LaneManager:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
         Policy:
+        - Manual TP changes disable auto_tensor_parallel for this lane, so
+          later restarts keep the selected value instead of the profile's TP.
         - A calibrated profile's tensor_parallel_size is the single source of
           truth — the profile's residency and KV data were measured under that
           TP, so the lane must run at it. It wins over whatever TP the
@@ -1449,6 +1460,8 @@ class LaneManager:
           OOM failures.
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
+            return lane_config
+        if not lane_config.auto_tensor_parallel:
             return lane_config
         vc = lane_config.vllm_config
         gpu_count = self._gpu_device_count()

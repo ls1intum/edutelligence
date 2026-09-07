@@ -53,6 +53,17 @@ describe('Benchmark runner', () => {
     expect(component.benchmarkStartingPairId()).toBeNull();
   });
 
+  it.each([
+    ['reconfiguring_worker', 'Applying vLLM settings on hochbruegge · model may restart'],
+    ['waiting_for_model', 'Waiting for the model on hochbruegge to become ready'],
+  ])('shows the %s preparation phase', (stage, expected) => {
+    expect(component.benchmarkStatusLabel({
+      ...run,
+      request: { ...run.request, provider_name: 'hochbruegge' },
+      result: { stage },
+    })).toBe(expected);
+  });
+
   it('blocks repeated cancellation while cancellation is pending', async () => {
     const pending = deferred<unknown>();
     service.cancelBenchmark.mockReturnValue(pending.promise);

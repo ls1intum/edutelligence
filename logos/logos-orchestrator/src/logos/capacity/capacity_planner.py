@@ -14,7 +14,7 @@ import os
 import time
 from datetime import datetime, timezone
 from itertools import combinations
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
@@ -1124,6 +1124,7 @@ class CapacityPlanner:
         model_name: str,
         overrides,
         timeout_seconds: float = 600.0,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> bool:
         """Reload an idle vLLM lane and wait for its new configuration to be reported."""
         from logos.benchmarks.guidellm_runner import apply_serving_overrides
@@ -1154,13 +1155,30 @@ class CapacityPlanner:
                 return True
             self._mark_lane_cold(provider_id, target.lane_id)
             try:
-                await self._registry.send_command(
+                if progress_callback is not None:
+                    progress_callback("reconfiguring_worker")
+                result = await self._registry.send_command(
                     provider_id,
                     "reconfigure_lane",
                     {"lane_id": target.lane_id, "updates": {"vllm_config": updated}, "require_idle": True},
                     timeout_seconds=int(timeout_seconds),
                 )
-                deadline = time.monotonic() + timeout_seconds
+                reported = (result.get("lane_config") or {}).get("vllm_config")
+                if not isinstance(reported, dict):
+                    raise RuntimeError("Worker did not return its vLLM configuration after the model restart.")
+                differences = [
+                    f"{key}: requested {value!r}, reported {reported.get(key)!r}"
+                    for key, value in updated.items()
+                    if reported.get(key) != value
+                ]
+                if differences:
+                    raise RuntimeError("Worker did not apply the requested vLLM settings: " + "; ".join(differences))
+                if progress_callback is not None:
+                    progress_callback("waiting_for_model")
+                # The command already returned the applied configuration. Only
+                # wait for the next status report here, not another full startup timeout.
+                confirmation_timeout = min(timeout_seconds, 30.0)
+                deadline = time.monotonic() + confirmation_timeout
                 while time.monotonic() < deadline:
                     snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
                     lanes = (snapshot.get("runtime") or {}).get("lanes", [])
@@ -1170,7 +1188,10 @@ class CapacityPlanner:
                         break
                     await asyncio.sleep(1)
                 else:
-                    raise RuntimeError("Worker did not confirm the requested vLLM configuration")
+                    raise RuntimeError(
+                        f"Worker {provider_id} applied the vLLM settings but did not report them "
+                        f"within {confirmation_timeout:g} seconds. Check its connection."
+                    )
             finally:
                 self._unmark_lane_cold(provider_id, target.lane_id)
         return await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds)

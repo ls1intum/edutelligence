@@ -484,6 +484,10 @@ class LaneConfig(BaseModel):
     flash_attention: bool = True
     gpu_devices: str = ""
     vllm_config: VllmConfig | None = None
+    auto_tensor_parallel: bool = Field(
+        default=True,
+        description="Allow calibrated profiles and GPU sizing to select TP. Disabled after a manual TP change.",
+    )
 
     @field_validator("gpu_devices")
     @classmethod
