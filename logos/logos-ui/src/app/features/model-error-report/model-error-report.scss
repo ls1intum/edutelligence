@@ -5,8 +5,8 @@
 // ==========================================================================
 
 .model-error-report {
-  // One type scale for log content, benchmark data and their controls.
-  --model-detail-font-family: 'JetBrains Mono', monospace;
+  // Match the summary cards in Complete Logs on Dev; reserve monospace for code.
+  --model-detail-font-family: sans-serif;
   --model-detail-font-size: var(--font-size-sm);
   --model-detail-heading-size: var(--font-size-base);
   display: flex;
@@ -157,7 +157,7 @@
   font-size: var(--model-detail-font-size);
   line-height: var(--line-height-normal);
 
-  button, input, select, textarea, code, pre { font-family: inherit; }
+  button, input, select, textarea { font-family: inherit; }
 }
 
 // ==========================================================================
@@ -855,7 +855,7 @@
   overflow: auto;
   background: rgb(var(--color-surface-0));
   color: rgb(var(--color-typography-100));
-  font-family: var(--model-detail-font-family);
+  font-family: monospace;
   font-size: var(--model-detail-font-size);
   line-height: var(--line-height-normal);
 }
