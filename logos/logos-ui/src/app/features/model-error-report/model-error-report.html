@@ -463,15 +463,18 @@
           </details>
 
           @if (benchmarkPairs().length > 0) {
-            <section class="benchmark-runner">
+            <section class="benchmark-runner" id="benchmark-runner">
               <header class="benchmark-runner__header">
                 <div>
                   <h3>Run benchmark</h3>
-                  <p>GSM8K main/test · 512 max output tokens · includes one unmeasured warm-up request</p>
+                  <p>{{ benchmarkSettings().dataset }} · {{ benchmarkSettings().subset }}/{{ benchmarkSettings().split }} · {{ benchmarkSettings().max_output_tokens }} max output tokens · one unmeasured warm-up request</p>
                 </div>
                 <span>One active run per provider</span>
               </header>
 
+              <app-benchmark-settings-editor
+                [settings]="benchmarkSettings()" (settingsChange)="benchmarkSettings.set($event)"
+                (validChange)="benchmarkSettingsValid.set($event)" />
               <div class="benchmark-sample-control">
                 <div class="benchmark-sample-control__heading">
                   <label class="benchmark-sample-control__label" for="benchmark-sample-size">Sample size</label>
@@ -510,9 +513,9 @@
                       <strong>{{ pair.provider_name }}</strong>
                       <span>{{ pair.model_name }}</span>
                       <div class="benchmark-order-summary" aria-label="Benchmark configuration">
-                        <small>GSM8K</small>
+                        <small>{{ benchmarkSettings().dataset }}</small>
                         <small>{{ benchmarkSampleLabel() }}</small>
-                        <small>512 max tokens</small>
+                        <small>{{ benchmarkSettings().max_output_tokens }} max tokens</small>
                       </div>
                     </div>
 
@@ -550,8 +553,8 @@
                       class="benchmark-run-button"
                       type="button"
                       (click)="startBenchmark(pair)"
-                      [disabled]="benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
-                      [attr.title]="!pair.endpoint_configured
+                      [disabled]="!benchmarkSettingsValid() || (hasServingOverrides() && pair.provider_type !== 'logosnode') || benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
+                      [attr.title]="hasServingOverrides() && pair.provider_type !== 'logosnode' ? 'vLLM settings require a Logos worker. Clear the overrides to run on this provider.' : !pair.endpoint_configured
                         ? 'Configure the provider endpoint first'
                         : 'Run benchmark on ' + pair.provider_name + ' · ' + pair.model_name + ' · ' + benchmarkSampleLabel()"
                     >
@@ -685,6 +688,9 @@
                     </summary>
 
                     <div class="benchmark-configuration__content">
+                      <button type="button" class="benchmark-run-button" (click)="useBenchmarkConfiguration(benchmark)">
+                        Use for next benchmark
+                      </button>
                       <div class="configuration-headings">
                         <h4>GuideLLM benchmark</h4>
                         <div>
