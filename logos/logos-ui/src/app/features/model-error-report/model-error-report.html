@@ -176,44 +176,53 @@
 
                       <section class="error-box">
 
-                        <h3 class="error-box-title">
-                          Error Details
-                        </h3>
+                        <div class="error-box-header">
 
-                        @if (item.reasonKind === 'unsupported') {
-                          <span class="reason-badge reason-badge--unsupported">
-                            Model Unsupported
+                          @if (item.reasonKind === 'unsupported') {
+                            <span
+                              class="reason-badge reason-badge--unsupported"
+                              title="This model cannot load on this node and will not be retried until an operator resolves the underlying issue."
+                            >
+                              Unsupported
+                            </span>
+                          } @else if (item.reasonKind === 'node_unhealthy') {
+                            <span
+                              class="reason-badge reason-badge--node"
+                              title="This node itself is degraded — it affects every model scheduled here, not just this one."
+                            >
+                              Node Unhealthy
+                            </span>
+                          } @else if (item.reasonKind === 'observed') {
+                            <span
+                              class="reason-badge reason-badge--observed"
+                              title="Last observed on a failing probe. Not a permanent classification — this node may succeed on the next calibration window."
+                            >
+                              Observed
+                            </span>
+                          } @else {
+                            <span class="reason-badge reason-badge--unknown">
+                              Error
+                            </span>
+                          }
+
+                          <span class="error-box-message">
+                            {{ item.errorMessage }}
                           </span>
-                          <p class="reason-explainer">
-                            This model cannot load on this node and will
-                            not be retried until an operator resolves
-                            the underlying issue.
+
+                        </div>
+
+                        @if (item.reasonKind && item.errorDetail && item.errorDetail !== item.errorMessage) {
+
+                          <p class="error-box-detail">
+                            {{ item.errorDetail }}
                           </p>
-                        } @else if (item.reasonKind === 'node_unhealthy') {
-                          <span class="reason-badge reason-badge--node">
-                            Node Unhealthy
-                          </span>
-                          <p class="reason-explainer">
-                            This node itself is degraded — it affects
-                            every model scheduled here, not just this one.
-                          </p>
-                        } @else if (item.reasonKind === 'observed') {
-                          <span class="reason-badge reason-badge--observed">
-                            Observed — non-blocking
-                          </span>
-                          <p class="reason-explainer">
-                            Last observed on a failing probe. Not a
-                            permanent classification — this node may
-                            succeed on the next calibration window.
-                          </p>
+
                         }
 
                         @if (item.scope) {
                           <div class="error-scope">
-                            <strong>Scope:</strong>
-
                             @if (item.scope.type === 'global') {
-                              <span>Global</span>
+                              <span class="error-scope-label">Global</span>
                             } @else {
                               <div class="scope-nodes">
                                 @for (node of item.scope.nodes ?? []; track node) {
@@ -230,7 +239,7 @@
                           </div>
                         }
 
-                        @if (item.errorDetail && item.errorDetail !== item.errorMessage) {
+                        @if (!item.reasonKind && item.errorDetail && item.errorDetail !== item.errorMessage) {
 
                           <button
                             type="button"
@@ -241,18 +250,12 @@
                               class="pi pi-chevron-right"
                               [class.error-toggle__icon--open]="isErrorExpanded(item.name)"
                             ></i>
-                            {{ isErrorExpanded(item.name) ? 'Hide full error' : 'Show full error' }}
+                            {{ isErrorExpanded(item.name) ? 'Hide raw log' : 'Show raw log' }}
                           </button>
 
                           @if (isErrorExpanded(item.name)) {
                             <pre>{{ item.errorDetail }}</pre>
-                          } @else {
-                            <pre>{{ item.errorMessage }}</pre>
                           }
-
-                        } @else {
-
-                          <pre>{{ item.errorMessage }}</pre>
 
                         }
 
