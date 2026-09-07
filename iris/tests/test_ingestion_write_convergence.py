@@ -39,6 +39,22 @@ def _delete_result(failed: int = 0, matches: int = 0) -> SimpleNamespace:
     return SimpleNamespace(failed=failed, matches=matches, successful=matches - failed)
 
 
+def _patch_pdf(monkeypatch, page_count: int = 1) -> None:
+    fake_doc = SimpleNamespace(page_count=page_count)
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
+        MagicMock(return_value="/tmp/test.pdf"),
+    )
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_ingestion_pipeline.fitz.open",
+        MagicMock(return_value=fake_doc),
+    )
+
+
 def _page_pipeline(events: list) -> LectureUnitPageIngestionPipeline:
     pipeline = object.__new__(LectureUnitPageIngestionPipeline)
     lecture_unit = SimpleNamespace(
@@ -99,14 +115,7 @@ def test_page_replacement_deletes_only_after_all_llm_work(monkeypatch):
     pipeline.chunk_data = MagicMock(
         side_effect=lambda **_kwargs: events.append("chunk") or [chunk]
     )
-    monkeypatch.setattr(
-        "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
-        MagicMock(return_value="/tmp/test.pdf"),
-    )
-    monkeypatch.setattr(
-        "iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file",
-        MagicMock(),
-    )
+    _patch_pdf(monkeypatch)
 
     course_language = pipeline()[0]
 
@@ -121,14 +130,7 @@ def test_page_replacement_fails_run_when_batch_drops_objects(monkeypatch):
     pipeline.collection.batch.failed_objects = [SimpleNamespace(message="boom")]
     chunk = {LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: "text"}
     pipeline.chunk_data = MagicMock(return_value=[chunk])
-    monkeypatch.setattr(
-        "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
-        MagicMock(return_value="/tmp/test.pdf"),
-    )
-    monkeypatch.setattr(
-        "iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file",
-        MagicMock(),
-    )
+    _patch_pdf(monkeypatch)
 
     with pytest.raises(IngestionStageError) as exc_info:
         pipeline()
@@ -145,14 +147,7 @@ def test_page_replacement_fails_run_when_delete_fails(monkeypatch):
     )
     chunk = {LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: "text"}
     pipeline.chunk_data = MagicMock(return_value=[chunk])
-    monkeypatch.setattr(
-        "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
-        MagicMock(return_value="/tmp/test.pdf"),
-    )
-    monkeypatch.setattr(
-        "iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file",
-        MagicMock(),
-    )
+    _patch_pdf(monkeypatch)
 
     with pytest.raises(IngestionStageError) as exc_info:
         pipeline()
@@ -160,7 +155,7 @@ def test_page_replacement_fails_run_when_delete_fails(monkeypatch):
     assert exc_info.value.error_code == STALE_CONTENT_DELETE_FAILED
 
 
-def test_attachment_needs_update_for_legacy_and_rolled_back_versions():
+def test_attachment_needs_update_is_structural():
     pipeline = object.__new__(LectureUnitPageIngestionPipeline)
     pipeline.dto = SimpleNamespace(
         lecture_unit=SimpleNamespace(
@@ -169,20 +164,29 @@ def test_attachment_needs_update_for_legacy_and_rolled_back_versions():
         settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
 
-    def with_stored_version(version):
-        stored = SimpleNamespace(
-            properties={LectureUnitPageChunkSchema.PAGE_VERSION.value: version}
-        )
+    def needs_update(stored_chunks, page_count):
+        rows = [
+            SimpleNamespace(
+                properties={
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value: page,
+                    LectureUnitPageChunkSchema.PAGE_VERSION.value: version,
+                }
+            )
+            for page, version in stored_chunks
+        ]
         pipeline.collection = SimpleNamespace(
             query=SimpleNamespace(
-                fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[stored]))
+                fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows))
             )
         )
-        return pipeline.check_if_attachment_needs_update()
+        return pipeline.check_if_attachment_needs_update(page_count)
 
-    assert with_stored_version(None) is True
-    assert with_stored_version(3) is True
-    assert with_stored_version(2) is False
+    assert needs_update([], page_count=2) is True
+    assert needs_update([(1, None), (2, None)], page_count=2) is True
+    assert needs_update([(1, 3), (2, 3)], page_count=2) is True
+    assert needs_update([(1, 2)], page_count=2) is True
+    assert needs_update([(1, 2), (2, 2), (3, 2)], page_count=2) is True
+    assert needs_update([(1, 2), (2, 2)], page_count=2) is False
 
 
 def test_interpret_image_retries_then_fails_the_run():

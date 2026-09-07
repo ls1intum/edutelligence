@@ -31,7 +31,10 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
     pipeline.get_course_language = MagicMock(return_value="en")
 
     version_chunk = SimpleNamespace(
-        properties={LectureUnitPageChunkSchema.PAGE_VERSION.value: 7}
+        properties={
+            LectureUnitPageChunkSchema.PAGE_VERSION.value: 7,
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
+        }
     )
     existing_chunks = [
         SimpleNamespace(

@@ -212,37 +212,34 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
-            if not self.check_if_attachment_needs_update():
-                pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+            pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+            try:
                 doc = fitz.open(pdf_path)
-                try:
+                if not self.check_if_attachment_needs_update(doc.page_count):
                     self.course_language = self.get_course_language(
                         doc.load_page(min(5, doc.page_count - 1)).get_text()
                     )
-                finally:
-                    cleanup_temporary_file(pdf_path)
-                self.restore_display_page_numbers_from_existing_chunks()
+                    self.restore_display_page_numbers_from_existing_chunks()
+                    self.callback.update()
+                    self.callback.update()
+                    self.callback.update()
+                    self.callback.update()
+                    self.callback.update()
+                    self.callback.update()
+                    return self.course_language, self.tokens
+                self.callback.update()
+                self._load_existing_slide_visibility()
                 self.callback.update()
                 self.callback.update()
-                self.callback.update()
-                self.callback.update()
-                self.callback.update()
-                self.callback.update()
-                return self.course_language, self.tokens
-            self.callback.update()
-            self._load_existing_slide_visibility()
-            self.callback.update()
-            self.callback.update()
-            chunks = []
-            pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
-            chunks.extend(
-                self.chunk_data(
-                    lecture_pdf=pdf_path,
-                    lecture_unit_slide_dto=self.dto.lecture_unit,
-                    base_url=self.dto.settings.artemis_base_url,
+                chunks = list(
+                    self.chunk_data(
+                        lecture_pdf=pdf_path,
+                        lecture_unit_slide_dto=self.dto.lecture_unit,
+                        base_url=self.dto.settings.artemis_base_url,
+                    )
                 )
-            )
-            cleanup_temporary_file(pdf_path)
+            finally:
+                cleanup_temporary_file(pdf_path)
             self.callback.update()
             prepared_chunks = self.embed_chunks(chunks)
             self.callback.update()
@@ -271,21 +268,41 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 tokens=list(self.tokens),
             ) from e
 
-    def check_if_attachment_needs_update(self) -> bool:
-        page_chunk = self.collection.query.fetch_objects(
-            filters=self._get_page_chunk_filter(), limit=1
+    def check_if_attachment_needs_update(self, page_count: int) -> bool:
+        """Decide structurally whether the stored chunks are current and complete.
+
+        Skipping is only safe when every stored chunk carries the current
+        attachment version (a None version is a legacy row, and inequality
+        instead of "less than" also re-ingests after a version rollback) AND
+        the chunks cover exactly pages 1..page_count. A partially ingested
+        unit therefore self-heals through re-ingestion on its next dispatch.
+        """
+        chunks = self.collection.query.fetch_objects(
+            filters=self._get_page_chunk_filter(),
+            limit=10_000,
+            return_properties=[
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.PAGE_VERSION.value,
+            ],
         ).objects
 
-        if len(page_chunk) == 0:
+        if not chunks:
             return True
-        version = page_chunk[0].properties.get(
-            LectureUnitPageChunkSchema.PAGE_VERSION.value
-        )
 
-        # None means a legacy row without a stored version, and inequality (not
-        # "less than") also re-ingests after a version rollback, e.g. an import
-        # that restored an older attachment.
-        return version is None or version != self.dto.lecture_unit.attachment_version
+        pages: set[int] = set()
+        for chunk in chunks:
+            version = chunk.properties.get(
+                LectureUnitPageChunkSchema.PAGE_VERSION.value
+            )
+            if version is None or version != self.dto.lecture_unit.attachment_version:
+                return True
+            page_number = chunk.properties.get(
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value
+            )
+            if page_number is not None:
+                pages.add(int(page_number))
+
+        return pages != set(range(1, page_count + 1))
 
     def _get_page_chunk_filter(self):
         page_chunk_filter = Filter.by_property(
