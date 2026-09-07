@@ -17,7 +17,7 @@
          added with runInTransaction="false". IF NOT EXISTS makes the statement
          idempotent, which the preConditions below cannot fully guarantee on a
          concurrently-migrated database. -->
-    <changeSet id="024-cloud-provider-type-logos" author="wasnertobias" runInTransaction="false">
+    <changeSet id="025-cloud-provider-type-logos" author="wasnertobias" runInTransaction="false">
         <sql>
             ALTER TYPE cloud_provider_type_enum ADD VALUE IF NOT EXISTS 'logos';
         </sql>
@@ -40,7 +40,7 @@
          All three columns are nullable: an upstream that reports no window
          (most OpenAI-shaped resources do not) still gets a row, so the
          catalogue records that it was scraped and found nothing. -->
-    <changeSet id="024-cloud-model-context" author="wasnertobias">
+    <changeSet id="025-cloud-model-context" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="cloud_model_context"/></not>
         </preConditions>
