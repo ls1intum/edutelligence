@@ -41,6 +41,7 @@ _INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
 )
 
 _MAX_CALIBRATION_LOG_TEXT_BYTES = 512 * 1024
+_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES = 10 * 1024 * 1024
 
 
 # Commands that can grow this node's VRAM footprint. Refused while a
@@ -743,6 +744,8 @@ class LogosBridgeClient:
             return await self._handle_start_calibration_session(params)
         if action == "stop_calibration_session":
             return await self._handle_stop_calibration_session()
+        if action == "get_calibration_log":
+            return await self._handle_get_calibration_log(params)
         if action == "run_compatibility_precheck":
             return await self._handle_run_compatibility_precheck(params)
 
@@ -1250,6 +1253,30 @@ class LogosBridgeClient:
         )
         return {"ok": True, "was_active": True, "current_model": current_model}
 
+    async def _handle_get_calibration_log(self, params: dict[str, Any]) -> dict[str, Any]:
+        """On-demand fetch of one model's on-disk calibration log.
+
+        Backs the Download-full-logs button for successful runs, which no
+        longer ship log_text automatically. Plain disk read, no GPU/vLLM
+        involved — capped higher (10 MB) than the automatic 512 KB send.
+        """
+        from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+        model_name = str(params.get("model_name", "")).strip()
+        if not model_name:
+            return {"ok": False, "error": "model_name is required"}
+
+        log_dir = get_state_dir() / "calibration_logs"
+        log_text = await self._read_calibration_log_text(
+            model_name, log_dir, max_bytes=_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES
+        )
+        if not log_text:
+            return {"ok": False, "error": "No calibration log found on this node for this model"}
+        return {
+            "ok": True,
+            "log_text": self._truncate_calibration_log_text(log_text, max_bytes=_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES),
+        }
+
     # ------------------------------------------------------------------
     # Calibration session driver
     # ------------------------------------------------------------------
@@ -1328,17 +1355,12 @@ class LogosBridgeClient:
         tail = encoded[-budget:].decode("utf-8", errors="ignore")
         return marker + tail
 
-    def _record_calibration_probe_log(self, model_name: str, result: Any, log_text: str) -> None:
+    def _record_calibration_probe_log(self, model_name: str, result: Any, log_text: str | None) -> None:
         """Report the finalized per-model probe log to the orchestrator.
 
-        Fires once per model after ``calibrate_with_tp_escalation`` returns
-        (success or failure) — the model's ``{model}.log`` file is complete
-        for this session's attempt at that point. Rides the same event
-        channel as the other calibration events; the orchestrator upserts
-        this into ``calibration_probe_logs``, keyed on (node, model).
-        ``log_text`` is the caller's already-read file content (read off
-        the event loop — see the call sites) so this stays a cheap,
-        non-blocking, plain-sync call like the rest of the event helpers.
+        Rides the calibration event channel into calibration_probe_logs,
+        keyed on (node, model). log_text is None on success — kept only
+        for failures; the fields below cover a successful run already.
         """
         self._record_calibration_event(
             "calibration_probe_log",
@@ -1367,7 +1389,7 @@ class LogosBridgeClient:
                     "wake_from_sleep_time_s": (
                         round(result.wake_from_sleep_time_s, 1) if result.wake_from_sleep_time_s is not None else None
                     ),
-                    "log_text": self._truncate_calibration_log_text(log_text),
+                    "log_text": (self._truncate_calibration_log_text(log_text) if log_text is not None else None),
                 }
             ),
         )
@@ -1726,8 +1748,7 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"base_residency_mb={result.base_residency_mb:.0f}",
                     )
-                    log_text = await self._read_calibration_log_text(model_name, log_dir)
-                    self._record_calibration_probe_log(model_name, result, log_text)
+                    self._record_calibration_probe_log(model_name, result, None)
                     # Dirty the lane manager's status revision so the next
                     # status push includes the updated model_profiles right
                     # away (instead of waiting the full status_refresh
