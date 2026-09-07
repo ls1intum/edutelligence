@@ -41,6 +41,14 @@ from pathlib import Path
 WORKSPACE = Path("/workspace")
 CHECKOUT = WORKSPACE / "repo"
 
+# The one line the agent writes about what it changed, in its artefact
+# directory. The finalizer commits with it. Kept in step with the runner's
+# own COMMIT_FILE, which is how it reaches the prompt.
+COMMIT_FILE = "commit.txt"
+# Where the agent writes what it wants said back on the thread. The runner
+# posts it; the name is kept in step with the runner's own REPLY_FILE.
+REPLY_FILE = "reply.md"
+
 
 def log(message: str) -> None:
     print(f"[session] {message}", flush=True)
@@ -144,6 +152,76 @@ def _install_git_askpass(token: str) -> None:
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
 
 
+# Where the conversation is kept between sessions, on the workspace volume
+# and beside the home rather than inside it. The home is wiped at the start
+# of every session on purpose; this is the one thing worth carrying across.
+MEMORY = WORKSPACE / ".memory"
+
+# What the CLI keeps a conversation in, under the agent's home.
+_TRANSCRIPTS = ".claude/projects"
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _has_conversation() -> bool:
+    """Whether a conversation was restored into this session's home."""
+    home = Path(os.environ.get("HOME") or "/workspace/.home")
+    projects = home / _TRANSCRIPTS
+    return projects.is_dir() and any(projects.rglob("*.jsonl"))
+
+
+def _save_conversation() -> int:
+    """Copy the agent's transcripts out of the home before it is wiped.
+
+    Only the transcripts — `*.jsonl` under the CLI's project directory. Not
+    `settings.json`, not hooks, not a `CLAUDE.md`, not a shell profile, not a
+    build cache: those are executable configuration a session could have
+    written while holding a push token, and the next session must not
+    inherit them. A conversation is data the same agent already authored,
+    and carrying it is what keeps a pull request from being re-read from
+    scratch on every review.
+    """
+    home = Path(os.environ.get("HOME") or "/workspace/.home")
+    source = home / _TRANSCRIPTS
+    if not source.is_dir() or source.is_symlink():
+        return 0
+    kept = 0
+    for path in sorted(source.rglob("*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        target = MEMORY / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        kept += 1
+    return kept
+
+
+def _restore_conversation() -> int:
+    """Put the kept transcripts back into a freshly wiped home."""
+    if not MEMORY.is_dir() or MEMORY.is_symlink():
+        return 0
+    home = Path(os.environ.get("HOME") or "/workspace/.home")
+    restored = 0
+    for path in sorted(MEMORY.rglob("*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        target = home / _TRANSCRIPTS / path.relative_to(MEMORY)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        restored += 1
+    return restored
+
+
+def _forget_conversation() -> None:
+    """Drop what was kept: this workspace is starting on something else."""
+    if MEMORY.is_symlink():
+        MEMORY.unlink()
+    elif MEMORY.is_dir():
+        shutil.rmtree(MEMORY)
+
+
 def _reset_agent_home() -> None:
     """Replace the agent's home with a fresh, empty directory.
 
@@ -170,6 +248,35 @@ def _reset_agent_home() -> None:
     elif home.exists():
         home.unlink()
     home.mkdir(parents=True, exist_ok=True)
+    _seed_hook_store(home)
+
+
+def _seed_hook_store(home: Path) -> None:
+    """Give this session a writable pre-commit store of its own.
+
+    The hook environments are baked into the image, which is exactly what
+    lets a session with no network run the linters CI runs. What cannot be
+    baked in is the store itself: pre-commit takes a lock file and records
+    the config it just ran in a small sqlite database, and the image's root
+    filesystem is read-only — so the advertised offline command failed on
+    the first thing it tried to write.
+
+    Only the database is copied. Its rows hold the paths of the installed
+    environments, which stay where they are: pre-commit reads and executes
+    them, and writes to neither.
+    """
+    store = Path(os.environ.get("PRE_COMMIT_HOME") or (home / "pre-commit"))
+    seeded = Path(os.environ.get("PRE_COMMIT_STORE") or "/opt/pre-commit")
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+        database = seeded / "db.db"
+        if database.is_file():
+            shutil.copy2(database, store / "db.db")
+    except OSError as exc:
+        # Not fatal: pre-commit falls back to installing the hooks itself,
+        # fails without a network, and says so. Better a linter the agent
+        # is told is unavailable than a session that never starts.
+        print(f"[setup] could not prepare the pre-commit store: {exc}", flush=True)
 
 
 def _clear_checkout() -> None:
@@ -243,7 +350,20 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     repository metadata rebuilt before any git command runs.
     """
     _install_git_askpass(token)
+    # The conversation is carried across the wipe when this session
+    # continues the same piece of work — an issue that became a pull
+    # request, a review on it, the review after that. Re-reading the whole
+    # repository on every cycle is what makes a feedback round cost
+    # millions of tokens for a change of ten lines.
+    continuing = _flag("LOGOS_SESSION_CONTINUE")
+    saved = _save_conversation() if continuing else 0
     _reset_agent_home()
+    if continuing:
+        restored = _restore_conversation()
+        log(f"continuing the conversation of this workspace ({saved} kept, {restored} restored)")
+    else:
+        # A workspace pointed at different work starts with a clean head.
+        _forget_conversation()
     if CHECKOUT.is_symlink() or (CHECKOUT.exists() and not CHECKOUT.is_dir()):
         # A session may have replaced the checkout itself with a link: the
         # `.git` check below would follow it into another tree and treat
@@ -343,6 +463,9 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     Returns False when there is no working copy to finalize: the agent left
     nothing, or a link in place of the checkout.
     """
+    # Saved before the wipe, so the next review on this pull request finds
+    # the conversation that produced it rather than starting over.
+    _save_conversation()
     _reset_agent_home()
     if CHECKOUT.is_symlink() or (CHECKOUT.exists() and not CHECKOUT.is_dir()):
         log("the checkout is not a directory; there is no work to finalize")
@@ -379,8 +502,31 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
 
 def build_prompt(task: str) -> str:
     """Wrap the operator's task with the constraints of this environment."""
+    images = [path for path in os.environ.get("LOGOS_SESSION_IMAGES", "").split(",") if path.strip()]
+    pictures = ""
+    if images:
+        # An issue whose description is a screenshot is unreadable without
+        # this, and the sandbox cannot go and fetch one.
+        listed = "\n".join(f"  {path}" for path in images)
+        pictures = (
+            "\n\nThe request came with images. They have been downloaded for you "
+            "and you can open them with the Read tool:\n"
+            f"{listed}\n"
+            "Look at them before you decide anything — on a visual report they "
+            "are usually the whole description.\n"
+        )
+    # What this container is, as the runner describes it — an operator can
+    # adjust that text, and the page shows exactly what was handed over. The
+    # text below is the fallback for a session started by an older runner,
+    # which is why the test is whether the runner said anything at all: an
+    # operator who empties the notes has decided nothing should be said
+    # here, and answering that decision with a page of defaults ignores it.
+    if "LOGOS_SESSION_ENVIRONMENT_NOTES" in os.environ:
+        notes = os.environ["LOGOS_SESSION_ENVIRONMENT_NOTES"].strip()
+        return f"{task}{pictures}\n\n{notes}\n" if notes else f"{task}{pictures}\n"
     return (
-        f"{task}\n\n"
+        f"{task}"
+        f"{pictures}\n\n"
         "--- Environment notes ---\n"
         "You are running unattended in an isolated container on a working copy "
         "of this repository. There is no human to ask, so make reasonable "
@@ -388,16 +534,56 @@ def build_prompt(task: str) -> str:
         "- Work only inside the current checkout.\n"
         "- Do not run git commit, git push, or gh: the harness commits and "
         "opens the pull request for you after you finish.\n"
-        "- Run the project's tests or linters for the code you touch, and fix "
-        "what you break.\n"
+        f"- Write the commit subject to $LOGOS_ARTIFACT_DIR/{COMMIT_FILE}: "
+        "ONE line, imperative, under 60 characters, saying what the change "
+        "does — 'Cancel the queued request when the client goes away', not "
+        "'Fixed stuff' and not a description of the task you were given. No "
+        "body, no bullet points, no issue numbers.\n"
+        "- Run the project's tests for the code you touch, and fix what you "
+        "break.\n"
+        "- Lint what you changed: from the top of the checkout, `pre-commit "
+        "run --files <the files you changed>`. Same command and same pinned "
+        "hooks as CI, installed in this image, no network needed. Several of "
+        "them reformat in place, so a hook that says it modified your files "
+        "has already fixed them — run it once more and it passes. To chase one "
+        "hook, name it: `pre-commit run flake8 --files <files>`. "
+        "The `pylint` and `mypy` hooks under iris/ and memiris/ go through "
+        "poetry and cannot run in here; say so if one of those is what "
+        "failed.\n"
         "- If the task turns out to be impossible or already done, say so "
         "plainly instead of inventing changes.\n"
+        f"- Changing nothing is a legitimate outcome, but it is never a silent "
+        f"one: if you finish without touching a file, write why into "
+        f"$LOGOS_ARTIFACT_DIR/{REPLY_FILE} — what you looked at, what you "
+        "would need, what you would change if you were sure. Somebody asked "
+        "for this and is waiting to hear something.\n"
+        "- Write in English: your final message, your commit subject, your "
+        "reply, whatever you put in the pull request.\n"
     )
 
 
-def run_agent(task: str) -> dict[str, object]:
-    """Drive the coding agent and return what it reported about the run."""
-    prompt = build_prompt(task)
+# What the CLI prints when its connection to the model died mid-answer. The
+# runner causes exactly this on purpose: a session paused to give capacity
+# back is frozen and taken off the model network, so the response it was
+# reading ends under it. Every session that was paused died this way before
+# the retry below existed, and every session that was never paused finished.
+_INTERRUPTIONS = (
+    "connection lost mid-response",
+    "connection error",
+    "api error: request timed out",
+    "fetch failed",
+    "socket hang up",
+    "econnreset",
+)
+
+# How many times a run may be picked up again after such an interruption.
+# The work itself is in the checkout, so continuing costs a prompt and the
+# conversation it resumes; three is enough for a busy afternoon of pauses
+# and few enough that a genuinely broken gateway stops being retried.
+_MAX_CONTINUATIONS = 3
+
+
+def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
     cmd = [
         "claude",
         "-p",
@@ -410,20 +596,28 @@ def run_agent(task: str) -> dict[str, object]:
         "--permission-mode",
         "bypassPermissions",
     ]
+    if resuming:
+        # Same conversation, same working directory: the agent keeps what it
+        # has already read and done instead of starting the task again.
+        cmd.append("--continue")
     max_turns = os.environ.get("LOGOS_SESSION_MAX_TURNS", "").strip()
     if max_turns.isdigit():
         cmd += ["--max-turns", max_turns]
+    return cmd
 
-    log("starting agent")
-    started = time.monotonic()
+
+def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
+    """Run one invocation. Returns its exit code, usage, and whether it was cut off."""
     usage: dict[str, object] = {}
-
+    interrupted = False
     process = subprocess.Popen(cmd, cwd=CHECKOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert process.stdout is not None
     for line in process.stdout:
         line = line.rstrip("\n")
         if not line:
             continue
+        if any(marker in line.lower() for marker in _INTERRUPTIONS):
+            interrupted = True
         # The stream is newline-delimited JSON; anything that is not valid JSON
         # is the CLI talking to us directly, and is worth showing verbatim.
         try:
@@ -434,28 +628,243 @@ def run_agent(task: str) -> dict[str, object]:
         _render_event(event)
         if event.get("type") == "result":
             usage = event
-    code = process.wait()
-    elapsed = time.monotonic() - started
-    log(f"agent finished in {elapsed:.0f}s with exit code {code}")
-    if code != 0:
-        raise RuntimeError(f"agent exited with code {code}")
-    return usage
+            _account_for(event)
+    return process.wait(), usage, interrupted
+
+
+def run_agent(task: str) -> dict[str, object]:
+    """Drive the coding agent and return what it reported about the run.
+
+    An interrupted run is picked up rather than failed. The platform takes
+    its capacity back by freezing a session and cutting it off the model
+    network — deliberately, so a waiting user gets the slot — and the agent
+    finds a dead response when it thaws. Treating that as a failed session
+    threw away everything it had done: hours of work, uncommitted, in a
+    checkout the next session resets.
+    """
+    prompt = build_prompt(task)
+    started = time.monotonic()
+    # A conversation restored by the preparation phase is this workspace's
+    # own history on this pull request: continue it instead of introducing
+    # the repository to a stranger again.
+    carry_on = _flag("LOGOS_SESSION_CONTINUE") and _has_conversation()
+    if carry_on:
+        log("picking up this workspace's earlier conversation")
+        # The conversation already holds the change and why it was made, so
+        # the task is what is *new*: the review that just came in, the
+        # question somebody asked. Saying so beats letting it look like the
+        # work is starting over.
+        prompt = (
+            "This is the same piece of work you have been doing in this "
+            "checkout, one round later. Everything you did before is still "
+            "here, and so is your reasoning for it — do not start over and "
+            "do not re-read what you already know. Here is what came back:"
+            f"\n\n{prompt}"
+        )
+    log("starting agent")
+    # Spending is summed across invocations. An interrupted run is still a
+    # run — its tokens were spent and its cost incurred — and the result
+    # event of the invocation that finished only describes that one.
+    spent_in = spent_out = 0
+    spent_cost = 0.0
+    for attempt in range(_MAX_CONTINUATIONS + 1):
+        resuming = attempt > 0 or carry_on
+        if attempt > 0:
+            log(f"the agent's connection was cut; continuing where it left off ({attempt}/{_MAX_CONTINUATIONS})")
+        # The first run of a continued session carries the new work — the
+        # review that just came in — into the conversation that did the
+        # earlier rounds. A later run carries only "you were cut off".
+        text = CONTINUE_PROMPT if attempt > 0 else prompt
+        code, run_usage, interrupted = _drive_agent(_agent_command(text, resuming=resuming))
+        run_in, run_out, run_cost = usage_totals(run_usage)
+        if not run_usage:
+            # Cut off before it could report: what the assistant events
+            # showed is the best account of that invocation there is.
+            run_in, run_out = max(run_in, _spent["in"] - spent_in), max(run_out, _spent["out"] - spent_out)
+        spent_in += run_in
+        spent_out += run_out
+        spent_cost += run_cost
+        elapsed = time.monotonic() - started
+        if code == 0:
+            log(f"agent finished in {elapsed:.0f}s with exit code {code}")
+            return _totalled(spent_in, spent_out, spent_cost)
+        if not interrupted or attempt == _MAX_CONTINUATIONS:
+            log(f"agent finished in {elapsed:.0f}s with exit code {code}")
+            raise RuntimeError(f"agent exited with code {code}")
+    raise RuntimeError("agent exited without a result")
+
+
+def _totalled(tokens_in: int, tokens_out: int, cost: float) -> dict[str, object]:
+    """One usage record standing for every invocation this session made."""
+    return {
+        "usage": {"input_tokens": tokens_in, "output_tokens": tokens_out},
+        "total_cost_usd": cost,
+    }
+
+
+# What the agent is told when it comes back from an interruption. Short on
+# purpose: the conversation it resumes carries the task, and repeating it
+# would invite starting over.
+CONTINUE_PROMPT = (
+    "Your connection to the model was interrupted — the platform froze this "
+    "session to give a waiting user its capacity, and the answer you were "
+    "receiving was cut off. Nothing you had already done was lost: the "
+    "working copy is exactly as you left it. Carry on from where you were. "
+    "If you are unsure how far you got, check `git status` and the files you "
+    "were editing before assuming anything."
+)
+
+# What has been spent so far, as the transcript goes. The runner reads these
+# lines back out of the container's output: it is the only channel out of the
+# sandbox, which holds no credential and reaches nothing but the model
+# gateway. The totals in the result file at the end are the authority.
+_spent = {"in": 0, "out": 0}
+
+
+def _report_usage(message: dict) -> None:
+    """Print what has been spent so far, when it changes.
+
+    Cache reads are deliberately not counted. Every turn re-reads the whole
+    conversation out of the cache, so summing that key means counting the
+    same tokens once per turn: a session reported seventeen million input
+    tokens against no output at all, which is a true sum of a meaningless
+    quantity. What is counted is what the model had to take in anew —
+    fresh input and cache writes — and what it wrote.
+
+    What it wrote is usually not there yet. The usage on an assistant event
+    is the count as the turn *began*, so the output figure is zero all the
+    way through a run and only the result event knows the total — which is
+    why a session that had written a hundred thousand tokens spent its whole
+    life reporting `out=0` on the page. So the number is printed when there
+    is one, and left out when there is not: an absent figure reads as
+    unknown, and a zero reads as nothing written.
+    """
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return
+    read = sum(
+        value for key in ("input_tokens", "cache_creation_input_tokens") if isinstance(value := usage.get(key), int)
+    )
+    written = usage.get("output_tokens")
+    before = dict(_spent)
+    _spent["in"] += read
+    _spent["out"] += written if isinstance(written, int) else 0
+    if _spent != before:
+        _print_usage()
+
+
+def _print_usage() -> None:
+    """One transcript line for the running total."""
+    written = f" out={_spent['out']}" if _spent["out"] else ""
+    print(f"[usage] in={_spent['in']}{written}", flush=True)
+
+
+def _account_for(result: dict) -> None:
+    """Take the authoritative totals of a finished invocation.
+
+    The result event is the only place the output count appears, so it is
+    folded into the running figures rather than left to the settlement: a
+    paused session, a continued one, and the page in between all read the
+    transcript, and the transcript should not be the one account that is
+    permanently missing half the number.
+    """
+    tokens_in, tokens_out, _cost = usage_totals(result)
+    if tokens_out > _spent["out"]:
+        _spent["out"] = tokens_out
+    if tokens_in > _spent["in"]:
+        _spent["in"] = tokens_in
+    _print_usage()
 
 
 def _render_event(event: dict) -> None:
     """Turn one stream event into a readable transcript line."""
     kind = event.get("type")
     if kind == "assistant":
-        for block in (event.get("message") or {}).get("content") or []:
+        message = (event.get("message") or {}) if isinstance(event.get("message"), dict) else {}
+        for block in message.get("content") or []:
             if block.get("type") == "text" and block.get("text", "").strip():
                 print(block["text"].strip(), flush=True)
             elif block.get("type") == "tool_use":
-                print(f"[tool] {block.get('name')}", flush=True)
+                print(_tool_line(block), flush=True)
+        _report_usage(message)
     elif kind == "result":
         subtype = event.get("subtype", "")
         print(f"[result] {subtype}", flush=True)
     elif kind == "system" and event.get("subtype") == "init":
         print(f"[agent] model={event.get('model')}", flush=True)
+
+
+# How much of a tool call fits on one transcript line. Long enough for a git
+# command or a path, short enough that a wall of them is still readable.
+_TOOL_DETAIL = 140
+
+
+def _tool_line(block: dict) -> str:
+    """One transcript line for one tool call.
+
+    "[tool] Bash" three times in a row tells a reader nothing — not which
+    file was read, not which command ran, not whether the agent is looking
+    at the right thing at all. The name is the least interesting part of the
+    call; what it was given is the part somebody watching wants.
+    """
+    name = str(block.get("name") or "tool")
+    args = block.get("input")
+    detail = _tool_detail(name, args if isinstance(args, dict) else {})
+    return f"[tool] {name}: {detail}" if detail else f"[tool] {name}"
+
+
+def _tool_detail(name: str, args: dict) -> str:
+    """The part of a tool call worth showing."""
+    if name == "Bash":
+        return _one_line(args.get("command"))
+    if name in ("Read", "NotebookEdit"):
+        where = _short_path(args.get("file_path") or args.get("notebook_path"))
+        offset = args.get("offset")
+        return f"{where}:{offset}" if where and isinstance(offset, int) else where
+    if name in ("Edit", "Write"):
+        return _short_path(args.get("file_path"))
+    if name == "Grep":
+        pattern = _one_line(args.get("pattern"))
+        where = _short_path(args.get("path"))
+        return f"{pattern} in {where}" if where else pattern
+    if name == "Glob":
+        return _one_line(args.get("pattern"))
+    if name in ("WebFetch", "WebSearch"):
+        return _one_line(args.get("url") or args.get("query"))
+    if name == "Task":
+        return _one_line(args.get("description") or args.get("subagent_type"))
+    if name == "TodoWrite":
+        todos = args.get("todos")
+        if isinstance(todos, list):
+            doing = next(
+                (
+                    str(item.get("content") or "")
+                    for item in todos
+                    if isinstance(item, dict) and item.get("status") == "in_progress"
+                ),
+                "",
+            )
+            return _one_line(f"{len(todos)} steps, on '{doing}'" if doing else f"{len(todos)} steps")
+    # An unfamiliar tool: show whatever short string it was given rather
+    # than nothing at all.
+    for value in args.values():
+        if isinstance(value, str) and value.strip():
+            return _one_line(value)
+    return ""
+
+
+def _one_line(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[: _TOOL_DETAIL - 1] + "…" if len(text) > _TOOL_DETAIL else text
+
+
+def _short_path(value: object) -> str:
+    """A path as it reads in the repository, not as it sits in the container."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    prefix = f"{CHECKOUT}/"
+    return _one_line(text[len(prefix) :] if text.startswith(prefix) else text)
 
 
 def usage_totals(usage: dict[str, object]) -> tuple[int, int, float]:
@@ -471,7 +880,11 @@ def usage_totals(usage: dict[str, object]) -> tuple[int, int, float]:
                 return value
         return 0
 
-    tokens_in = as_int("input_tokens") + as_int("cache_creation_input_tokens") + as_int("cache_read_input_tokens")
+    # Same definition as the running figures the session reports on its
+    # transcript, so the number does not change meaning when the session
+    # ends: fresh input and cache writes, not the conversation re-read out
+    # of the cache on every turn.
+    tokens_in = as_int("input_tokens") + as_int("cache_creation_input_tokens")
     tokens_out = as_int("output_tokens")
     # The CLI reports USD; Logos accounts in EUR. Without a live rate the
     # honest thing is to carry the number through unconverted and let the
@@ -541,32 +954,59 @@ def commit_and_push(branch: str, task: str) -> int:
 
     log(f"committing {len(files)} changed file(s)")
     run(["git", "add", "-A"], cwd=CHECKOUT)
-    subject = _commit_subject(task)
-    message = (
-        f"{subject}\n\n"
-        f"Produced by an unattended Logos agent session "
-        f"({os.environ.get('LOGOS_SESSION_ID', '?')}).\n\n"
-        f"Task:\n{task.strip()[:2000]}\n"
-    )
-    run(["git", "commit", "-m", message], cwd=CHECKOUT)
+    # One line, and nothing else. What the change is belongs in the subject;
+    # why it was made belongs in the pull request, where people read it.
+    run(["git", "commit", "-m", _commit_subject(task)], cwd=CHECKOUT)
     run(["git", "push", "--force-with-lease", "origin", branch], cwd=CHECKOUT)
     return len(files)
 
 
-def _commit_subject(task: str) -> str:
-    """Derive a commit subject that satisfies the repository's title policy.
+# What a subject may be. Fifty is the git convention and seventy-two the
+# point at which tools start wrapping; with the `Logos`: prefix counted, this
+# leaves a summary that fits on one line in every viewer.
+_SUBJECT_LIMIT = 72
 
-    The repo requires `` `Logos`: Capitalised … `` on pull requests, and CI
-    enforces it. Producing it here rather than asking the agent for it means a
-    session cannot fail review on a formatting rule.
+
+def _commit_subject(task: str) -> str:
+    """One line saying what changed.
+
+    The agent writes it, because it is the only one that knows: a subject
+    derived from the task describes the *request*, and for a handover that
+    reads "Pull request #851 ('…') has been assigned to you" — which is not
+    what the commit did. What it writes is trimmed to one line and given the
+    `` `Logos`: `` prefix the repository requires, so a session cannot fail
+    review on a formatting rule either.
     """
-    first_line = task.strip().splitlines()[0] if task.strip() else "Agent session"
+    return (
+        _as_subject(_written_subject())
+        or _as_subject(os.environ.get("LOGOS_SESSION_SUBJECT", ""))
+        or "`Logos`: Update from an agent session"
+    )
+
+
+def _written_subject() -> str:
+    """What the agent said about its own change, if it said anything."""
+    path = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / COMMIT_FILE
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+def _as_subject(text: str) -> str:
+    """One clean line, or nothing."""
+    first_line = next((line for line in (text or "").splitlines() if line.strip()), "")
     cleaned = re.sub(r"\s+", " ", first_line).strip().rstrip(".")
     cleaned = re.sub(r"^`?logos`?\s*:\s*", "", cleaned, flags=re.IGNORECASE)
     if not cleaned:
-        cleaned = "Agent session"
+        return ""
     cleaned = cleaned[0].upper() + cleaned[1:]
-    return f"`Logos`: {cleaned[:88]}"
+    room = _SUBJECT_LIMIT - len("`Logos`: ")
+    if len(cleaned) > room:
+        # Cut on a word rather than mid-word, and without a trailing ellipsis:
+        # a subject is a sentence, not a preview of one.
+        cleaned = cleaned[:room].rsplit(" ", 1)[0].rstrip(",;:-")
+    return f"`Logos`: {cleaned}"
 
 
 def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
@@ -575,18 +1015,13 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
         log("no repository slug configured; skipping pull request")
         return None
 
+    # Title only. The description is the author's to write, and a pull
+    # request opened with a wall of generated text — a summary nobody wrote,
+    # the task pasted back, a checklist — buries the diff under boilerplate
+    # and gives the reviewer a page of things they already know. What the
+    # change does belongs in the commit subject; why it was made belongs to
+    # whoever picks it up.
     title = _commit_subject(task)
-    body = (
-        "## Summary\n\n"
-        "Opened by an unattended Logos agent session running on spare platform "
-        "capacity. **Nothing here has been reviewed by a human yet.**\n\n"
-        "## Task given to the agent\n\n"
-        f"```\n{task.strip()[:4000]}\n```\n\n"
-        "## Steps for Testing\n\n"
-        "1. Read the diff — this is the first point a person sees this work.\n"
-        "2. Check that the tests the agent ran actually cover the change.\n\n"
-        f"Session: `{os.environ.get('LOGOS_SESSION_ID', '?')}`\n"
-    )
     process = run(
         [
             "gh",
@@ -600,9 +1035,10 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
             branch,
             "--title",
             title,
+            # Empty rather than absent: `gh` prompts for a body it was not
+            # given, and a session has no terminal to prompt at.
             "--body",
-            body,
-            "--draft",
+            "",
         ],
         cwd=CHECKOUT,
         check=False,

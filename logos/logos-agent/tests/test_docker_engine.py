@@ -71,8 +71,8 @@ class TestNetworkIsolation:
         async def fake_request(method, path, **kwargs):
             calls.append((method, path))
             if method == "GET":
-                return {"Name": "logos-agent-net", "Internal": True}
-            return {}
+                return _FakeResponse({"Name": "logos-agent-net", "Internal": True})
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 
@@ -84,8 +84,8 @@ class TestNetworkIsolation:
     async def test_a_plain_bridge_is_refused_rather_than_used(self, monkeypatch):
         async def fake_request(method, path, **kwargs):
             if method == "GET":
-                return {"Name": "logos-agent-net", "Internal": False}
-            return {}
+                return _FakeResponse({"Name": "logos-agent-net", "Internal": False})
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 
@@ -99,7 +99,7 @@ class TestNetworkIsolation:
             if method == "GET":
                 raise docker_engine.DockerError(404, "no such network")
             created.update(kwargs.get("json") or {})
-            return {}
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 
@@ -117,7 +117,7 @@ class TestPauseReportsReality:
 
     async def test_a_successful_pause_is_reported(self, monkeypatch):
         async def fake_request(method, path, **kwargs):
-            return {}
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
         assert await docker_engine.pause_container("cid") is True
@@ -153,7 +153,7 @@ class TestNetworkDetach:
 
         async def fake_request(method, path, **kwargs):
             sent.update({"method": method, "path": path, "json": kwargs.get("json")})
-            return {}
+            return _FakeResponse({})
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
 
@@ -167,3 +167,53 @@ class TestNetworkDetach:
 
         monkeypatch.setattr(docker_engine, "_request", fake_request)
         assert await docker_engine.connect_network("logos-agent-net", "cid") is True
+
+
+class TestThawingSomethingThatIsAlreadyRunning:
+    """Docker has two ways of saying "it is not frozen".
+
+    In production the second one — a 500 with "Container … is not paused" —
+    escaped as an exception and killed the whole scheduler pass, which then
+    stopped resuming, admitting and sweeping until the next tick.
+    """
+
+    async def test_a_304_means_it_is_running(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(304, "not paused")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        assert await docker_engine.unpause_container("cid") is True
+
+    async def test_a_500_saying_the_same_thing_means_the_same_thing(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(500, "Container e2dd8c92 is not paused")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        assert await docker_engine.unpause_container("cid") is True
+
+    async def test_a_container_that_is_gone_is_not_running(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(404, "no such container")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        assert await docker_engine.unpause_container("cid") is False
+
+    async def test_another_500_is_still_an_error(self, monkeypatch):
+        from app import docker_engine
+
+        async def refuses(*_args, **_kwargs):
+            raise docker_engine.DockerError(500, "devicemapper: something went wrong")
+
+        monkeypatch.setattr(docker_engine, "_request", refuses)
+
+        with pytest.raises(docker_engine.DockerError):
+            await docker_engine.unpause_container("cid")

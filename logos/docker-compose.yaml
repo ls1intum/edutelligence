@@ -342,6 +342,11 @@ services:
   logos-agent:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent:${IMAGE_TAG:-latest}
     container_name: logos-agent
+    # Long enough to freeze every running session before the process is
+    # killed. A deploy restarts this service and the model gateway together;
+    # a session frozen first survives that, one left talking to a gateway
+    # being replaced loses the turn it was in the middle of.
+    stop_grace_period: 30s
     restart: unless-stopped
     # Opt-in: the service does nothing until a profile enables it, so an
     # existing deployment that does not want agent sessions is unchanged by
@@ -398,7 +403,15 @@ services:
       # The uid the session image runs as; the runner chowns the per-session
       # artefact directories it creates to this user.
       LOGOS_AGENT_SESSION_UID: "${LOGOS_AGENT_SESSION_UID:-10001}"
-      LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-10800}"
+      # Empty by default: a session ends when the agent is done, not when a
+      # clock says so. Set a number of seconds only if a deployment wants
+      # one — what protects capacity here is the pause and the ceilings,
+      # neither of which cares how long a session has been at it.
+      # Whose word the agent acts on: membership of these teams in the
+      # repository's organisation. Empty falls back to "may write to this
+      # repository", which is what the runner used before.
+      LOGOS_AGENT_TRUSTED_TEAMS: "${LOGOS_AGENT_TRUSTED_TEAMS:-logos-developers,logos-maintainers}"
+      LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-0}"
 
       # Capacity gates: start only below the first threshold, hand capacity
       # back above the second. Pause must exceed start or sessions flap.
@@ -416,8 +429,12 @@ services:
       # Optional: a second token of the same account without 'workflow' scope,
       # handed to session containers. Falls back to the token above.
       LOGOS_AGENT_SESSION_GITHUB_TOKEN: "${LOGOS_AGENT_SESSION_GITHUB_TOKEN:-}"
-      # Queue sessions in response to labelled issues and reviews.
-      LOGOS_AGENT_TRIGGERS_ENABLED: "${LOGOS_AGENT_TRIGGERS_ENABLED:-false}"
+      # Whether the agent's GitHub account may be used like a colleague's:
+      # assignments, reviews on its pull requests, and comments addressed to
+      # it queue sessions. On unless explicitly switched off — running this
+      # service is already the deliberate step, and the assignment or the
+      # mention is the per-item consent.
+      LOGOS_AGENT_TRIGGERS_ENABLED: "${LOGOS_AGENT_TRIGGERS_ENABLED:-true}"
       LOGOS_AGENT_DEPLOY_ENABLED: "${LOGOS_AGENT_DEPLOY_ENABLED:-false}"
       LOGOS_AGENT_DEV_BASE_URL: "${LOGOS_AGENT_DEV_BASE_URL:-https://logos-dev.aet.cit.tum.de}"
     volumes:
@@ -456,7 +473,12 @@ services:
   # it is also where the model credential lives, injected into the traffic
   # so the session containers never carry it. See agent-gateway/nginx.conf.
   logos-agent-gateway:
-    image: nginx:1.28-alpine
+    # The nginx configuration is baked into this image, not mounted from the
+    # host: a deployment copies only the compose file to its VM, so a bind
+    # mount of ./agent-gateway/nginx.conf resolved to a missing path there,
+    # Docker created an empty directory in its place, and the gateway served
+    # its stock configuration and failed its health check forever.
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent-gateway:${IMAGE_TAG:-latest}
     container_name: logos-agent-gateway
     restart: unless-stopped
     profiles: ["agent"]
@@ -472,16 +494,12 @@ services:
     depends_on:
       - logos-orchestrator
     environment:
-      # The Logos key the gateway injects into the agent's model calls. It
-      # is substituted into the nginx configuration by the image's envsubst
-      # at container start (the file is mounted as a template for exactly
-      # this), so it never has to be passed to a session container.
+      # The Logos key the gateway injects into the agent's model calls. The
+      # image ships the configuration as a template, and its entrypoint runs
+      # envsubst at container start, so the key enters the running
+      # configuration here and never has to be passed to a session
+      # container — nor does it sit in an image layer.
       LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
-    volumes:
-      # Mounted into /etc/nginx/templates/ so the image's envsubst renders
-      # ${LOGOS_AGENT_API_KEY} into the live configuration at startup;
-      # nginx's own $variables are left untouched.
-      - ./agent-gateway/nginx.conf:/etc/nginx/templates/default.conf.template:ro
     networks:
       - internal
       - agent

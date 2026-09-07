@@ -158,6 +158,51 @@ class SessionSummary(BaseModel):
     # ('issue-812'). Null for sessions a person created.
     trigger_kind: str | None = None
     trigger_ref: str | None = None
+    # How urgent this work is, and the sentence explaining it.
+    priority: int = 50
+    priority_reason: str | None = None
+    # The environment notes this session was handed, as they stood when it
+    # started. Null for a session that never started, and for the ones that
+    # ran before the runner kept a copy — the page says so rather than
+    # showing today's text as if it were theirs.
+    environment_notes: str | None = None
+
+
+class InstructionState(BaseModel):
+    """The standing text every session is given."""
+
+    house_rules: str
+    environment_notes: str
+    # Whether each half is what the code ships with, or somebody's decision.
+    house_rules_default: bool
+    environment_notes_default: bool
+    updated_by: str = ""
+
+
+class InstructionUpdate(BaseModel):
+    """New standing text.
+
+    Each half is optional and left as it is stored when it is absent, so a
+    page can save or reset one box without also submitting whatever is
+    typed in the other. `reset_*` is the third state: back to the text the
+    code ships with, which an empty string does not mean.
+    """
+
+    house_rules: str | None = Field(default=None, max_length=20000)
+    environment_notes: str | None = Field(default=None, max_length=20000)
+    reset_house_rules: bool = False
+    reset_environment_notes: bool = False
+
+
+class QueueMove(BaseModel):
+    """Where an operator wants a queued session to sit.
+
+    A move rather than a number: the order is what the runner works on
+    while the platform is busy, and picking a number means guessing what
+    the neighbours are.
+    """
+
+    move: str = Field(pattern="^(up|down|first)$")
 
 
 class SessionEvent(BaseModel):
@@ -166,6 +211,37 @@ class SessionEvent(BaseModel):
     ts: datetime
     kind: EventKind
     payload: dict
+
+
+class ControlState(BaseModel):
+    """What an operator has changed about the runner while it runs."""
+
+    # 'running', 'draining' (start nothing new), or 'paused' (hand
+    # everything back now).
+    mode: str = "running"
+    mode_reason: str = ""
+    paused: bool = False
+    admits_new_sessions: bool = True
+    # The ceiling in force. `max_parallel_override` is null when the
+    # environment's configured value stands.
+    max_parallel: int
+    max_parallel_override: int | None = None
+    max_parallel_configured: int
+    updated_by: str = ""
+
+
+class ControlUpdate(BaseModel):
+    """A change to the runtime controls. Omitted fields stay as they are."""
+
+    # 'running' works as configured, 'draining' starts nothing new while
+    # what runs finishes, 'paused' hands everything back now.
+    mode: str | None = Field(default=None, pattern="^(running|draining|paused)$")
+    # Why it was stopped, for the people who find it stopped.
+    reason: str = Field(default="", max_length=200)
+    # 0 drains without pausing: nothing new starts, what runs keeps running.
+    # Null clears the override and the configured ceiling applies again.
+    max_parallel: int | None = Field(default=None, ge=0, le=100)
+    clear_max_parallel: bool = False
 
 
 class CapacityState(BaseModel):

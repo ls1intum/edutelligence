@@ -112,12 +112,12 @@ async def ensure_network(name: str, *, internal: bool = False) -> None:
     operator removing it while nothing runs.
     """
     try:
-        existing = await _request("GET", f"/networks/{name}")
+        response = await _request("GET", f"/networks/{name}")
     except DockerError as exc:
         if exc.status != 404:
             raise
     else:
-        actual = bool(existing.get("Internal", False))
+        actual = bool(response.json().get("Internal", False))
         if actual != internal:
             raise DockerError(
                 409,
@@ -137,6 +137,24 @@ async def ensure_network(name: str, *, internal: bool = False) -> None:
             "Labels": {"logos.agent": "session-network"},
         },
     )
+
+
+async def image_present(image: str) -> bool:
+    """Whether an image is on this host already.
+
+    Sessions run an image the registry publishes on every build of the
+    default branch. Between a merge and that build finishing — or when a
+    deployment has never pulled it — the first session dies with a bare
+    `404: No such image`, which reads like a bug in the runner rather than
+    a missing artefact. Asking first turns that into a sentence.
+    """
+    try:
+        await _request("GET", f"/images/{image}/json")
+        return True
+    except DockerError as exc:
+        if exc.status == 404:
+            return False
+        raise
 
 
 async def create_session_container(
@@ -321,11 +339,17 @@ async def unpause_container(container_id: str) -> bool:
     304 means it was not frozen in the first place, which is the desired
     end state; 404 and 409 mean there is no running container to thaw, and
     the caller must not record the session as running again.
+
+    Docker also answers 500 "Container … is not paused" for a container
+    that is running — the same situation as 304, reported differently, and
+    in production it escaped as an exception that killed the whole
+    scheduler pass. A container that is already running is what the caller
+    asked for.
     """
     try:
         await _request("POST", f"/containers/{container_id}/unpause")
     except DockerError as exc:
-        if exc.status == 304:
+        if exc.status == 304 or (exc.status == 500 and "is not paused" in str(exc)):
             return True
         if exc.status in (404, 409):
             return False

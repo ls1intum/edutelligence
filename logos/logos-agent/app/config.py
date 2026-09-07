@@ -42,6 +42,17 @@ def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+# The file a session writes an answer into, relative to its artefact
+# directory. Shared contract: the task text tells the agent to write it, the
+# runner reads it and posts what it finds. It lives here rather than in
+# either of those modules so neither has to import the other.
+REPLY_FILE = "reply.md"
+# The one line the agent writes about what it changed. The runner commits
+# with it, because the agent is the only one that knows what the change is —
+# and because a commit subject derived from the task reads like the task.
+COMMIT_FILE = "commit.txt"
+
+
 @dataclass(frozen=True)
 class Settings:
     # --- database ---------------------------------------------------------
@@ -125,9 +136,47 @@ class Settings:
     # per-session artefact directory on the host as root, so it must hand it
     # over to this UID or the session cannot write its own output.
     session_uid: int = _int("LOGOS_AGENT_SESSION_UID", 10001)
-    # Wall-clock ceiling for one session. A stuck agent burns capacity that the
-    # whole point of this runner is to reclaim, so the cap is not optional.
-    session_timeout_s: int = _int("LOGOS_AGENT_SESSION_TIMEOUT_S", 3 * 3600)
+    # Whose word the agent acts on. A session pushes branches and answers on
+    # behalf of this repository, so what may direct it is a decision about
+    # people, not about permissions that happen to be attached to a fork or
+    # a triage role. Named teams in the repository's own organisation; the
+    # runner falls back to "may write to this repository" when it cannot ask
+    # (a token without `read:org`), which is the older, coarser rule.
+    trusted_teams: tuple[str, ...] = tuple(
+        team.strip()
+        for team in os.getenv("LOGOS_AGENT_TRUSTED_TEAMS", "logos-developers,logos-maintainers").split(",")
+        if team.strip()
+    )
+    # The review apps this repository runs on its own pull requests. They may
+    # not direct anything — no review of theirs starts a session, no comment
+    # of theirs steers one — but what they wrote travels with a task that
+    # somebody trusted has already directed.
+    #
+    # Without this the agent takes over its own pull request to address a
+    # review and is handed the pull request without the review: on prod,
+    # every handover dropped between six and seventeen comments, and on the
+    # busy ones those were the entire review. An agent given a diff and told
+    # "start from what is still open" reconstructs a review from the diff,
+    # which is guesswork dressed up as work.
+    #
+    # Named accounts rather than "any bot": this is a list of two apps that
+    # this repository chose, and it is emptied by setting the variable to
+    # nothing.
+    review_bots: tuple[str, ...] = tuple(
+        name.strip().lower()
+        for name in os.getenv("LOGOS_AGENT_REVIEW_BOTS", "coderabbitai[bot],Claudia-Anthropica").split(",")
+        if name.strip()
+    )
+    # Wall-clock ceiling for one session, or 0 for none — which is the
+    # default. A clock is the wrong thing to stop an agent with: a session
+    # that has read the repository for two hours and is halfway through a
+    # change is not stuck, and killing it throws away everything it has done
+    # without committing any of it. What this runner actually protects is
+    # capacity, and that is protected by the things that measure capacity —
+    # the pause, the parallel ceiling, the trigger quota — none of which
+    # care how long a session has been at it. A session that really is stuck
+    # is a thing a person can see on the page and cancel.
+    session_timeout_s: int = _int("LOGOS_AGENT_SESSION_TIMEOUT_S", 0)
     # One helper container (checkout preparation, finalization) must not
     # outlive the session budget either: these are git and GitHub
     # round-trips, not agent work, and a stuck helper would pin its session
@@ -185,23 +234,32 @@ class Settings:
     allowed_environment: str = os.getenv("LOGOS_AGENT_ALLOWED_ENVIRONMENT", "logos-dev")
     dev_base_url: str = os.getenv("LOGOS_AGENT_DEV_BASE_URL", "https://logos-dev.aet.cit.tum.de")
 
-    # Branch names a session may push. Anything outside this prefix is refused
-    # by the service before the container is even started.
-    branch_prefix: str = os.getenv("LOGOS_AGENT_BRANCH_PREFIX", "agent/")
+    # The prefix of branches this runner *creates*. Everything in this
+    # repository lives under `logos/`, and agent work is a subtree of that,
+    # so a glance at a branch name says both what it belongs to and who made
+    # it. A branch the runner did not create — a pull request handed to it by
+    # a person — keeps its own name: renaming it would abandon the pull
+    # request it belongs to.
+    branch_prefix: str = os.getenv("LOGOS_AGENT_BRANCH_PREFIX", "logos/agent/")
     protected_branches: tuple[str, ...] = field(
         default_factory=lambda: _csv("LOGOS_AGENT_PROTECTED_BRANCHES", ("main", "develop"))
     )
 
     # --- reacting to the repository --------------------------------------
     # Whether the runner queues sessions of its own when something happens on
-    # GitHub. This is the only knob the feature has: everything else about it
-    # — how often the repository is polled, how far back a restarted runner
-    # looks, how many self-queued sessions may be active at once — is a
-    # constant in `triggers.py`, derived where it depends on anything. An
-    # operator turns this on deliberately, because it is the difference
-    # between a tool that runs what it is told and one that decides for
-    # itself what to work on.
-    triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", False)
+    # GitHub. On by default: starting this service at all is already the
+    # deliberate decision (it lives behind a compose profile), and the real
+    # consent is per item — an issue or pull request only becomes agent work
+    # by carrying the label or being assigned to the agent account. A second,
+    # invisible switch on top of those would only be a way to have the
+    # feature deployed and quietly not working. It remains configurable as a
+    # kill switch: turning it off stops the automation without taking the
+    # runner and its UI down with it.
+    #
+    # Everything else about the feature — poll interval, how far back a
+    # restarted runner looks, how many self-queued sessions may be active —
+    # is a constant in `triggers.py`, derived where it depends on anything.
+    triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", True)
 
     # --- storage ----------------------------------------------------------
     # Where session artefacts (logs, screenshots) are kept, on a volume shared

@@ -12,7 +12,10 @@ import { FormsModule } from '@angular/forms';
 import { AgentService } from '../../core/services/agent.service';
 import {
   AgentCapacity,
+  AgentControls,
+  AgentRunnerMode,
   AgentEvent,
+  AgentInstructions,
   AgentModels,
   AgentSession,
   AgentSessionStatus,
@@ -46,6 +49,8 @@ export class Agents implements OnInit {
   capacity = signal<AgentCapacity | null>(null);
   models = signal<AgentModels | null>(null);
   triggers = signal<AgentTriggers | null>(null);
+  controls = signal<AgentControls | null>(null);
+  controlBusy = signal(false);
   loading = signal(true);
   error = signal<string | null>(null);
 
@@ -71,6 +76,36 @@ export class Agents implements OnInit {
   formError = signal<string | null>(null);
 
   newWorkspaceName = signal('');
+  pauseReason = signal('');
+  /** What is typed in the limit field, until it is applied. */
+  limitDraft = signal('');
+
+  /**
+   * What the slider stands at: the value being dragged if there is one,
+   * otherwise the limit in force — the override, or the configured value
+   * when nothing overrides it.
+   */
+  readonly limitShown = computed(() => {
+    const draft = this.limitDraft().trim();
+    if (draft !== '' && Number.isFinite(Number(draft))) return Number(draft);
+    const state = this.controls();
+    return state?.max_parallel_override ?? state?.max_parallel_configured ?? 0;
+  });
+
+  /**
+   * How far the slider goes. The configured value is the normal working
+   * point, so the scale reaches past it without running to the schema's
+   * hundred, which no deployment has the capacity for.
+   */
+  readonly limitCeiling = computed(() => {
+    const state = this.controls();
+    const configured = state?.max_parallel_configured ?? 10;
+    // Never below what is actually set: a stored override of 80 against a
+    // scale that stops at 20 would show 80 in the label, clamp the control
+    // to 20, and lower the limit on the first touch of it.
+    const inForce = Math.max(state?.max_parallel_override ?? 0, this.limitShown());
+    return Math.min(100, Math.max(20, configured * 2, inForce));
+  });
   creatingWorkspace = signal(false);
 
   readonly workspaceOptions = computed<AppSelectOption[]>(() =>
@@ -103,10 +138,32 @@ export class Agents implements OnInit {
   );
 
   // ── grouped view ─────────────────────────────────────────────────────────
-  activeSessions = computed(() => this.sessions().filter((s) => isActive(s.status)));
+  /** What is under way: everything active that is not still waiting. */
+  activeSessions = computed(() =>
+    this.sessions().filter((s) => isActive(s.status) && s.status !== 'queued'),
+  );
   finishedSessions = computed(() => this.sessions().filter((s) => !isActive(s.status)));
 
   loadPercent = computed(() => Math.round((this.capacity()?.load ?? 0) * 100));
+
+  /**
+   * The session occupying each workspace, by workspace id.
+   *
+   * A workspace runs one session at a time — that is what makes the parallel
+   * ceiling a count of workspaces — so the list can say which one rather
+   * than only that it is taken.
+   */
+  private readonly occupants = computed(() => {
+    const byWorkspace = new Map<number, AgentSession>();
+    for (const session of this.activeSessions()) {
+      if (!byWorkspace.has(session.workspace_id)) byWorkspace.set(session.workspace_id, session);
+    }
+    return byWorkspace;
+  });
+
+  occupantOf(workspace: AgentWorkspace): AgentSession | undefined {
+    return this.occupants().get(workspace.id);
+  }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {
@@ -114,6 +171,7 @@ export class Agents implements OnInit {
     const timer = setInterval(() => void this.tick(), POLL_MS);
     this.destroyRef.onDestroy(() => {
       clearInterval(timer);
+      this.stopStream();
       this.resetScreenshots();
     });
   }
@@ -121,7 +179,12 @@ export class Agents implements OnInit {
   private async tick(): Promise<void> {
     // Only poll while something can change; a page left open on a finished
     // session should not keep the runner busy answering.
-    if (this.activeSessions().length === 0 && this.selectedId() === null) {
+    // Everything that has not finished, queued rows included: they are not
+    // rendered with the active ones any more, and gating the poll on that
+    // list would leave a page showing only a queue frozen — no start, no
+    // cancellation and no reordering would ever reach it.
+    const live = this.sessions().filter((s) => isActive(s.status)).length;
+    if (live === 0 && this.selectedId() === null) {
       await this.loadCapacity();
       return;
     }
@@ -157,6 +220,84 @@ export class Agents implements OnInit {
     } catch {
       this.capacity.set(null);
     }
+    // Read with the capacity, not with the list: an operator who paused the
+    // runner wants to see it paused on the next tick, not on the next
+    // manual refresh.
+    try {
+      const state = await this.agentService.getControls();
+      this.controls.set(state);
+      if (!this.controlBusy()) {
+        this.limitDraft.set(String(state.max_parallel_override ?? ''));
+        this.pauseReason.set(state.mode_reason);
+      }
+    } catch {
+      this.controls.set(null);
+    }
+  }
+
+  /**
+   * Run, drain, or pause. Draining starts nothing new and lets what is
+   * running finish; pausing hands everything back at once.
+   */
+  async setMode(mode: AgentRunnerMode): Promise<void> {
+    if (this.controlBusy()) return;
+    this.controlBusy.set(true);
+    try {
+      const reason = mode === 'running' ? '' : this.pauseReason().trim();
+      const state = await this.agentService.setControls({ mode, reason });
+      this.controls.set(state);
+      // Follow the server: after a resume the reason is gone, and a later
+      // pause must not silently send the old one again.
+      this.pauseReason.set(state.mode_reason);
+      await this.refresh({ quiet: true });
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not change the runner controls.'));
+    } finally {
+      this.controlBusy.set(false);
+    }
+  }
+
+  readonly modeLabel = computed(() => {
+    const mode = this.controls()?.mode;
+    if (mode === 'paused') return 'Paused — everything handed back';
+    if (mode === 'draining') return 'Draining — no new sessions';
+    return 'Running';
+  });
+
+  /**
+   * Change how many sessions may run at once, from now on.
+   *
+   * Called when the field is left or Enter is pressed, never on each
+   * keystroke: submitting per character disables the input mid-number, so
+   * "25" could not be typed at all.
+   */
+  async applyLimit(value: string): Promise<void> {
+    if (this.controlBusy()) return;
+    const trimmed = value.trim();
+    let body: { max_parallel?: number; clear_max_parallel?: boolean };
+    if (trimmed === '') {
+      body = { clear_max_parallel: true };
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed)) {
+        // Nothing to send: an unparseable field is a typo, not an
+        // instruction, and null would silently mean "no change".
+        this.limitDraft.set(String(this.controls()?.max_parallel_override ?? ''));
+        return;
+      }
+      body = { max_parallel: Math.max(0, Math.min(100, Math.round(parsed))) };
+    }
+    this.controlBusy.set(true);
+    try {
+      const state = await this.agentService.setControls(body);
+      this.controls.set(state);
+      this.limitDraft.set(String(state.max_parallel_override ?? ''));
+      await this.refresh({ quiet: true });
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not change the session limit.'));
+    } finally {
+      this.controlBusy.set(false);
+    }
   }
 
   private async loadModelsAndTriggers(): Promise<void> {
@@ -172,6 +313,11 @@ export class Agents implements OnInit {
     } catch {
       this.triggers.set(null);
     }
+    try {
+      this.instructions.set(await this.agentService.getInstructions());
+    } catch {
+      this.instructions.set(null);
+    }
   }
 
   // ── session selection ────────────────────────────────────────────────────
@@ -179,21 +325,212 @@ export class Agents implements OnInit {
     if (this.selectedId() === session.id) {
       this.selectedId.set(null);
       this.events.set([]);
+      this.stopStream();
       this.resetScreenshots();
       return;
     }
     this.selectedId.set(session.id);
     this.events.set([]);
     this.lastEventId = 0;
+    this.stopStream();
     this.resetScreenshots();
     await this.loadEvents();
+    // The load is asynchronous, and the selection may have moved on while
+    // it ran. Opening the stream anyway would leave a connection nobody
+    // holds the handle to — untracked, unabortable, and read by the server
+    // for as long as it stays open.
+    if (this.selectedId() !== session.id) return;
+    this.startStream(session.id);
+  }
+
+  /**
+   * Follow an open session's output as it is written.
+   *
+   * The four-second poll is what made a working session look like a stalled
+   * one: the agent prints a line and it appears whenever the next poll
+   * happens to run. The stream carries each event as the runner writes it;
+   * polling stays as the fallback, so a proxy that will not hold a long
+   * response degrades to what it did before rather than to nothing.
+   */
+  private startStream(sessionId: number): void {
+    // Whatever was streaming stops first: two controllers in `this.stream`
+    // would leave the older connection with no way to abort it.
+    this.stopStream();
+    const controller = new AbortController();
+    this.stream = controller;
+    void (async () => {
+      try {
+        for await (const event of this.agentService.streamEvents(
+          sessionId,
+          this.lastEventId,
+          controller.signal,
+        )) {
+          if (this.selectedId() !== sessionId) return;
+          if (event.id <= this.lastEventId) continue;
+          this.lastEventId = event.id;
+          this.events.update((existing) => [...existing, event]);
+          if (event.kind === 'screenshot') void this.loadScreenshots();
+        }
+      } catch {
+        // Aborted, refused, or dropped: the poll keeps the page correct, so
+        // there is nothing to report and nothing to retry here.
+      } finally {
+        if (this.stream === controller) this.stream = null;
+      }
+    })();
+  }
+
+  private stopStream(): void {
+    this.stream?.abort();
+    this.stream = null;
+  }
+
+  private stream: AbortController | null = null;
+  retrying = signal<number | null>(null);
+
+  // ── what every session is told ───────────────────────────────────────────
+  instructions = signal<AgentInstructions | null>(null);
+  instructionsOpen = signal(false);
+  houseRulesDraft = signal('');
+  environmentNotesDraft = signal('');
+  savingInstructions = signal(false);
+
+  /** Open the editor with the text that is actually in force. */
+  toggleInstructions(): void {
+    const open = !this.instructionsOpen();
+    this.instructionsOpen.set(open);
+    const current = this.instructions();
+    if (open && current) {
+      this.houseRulesDraft.set(current.house_rules);
+      this.environmentNotesDraft.set(current.environment_notes);
+    }
+  }
+
+  /**
+   * Change what every session is told.
+   *
+   * These are prompts, and prompts are the part of an unattended agent most
+   * worth adjusting after watching it work — and the part least worth
+   * waiting for a release to adjust.
+   */
+  async saveInstructions(): Promise<void> {
+    if (this.savingInstructions()) return;
+    this.savingInstructions.set(true);
+    try {
+      this.instructions.set(
+        await this.agentService.setInstructions({
+          house_rules: this.houseRulesDraft(),
+          environment_notes: this.environmentNotesDraft(),
+        }),
+      );
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not change what the sessions are told.'));
+    } finally {
+      this.savingInstructions.set(false);
+    }
+  }
+
+  /**
+   * Put one half back to the text the code ships with.
+   *
+   * Only that half is sent, and only that half's box is refilled. Reset is
+   * a statement about one box: the other one may hold an edit nobody has
+   * saved yet, and neither the database nor the screen may lose it here.
+   */
+  async resetInstructions(half: 'house_rules' | 'environment_notes'): Promise<void> {
+    if (this.savingInstructions()) return;
+    this.savingInstructions.set(true);
+    try {
+      const fresh = await this.agentService.setInstructions(
+        half === 'house_rules' ? { reset_house_rules: true } : { reset_environment_notes: true },
+      );
+      this.instructions.set(fresh);
+      if (half === 'house_rules') {
+        this.houseRulesDraft.set(fresh.house_rules);
+      } else {
+        this.environmentNotesDraft.set(fresh.environment_notes);
+      }
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not restore the default text.'));
+    } finally {
+      this.savingInstructions.set(false);
+    }
+  }
+  moving = signal<number | null>(null);
+
+  /**
+   * The queue, in the order the runner will work through it.
+   *
+   * Not the order the list arrives in: sessions come newest-first, and the
+   * scheduler takes the most urgent, oldest among equals. Showing one and
+   * moving by the other would grey out the arrows on the wrong rows.
+   */
+  readonly queuedSessions = computed(() =>
+    this.sessions()
+      .filter((s) => s.status === 'queued')
+      .sort(
+        (a, b) =>
+          b.priority - a.priority || a.created_at.localeCompare(b.created_at) || a.id - b.id,
+      ),
+  );
+
+  /**
+   * Move a queued session in the queue.
+   *
+   * Priority is derived from what a request is, which is right most of the
+   * time. The rest — which review is holding up a release, which issue can
+   * wait until tomorrow — is something the person watching knows and the
+   * rules do not.
+   */
+  async move(session: AgentSession, where: 'up' | 'down' | 'first'): Promise<void> {
+    if (this.moving() !== null) return;
+    this.moving.set(session.id);
+    try {
+      await this.agentService.moveInQueue(session.id, where);
+      await this.refresh({ quiet: true });
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not move that session in the queue.'));
+    } finally {
+      this.moving.set(null);
+    }
+  }
+
+  /**
+   * Queue a finished session's work again.
+   *
+   * A session that failed keeps its task, its workspace and — for work the
+   * runner took on itself — the branch and the thread it belongs to. What
+   * came from the repository is not queued a second time by the poller
+   * either: the trigger counts as handled the moment a session exists for
+   * it, so without this the request was simply gone.
+   */
+  async retry(session: AgentSession): Promise<void> {
+    if (this.retrying() !== null) return;
+    this.retrying.set(session.id);
+    try {
+      const fresh = await this.agentService.retrySession(session.id);
+      await this.refresh({ quiet: true });
+      // Only if the person is still looking at what they retried: opening
+      // the new session over a selection they made in the meantime would
+      // clear that transcript and abort its stream.
+      if (this.selectedId() === session.id) await this.select(fresh);
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not queue that work again.'));
+    } finally {
+      this.retrying.set(null);
+    }
   }
 
   private async loadEvents(): Promise<void> {
     const id = this.selectedId();
     if (id === null) return;
     try {
-      const fresh = await this.agentService.getEvents(id, this.lastEventId);
+      const answer = await this.agentService.getEvents(id, this.lastEventId);
+      // Filtered against the cursor as it is *now*, not as it was when the
+      // request went out: the stream appends while this is in flight, and
+      // an event both of them saw would otherwise be shown twice.
+      const fresh = answer.filter((event) => event.id > this.lastEventId);
+      if (this.selectedId() !== id) return;
       if (fresh.length > 0) {
         this.lastEventId = fresh[fresh.length - 1].id;
         this.events.update((existing) => [...existing, ...fresh]);

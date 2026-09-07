@@ -19,11 +19,18 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 
-from . import capacity, db, docker_engine, github, model_policy, triggers
+from . import capacity, controls, conventions, db, docker_engine, github, model_policy, pulse, triggers
 from .auth import Principal, require_agent_operator
 from .config import settings
 from .schemas import (
+    TERMINAL_STATUSES,
     CapacityState,
+    ControlState,
+    ControlUpdate,
+    EventKind,
+    InstructionState,
+    InstructionUpdate,
+    QueueMove,
     SessionCreate,
     SessionEvent,
     SessionStatus,
@@ -111,16 +118,64 @@ async def health() -> dict[str, object]:
     }
 
 
+# --- what every session is told -------------------------------------------
+
+
+@app.get("/instructions", response_model=InstructionState, tags=["capacity"])
+async def get_instructions(_: Principal = Depends(require_agent_operator)) -> InstructionState:
+    """The standing text appended to every task, as it stands now."""
+    return InstructionState(**vars(await conventions.current()))
+
+
+@app.put("/instructions", response_model=InstructionState, tags=["capacity"])
+async def put_instructions(
+    body: InstructionUpdate,
+    principal: Principal = Depends(require_agent_operator),
+) -> InstructionState:
+    """Change what every session is told, without a deployment.
+
+    These are prompts: the part of an unattended agent most worth adjusting
+    after watching it work, and the part least worth waiting for a release
+    to adjust. A half that is reset goes back to what the code ships with,
+    which is not the same as an empty one — empty is somebody deciding that
+    nothing should be said there.
+
+    A half nobody mentioned stays as it is stored. Resetting the house
+    rules is a statement about the house rules, and it must not carry an
+    untouched draft of the environment notes into the database with it.
+    """
+    sent = body.model_fields_set
+
+    def half(name: str, value: str | None, reset: bool) -> str | None | db.Unchanged:
+        if reset:
+            return None
+        return value if name in sent else db.UNCHANGED
+
+    state = await conventions.set_instructions(
+        house_rules=half("house_rules", body.house_rules, body.reset_house_rules),
+        environment_notes=half("environment_notes", body.environment_notes, body.reset_environment_notes),
+        by=principal.username or "an operator",
+    )
+    logger.info("agent instructions changed by %s", principal.username)
+    return InstructionState(**vars(state))
+
+
 # --- capacity -------------------------------------------------------------
 
 
 @app.get("/capacity", response_model=CapacityState, tags=["capacity"])
 async def get_capacity(_: Principal = Depends(require_agent_operator)) -> CapacityState:
-    reading = await capacity.read_load()
+    reading = await capacity.read_load(lane=model_policy.current().lane())
     counts = await db.count_sessions_by_status()
     running = counts.get(SessionStatus.RUNNING.value, 0)
     paused = counts.get(SessionStatus.PAUSED.value, 0)
-    may_start, reason = capacity.start_decision(reading, running=running, paused=paused)
+    control = await controls.current()
+    may_start, reason = capacity.start_decision(
+        reading, running=running, paused=paused, max_parallel=control.max_parallel
+    )
+    blocked = control.admission_block()
+    if blocked:
+        may_start, reason = False, blocked
     # The local-only model policy gates admission as hard as load does, so
     # the page that explains why nothing starts has to show it too — an
     # operator staring at an idle platform should not have to read the logs
@@ -137,10 +192,56 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
         sessions_running=running,
         sessions_queued=counts.get(SessionStatus.QUEUED.value, 0),
         sessions_paused=paused,
-        max_parallel=settings.max_parallel_sessions,
+        max_parallel=control.max_parallel,
         may_start=may_start,
         reason=reason,
     )
+
+
+def _control_state(state: controls.Controls) -> ControlState:
+    return ControlState(
+        mode=state.mode,
+        mode_reason=state.mode_reason,
+        paused=state.paused,
+        admits_new_sessions=not state.admission_block(),
+        max_parallel=state.max_parallel,
+        max_parallel_override=state.max_parallel_override,
+        max_parallel_configured=settings.max_parallel_sessions,
+        updated_by=state.updated_by,
+    )
+
+
+@app.get("/controls", response_model=ControlState, tags=["capacity"])
+async def get_controls(_: Principal = Depends(require_agent_operator)) -> ControlState:
+    """The kill switch and the ceiling, as they stand."""
+    return _control_state(await controls.current())
+
+
+@app.post("/controls", response_model=ControlState, tags=["capacity"])
+async def update_controls(body: ControlUpdate, principal: Principal = Depends(require_agent_operator)) -> ControlState:
+    """Stop the runner, drain it, or change how much of the platform it uses.
+
+    `draining` starts nothing new and lets what is running finish;
+    `paused` hands everything back on the next scheduler pass. Neither
+    cancels anything, so going back to `running` resumes the work mid-task.
+    """
+    state = await controls.current()
+    if body.mode is not None:
+        state = await controls.set_mode(mode=body.mode, reason=body.reason, by=principal.username)
+        logger.info(
+            "%s set the agent runner to %s%s",
+            principal.username,
+            body.mode,
+            f": {body.reason}" if body.reason else "",
+        )
+    if body.clear_max_parallel or body.max_parallel is not None:
+        limit = None if body.clear_max_parallel else body.max_parallel
+        state = await controls.set_max_parallel(limit=limit, by=principal.username)
+        logger.info("%s set the parallel ceiling to %s", principal.username, limit if limit is not None else "default")
+    # A pause takes effect on the next pass anyway; running one now means the
+    # operator sees it happen instead of waiting a tick for it.
+    asyncio.create_task(manager.scheduler_pass())
+    return _control_state(state)
 
 
 @app.get("/models", tags=["capacity"])
@@ -163,7 +264,8 @@ async def get_models(_: Principal = Depends(require_agent_operator)) -> dict[str
 @app.get("/triggers", tags=["capacity"])
 async def get_triggers(_: Principal = Depends(require_agent_operator)) -> dict[str, object]:
     """Whether the runner reacts to the repository, and what it has done."""
-    status = triggers.poller.status()
+    control = await controls.current()
+    status = triggers.poller.status(control.max_parallel)
     status["active_sessions"] = await triggers.active_trigger_sessions()
     return status
 
@@ -301,6 +403,90 @@ async def cancel_session(session_id: int, _: Principal = Depends(require_agent_o
     return {"cancelled": True}
 
 
+@app.post(
+    "/sessions/{session_id}/retry",
+    response_model=SessionSummary,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["sessions"],
+)
+async def retry_session(session_id: int, principal: Principal = Depends(require_agent_operator)) -> SessionSummary:
+    """Queue the same work again, from where it came from.
+
+    A session that failed keeps its task, its workspace and — for work that
+    came from the repository — the branch and the thread it belongs to.
+    Without this the only way back was to retype the task by hand, and a
+    request the runner took on and then lost to an infrastructure failure
+    was simply gone: the trigger counts as handled, so no later pass finds
+    it again.
+
+    A new row rather than a resurrection of the old one: the failed session
+    keeps its transcript and its reason, which is the record of what
+    happened.
+    """
+    row = await db.get_session(session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if row["status"] not in {s.value for s in TERMINAL_STATUSES}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Session is {row['status']}; retry it once it has finished",
+        )
+    try:
+        new_id = await db.create_session(
+            workspace_id=row["workspace_id"],
+            task=row["task"],
+            model=row.get("model"),
+            created_by=principal.username or "operator",
+            open_pull_request=bool(row.get("open_pull_request")),
+            # Deploying is a decision per attempt, not a property of the work.
+            deploy_to_dev=False,
+            screenshot_paths=[],
+            trigger_kind=row.get("trigger_kind"),
+            trigger_ref=row.get("trigger_ref"),
+            branch=row.get("branch_name"),
+            reply_target=row.get("reply_target"),
+            reaction_target=row.get("reaction_target"),
+            priority=int(row.get("priority") or 50),
+            priority_reason=row.get("priority_reason"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await db.add_event(new_id, EventKind.STATUS, {"status": "queued", "retry_of": session_id})
+    logger.info("session %s queued as a retry of %s", new_id, session_id)
+    # Same reason as a fresh session: a pass now means it starts in a second
+    # rather than at the next tick.
+    asyncio.create_task(manager.scheduler_pass())
+    created = await db.get_session(new_id)
+    assert created is not None
+    return SessionSummary(**_summary_fields(created))
+
+
+@app.post("/sessions/{session_id}/queue", response_model=SessionSummary, tags=["sessions"])
+async def move_session_in_queue(
+    session_id: int,
+    body: QueueMove,
+    principal: Principal = Depends(require_agent_operator),
+) -> SessionSummary:
+    """Move a queued session up, down, or to the front.
+
+    Priority is derived from what a request is — a review outranks a fresh
+    issue, a security label outranks a typo — and that is right most of the
+    time. An operator watching the backlog knows the rest: which review is
+    holding up a release, which issue can wait until tomorrow.
+    """
+    try:
+        moved = await db.move_in_queue(session_id, body.move, by=principal.username or "an operator")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if moved is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only a queued session can be moved in the queue",
+        )
+    logger.info("session %s moved %s in the queue by %s", session_id, body.move, principal.username)
+    return SessionSummary(**_summary_fields(moved))
+
+
 @app.get("/sessions/{session_id}/events", response_model=list[SessionEvent], tags=["sessions"])
 async def list_events(
     session_id: int,
@@ -329,36 +515,16 @@ async def stream_events(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     async def generate():
-        cursor = after_id
-        idle_ticks = 0
-        while True:
-            events = await db.list_events(session_id, after_id=cursor, limit=200)
-            for event in events:
-                cursor = event["id"]
-                payload = {
-                    "id": event["id"],
-                    "ts": event["ts"].isoformat(),
-                    "kind": event["kind"],
-                    "payload": event["payload"],
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-            if events:
-                idle_ticks = 0
-            else:
-                idle_ticks += 1
-                # Keep the connection alive through proxies during quiet spells.
-                yield ": keep-alive\n\n"
-
-            session = await db.get_session(session_id)
-            if session and session["status"] in (
-                SessionStatus.SUCCEEDED,
-                SessionStatus.FAILED,
-                SessionStatus.CANCELLED,
-            ):
-                # Drain whatever landed after the terminal transition, then end
-                # the stream so the browser stops reconnecting.
-                remaining = await db.list_events(session_id, after_id=cursor, limit=200)
-                for event in remaining:
+        # Registered for as long as this response lives, so the write side
+        # has somebody to nudge — and so nothing is left behind when the
+        # browser disconnects mid-stream, which is the ordinary ending.
+        async with pulse.watching(session_id):
+            cursor = after_id
+            idle_ticks = 0
+            while True:
+                events = await db.list_events(session_id, after_id=cursor, limit=200)
+                for event in events:
+                    cursor = event["id"]
                     payload = {
                         "id": event["id"],
                         "ts": event["ts"].isoformat(),
@@ -366,11 +532,39 @@ async def stream_events(
                         "payload": event["payload"],
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
-                yield "event: end\ndata: {}\n\n"
-                return
-            if idle_ticks > 600:  # ~20 minutes of nothing; let the client reconnect
-                return
-            await asyncio.sleep(2.0)
+                if events:
+                    idle_ticks = 0
+                else:
+                    idle_ticks += 1
+                    # Keep the connection alive through proxies during quiet spells.
+                    yield ": keep-alive\n\n"
+
+                session = await db.get_session(session_id)
+                if session and session["status"] in (
+                    SessionStatus.SUCCEEDED,
+                    SessionStatus.FAILED,
+                    SessionStatus.CANCELLED,
+                ):
+                    # Drain whatever landed after the terminal transition, then end
+                    # the stream so the browser stops reconnecting.
+                    remaining = await db.list_events(session_id, after_id=cursor, limit=200)
+                    for event in remaining:
+                        payload = {
+                            "id": event["id"],
+                            "ts": event["ts"].isoformat(),
+                            "kind": event["kind"],
+                            "payload": event["payload"],
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                    yield "event: end\ndata: {}\n\n"
+                    return
+                if idle_ticks > 600:  # ~20 minutes of nothing; let the client reconnect
+                    return
+                # Woken by the write side rather than by the clock: watching an
+                # agent work is the one thing here that a person does in real
+                # time, and a fixed tick puts a floor under how live it can be.
+                # The timeout is the fallback, not the mechanism.
+                await pulse.wait(session_id, timeout=2.0)
 
     return StreamingResponse(
         generate(),

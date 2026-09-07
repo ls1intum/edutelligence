@@ -60,14 +60,14 @@ class BillingControllerTest {
     }
 
     @Test
-    void addBilling_unknownTokenNameReturns500() throws Exception {
+    void addBilling_unknownTokenNameReturns400() throws Exception {
         mvc.perform(post("/logosdb/add_billing")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("""
                     {"type_name":"nonexistent_token","type_cost":1.0,"valid_from":"2025-01-01T00:00:00Z"}
                     """))
-           .andExpect(status().isInternalServerError());
+           .andExpect(status().isBadRequest());
     }
 
     @Test
