@@ -983,6 +983,7 @@ def _classify_calibration_stages(
     reason_kind: str | None,
     reason_code: str | None,
     reason_domain: str | None,
+    reason_needle: str | None,
     tensor_parallel_size: int,
 ) -> list[dict[str, Any]]:
     """Failure-domain checklist for ONE (failed) probe attempt.
@@ -1027,6 +1028,13 @@ def _classify_calibration_stages(
                 "reason_code": reason_code,
                 "generic_error_message": generic[0] if generic else None,
                 "generic_error_detail": generic[1] if generic else None,
+                # Literal substring guaranteed to exist in the raw log —
+                # the matched pattern's needle for a classified reason,
+                # else the generic grep's own (already raw) summary line.
+                # Distinct from the human-facing message/label above:
+                # the UI uses THIS to scroll to and highlight the actual
+                # log line, which a polished label would never match.
+                "log_anchor": reason_needle if reason_code else (generic[0] if generic else None),
             }
         )
     return stages
@@ -1761,12 +1769,16 @@ class CalibrationResult:
     # state (filesystem EIO, read-only mount, etc. — see
     # ``_NODE_LEVEL_TRANSIENT_PATTERNS``). Distinct from
     # ``unsupported_reason``: that one marks a single model permanently,
-    # this one marks the whole node as broken until ops intervenes.
-    # The bridge surfaces this into the runtime status so the master's
-    # orchestrator stops sending calibration commands until the node
-    # recovers. Critically: when this is set, NO blacklist entry of any
-    # kind was written — the failure isn't the calibration's fault and
-    # leaving artefacts behind just pollutes things (see deioma 2026-06-04).
+    # this one describes the whole node as broken for this one probe.
+    # Display-only: it's recorded on the calibration_probe_logs row for
+    # the model-error-report UI, nothing more — it does NOT reach the
+    # orchestrator's scheduler. Live avoidance of a degraded node is
+    # handled entirely by the separate node_health.py sensor module
+    # (proactive, runs every heartbeat) — see the design note above
+    # _NODE_LEVEL_TRANSIENT_PATTERNS. Critically: when this is set, NO
+    # blacklist entry of any kind was written — the failure isn't the
+    # calibration's fault and leaving artefacts behind just pollutes
+    # things (see deioma 2026-06-04).
     node_unhealthy_reason: str | None = None
     # Set when the last failing probe matched an
     # ``_OBSERVED_TRANSIENT_PATTERNS`` entry (CUDA OOM, HF network blip,
@@ -2121,9 +2133,10 @@ def calibrate_model(
     # Sibling latch for node-level transient failures (filesystem EIO,
     # read-only mount, …). When set, the kv-cache search aborts without
     # writing ANY blacklist artefact — neither the per-command file nor
-    # the per-model unsupported list. The bridge reads the latch via
-    # ``partial.node_unhealthy_reason`` and surfaces it into the runtime
-    # status so the master skips this worker until ops intervenes.
+    # the per-model unsupported list. Copied into
+    # ``partial.node_unhealthy_reason`` — display-only for the
+    # model-error-report UI (see the CalibrationResult field docstring).
+    # Actually avoiding this node again is node_health.py's job, not this.
     _node_unhealthy_box: list[NodeTransientErrorPattern] = []
 
     # Sibling latch for informational-only observed reasons (CUDA OOM, HF
@@ -2327,10 +2340,10 @@ def calibrate_model(
             # must NOT leave any artefact behind. If we recorded per-command
             # blacklist lines for them we'd accumulate dozens of garbage
             # entries during a single 10-minute Ceph outage (see deioma
-            # 2026-06-04). Latch the box, log loudly, and abort. The bridge
-            # reads the partial result, surfaces ``node_unhealthy_reason``
-            # into the runtime status, and the master orchestrator skips
-            # this worker until the node recovers.
+            # 2026-06-04). Latch the box, log loudly, and abort. This only
+            # records ``node_unhealthy_reason`` for the model-error-report
+            # UI — node_health.py's own sensors, not this, are what make
+            # the orchestrator actually stop scheduling on this node.
             node_pattern = _classify_node_transient_error(probe_log)
             if node_pattern is not None:
                 if not _node_unhealthy_box:
@@ -2351,6 +2364,7 @@ def calibrate_model(
                         "node_unhealthy",
                         node_pattern.reason_code,
                         node_pattern.domain,
+                        node_pattern.needle,
                         tp,
                     )
                 ]
@@ -2479,20 +2493,24 @@ def calibrate_model(
                 _unsupported_box.append(fatal_pattern)
 
             if fatal_pattern is not None:
-                _reason_kind, _reason_code, _reason_domain = (
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = (
                     "unsupported",
                     fatal_pattern.reason_code,
                     fatal_pattern.domain,
+                    fatal_pattern.needle,
                 )
             elif observed_pattern is not None:
-                _reason_kind, _reason_code, _reason_domain = (
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = (
                     "observed",
                     observed_pattern.reason_code,
                     observed_pattern.domain,
+                    observed_pattern.needle,
                 )
             else:
-                _reason_kind, _reason_code, _reason_domain = None, None, None
-            _stages_box[:] = [_classify_calibration_stages(probe_log, _reason_kind, _reason_code, _reason_domain, tp)]
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = None, None, None, None
+            _stages_box[:] = [
+                _classify_calibration_stages(probe_log, _reason_kind, _reason_code, _reason_domain, _reason_needle, tp)
+            ]
             return None
 
     proc: subprocess.Popen[str] | None = None

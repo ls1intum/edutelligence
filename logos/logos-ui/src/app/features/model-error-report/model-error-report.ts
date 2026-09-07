@@ -60,6 +60,11 @@ interface ChecklistItem {
   readonly scope?: ErrorScope;
   readonly reasonKind?: AuthoritativeReasonKind;
   readonly reasonCode?: string;
+  // Literal raw-log substring for openNodeLog's scroll-to-line search —
+  // distinct from errorMessage, which is a polished display label that
+  // won't itself appear verbatim in the log. Falls back to errorMessage
+  // only when no better anchor exists (see openNodeLog call site).
+  readonly logAnchor?: string;
 }
 
 
@@ -71,6 +76,7 @@ interface AuthoritativeReason {
   readonly label: string;
   readonly description: string;
   readonly domain?: string;
+  readonly needle?: string;
 }
 
 interface CalibrationStageResult {
@@ -80,6 +86,7 @@ interface CalibrationStageResult {
   readonly errorDetail?: string;
   readonly reasonKind?: AuthoritativeReasonKind;
   readonly reasonCode?: string;
+  readonly logAnchor?: string;
 }
 
 interface CalibrationProbeResult {
@@ -90,6 +97,7 @@ interface CalibrationProbeResult {
   readonly errorDetail?: string;
   readonly reasonKind?: AuthoritativeReasonKind;
   readonly reasonCode?: string;
+  readonly logAnchor?: string;
 }
 
 interface CalibrationError {
@@ -118,6 +126,7 @@ interface BackendStageResult {
   readonly reason_code?: string | null;
   readonly generic_error_message?: string | null;
   readonly generic_error_detail?: string | null;
+  readonly log_anchor?: string | null;
 }
 
 interface BackendCalibrationLog {
@@ -171,6 +180,13 @@ interface ReasonDescription {
   // deterministic point — resolved positionally instead, same convention
   // as calibration.py's Pattern.domain=None.
   readonly domain?: string;
+  // The pattern's literal needle (mirrors calibration.py's
+  // Pattern.needle) — guaranteed to exist verbatim in the raw log,
+  // unlike `label`/`description` above which are polished for display.
+  // Used ONLY to scroll to and highlight the matching log line (see
+  // openNodeLog) when this reason came from the regex fallback path —
+  // backend-supplied stages carry their own log_anchor instead.
+  readonly needle?: string;
 }
 
 const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
@@ -180,6 +196,7 @@ const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'vLLM cannot resolve the model name to a Hugging Face ' +
       'repository or a local directory with config.json.',
     domain: DOMAIN_MODEL_RESOLUTION,
+    needle: 'Invalid repository ID or local directory specified',
   },
   'gated-repo-no-token': {
     label: 'Gated repository, no HF token',
@@ -187,6 +204,7 @@ const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'Hugging Face flags this repository as gated and the worker ' +
       'has no (or an insufficient) HF token.',
     domain: DOMAIN_MODEL_RESOLUTION,
+    needle: 'Cannot access gated repo',
   },
   'unsupported-architecture': {
     label: 'Unsupported architecture',
@@ -194,6 +212,7 @@ const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'The installed vLLM build does not implement this model\'s ' +
       'architecture.',
     domain: DOMAIN_ENGINE_INIT,
+    needle: 'does not recognize this architecture',
   },
   'requires-trust-remote-code': {
     label: 'Requires trust_remote_code',
@@ -201,6 +220,7 @@ const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'This repository ships custom modeling code and requires ' +
       'trust_remote_code=True, which is not auto-enabled.',
     domain: DOMAIN_MODEL_RESOLUTION,
+    needle: 'trust_remote_code=True',
   },
   'unsupported-quantization': {
     label: 'Unsupported quantization method',
@@ -208,6 +228,7 @@ const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'The installed vLLM build does not support this model\'s ' +
       'quantization method on this hardware.',
     domain: DOMAIN_ENGINE_INIT,
+    needle: 'is not supported for quantization method',
   },
 };
 
@@ -218,6 +239,7 @@ const NODE_UNHEALTHY_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'Filesystem reads are failing with EIO. The backing storage ' +
       'on this node is degraded or disconnected.',
     // Can hit at any disk access — resolved positionally (domain omitted).
+    needle: 'Input/output error',
   },
   'filesystem-readonly': {
     label: 'Filesystem remounted read-only',
@@ -225,16 +247,19 @@ const NODE_UNHEALTHY_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'The kernel remounted this node\'s filesystem read-only ' +
       'after I/O errors.',
     // Same reasoning as filesystem-eio above.
+    needle: 'Read-only file system',
   },
   'disk-space-exhausted': {
     label: 'Disk space exhausted',
     description: 'The node\'s disk is full — nothing can be written.',
     // Same reasoning as filesystem-eio above.
+    needle: 'No space left on device',
   },
   'cuda-device-not-detected': {
     label: 'No GPU detected',
     description: 'No CUDA-capable device is visible to vLLM on this node.',
     domain: DOMAIN_NODE_PREFLIGHT,
+    needle: 'no CUDA-capable device is detected',
   },
   'cuda-driver-runtime-mismatch': {
     label: 'CUDA driver/runtime mismatch',
@@ -242,6 +267,7 @@ const NODE_UNHEALTHY_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'The installed NVIDIA driver is older than the CUDA runtime ' +
       'vLLM requires on this node.',
     domain: DOMAIN_NODE_PREFLIGHT,
+    needle: 'CUDA driver version is insufficient for CUDA runtime version',
   },
 };
 
@@ -253,6 +279,7 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       '— the kv-cache search retries with a smaller budget automatically.',
     // Can hit during weight loading OR kv-cache reservation — resolved
     // positionally (domain omitted).
+    needle: 'CUDA out of memory',
   },
   'cuda-runtime-error': {
     label: 'CUDA runtime error (observed)',
@@ -262,6 +289,7 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'launch failure"). Often a driver, kernel, or multi-GPU sync crash.',
     // Can hit at essentially any point CUDA kernels run — resolved
     // positionally (domain omitted), same as cuda-oom.
+    needle: 'CUDA error:',
   },
   'hf-network-timeout': {
     label: 'Hugging Face network timeout (observed)',
@@ -269,6 +297,7 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'A Hugging Face Hub request timed out on the last failing probe. ' +
       'Usually transient.',
     domain: DOMAIN_MODEL_RESOLUTION,
+    needle: 'Read timed out',
   },
   'hf-rate-limited': {
     label: 'Hugging Face rate limited (observed)',
@@ -276,6 +305,7 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'Hugging Face Hub rate-limited the download on the last failing ' +
       'probe. Usually transient.',
     domain: DOMAIN_MODEL_RESOLUTION,
+    needle: 'Too Many Requests',
   },
   'nccl-handshake-failure': {
     label: 'NCCL handshake failure (observed)',
@@ -283,6 +313,7 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'NCCL failed to establish communication between vLLM ranks on ' +
       'the last failing probe. Often transient.',
     domain: DOMAIN_MULTI_GPU_COORDINATION,
+    needle: 'NCCL error',
   },
   'port-in-use': {
     label: 'Port already in use (observed)',
@@ -290,6 +321,7 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'The port vLLM tried to bind was still held by a prior process ' +
       'on the last failing probe. Usually resolves on retry.',
     domain: DOMAIN_SERVER_START,
+    needle: 'Address already in use',
   },
 };
 
@@ -1262,6 +1294,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         errorDetail: resolved?.description ?? stage.generic_error_detail ?? undefined,
         reasonKind,
         reasonCode,
+        // The backend already computed the raw-log anchor (pattern
+        // needle, or the generic grep's own raw summary line) — use it
+        // directly rather than re-deriving via the frontend's own
+        // reason tables.
+        logAnchor: stage.log_anchor ?? undefined,
       };
     });
 
@@ -1275,6 +1312,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       errorDetail: failedStage?.errorDetail,
       reasonKind: failedStage?.reasonKind,
       reasonCode: failedStage?.reasonCode,
+      logAnchor: failedStage?.logAnchor,
     };
   }
 
@@ -1324,6 +1362,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         error?.summary ??
         'Calibration failed — log format not recognized, see Complete Logs for details.';
       const errorDetail = authoritativeReason?.description ?? error?.detail;
+      const logAnchor = authoritativeReason?.needle ?? error?.summary;
       return {
         providerId,
         node,
@@ -1337,6 +1376,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
             errorDetail,
             reasonKind: authoritativeReason?.kind,
             reasonCode: authoritativeReason?.code,
+            logAnchor,
             stages: [
               {
                 name: CALIBRATION_DOMAINS[0].label,
@@ -1345,6 +1385,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
                 errorDetail,
                 reasonKind: authoritativeReason?.kind,
                 reasonCode: authoritativeReason?.code,
+                logAnchor,
               },
             ],
           },
@@ -1451,6 +1492,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
       const errorMessage = authoritativeReason?.label ?? error?.summary;
       const errorDetail = authoritativeReason?.description ?? error?.detail;
+      // Raw-log substring for the scroll-to-line search — the reason's
+      // needle if classified, else the generic grep's own (already raw)
+      // summary line. NEVER the polished errorMessage above, which
+      // won't itself appear verbatim in the log for a classified reason.
+      const logAnchor = authoritativeReason?.needle ?? error?.summary;
 
       stages[effectiveIndex] = {
         ...stages[effectiveIndex],
@@ -1459,6 +1505,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         errorDetail,
         reasonKind: authoritativeReason?.kind,
         reasonCode: authoritativeReason?.code,
+        logAnchor,
       };
 
       return {
@@ -1469,6 +1516,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         errorDetail,
         reasonKind: authoritativeReason?.kind,
         reasonCode: authoritativeReason?.code,
+        logAnchor,
       };
     }
 
@@ -1550,6 +1598,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           detail?: string;
           reasonKind?: AuthoritativeReasonKind;
           reasonCode?: string;
+          logAnchor?: string;
         }
       >();
 
@@ -1597,6 +1646,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
               detail: stageResult.errorDetail,
               reasonKind: stageResult.reasonKind,
               reasonCode: stageResult.reasonCode,
+              logAnchor: stageResult.logAnchor,
             };
 
           entry.nodes.push(result.node);
@@ -1629,6 +1679,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           errorDetail: firstEntry?.detail,
           reasonKind: firstEntry?.reasonKind,
           reasonCode: firstEntry?.reasonCode,
+          logAnchor: firstEntry?.logAnchor,
         });
 
         continue;

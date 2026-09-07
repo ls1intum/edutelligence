@@ -220,7 +220,7 @@
                                   <button
                                     type="button"
                                     class="scope-node-button"
-                                    (click)="openNodeLog(node, item.errorMessage)"
+                                    (click)="openNodeLog(node, item.logAnchor ?? item.errorMessage)"
                                   >
                                     {{ node }}
                                   </button>
