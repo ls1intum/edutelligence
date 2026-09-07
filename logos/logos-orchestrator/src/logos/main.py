@@ -516,6 +516,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
+        "telemetry_available": bool(devices.get("telemetry_available", devices.get("nvidia_smi_available", False))),
         "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
@@ -757,7 +758,13 @@ def _build_live_local_provider_sample(
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
-    if devices.get("nvidia_smi_available"):
+    # telemetry_available is the backend-neutral successor to
+    # nvidia_smi_available: it means "the worker measured this on real
+    # hardware", whether that hardware reports through nvidia-smi or through
+    # Metal's device_info. Metal workers set it and leave nvidia_smi_available
+    # False, so gating on the old field alone would discard their free-memory
+    # reading and fall back to the coarser total-minus-used estimate.
+    if devices.get("telemetry_available") or devices.get("nvidia_smi_available"):
         remaining_vram_mb = float(devices.get("free_memory_mb") or 0.0)
     elif total_vram_mb > 0:
         remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)
@@ -2442,6 +2449,82 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     with DBManager() as db:
         rows = db.get_calibration_probe_logs_by_model(model_name)
     return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
+
+
+@app.get("/internal/calibration_probe_logs/fetch", tags=["admin"])
+async def internal_fetch_calibration_log(provider_id: int, model_name: str, request: Request):
+    """On-demand fetch of a model's full calibration log from the worker.
+
+    Backs the Download-full-logs button: successful runs skip storing
+    log_text, so this re-reads the on-disk log live. Pure file read, no
+    GPU impact; needs the worker online and not yet recalibrated since.
+    """
+    _require_internal_secret(request)
+
+    try:
+        result = await _logosnode_registry.send_command(
+            provider_id,
+            "get_calibration_log",
+            params={"model_name": model_name},
+            timeout_seconds=20,
+        )
+    except LogosNodeOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc) or "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+
+    return JSONResponse(status_code=200, content=jsonable_encoder({"log_text": result.get("log_text", "")}))
+
+
+@app.get("/internal/compatibility_precheck", tags=["admin"])
+async def internal_compatibility_precheck(model_name: str, request: Request, provider_id: int | None = None):
+    """On-demand HF compatibility check for one model, across one or all
+    connected logosnode workers.
+
+    Unlike calibration itself, this is safe to call any time — including
+    during the day, with live traffic on the nodes — because the worker-side
+    check (run_compatibility_precheck) never touches vLLM or lanes: it's
+    only an HF metadata fetch plus a read-only nvidia-smi query. Omitting
+    provider_id fans out across every connected worker, answering "would
+    this model run on ANY node" rather than requiring the caller to already
+    know which one to ask.
+    """
+    _require_internal_secret(request)
+
+    provider_ids = [provider_id] if provider_id is not None else _logosnode_registry.active_provider_ids()
+    if not provider_ids:
+        return JSONResponse(status_code=200, content={"model": model_name, "results": []})
+
+    async def _check_one(pid: int) -> dict[str, Any]:
+        pname = _resolve_provider_name(pid)
+        try:
+            result = await _logosnode_registry.send_command(
+                pid, "run_compatibility_precheck", params={"model": model_name}, timeout_seconds=30
+            )
+            # A worker reply with "result": null bypasses send_command's
+            # dict type hint (a present null isn't its .get() default) and
+            # would otherwise raise **result below, outside this try —
+            # taking every other provider's result down with it.
+            if not isinstance(result, dict):
+                return {
+                    "provider_id": pid,
+                    "provider_name": pname,
+                    "ok": False,
+                    "error": f"Worker returned an unexpected response type: {type(result).__name__}",
+                }
+            return {"provider_id": pid, "provider_name": pname, **result}
+        except LogosNodeOfflineError:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": "Worker not connected"}
+        except LogosNodeCommandError as exc:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            # An unexpected failure for one provider must not lose the
+            # results already gathered for every other one — see below.
+            logger.exception("[Precheck] unexpected failure checking provider %s for %s", pid, model_name)
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": f"Unexpected error: {exc}"}
+    results = await asyncio.gather(*(_check_one(pid) for pid in provider_ids))
+    return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
+    return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
 
 
 class _InternalCalibrateRequest(BaseModel):

@@ -319,6 +319,74 @@ jobs:
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
 
+  # ── Apple Silicon / MLX worker node ────────────────────────────────────────
+  # Pushed to ghcr.io, NOT Harbor, and deliberately so: this image is pulled by
+  # Mac workers during bootstrap, and requiring Harbor credentials on every Mac
+  # just to fetch a tarball of Python source is friction we do not need. A
+  # public GHCR package makes `bootstrap-macos.sh` work with no login at all.
+  #
+  # NOTE: a GHCR package is private on its first push. After the initial run,
+  # flip it once under Package settings → Change visibility → Public.
+  #
+  # The image is a distribution artifact, never a running container — Metal
+  # cannot be passed into one. See Dockerfile.mlx for the full reasoning.
+  build-workernode-mlx:
+    name: Build Logos Worker Node (MLX / Apple Silicon)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Publish target for the MLX distribution image. Resolves to
+          # ghcr.io/ls1intum/logos-workernode-mlx and must stay literally
+          # identical to the default IMAGE ref in
+          # logos/logos-workernode/scripts/bootstrap-macos.sh — that script is
+          # the consumer, and nothing in CI catches a publish/consumer
+          # mismatch.
+          images: ghcr.io/${{ github.repository_owner }}/logos-workernode-mlx
+          tags: |
+            type=ref,event=pr
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+            type=semver,pattern={{version}}
+          flavor: |
+            latest=false
+
+      # linux/arm64 to match the Macs that consume it. The payload is pure
+      # Python and shell, so this only spares Docker Desktop from emulating a
+      # foreign image while copying files out of it.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-workernode
+          file: ./logos/logos-workernode/Dockerfile.mlx
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   build-agent:
     name: Build Logos Agent Runner
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}

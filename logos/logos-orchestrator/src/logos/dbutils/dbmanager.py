@@ -54,12 +54,10 @@ DEFAULT_LOCAL_TPM_LIMIT = 10000
 DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
 
-VALID_PRIVACY_LEVELS = {
-    "LOCAL",
-    "CLOUD_IN_EU_BY_EU_PROVIDER",
-    "CLOUD_IN_EU_BY_US_PROVIDER",
-    "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-}
+# Derived from the ThresholdLevel declaration order (the single definition —
+# see that class for the trust ordering and the copies this mirrors): a new
+# level added to the enum is accepted by provider registration automatically.
+VALID_PRIVACY_LEVELS = frozenset(level.value for level in ThresholdLevel)
 
 
 def _choose_bucket_seconds(span_seconds: int) -> int:
@@ -1539,12 +1537,14 @@ class DBManager:
         """Every node's most recent calibration probe log for one model.
 
         Used by the webservice's model-error-report page to show real
-        per-node log text instead of mocked fixtures.
+        per-node log text instead of mocked fixtures. ``summary`` backs
+        the "Complete Logs" tab for successful calibrations, which no
+        longer carry a ``log_text`` (see upsert_calibration_probe_log).
         """
         sql = text(
             """
             SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
-                   cpl.probe_command, cpl.error, cpl.log_text,
+                   cpl.probe_command, cpl.error, cpl.summary, cpl.log_text,
                    cpl.recorded_at, cpl.updated_at
             FROM calibration_probe_logs cpl
             JOIN providers p ON p.id = cpl.provider_id
@@ -1553,7 +1553,13 @@ class DBManager:
         """
         )
         rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
-        return [dict(row._mapping) for row in rows]
+        results = []
+        for row in rows:
+            entry = dict(row._mapping)
+            summary = entry.get("summary")
+            entry["summary"] = json.loads(summary) if isinstance(summary, str) else summary
+            results.append(entry)
+        return results
 
     def get_ollama_vram_stats(
         self,
