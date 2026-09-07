@@ -54,12 +54,10 @@ DEFAULT_LOCAL_TPM_LIMIT = 10000
 DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
 
-VALID_PRIVACY_LEVELS = {
-    "LOCAL",
-    "CLOUD_IN_EU_BY_EU_PROVIDER",
-    "CLOUD_IN_EU_BY_US_PROVIDER",
-    "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-}
+# Derived from the ThresholdLevel declaration order (the single definition —
+# see that class for the trust ordering and the copies this mirrors): a new
+# level added to the enum is accepted by provider registration automatically.
+VALID_PRIVACY_LEVELS = frozenset(level.value for level in ThresholdLevel)
 
 
 def _choose_bucket_seconds(span_seconds: int) -> int:
