@@ -47,6 +47,8 @@ public class ModelService {
     private final ModelWeightService weightService;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelCapabilitiesRepository modelCapabilitiesRepository;
+    private final ModelCapabilitiesPersistenceService modelCapabilitiesPersistenceService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final ModelAliasRepository modelAliasRepository;
     private final OrchestratorModelHealthClient orchestratorModelHealthClient;
     private final ApiKeyRepository apiKeyRepository;
@@ -54,6 +56,8 @@ public class ModelService {
     public ModelService(ModelRepository modelRepository, ModelWeightService weightService,
                         OrchestratorNotificationService orchestratorNotificationService,
                         ModelCapabilitiesRepository modelCapabilitiesRepository,
+                        ModelCapabilitiesPersistenceService modelCapabilitiesPersistenceService,
+                        ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
                         ModelAliasRepository modelAliasRepository,
                         OrchestratorModelHealthClient orchestratorModelHealthClient,
                         ApiKeyRepository apiKeyRepository) {
@@ -61,6 +65,8 @@ public class ModelService {
         this.weightService = weightService;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelCapabilitiesRepository = modelCapabilitiesRepository;
+        this.modelCapabilitiesPersistenceService = modelCapabilitiesPersistenceService;
+        this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.modelAliasRepository = modelAliasRepository;
         this.orchestratorModelHealthClient = orchestratorModelHealthClient;
         this.apiKeyRepository = apiKeyRepository;
@@ -358,6 +364,14 @@ public class ModelService {
     }
 
     public Map<Integer, ModelCapabilitiesDTO> getModelCapabilities(List<Integer> modelIds) {
+        Set<Integer> existingModelIds = modelRepository.findAllById(modelIds).stream()
+            .map(Model::getId)
+            .collect(Collectors.toSet());
+        for (Integer modelId : modelIds) {
+            if (!existingModelIds.contains(modelId)) {
+                throw new IllegalArgumentException("Model not found: " + modelId);
+            }
+        }
         return modelCapabilitiesRepository.findByModelIdIn(modelIds)
             .stream()
             .map(ModelService::toModelCapabilitiesDTO)
@@ -367,12 +381,61 @@ public class ModelService {
             ));
     }
 
+    @Transactional
+    public Map<String, Object> setModelCapabilities(
+            Integer modelId,
+            boolean supportsFunctionCalling,
+            boolean supportsVision,
+            boolean supportsReasoning) {
+        // findByIdForUpdate, not findById: the lock taken here is held until this
+        // transaction commits, so a catalog sync running in parallel waits for the
+        // override instead of overwriting it (see ModelRepository).
+        modelRepository.findByIdForUpdate(modelId)
+            .orElseThrow(() -> new IllegalArgumentException("Model not found: " + modelId));
+        modelCapabilitiesPersistenceService.setManualCapabilities(
+            modelId,
+            supportsFunctionCalling,
+            supportsVision,
+            supportsReasoning
+        );
+        return capabilitiesState(modelId);
+    }
+
+    @Transactional
+    public Map<String, Object> resetModelCapabilities(Integer modelId) {
+        // Read the name under the row lock: the re-sync below matches it against
+        // the persisted name, so a rename that lands between the two would
+        // otherwise make the re-sync a no-op.
+        Model model = modelRepository.findByIdForUpdate(modelId)
+            .orElseThrow(() -> new IllegalArgumentException("Model not found: " + modelId));
+        modelCapabilitiesPersistenceService.clearManualOverride(modelId);
+        // Synchronous re-sync so the response (and the UI) reflects the catalog state
+        // immediately; the guard in the updater makes this a no-op only if the override
+        // was not actually cleared.
+        modelCapabilitiesUpdaterService.updateCapabilitiesForModel(modelId, model.getName());
+        return capabilitiesState(modelId);
+    }
+
+    /** The capability flags a client should show for a model, row or no row. */
+    public Map<String, Object> capabilitiesState(Integer modelId) {
+        ModelCapabilities capabilities = modelCapabilitiesRepository.findByModelId(modelId)
+            .orElse(null);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("model_id", modelId);
+        m.put("supports_function_calling", capabilities != null && capabilities.getSupportsFunctionCalling());
+        m.put("supports_vision", capabilities != null && capabilities.getSupportsVision());
+        m.put("supports_reasoning", capabilities != null && capabilities.getSupportsReasoning());
+        m.put("manual_override", capabilities != null && capabilities.getManualOverride());
+        return m;
+    }
+
     private static ModelCapabilitiesDTO toModelCapabilitiesDTO(ModelCapabilities capabilities) {
         return new ModelCapabilitiesDTO(
             capabilities.getModelId(),
             capabilities.getSupportsFunctionCalling(),
             capabilities.getSupportsVision(),
-            capabilities.getSupportsReasoning()
+            capabilities.getSupportsReasoning(),
+            capabilities.getManualOverride()
         );
     }
 }

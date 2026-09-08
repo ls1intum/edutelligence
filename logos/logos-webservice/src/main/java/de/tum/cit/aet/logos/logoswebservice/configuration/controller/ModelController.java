@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -20,6 +21,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequest
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCalibrationLogRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ResetModelCapabilitiesRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
@@ -115,12 +118,17 @@ public class ModelController {
     public ResponseEntity<?> updateModelInfo(
             @RequestBody UpdateModelRequestDTO req) {
         try {
-            ResponseEntity<?> response = ResponseEntity.ok(modelService.updateModelInfo(req));
+            Map<String, Object> result = new LinkedHashMap<>(modelService.updateModelInfo(req));
             if (req.name() != null) {
                 priceUpdaterService.updatePricesForModelAsync(req.modelId(), req.name());
-                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), req.name());
+                // Capabilities resolve against a local catalog file, so this runs
+                // inline rather than async: the response then carries the state
+                // the rename produced, and the client does not have to keep the
+                // flags of the old name on screen until the next full reload.
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModel(req.modelId(), req.name());
+                result.put("capabilities", modelService.capabilitiesState(req.modelId()));
             }
-            return response;
+            return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             // "Model not found: ..." is a lookup miss; alias validation
             // failures are bad input.
@@ -230,7 +238,54 @@ public class ModelController {
             return ResponseEntity.badRequest()
                 .body(Map.of("error", "ids are required"));
         }
+        // A null element is malformed input, not a lookup miss: without this the
+        // service's "Model not found: null" would surface as a 404.
+        if (req.ids().contains(null)) {
+            return ResponseEntity.badRequest()
+                .body(Map.of("error", "ids must not contain null"));
+        }
 
-        return ResponseEntity.ok(modelService.getModelCapabilities(req.ids()));
+        try {
+            return ResponseEntity.ok(modelService.getModelCapabilities(req.ids()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/set_model_capabilities")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> setModelCapabilities(
+            @RequestBody SetModelCapabilitiesRequestDTO req) {
+        if (req.modelId() == null
+                || req.supportsFunctionCalling() == null
+                || req.supportsVision() == null
+                || req.supportsReasoning() == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "model_id, supports_function_calling, supports_vision, and supports_reasoning are required"));
+        }
+        try {
+            return ResponseEntity.ok(modelService.setModelCapabilities(
+                req.modelId(),
+                req.supportsFunctionCalling(),
+                req.supportsVision(),
+                req.supportsReasoning()
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/reset_model_capabilities")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> resetModelCapabilities(
+            @RequestBody ResetModelCapabilitiesRequestDTO req) {
+        if (req.modelId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "model_id is required"));
+        }
+        try {
+            return ResponseEntity.ok(modelService.resetModelCapabilities(req.modelId()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
     }
 }

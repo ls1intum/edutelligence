@@ -4,5 +4,6 @@ public record ModelCapabilitiesDTO(
     Integer modelId,
     boolean supportsFunctionCalling,
     boolean supportsVision,
-    boolean supportsReasoning
+    boolean supportsReasoning,
+    boolean manualOverride
 ) {}
