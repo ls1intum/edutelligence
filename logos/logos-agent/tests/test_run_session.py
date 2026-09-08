@@ -263,6 +263,45 @@ def _remote_with_a_feature(tmp_path: Path) -> tuple[Path, Path]:
     return bare, tip
 
 
+def _remote_with_a_deep_divergence(tmp_path: Path, depth: int = 60) -> Path:
+    """A bare remote whose ``main`` and ``feature`` each grew ``depth`` commits
+    from the same root, so their merge base sits ``depth`` commits behind both
+    tips — deeper than the shallow history the preparation starts from.
+
+    This is a pull request that branched from an old main and has sat since:
+    the ref the review diffs against is not inside a depth-50 checkout, so the
+    preparation has to deepen the history before it can compute the diff.
+    """
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--quiet", "--bare", "--initial-branch=main", str(bare)], check=True)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _git("init", "--quiet", "--initial-branch=main", cwd=seed)
+    _git("config", "user.name", "seed", cwd=seed)
+    _git("config", "user.email", "seed@example.com", cwd=seed)
+    (seed / "root.txt").write_text("root\n")
+    _git("add", "root.txt", cwd=seed)
+    _git("commit", "--quiet", "-m", "root", cwd=seed)
+    root = _git("rev-parse", "HEAD", cwd=seed).stdout.strip()
+    for i in range(1, depth + 1):
+        (seed / "main.txt").write_text(f"main {i}\n")
+        _git("add", "main.txt", cwd=seed)
+        _git("commit", "--quiet", "-m", f"main {i}", cwd=seed)
+    _git("checkout", "--quiet", root, cwd=seed)
+    _git("checkout", "--quiet", "-b", "feature", cwd=seed)
+    for i in range(1, depth + 1):
+        (seed / "feature.txt").write_text(f"feature {i}\n")
+        _git("add", "feature.txt", cwd=seed)
+        _git("commit", "--quiet", "-m", f"feature {i}", cwd=seed)
+    feature_tip = _git("rev-parse", "HEAD", cwd=seed).stdout.strip()
+    _git("checkout", "--quiet", "main", cwd=seed)
+    _git("push", "--quiet", str(bare), "main", cwd=seed)
+    _git("push", "--quiet", str(bare), "feature", cwd=seed)
+    # The ref a review of that pull request is read from.
+    _git("update-ref", "refs/pull/1/head", feature_tip, cwd=bare)
+    return bare
+
+
 def _plant_agent_phase(workspace: Path, origin: Path, branch: str) -> tuple[Path, Path, Path]:
     """A checkout plus home as a hostile agent phase leaves them.
 
@@ -357,6 +396,53 @@ class TestPreparingTheRefTheTaskPointsAt:
         assert _git("rev-parse", "refs/remotes/origin/main", cwd=checkout).stdout.strip() == main
         diff = _git("diff", "--stat", "origin/main...HEAD", cwd=checkout)
         assert "file.txt" in diff.stdout
+
+    def test_a_merge_base_beyond_the_shallow_history_is_deepened_into_view(self, tmp_path, monkeypatch):
+        # A pull request that branched from an old main and has sat since is
+        # older than the shallow history the preparation starts from: its
+        # merge base is more than fifty commits behind both tips, so a
+        # depth-50 checkout has no base to diff against. The preparation must
+        # deepen the history until the base is reachable, or the review diff
+        # the agent is handed cannot be computed at all. Read from the pull
+        # ref — the review's real source — and over a file:// URL, the only
+        # local transport that makes the clone honour --depth.
+        bare = _remote_with_a_deep_divergence(tmp_path)
+        workspace = tmp_path / "ws"
+        _patch_workspace(monkeypatch, workspace)
+
+        prepare_checkout(f"file://{bare}", "refs/pull/1/head", "agent/review-3", "a-token")
+
+        checkout = workspace / "repo"
+        # The working copy is the pull request's code...
+        assert (
+            _git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
+            == _git("rev-parse", "refs/pull/1/head", cwd=bare).stdout.strip()
+        )
+        # ...and the base it diffs against is present...
+        base = _git("merge-base", "origin/main", "HEAD", cwd=checkout).stdout.strip()
+        assert base
+        # ...at the remote's true split point, not a shallow boundary...
+        assert base == _git("merge-base", "main", "feature", cwd=bare).stdout.strip()
+        # ...and the diff the task tells the agent to run works, showing the
+        # pull request's own work and not the default branch's.
+        diff = _git("diff", "--stat", "origin/main...HEAD", cwd=checkout)
+        assert "feature.txt" in diff.stdout
+        assert "main.txt" not in diff.stdout
+
+    def test_a_merge_base_beyond_the_ceiling_fails_the_preparation(self, tmp_path, monkeypatch):
+        # When the base is further away than the ceiling allows, deepening
+        # never reaches it and the preparation fails: it does not hand the
+        # agent a checkout it cannot diff against the default branch. The
+        # ceiling is shrunk so the test does not have to deepen a full
+        # history — the base sits well past a cap of five commits.
+        bare = _remote_with_a_deep_divergence(tmp_path)
+        workspace = tmp_path / "ws"
+        _patch_workspace(monkeypatch, workspace)
+        monkeypatch.setattr(run_session, "_MAX_HISTORY_DEPTH", 5)
+        monkeypatch.setattr(run_session, "_DEEPEN_STEP", 5)
+
+        with pytest.raises(RuntimeError, match="no merge base"):
+            prepare_checkout(f"file://{bare}", "feature", "agent/review-4", "a-token")
 
 
 class TestFinalizer:

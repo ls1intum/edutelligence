@@ -351,6 +351,51 @@ def _remote_default_branch() -> str | None:
     return None
 
 
+# The clone and the branch fetches start at this shallow depth, so the merge
+# base of two tips is present only when they came apart within so many
+# commits. When it is not, _deepen_until_merge_base pulls more in this step
+# size, stopping at the ceiling: past it, a missing base is not a shallow
+# history to outwait but a checkout that cannot be diffed.
+_HISTORY_DEPTH = 50
+_DEEPEN_STEP = 250
+_MAX_HISTORY_DEPTH = 5000
+
+
+def _deepen_until_merge_base(default: str) -> None:
+    """Make `git merge-base origin/<default> HEAD` resolvable, or fail.
+
+    A reviewing session is handed a diff against the default branch
+    (`origin/<default>...HEAD`), and a triple-dot diff is only a diff from the
+    point the two lines last met. A depth-50 history holds that point only
+    when the tips came apart within fifty commits; a pull request older than
+    that — or based on main before main moved on — cannot be diffed until both
+    histories are deep enough to reach the common ancestor. So deepen them in
+    steps until the base computes. A base that still cannot be found at the
+    ceiling fails the preparation rather than handing the agent a checkout it
+    cannot diff: an agent told to review a pull request has to be able to see
+    it, and guessing at a diff it cannot see is worse than no session.
+    """
+    deepened = 0
+    while True:
+        process = run(
+            ["git", "merge-base", f"origin/{default}", "HEAD"],
+            cwd=CHECKOUT,
+            check=False,
+            quiet=True,
+        )
+        if (process.stdout or "").strip():
+            return
+        if deepened >= _MAX_HISTORY_DEPTH:
+            raise RuntimeError(
+                f"no merge base between origin/{default} and HEAD within {_MAX_HISTORY_DEPTH} commits; "
+                "the checkout cannot be diffed against the default branch"
+            )
+        deepened += _DEEPEN_STEP
+        # No refspec: deepens every shallow boundary at once, so the base's
+        # line and the default's line both grow, not just one.
+        run(["git", "fetch", f"--deepen={_DEEPEN_STEP}", "origin"], cwd=CHECKOUT)
+
+
 def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> None:
     """Get a clean working copy of `base_branch` on a fresh `branch`.
 
@@ -423,18 +468,29 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     # works however the checkout was built. A failure here does not fail
     # the preparation: the base is already where the session needs it.
     default = _remote_default_branch()
+    default_available = False
     if default:
         process = run(
             ["git", "fetch", "--depth", "50", "origin", f"{default}:refs/remotes/origin/{default}"],
             cwd=CHECKOUT,
             check=False,
         )
-        if process.returncode != 0:
+        default_available = process.returncode == 0
+        if not default_available:
             log(f"could not fetch the default branch {default!r}; the checkout keeps its base only")
 
     _configure_git_identity()
     # -B so a retried session reuses its branch name instead of failing.
     run(["git", "checkout", "-B", branch], cwd=CHECKOUT)
+
+    # With the branch checked out, `HEAD` is the tip the session is to be
+    # diffed against the default branch from, so this is the same ref the
+    # review command uses. Deepen until that diff has a base to start from.
+    # Skipped when the default branch could not be fetched at all: the base
+    # alone is still a usable working copy, and there is nothing to deepen
+    # toward.
+    if default_available:
+        _deepen_until_merge_base(default)
 
 
 def agent_login() -> str:
