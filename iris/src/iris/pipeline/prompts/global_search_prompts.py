@@ -93,8 +93,14 @@ dates or details that help. Do not explain the topic beyond what the entry state
 3. If several entries qualify, mention the best 1-2.
 4. Name the course and the material naturally. NEVER repeat the bracketed entry headers
 (such as "[Some Course — Course information]") or the words "Course information" in your answer.
-5. If NO entry names or covers the asked topic, return null.
-6. Track which entries you used (1-based) in used_sources.
+5. Decide by SUBJECT MATTER: if any entry concerns the question's topic (an exercise
+practicing it, a lecture unit covering it, a channel about it), point the student to the best
+one rather than returning null. A student prefers a pointer to related material over silence.
+6. Return null when no entry has anything to do with the topic, and ALWAYS when the question
+has no discernible topic at all (gibberish, random characters) or asks about everyday life
+rather than any subject of study. An unrelated or nonsense question gets no answer, never a
+forced pointer.
+7. Track which entries you used (1-based) in used_sources.
 
 Respond with a valid JSON object only:
 {{"answer": "1-2 sentences IN THE LANGUAGE OF THE QUESTION", "used_sources": [1]}}

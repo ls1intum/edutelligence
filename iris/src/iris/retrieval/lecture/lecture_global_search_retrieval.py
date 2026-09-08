@@ -91,6 +91,8 @@ _MAX_ENTITY_CANDIDATES = 25
 # snippets are ~1000 chars and get one.
 _ENTITY_REPRESENTATION_SLOTS = 2
 _CONTENT_REPRESENTATION_SLOTS = 1
+# Entity cards offered to the navigate prompt when the floored pool is empty.
+_POINTER_TIER_CAP = 3
 # Hard wall-clock bound on the ANSWER-PATH rerank call: on timeout the search
 # falls back to the fused ordering instead of blocking the request. The results
 # list uses the shorter settings.global_search_rerank_list_timeout_s budget.
@@ -545,9 +547,13 @@ class LectureGlobalSearchRetrieval:
             else None
         )
         if rerank_result is None:
-            if entity_pool:
-                telemetry.drop_counts["entities_dropped_no_rerank"] += len(entity_pool)
-            return deduped[:limit]
+            # Keep the ladder alive without rerank scores: entities join the
+            # context in prefetch order (capped) and the answer model judges
+            # them, instead of the whole entity world vanishing on a timeout.
+            fallback_entities = entity_pool[:_POINTER_TIER_CAP]
+            if fallback_entities:
+                telemetry.entity_kept = len(fallback_entities)
+            return deduped[:limit] + fallback_entities
 
         telemetry.rerank_ms, relevance = rerank_result
         telemetry.reranked = True
@@ -588,23 +594,26 @@ class LectureGlobalSearchRetrieval:
                     break
             telemetry.entity_kept = sum(1 for c in kept if _is_entity(c))
 
-        # Pointer tier: an empty floored pool with an entity card in the
-        # calibrated band just below the floor is not "nothing exists" — it
-        # is "no content answers this, but this material seems related". The
-        # answer stage phrases that as navigation.
-        if not kept and entity_pool:
-            pointer_floor = settings.global_search_pointer_floor
-            pointers = [
-                c
-                for c in reranked
-                if _is_entity(c) and pointer_floor <= c.score < floor
-            ][:_ENTITY_REPRESENTATION_SLOTS]
+        # Pointer tier: when no entity card clears the floor, the best-ranked
+        # cards are admitted from below it anyway. The floor is calibrated for
+        # "does this text ANSWER the question", which correctly rejects a card
+        # that merely NAMES material for a definition question (a sorting
+        # exercise scores 0.03 for "what is a sorting algorithm") — but
+        # whether material is ABOUT the topic is a different judgment, and it
+        # belongs to the answer LLM, not a score cutoff. With an otherwise
+        # empty pool the cards go alone to the navigate prompt; alongside
+        # surviving content the grounded prompt (and its null-to-navigate
+        # fallback) decides between answering, pointing, and declining. The
+        # LLM is the junk gate for the below-floor entity world, and that
+        # discrimination is measured by the negative suite in the gate.
+        if entity_pool and not any(_is_entity(c) for c in kept):
+            pointers = [c for c in reranked if _is_entity(c)][:_POINTER_TIER_CAP]
             if pointers:
                 telemetry.pointer_tier = True
                 telemetry.entity_kept = len(pointers)
                 for candidate in pointers:
                     candidate.dto.via_pointer_tier = True
-                kept = pointers
+                kept = kept + pointers
         return kept
 
     def _expand_by_unit(

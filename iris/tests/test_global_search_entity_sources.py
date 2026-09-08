@@ -207,32 +207,68 @@ class TestEntityRerankGate:
         assert len(kept) == 6
         assert _is_entity(kept[-1])
 
-    def test_pointer_tier_admits_band_entities_when_floor_empty(self):
+    def test_pointer_tier_offers_top_entities_when_floor_empties(self):
+        # The numeric floor judges "answers the question"; whether material is
+        # ABOUT the topic is judged downstream by the navigate prompt, so even
+        # low-scoring entity cards are offered (capped) instead of silence.
         retrieval = _retrieval()
         deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
         entity_pool = [_Candidate(0.0, _entity_source(), (None, None, None))]
-        kept, telemetry = self._gate(retrieval, deduped, entity_pool, [0.05, 0.09])
+        kept, telemetry = self._gate(retrieval, deduped, entity_pool, [0.05, 0.035])
         assert len(kept) == 1 and _is_entity(kept[0])
         assert telemetry.pointer_tier
         assert kept[0].dto.via_pointer_tier
 
-    def test_pointer_tier_rejects_junk_band(self):
+    def test_pointer_tier_joins_surviving_content_when_no_entity_clears_the_floor(self):
+        # Weak-but-topical content above the floor must not suppress the
+        # pointer tier: the student's real target may be a below-floor card,
+        # since a unit that NAMES the topic never "answers" a what-is question.
         retrieval = _retrieval()
         deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
-        entity_pool = [_Candidate(0.0, _entity_source(), (None, None, None))]
-        kept, telemetry = self._gate(retrieval, deduped, entity_pool, [0.05, 0.03])
+        entity_pool = [
+            _Candidate(0.0, _entity_source(title=f"e{i}"), (None, None, None))
+            for i in range(4)
+        ]
+        relevance = [0.5, 0.01, 0.04, 0.02, 0.03]
+        kept, telemetry = self._gate(retrieval, deduped, entity_pool, relevance)
+        assert not _is_entity(kept[0]) and kept[0].score == 0.5
+        assert [c.dto.title for c in kept[1:]] == ["e1", "e3", "e2"]
+        assert all(c.dto.via_pointer_tier for c in kept[1:])
+        assert telemetry.pointer_tier and telemetry.entity_kept == 3
+
+    def test_pointer_tier_caps_the_offered_entities_and_keeps_rank_order(self):
+        retrieval = _retrieval()
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        entity_pool = [
+            _Candidate(0.0, _entity_source(title=f"e{i}"), (None, None, None))
+            for i in range(5)
+        ]
+        relevance = [0.05, 0.01, 0.04, 0.02, 0.03, 0.05]
+        kept, _ = self._gate(retrieval, deduped, entity_pool, relevance)
+        assert [c.dto.title for c in kept] == ["e4", "e1", "e3"]  # top 3 by score
+
+    def test_pointer_tier_stays_silent_without_entities(self):
+        retrieval = _retrieval()
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        kept, telemetry = self._gate(retrieval, deduped, [], [0.05])
         assert kept == []
         assert not telemetry.pointer_tier
 
-    def test_fused_fallback_returns_content_only(self):
+    def test_fused_fallback_keeps_capped_entities(self):
+        # A rerank timeout must not erase the entity ladder: entities join the
+        # context in prefetch order (capped) and the answer model judges them.
         retrieval = _retrieval()
         retrieval._safe_rerank = Mock(return_value=None)
         deduped = [_Candidate(0.9, _content(), (None, 1, 1))]
-        entity_pool = [_Candidate(0.0, _entity_source(), (None, None, None))]
+        entity_pool = [
+            _Candidate(0.0, _entity_source(title=f"e{i}"), (None, None, None))
+            for i in range(4)
+        ]
         telemetry = _SearchTelemetry()
         kept = retrieval._rerank_and_gate("q", deduped, 5, True, telemetry, entity_pool)
-        assert kept == deduped
-        assert telemetry.drop_counts["entities_dropped_no_rerank"] == 1
+        assert kept[0] is deduped[0]
+        assert [c.dto.title for c in kept[1:]] == ["e0", "e1", "e2"]  # capped at 3
+        assert telemetry.entity_kept == 3
 
 
 # --------------------------------------------------------------- pipeline logic

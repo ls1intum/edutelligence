@@ -182,19 +182,6 @@ class Settings(BaseModel):
         "returns no sources - the honest empty state, skipping the answer LLM. "
         "Set to 0.0 for log-only calibration.",
     )
-    global_search_pointer_floor: float = Field(
-        default=0.08,
-        description="Lower admission bound for ENTITY POINTER candidates when "
-        "nothing clears the main rerank floor. Derived from the same "
-        "calibration as the floor: junk peaks at 0.065 and reranker noise is "
-        "about +/-0.01, so 0.08 stays above the junk ceiling while admitting "
-        "the borderline band the 0.10 floor deliberately clips (a topical "
-        "lecture-unit card for a concept question sits at 0.08-0.10). Applies "
-        "ONLY to entity cards and ONLY when the floored pool is empty — the "
-        "honest reading of that state is 'no content answers this, but this "
-        "material seems related', which the answer stage phrases as "
-        "navigation. Must stay below global_search_rerank_floor.",
-    )
     global_search_expand_units: bool = Field(
         default=True,
         description="Graph expansion for the ANSWER path: once a candidate "
