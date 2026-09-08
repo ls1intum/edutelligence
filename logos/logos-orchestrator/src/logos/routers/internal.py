@@ -52,7 +52,6 @@ from logos.main import (
     _find_uncalibrated_models_on_provider,
     _forget_benchmark_task,
     _live_streams,
-    _logosnode_registry,
     _normalize_provider_type,
     _resolve_provider_name,
     _served_context_window_stats,
@@ -141,7 +140,7 @@ async def internal_model_health(request: Request):
             if provider_id <= 0:
                 continue
             worker_ids.add(provider_id)
-            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id)
             if not _logosnode_snapshot_is_connected(snapshot):
                 continue
             snapshots[provider_id] = snapshot
@@ -214,7 +213,7 @@ async def internal_provider_status(request: Request):
         provider_id = int(provider.get("provider_id") or 0)
         if provider_id <= 0:
             continue
-        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        runtime_snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id)
         connected = _logosnode_snapshot_is_connected(runtime_snapshot)
         last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
         if isinstance(last_heartbeat, datetime.datetime):
@@ -227,7 +226,7 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
-                "calibrating": _logosnode_registry.is_calibrating(provider_id),
+                "calibrating": _main._logosnode_registry.is_calibrating(provider_id),
             }
         )
     return {"providers": providers}
@@ -368,7 +367,7 @@ async def internal_fetch_calibration_log(provider_id: int, model_name: str, requ
     _require_internal_secret(request)
 
     try:
-        result = await _logosnode_registry.send_command(
+        result = await _main._logosnode_registry.send_command(
             provider_id,
             "get_calibration_log",
             params={"model_name": model_name},
@@ -397,14 +396,14 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
     """
     _require_internal_secret(request)
 
-    provider_ids = [provider_id] if provider_id is not None else _logosnode_registry.active_provider_ids()
+    provider_ids = [provider_id] if provider_id is not None else _main._logosnode_registry.active_provider_ids()
     if not provider_ids:
         return JSONResponse(status_code=200, content={"model": model_name, "results": []})
 
     async def _check_one(pid: int) -> dict[str, Any]:
         pname = _resolve_provider_name(pid)
         try:
-            result = await _logosnode_registry.send_command(
+            result = await _main._logosnode_registry.send_command(
                 pid, "run_compatibility_precheck", params={"model": model_name}, timeout_seconds=30
             )
             # A worker reply with "result": null bypasses send_command's
@@ -469,7 +468,7 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
                     }
                 ),
             )
-        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        runtime_snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id)
         if provider_type == "logosnode":
             if runtime_snapshot is None or not _logosnode_snapshot_is_connected(runtime_snapshot):
                 raise HTTPException(status_code=503, detail=f"Provider {target['provider_name']} is offline")
@@ -530,13 +529,13 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             max_output_tokens=data.max_output_tokens,
             serving_configuration=serving_configuration,
             serving_configuration_getter=lambda: extract_serving_configuration(
-                _logosnode_registry.peek_runtime_snapshot(provider_id), model_name
+                _main._logosnode_registry.peek_runtime_snapshot(provider_id), model_name
             ),
             request_headers=request_headers,
             worker_preparer=worker_preparer,
             worker_session_is_current=(
                 (
-                    lambda: (_logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
+                    lambda: (_main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
                     == job_payload["provider_session_id"]
                 )
                 if is_internal_worker_benchmark
@@ -676,7 +675,7 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
     )
     if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
     if not snap.get("first_status_received"):
@@ -692,7 +691,7 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
     )
     pname = _resolve_provider_name(data.provider_id)
     try:
-        await _logosnode_registry.send_command(
+        await _main._logosnode_registry.send_command(
             data.provider_id,
             "start_calibration_session",
             params={"sleep_level": sleep_level},
@@ -804,7 +803,7 @@ async def internal_logosnode_sleep_lane(data: InternalSleepLaneRequest, request:
     if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
 
-    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
     if not snap.get("first_status_received"):

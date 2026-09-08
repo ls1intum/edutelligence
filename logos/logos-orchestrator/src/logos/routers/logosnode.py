@@ -33,7 +33,6 @@ from logos.main import (
     _cancel_benchmark_job,
     _dispatch_logosnode_command,
     _find_uncalibrated_models_on_provider,
-    _logosnode_registry,
     _normalize_provider_type,
     _resolve_provider_name,
 )
@@ -110,7 +109,7 @@ def _capture_logosnode_provider_snapshot(
                     )
 
     sample["snapshot_id"] = snapshot_id
-    asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
+    asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
 
 
 def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> None:
@@ -251,7 +250,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     provider_id = provider["id"]
     worker_id = provider.get("name") or f"worker-{provider_id}"
 
-    conflicting_session = await _logosnode_registry.get_conflicting_session(
+    conflicting_session = await _main._logosnode_registry.get_conflicting_session(
         provider_id,
         worker_id,
         stale_after_seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS,
@@ -263,7 +262,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
                 f"Worker '{conflicting_session.worker_id}' is already connected. " f"Stop the existing worker first."
             ),
         )
-    token = await _logosnode_registry.issue_ticket(
+    token = await _main._logosnode_registry.issue_ticket(
         provider_id=provider_id,
         worker_id=worker_id,
         capabilities_models=data.capabilities_models,
@@ -284,14 +283,14 @@ async def logosnode_session(websocket: WebSocket, token: str):
         await websocket.close(code=1008, reason="TLS required")
         return
 
-    ticket = await _logosnode_registry.consume_ticket(token)
+    ticket = await _main._logosnode_registry.consume_ticket(token)
     if ticket is None:
         await websocket.close(code=1008, reason="Invalid or expired token")
         return
 
     await websocket.accept()
     try:
-        session = await _logosnode_registry.attach_session(ticket, websocket)
+        session = await _main._logosnode_registry.attach_session(ticket, websocket)
     except LogosNodeSessionConflictError as exc:
         await websocket.close(code=1008, reason=str(exc))
         return
@@ -304,7 +303,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 continue
             msg_type = payload.get("type")
             if msg_type == "hello":
-                await _logosnode_registry.on_hello(
+                await _main._logosnode_registry.on_hello(
                     provider_id=ticket.provider_id,
                     worker_id=str(payload.get("worker_id", "")).strip() or ticket.worker_id,
                     capabilities_models=(
@@ -325,7 +324,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
-                await _logosnode_registry.update_runtime(
+                await _main._logosnode_registry.update_runtime(
                     provider_id=ticket.provider_id,
                     runtime=runtime,
                     capabilities_models=(
@@ -343,7 +342,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-                await _logosnode_registry.append_event(
+                await _main._logosnode_registry.append_event(
                     provider_id=ticket.provider_id,
                     event=event,
                     replay=bool(payload.get("replay", False)),
@@ -358,20 +357,20 @@ async def logosnode_session(websocket: WebSocket, token: str):
                             exc_info=True,
                         )
             elif msg_type == "heartbeat":
-                await _logosnode_registry.mark_heartbeat(ticket.provider_id)
+                await _main._logosnode_registry.mark_heartbeat(ticket.provider_id)
             elif msg_type == "command_result":
-                await _logosnode_registry.on_command_result(ticket.provider_id, payload)
+                await _main._logosnode_registry.on_command_result(ticket.provider_id, payload)
             elif msg_type == "stream_start":
-                await _logosnode_registry.on_stream_start(ticket.provider_id, payload)
+                await _main._logosnode_registry.on_stream_start(ticket.provider_id, payload)
             elif msg_type == "stream_chunk":
-                await _logosnode_registry.on_stream_chunk(ticket.provider_id, payload)
+                await _main._logosnode_registry.on_stream_chunk(ticket.provider_id, payload)
             elif msg_type == "stream_end":
-                await _logosnode_registry.on_stream_end(ticket.provider_id, payload)
+                await _main._logosnode_registry.on_stream_end(ticket.provider_id, payload)
     except WebSocketDisconnect:
         pass
     finally:
-        await _logosnode_registry.detach_session(ticket.provider_id, websocket)
-        current = _logosnode_registry.peek_runtime_snapshot(ticket.provider_id)
+        await _main._logosnode_registry.detach_session(ticket.provider_id, websocket)
+        current = _main._logosnode_registry.peek_runtime_snapshot(ticket.provider_id)
         _cancel_benchmarks_for_changed_session(
             ticket.provider_id,
             str(current["session_id"]) if current else None,
@@ -382,7 +381,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
 async def logosnode_status(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
-        return await _logosnode_registry.get_runtime_snapshot(data.provider_id)
+        return await _main._logosnode_registry.get_runtime_snapshot(data.provider_id)
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
@@ -391,7 +390,7 @@ async def logosnode_status(data: LogosNodeStatusRequest):
 async def logosnode_devices(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
-        return {"devices": await _logosnode_registry.get_devices(data.provider_id)}
+        return {"devices": await _main._logosnode_registry.get_devices(data.provider_id)}
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
@@ -400,7 +399,7 @@ async def logosnode_devices(data: LogosNodeStatusRequest):
 async def logosnode_lanes(data: LogosNodeStatusRequest):
     _require_root_access(data.logos_key)
     try:
-        return {"lanes": await _logosnode_registry.get_lanes(data.provider_id)}
+        return {"lanes": await _main._logosnode_registry.get_lanes(data.provider_id)}
     except LogosNodeOfflineError as exc:
         return JSONResponse(status_code=503, content={"error": str(exc)})
 
@@ -466,7 +465,7 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
     as uncalibrated right now.
     """
     _require_root_access(data.logos_key)
-    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
     if not snap.get("first_status_received"):
@@ -486,7 +485,7 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
     )
     pname = _resolve_provider_name(data.provider_id)
     try:
-        await _logosnode_registry.send_command(
+        await _main._logosnode_registry.send_command(
             data.provider_id,
             "start_calibration_session",
             params={"sleep_level": sleep_level},

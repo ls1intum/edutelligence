@@ -109,7 +109,7 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
 
     monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "internal-secret")
     monkeypatch.setattr(internal_mod, "DBManager", DummyDB)
-    monkeypatch.setattr(internal_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
     monkeypatch.setattr(main, "_capacity_planner", planner)
     monkeypatch.setattr(internal_mod, "run_benchmark_job", runner)
 

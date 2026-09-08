@@ -12,10 +12,9 @@ from logos.routers import internal as internal_mod
 
 
 def _patch_registry(monkeypatch, registry) -> None:
-    # The endpoint reads the registry itself, and the dispatch helper it
-    # delegates to reads it from main's globals — both need the fake.
-    for module in (main_mod, internal_mod):
-        monkeypatch.setattr(module, "_logosnode_registry", registry)
+    # The endpoint and the dispatch helper it delegates to both read the
+    # registry through logos.main's globals, so one patch covers both.
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
 
 def _make_request(authorization: str = "") -> MagicMock:

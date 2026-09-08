@@ -312,7 +312,7 @@ async def test_registry_rejects_different_worker_for_active_provider():
 
 @pytest.mark.asyncio
 async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
-    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
 
     class _FakeDB:
         def __enter__(self):
@@ -358,7 +358,7 @@ async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
     ticket = await registry.consume_ticket(await registry.issue_ticket(3, "worker-a", []))
     assert ticket is not None
     await registry.attach_session(ticket, _FakeWebSocket())
-    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
     class _FakeDB:
         def __enter__(self):
@@ -399,7 +399,7 @@ async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_logosnode_auth_requires_tls(monkeypatch):
-    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
     req = LogosNodeAuthRequest(shared_key="secret")
     request = Request(
         {
@@ -417,7 +417,7 @@ async def test_logosnode_auth_requires_tls(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_logosnode_auth_allows_http_in_dev_mode(monkeypatch):
-    monkeypatch.setattr(logosnode_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
     monkeypatch.setenv("LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP", "true")
 
     class _FakeDB:

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
+import logos as main
 from logos.logosnode_snapshot import _LOGOSNODE_STATS_STALE_AFTER_SECONDS
 from logos.routers import internal as internal_mod
 from logos.routers import monitoring as monitoring_mod
@@ -59,10 +60,12 @@ def fake_db(monkeypatch):
 
 
 def _patch_registry(monkeypatch, registry) -> None:
-    # The /health and /internal/model_health handlers read the registry from
-    # their own router modules, so both bindings have to see the fake.
-    monkeypatch.setattr(internal_mod, "_logosnode_registry", registry)
-    monkeypatch.setattr(monitoring_mod, "_logosnode_registry", registry)
+    # The /health and /internal/model_health handlers read the registry
+    # through logos.main (the routers no longer keep their own binding), so
+    # one patch covers both — and it is exactly the attribute
+    # start_pipeline rebinds at startup, which router-local patches used to
+    # hide.
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
 
 
 def _body(response) -> dict:

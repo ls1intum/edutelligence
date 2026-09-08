@@ -6,9 +6,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+import logos.main as _main
 from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_snapshot import _logosnode_snapshot_is_connected
-from logos.main import _PROMETHEUS_API_KEY, _logosnode_registry
+from logos.main import _PROMETHEUS_API_KEY
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
 
 logger = logging.getLogger("LogosLogger")
@@ -48,7 +49,7 @@ async def health():
             if provider_id <= 0:
                 continue
             worker_ids.add(provider_id)
-            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+            snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id)
             if not _logosnode_snapshot_is_connected(snapshot):
                 continue
             # Local is serveable if an online worker declares at least one capable model.

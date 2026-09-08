@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
+import logos as main
 from logos.logosnode_snapshot import _LOGOSNODE_STATS_STALE_AFTER_SECONDS
 from logos.routers import internal as main_mod
 
@@ -62,7 +63,7 @@ async def test_reports_connected_and_offline_providers(monkeypatch):
     fresh_heartbeat = datetime.datetime.now(datetime.timezone.utc).isoformat()
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: ({"last_heartbeat": fresh_heartbeat} if pid == 1 else None)
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
 
     result = await main_mod.internal_provider_status(_make_request("Bearer correct-secret"))
 
@@ -88,7 +89,7 @@ async def test_stale_heartbeat_counts_as_offline(monkeypatch):
     ).isoformat()
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: {"last_heartbeat": stale}
-    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
 
     result = await main_mod.internal_provider_status(_make_request("Bearer correct-secret"))
 
