@@ -1,5 +1,16 @@
 export type ProviderType = 'logosnode' | 'cloud';
-export type CloudProviderType = 'azure' | 'openai' | 'anthropic' | 'gemini' | 'bedrock' | 'deepseek' | 'groq' | 'none';
+// 'logos' is another Logos instance used as an upstream: it serves every
+// surface this one does, so requests reach it unchanged.
+export type CloudProviderType =
+  | 'azure'
+  | 'openai'
+  | 'anthropic'
+  | 'gemini'
+  | 'bedrock'
+  | 'deepseek'
+  | 'groq'
+  | 'logos'
+  | 'none';
 // Mirrors the Postgres enum threshold_enum (liquibase 000 + 024) and
 // ThresholdLevel in logos-orchestrator — keep in sync. THIRD_PARTY_HARDWARE
 // covers hardware outside operator control (e.g. a personal Mac MLX worker);
