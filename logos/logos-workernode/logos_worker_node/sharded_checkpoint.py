@@ -63,7 +63,7 @@ def _sanitize_model(model: str) -> str:
 def resolve_cache_root(models_path: str) -> str:
     """Resolve the persistent cache root the same way ``vllm_process`` does.
 
-    ``LOGOS_WORKER_CACHE_ROOT`` wins; otherwise the ollama ``models_path``
+    ``LOGOS_WORKER_CACHE_ROOT`` wins; otherwise the worker's ``models_path``
     (mounted as a persistent volume in the standard docker-compose) is used.
     """
     override = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()

@@ -4,7 +4,7 @@ Legacy architecture notes in this file were deprecated on 2026-03-10.
 
 Use these files as the current source of truth:
 - `README.md` for project overview and current API surface.
-- `LANES.md` for lane operations (Ollama, vLLM, mixed lanes).
+- `LANES.md` for lane operations (vLLM lanes).
 - `TESTING.md` for benchmark and runbook commands.
 - `logos_worker_node/models.py` for exact request/response schemas (`admin_api.py`, referenced here before, no longer exists — schemas live in `models.py` alone now).
 

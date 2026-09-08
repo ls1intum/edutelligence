@@ -55,7 +55,7 @@ All five hang off a single root, resolved at boot:
    `.env`).
 2. otherwise `worker.cache_path` from `config.yml` (recommended config-file
    knob — see `config.example.yml`).
-3. otherwise `engines.ollama.models_path` (default in `config.yml`:
+3. otherwise `worker.models_path` (default in `config.yml`:
    `/usr/share/ollama/.ollama/models`) — used because the standard
    `docker-compose.yml` already mounts that path as a named volume
    (`ollama-models`).
@@ -68,17 +68,16 @@ Layout under `<root>/`:
 | `.cache/vllm/` | vLLM compilation artifacts | `VLLM_CACHE_ROOT` + `--compilation-config cache_dir` | torch.compile bytecode reuse |
 | `.cache/torch_inductor/` | Torch inductor / FX graph cache | `TORCHINDUCTOR_CACHE_DIR` (+ `TORCHINDUCTOR_FX_GRAPH_CACHE=1`) | inductor lowering cache |
 | `.cache/flashinfer/<version>/<sm>/cached_ops/*.so` | FlashInfer JIT kernels (per-`(head_dim, dtype)`) | `FLASHINFER_WORKSPACE_BASE` (parent of `.cache/flashinfer`) | first compile takes 30–60 s; reused thereafter |
-| (ollama's own GGUF blobs, if Ollama is configured) | Ollama models | `OLLAMA_MODELS` | when Ollama lanes are in use |
 
 **Default deployment** — leave both `LOGOS_WORKER_CACHE_ROOT` and
 `worker.cache_path` unset; everything defaults to
-`engines.ollama.models_path` and is preserved by the `ollama-models`
-named volume in `docker-compose.yml`. This is the expected setup for
-ASE/Ansible deployments.
+`worker.models_path` and is preserved by the `ollama-models`
+named volume in `docker-compose.yml` (the path keeps its historical name).
+This is the expected setup for ASE/Ansible deployments.
 
-**Non-ollama deployment** — set `worker.cache_path: /var/cache/logos-worker`
+**Custom storage layout** — set `worker.cache_path: /var/cache/logos-worker`
 (or any persistent path) in `config.yml` and mount that path as a Docker
-volume. All four caches relocate together, ollama remains optional.
+volume. All four caches relocate together.
 
 **Operator override** — set `LOGOS_WORKER_CACHE_ROOT=/some/path` in `.env`
 to override `config.yml` for a particular host without editing the
@@ -122,9 +121,8 @@ docker compose up -d
 ```
 
 vLLM requirement:
-- vLLM lanes require a working `nvidia-smi`.
-- LogosWorkerNode blocks vLLM startup when `nvidia-smi` is unavailable or misconfigured.
-- If you want to run without `nvidia-smi`, use Ollama lanes only.
+- Every lane runs vLLM and requires a working `nvidia-smi`.
+- LogosWorkerNode blocks lane startup when `nvidia-smi` is unavailable or misconfigured.
 
 ## Docs
 - Setup: [QUICKSTART.md](QUICKSTART.md)

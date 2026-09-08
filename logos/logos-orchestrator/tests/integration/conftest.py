@@ -240,7 +240,7 @@ def mock_providers(respx_mock):
 
 @pytest.fixture
 def mock_sdi(mocker):
-    """Mock Ollama /ps endpoint."""
+    """Mock worker model-status endpoint."""
     from .fixtures.mock_sdi import SDIMocker
 
     return SDIMocker(mocker)

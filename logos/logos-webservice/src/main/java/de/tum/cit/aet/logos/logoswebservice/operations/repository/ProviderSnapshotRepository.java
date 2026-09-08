@@ -9,9 +9,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
-import de.tum.cit.aet.logos.logoswebservice.operations.entity.OllamaProviderSnapshot;
+import de.tum.cit.aet.logos.logoswebservice.operations.entity.ProviderSnapshot;
 
-public interface OllamaProviderSnapshotRepository extends JpaRepository<OllamaProviderSnapshot, Integer> {
+public interface ProviderSnapshotRepository extends JpaRepository<ProviderSnapshot, Integer> {
 
     /**
      * Downsamples snapshots in the database: keeps only the latest snapshot id
@@ -21,7 +21,7 @@ public interface OllamaProviderSnapshotRepository extends JpaRepository<OllamaPr
     @Transactional(readOnly = true)
     @Query("""
         SELECT MAX(s.id)
-        FROM OllamaProviderSnapshot s
+        FROM ProviderSnapshot s
         WHERE s.pollSuccess = TRUE
           AND s.snapshotTs >= :startTs
           AND s.snapshotTs < :endTs
@@ -47,7 +47,7 @@ public interface OllamaProviderSnapshotRepository extends JpaRepository<OllamaPr
                s.loadedModels AS loadedModels,
                s.schedulerSignals AS schedulerSignals,
                p.totalVramMb AS totalVramMb
-        FROM OllamaProviderSnapshot s
+        FROM ProviderSnapshot s
         LEFT JOIN Provider p ON p.id = s.providerId
         WHERE s.id IN :ids
         ORDER BY s.providerId, s.snapshotTs
@@ -58,7 +58,7 @@ public interface OllamaProviderSnapshotRepository extends JpaRepository<OllamaPr
     @Query("""
         SELECT s.providerId AS providerId,
                MAX(COALESCE(s.totalMemoryBytes, s.totalVramUsedBytes)) AS capacityBytes
-        FROM OllamaProviderSnapshot s
+        FROM ProviderSnapshot s
         WHERE s.pollSuccess = TRUE
           AND s.snapshotTs >= :startTs
           AND s.snapshotTs < :endTs

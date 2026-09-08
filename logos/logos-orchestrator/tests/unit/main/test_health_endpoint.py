@@ -118,15 +118,15 @@ async def test_local_down_returns_503_and_keeps_cloud_breakdown(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_legacy_local_provider_is_not_counted_as_cloud(monkeypatch):
-    # "ollama" is a legacy local worker type: list_local_providers counts it
+    # "node" is a legacy local worker type: list_local_providers counts it
     # as local, so its deployment must not flip cloud_models to UP.
     _FakeDBManager.providers = [
         {"provider_id": 1, "name": "node-a", "provider_type": "logosnode"},
-        {"provider_id": 2, "name": "ollama-x", "provider_type": "ollama"},
+        {"provider_id": 2, "name": "legacy-node", "provider_type": "node"},
     ]
     _FakeDBManager.deployments = [
         {"model_id": 1, "model_name": "model-a", "provider_id": 1, "provider_name": "node-a", "type": "logosnode"},
-        {"model_id": 2, "model_name": "model-b", "provider_id": 2, "provider_name": "ollama-x", "type": "ollama"},
+        {"model_id": 2, "model_name": "model-b", "provider_id": 2, "provider_name": "legacy-node", "type": "node"},
     ]
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: None

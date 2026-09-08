@@ -61,12 +61,12 @@ class ModelStatus:
 
     Provides raw data only - schedulers should derive predictions from this data.
     For example, to predict cold starts:
-    - Ollama: Check if is_loaded=False or expires_at < now
+    - LogosNode: Check if is_loaded=False or expires_at < now
     - Cloud: Always False (no cold starts in cloud providers)
 
     Queue State:
     - queue_state: Breakdown of queue depth by priority level
-      * Ollama: Real 3-level breakdown (we control the queue)
+      * LogosNode: Real 3-level breakdown (we control the queue)
       * Cloud: None (they control the queue, we have no visibility)
     - queue_depth: Total queue depth (computed property)
       * Returns 0 if queue_state is None (cloud providers)
@@ -87,7 +87,7 @@ class ModelStatus:
         Total queue depth across all priority levels.
 
         Returns 0 for cloud providers (no queue visibility).
-        For Ollama providers, returns sum of all priority queues.
+        For LogosNode providers, returns sum of all priority queues.
 
         This is a computed property for backward compatibility.
         """
@@ -174,15 +174,14 @@ class LaneSchedulerSignals:
     model_name: str
     runtime_state: str  # cold|starting|loaded|running|sleeping|stopped|error
     sleep_state: str  # unsupported|unknown|awake|sleeping
-    is_vllm: bool
     active_requests: int
-    queue_waiting: float  # from backend_metrics (vLLM) or 0 (Ollama)
-    requests_running: float  # from backend_metrics (vLLM) or active_requests (Ollama)
+    queue_waiting: float  # from backend_metrics, 0.0 when the engine reports nothing
+    requests_running: float  # from backend_metrics, or active_requests when no running count is reported
     gpu_cache_usage_percent: Optional[float]  # vLLM only
     ttft_p95_seconds: float  # computed from ttft_histogram, 0.0 if unavailable
     e2e_latency_p50_seconds: float  # p50 end-to-end request latency, 0.0 if unavailable
     effective_vram_mb: float
-    num_parallel: int  # Ollama: explicit; vLLM: worker-reported engine max concurrency (0 until the worker reports it)
+    num_parallel: int  # worker-reported engine max concurrency (0 until the worker reports it)
     gpu_memory_utilization: Optional[float] = None  # vLLM planner target
     tensor_parallel_size: Optional[int] = None  # vLLM topology hint
     gpu_devices: Optional[str] = None  # GPU device indices e.g. "0,1"
@@ -193,7 +192,6 @@ class LaneSchedulerSignals:
             "model_name": self.model_name,
             "runtime_state": self.runtime_state,
             "sleep_state": self.sleep_state,
-            "is_vllm": self.is_vllm,
             "active_requests": self.active_requests,
             "queue_waiting": self.queue_waiting,
             "requests_running": self.requests_running,

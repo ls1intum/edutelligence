@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (Azure, Ollama, OpenAI, and a fleet of self-hosted GPU workers running vLLM/Ollama). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, GPU capacity planning, and monitoring.
+**Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (worker-backed vLLM lanes, Azure, OpenAI). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, GPU capacity planning, and monitoring.
 
 This section (and most of this file) covers `logos-orchestrator/`, the Python/FastAPI service. See **Repository Structure** below for the other three services in this directory.
 
@@ -73,18 +73,16 @@ logos/
 │   │   ├── queue/
 │   │   │   └── priority_queue.py      # Thread-safe priority queue
 │   │   ├── sdi/                       # Scheduling Data Interface
-│   │   │   ├── ollama_facade.py
+│   │   │   ├── logosnode_facade.py
 │   │   │   └── azure_facade.py
 │   │   ├── monitoring/
-│   │   │   ├── recorder.py            # Request event monitoring
-│   │   │   └── ollama_monitor.py      # Background VRAM/model polling
+│   │   │   └── recorder.py            # Request event monitoring
 │   │   └── jobs/
 │   │       └── job_service.py         # Async job persistence
 │   └── tests/
 │       ├── conftest.py                # Global test config (stubs heavy deps)
 │       ├── unit/                      # main/, sdi/, queue/, responses/, capacity/, ...
-│       ├── integration/               # Full endpoint tests with mock providers
-│       └── scheduling_data/           # SDI-specific tests
+│       └── integration/               # Full endpoint tests with mock providers
 ├── logos-workernode/                  # Python — GPU worker-node control plane; see its own AGENTS.md
 │   └── logos_worker_node/             # lane_manager.py, calibration.py, logos_bridge.py, vllm_process.py, ...
 ├── logos-webservice/                  # Spring Boot (Java 25) — admin/stats API, owns the DB schema
@@ -95,7 +93,7 @@ logos/
 
 **Sibling services, briefly**: `logos-workernode` runs on GPU hosts, connects
 out to the orchestrator over a websocket bridge (`logosnode_registry.py` on
-the orchestrator side), and handles vLLM/Ollama lane lifecycle, calibration,
+the orchestrator side), and handles vLLM lane lifecycle, calibration,
 and the HF compatibility precheck (see `logos-workernode/AGENTS.md`).
 `logos-webservice` is a separate Spring Boot service that now owns the
 Postgres schema (via Liquibase) and serves admin/statistics endpoints
@@ -177,7 +175,7 @@ schema).
 | `model_provider` | Model ↔ Provider mapping |
 | `model_profiles` | Per-provider VRAM/calibration profile for a model (base residency, loaded/sleeping VRAM) — written by `logos-workernode` calibration |
 | `logosnode_provider_keys` | Auth keys for the workernode websocket bridge, per provider |
-| `ollama_provider_snapshots` | Periodic VRAM/loaded-model snapshots from Ollama providers |
+| `provider_snapshots` | Periodic VRAM/loaded-model snapshots from workers |
 | `policies` | Classification policies with threshold weights |
 | `log_entry` | Request usage logs (timestamps, payloads, tokens, SDI metrics) |
 | `usage_tokens` | Per-request token counts linked to log_entry |
@@ -379,7 +377,7 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 1. **main.py is large** (~6250 lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic/migration tooling on the orchestrator side** — it never had any; it just reads/writes tables. Schema and migrations are owned by `logos-webservice` via Liquibase (see Database Schema above).
-4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances), and self-hosted GPU workers via `logos-workernode` (vLLM/Ollama lanes, connected over the websocket bridge in `logosnode_registry.py`).
+4. **Provider types**: `cloud` (Azure/OpenAI), and self-hosted GPU workers via `logos-workernode` (vLLM lanes, connected over the websocket bridge in `logosnode_registry.py`).
 5. **Token tracking exists** in the `usage_tokens` and `token_prices` tables.
 6. **`api_keys` is the key auth entity** — each key has a unique `key_value`, and belongs to a `team_id` and/or `user_id`. There is no `process` table anymore.
 7. **Model/provider access is team-scoped by default** — `team_model_permissions`/`team_provider_permissions`, unless a key sets `use_custom_permissions=true` and gets its own `api_key_model_permissions`/`api_key_provider_permissions` rows. There is no `profiles` table anymore.

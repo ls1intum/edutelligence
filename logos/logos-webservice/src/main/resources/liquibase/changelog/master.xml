@@ -30,5 +30,7 @@
     <include file="liquibase/changelog/024_privacy_third_party_hardware.xml"/>
     <include file="liquibase/changelog/025_cloud_model_sync.xml"/>
     <include file="liquibase/changelog/026_agent_session_no_push.xml"/>
+    <include file="liquibase/changelog/027_rename_provider_snapshots.xml"/>
+    <include file="liquibase/changelog/028_refuse_ollama_typed_providers.xml"/>
 
 </databaseChangeLog>
