@@ -684,6 +684,28 @@ def test_gguf_capability_target_shapes(tmp_path: Path) -> None:
     assert gguf.gguf_capability_target(str(tmp_path), "org/aux-only-GGUF") == "org/aux-only-GGUF"
 
 
+def test_gguf_capability_target_plain_named_gguf_cache(tmp_path: Path) -> None:
+    # A plain-named repository whose cached snapshot holds GGUF backbone
+    # quants (no transformers backbone) is a GGUF model by the same
+    # classification resolve_gguf_spec applies — so the capability check
+    # proves the concrete quant, not the (partial) repository directory.
+    _write_gguf(tmp_path, "Qwen/Qwen3-8B", ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf"])
+    # An incomplete sharded cache still names the quant the lane will serve
+    # (so is_gguf_ref_cached reports it missing and the prefetch completes it) …
+    assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B") == "Qwen/Qwen3-8B:Q4_K_M"
+    # … an operator pin selects the pinned quant even when it is the one not
+    # cached …
+    assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B", pinned_quant="Q8_0") == "Qwen/Qwen3-8B:Q8_0"
+    # … but an invalid pin changes nothing the check can prove (directory).
+    assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B", pinned_quant="Q9_X") is None
+    # A plain name that also holds transformers backbone is a mixed-format
+    # model the plain name refers to as the backbone — not GGUF (directory).
+    _write_gguf(tmp_path, "org/mixed", ["model.safetensors", "org-mixed-Q4_K_M.gguf"])
+    assert gguf.gguf_capability_target(str(tmp_path), "org/mixed") is None
+    # No cached snapshot to classify → not provably GGUF (directory).
+    assert gguf.gguf_capability_target(str(tmp_path), "org/never-cached-plain") is None
+
+
 def test_gguf_capability_target_local_file_ref_is_itself() -> None:
     # A local GGUF file proves itself (its file existence) in absolute and
     # relative form — the directory fallback can never accept a file.

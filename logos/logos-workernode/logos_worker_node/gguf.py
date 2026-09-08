@@ -697,10 +697,16 @@ def gguf_capability_target(
       :func:`is_gguf_ref_cached` proves the file's or the directory's (the
       path without any quant suffix) existence on the host, which is the
       whole proof a local path can offer;
-    - ``None`` when the model is not a GGUF concern (plain model, or a
-      repository whose authoritative listing holds no GGUF files at all — the
-      resolver serves that as a plain model) — the caller applies its regular
-      directory check.
+    - a plain-named repository that the cached weight evidence proves is a
+      GGUF model (GGUF backbone quants present, no transformers backbone — the
+      same classification resolve_gguf_spec applies) → ``<repo>:<quant>`` with
+      the pin, else the auto-selected quant, so the concrete quant's complete
+      files are validated rather than a partial repository directory;
+    - ``None`` when the model is not a GGUF concern (a plain model, or a
+      repository whose authoritative listing holds no GGUF files / holds a
+      transformers backbone — the resolver serves that as a plain model), or
+      when a plain-named repository has no cached snapshot to classify — the
+      caller applies its regular directory check.
     """
     model = (model or "").strip()
     if is_remote_gguf_ref(model) or is_remote_gguf_file_ref(model):
@@ -708,7 +714,41 @@ def gguf_capability_target(
     if is_local_gguf_file_ref(model) or is_local_gguf_dir_ref(model):
         return model
     if not is_gguf_repo_name(model):
-        return None
+        # A plain-named repository is not a GGUF concern by NAME — but the
+        # serving resolver (resolve_gguf_spec) classifies it as GGUF from the
+        # cached weight evidence: GGUF backbone quants present and no
+        # transformers backbone. When the cache proves that, the capability
+        # check must prove the concrete quant's complete files (repo:quant)
+        # instead of excusing the capability on a partial repository directory
+        # — which would suppress the prefetch for a lane that then fails
+        # offline (a plain-named GGUF-only cache holding one shard, or a
+        # cached quant that gguf_quant pins away).
+        weights = list_cached_model_weights(hf_home, model)
+        if weights is None:
+            # No cached snapshot to read: nothing proves it is GGUF, so the
+            # caller's plain directory check stands.
+            return None
+        gguf_files, non_gguf_weights = weights
+        quants = candidate_quants(gguf_files)
+        if not quants:
+            # No GGUF backbone cached → the resolver serves it as a plain
+            # model; the directory check is the right proof.
+            return None
+        if any(is_non_gguf_backbone_weight(n) for n in non_gguf_weights):
+            # A plain name whose snapshot holds transformers backbone is a
+            # transformers model that also bundles GGUF files (mixed format);
+            # the plain name refers to the backbone, not the GGUF.
+            return None
+        pinned = (pinned_quant or "").strip()
+        if pinned:
+            # A pin the plugin would reject cannot load either way — the
+            # directory check stands and the lane fails at spawn with the
+            # plugin's own error.
+            if not (is_valid_gguf_quant_type(pinned) or is_nonstandard_gguf_quant_type(pinned)):
+                return None
+            return f"{model}:{pinned}"
+        quant = select_quant(quants)
+        return f"{model}:{quant}" if quant else model
     pinned = (pinned_quant or "").strip()
     if pinned:
         # A pin the plugin would reject cannot load either way, so it
