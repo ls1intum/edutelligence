@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode
 
 from logos.anthropic_compat import UpstreamDialect, dialect_for, forward_path_for, is_messages_path, translate_request
+from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
@@ -224,6 +225,27 @@ class ContextResolver:
                 azure_responses_deployment = responses_deployment
         else:
             forward_url = self._merge_url(base_url, endpoint)
+
+        # A key must never go out in the clear. Checked on the resolved URL
+        # rather than base_url, because a per-model endpoint can point
+        # somewhere else entirely — and only when a credential would actually
+        # be attached, so an upstream that serves unauthenticated is
+        # unaffected. Same rule Logos already applies to these credentials on
+        # the benchmark path: HTTPS, or plain HTTP on loopback only.
+        if (
+            provider_type != "logosnode"
+            and auth_name
+            and auth_value
+            and not credential_transport_is_secure(forward_url)
+        ):
+            logger.error(
+                "Refusing to send the credentials of provider %s (%s) over an insecure transport (%s): "
+                "use HTTPS, or plain HTTP only on loopback",
+                provider_id,
+                provider_name,
+                forward_url.split("?", 1)[0],
+            )
+            return None
 
         anthropic_dialect = (
             dialect_for(
