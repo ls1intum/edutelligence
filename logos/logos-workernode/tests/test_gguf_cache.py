@@ -9,12 +9,20 @@ offline and redundant boot downloads stop.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from logos_worker_node import gguf
 from logos_worker_node.calibration import _resolve_gguf_calibration_spec
 from logos_worker_node.lane_manager import LaneManager
 from logos_worker_node.models import OllamaConfig
+
+
+def _hf_home(models_path: Path) -> str:
+    """The root the production caller passes to ``validate_capabilities``:
+    ``HF_HOME`` (unset or blank in these tests) or ``<models_path>/.hf_cache`` —
+    the directory the startup prefetch populates."""
+    return os.environ.get("HF_HOME", "").strip() or str(models_path / ".hf_cache")
 
 
 def _write_cached(hf_home: Path, model: str, files: list[str] | None = None) -> None:
@@ -84,7 +92,7 @@ def test_validate_capabilities_checks_hf_cache_dir(tmp_path: Path, monkeypatch) 
         lane_port_end=16010,
     )
     _write_cached(cache_root / "models" / ".hf_cache", model)
-    assert manager.validate_capabilities([model]) == []
+    assert manager.validate_capabilities([model], _hf_home(cache_root / "models")) == []
 
     # The old, wrong .hf dir alone must NOT satisfy validation — it is not
     # where the prefetch writes, so a prefetched model would be flagged missing.
@@ -96,7 +104,7 @@ def test_validate_capabilities_checks_hf_cache_dir(tmp_path: Path, monkeypatch) 
         lane_port_end=16030,
     )
     (stale_root / "models" / ".hf" / "hub" / gguf.hf_cache_dir_name(model)).mkdir(parents=True)
-    assert stale.validate_capabilities([model]) == [model]
+    assert stale.validate_capabilities([model], _hf_home(stale_root / "models")) == [model]
 
 
 def test_validate_capabilities_local_dir_ref_checks_directory(tmp_path: Path, monkeypatch) -> None:
@@ -114,17 +122,17 @@ def test_validate_capabilities_local_dir_ref_checks_directory(tmp_path: Path, mo
     # The check targets the directory WITHOUT the quant suffix: a directory
     # literally named "…:Q4_K_M" cannot satisfy it …
     (tmp_path / "local" / "qwen-GGUF:Q4_K_M").mkdir(parents=True)
-    assert manager.validate_capabilities([model]) == [model]
+    assert manager.validate_capabilities([model], _hf_home(models_root)) == [model]
 
     # … while the plain directory does.
     local_dir.mkdir(parents=True)
-    assert manager.validate_capabilities([model]) == []
+    assert manager.validate_capabilities([model], _hf_home(models_root)) == []
 
     # A bare -GGUF local directory is checked the same way.
     bare_dir = tmp_path / "local" / "plain-GGUF"
-    assert manager.validate_capabilities([str(bare_dir)]) == [str(bare_dir)]
+    assert manager.validate_capabilities([str(bare_dir)], _hf_home(models_root)) == [str(bare_dir)]
     bare_dir.mkdir(parents=True)
-    assert manager.validate_capabilities([str(bare_dir)]) == []
+    assert manager.validate_capabilities([str(bare_dir)], _hf_home(models_root)) == []
 
 
 def test_validate_capabilities_local_gguf_file_ref_checks_the_file(tmp_path: Path, monkeypatch) -> None:
@@ -143,9 +151,9 @@ def test_validate_capabilities_local_gguf_file_ref_checks_the_file(tmp_path: Pat
 
     # The check is the FILE's existence (isfile), not the directory fallback
     # (isdir), which can never accept a file — even inside a -GGUF directory.
-    assert manager.validate_capabilities([ref]) == [ref]
+    assert manager.validate_capabilities([ref], _hf_home(models_root)) == [ref]
     gguf_file.write_bytes(b"\x00")
-    assert manager.validate_capabilities([ref]) == []
+    assert manager.validate_capabilities([ref], _hf_home(models_root)) == []
 
 
 def test_validate_capabilities_partial_snapshot_reports_missing_quant(tmp_path: Path, monkeypatch) -> None:
@@ -166,19 +174,25 @@ def test_validate_capabilities_partial_snapshot_reports_missing_quant(tmp_path: 
     _write_cached(cache_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q4_K_M.gguf"])
 
     # A quant the snapshot does not hold is missing (prefetch triggered) …
-    assert manager.validate_capabilities(["org/model-GGUF:Q8_0"]) == ["org/model-GGUF:Q8_0"]
-    # … while the fully cached quant stays excluded from missing.
-    assert manager.validate_capabilities(["org/model-GGUF:Q4_K_M"]) == []
-    # An explicit file reference is checked the same way.
-    assert manager.validate_capabilities(["org/model-GGUF/model-GGUF-Q5_K_M.gguf"]) == [
-        "org/model-GGUF/model-GGUF-Q5_K_M.gguf"
+    assert manager.validate_capabilities(["org/model-GGUF:Q8_0"], _hf_home(cache_root / "models")) == [
+        "org/model-GGUF:Q8_0"
     ]
-    assert manager.validate_capabilities(["org/model-GGUF/model-GGUF-Q4_K_M.gguf"]) == []
+    # … while the fully cached quant stays excluded from missing.
+    assert manager.validate_capabilities(["org/model-GGUF:Q4_K_M"], _hf_home(cache_root / "models")) == []
+    # An explicit file reference is checked the same way.
+    assert manager.validate_capabilities(
+        ["org/model-GGUF/model-GGUF-Q5_K_M.gguf"], _hf_home(cache_root / "models")
+    ) == ["org/model-GGUF/model-GGUF-Q5_K_M.gguf"]
+    assert (
+        manager.validate_capabilities(["org/model-GGUF/model-GGUF-Q4_K_M.gguf"], _hf_home(cache_root / "models")) == []
+    )
     # A reference to a repository that is not cached at all is missing too.
-    assert manager.validate_capabilities(["org/other-GGUF:Q4_K_M"]) == ["org/other-GGUF:Q4_K_M"]
+    assert manager.validate_capabilities(["org/other-GGUF:Q4_K_M"], _hf_home(cache_root / "models")) == [
+        "org/other-GGUF:Q4_K_M"
+    ]
     # A bare repository selects its quant from whatever the cache holds, so
     # the repository directory still satisfies it (unchanged behaviour).
-    assert manager.validate_capabilities(["org/model-GGUF"]) == []
+    assert manager.validate_capabilities(["org/model-GGUF"], _hf_home(cache_root / "models")) == []
 
 
 def test_validate_capabilities_bare_repo_pinned_quant(tmp_path: Path, monkeypatch) -> None:
@@ -197,14 +211,24 @@ def test_validate_capabilities_bare_repo_pinned_quant(tmp_path: Path, monkeypatc
     _write_cached(cache_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q4_K_M.gguf"])
 
     # Pinned Q8_0 is absent from the snapshot → missing (prefetch triggered) …
-    assert manager.validate_capabilities(["org/model-GGUF"], gguf_quants={"org/model-GGUF": "Q8_0"}) == [
-        "org/model-GGUF"
-    ]
+    assert manager.validate_capabilities(
+        ["org/model-GGUF"], _hf_home(cache_root / "models"), gguf_quants={"org/model-GGUF": "Q8_0"}
+    ) == ["org/model-GGUF"]
     # … an invalid pin changes nothing the cache can prove (the lane would
     # fail on it at spawn) — the directory check stands …
-    assert manager.validate_capabilities(["org/model-GGUF"], gguf_quants={"org/model-GGUF": "Q9_X"}) == []
+    assert (
+        manager.validate_capabilities(
+            ["org/model-GGUF"], _hf_home(cache_root / "models"), gguf_quants={"org/model-GGUF": "Q9_X"}
+        )
+        == []
+    )
     # … and an explicit reference stays authoritative over the pin.
-    assert manager.validate_capabilities(["org/model-GGUF:Q4_K_M"], gguf_quants={"org/model-GGUF:Q4_K_M": "Q8_0"}) == []
+    assert (
+        manager.validate_capabilities(
+            ["org/model-GGUF:Q4_K_M"], _hf_home(cache_root / "models"), gguf_quants={"org/model-GGUF:Q4_K_M": "Q8_0"}
+        )
+        == []
+    )
 
     # A snapshot holding the pinned quant stays available.
     other_root = tmp_path / "root2"
@@ -215,7 +239,12 @@ def test_validate_capabilities_bare_repo_pinned_quant(tmp_path: Path, monkeypatc
         lane_port_end=16080,
     )
     _write_cached(other_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q8_0.gguf"])
-    assert other.validate_capabilities(["org/model-GGUF"], gguf_quants={"org/model-GGUF": "Q8_0"}) == []
+    assert (
+        other.validate_capabilities(
+            ["org/model-GGUF"], _hf_home(other_root / "models"), gguf_quants={"org/model-GGUF": "Q8_0"}
+        )
+        == []
+    )
 
 
 def test_validate_capabilities_bare_repo_incomplete_shards_report_missing(tmp_path: Path, monkeypatch) -> None:
@@ -234,14 +263,14 @@ def test_validate_capabilities_bare_repo_incomplete_shards_report_missing(tmp_pa
     )
     _write_cached(cache_root / "models" / ".hf_cache", "org/model-GGUF", ["model-GGUF-Q4_K_M-00001-of-00002.gguf"])
     # Auto-selected Q4_K_M is incomplete (1 of 2 shards) → missing …
-    assert manager.validate_capabilities(["org/model-GGUF"]) == ["org/model-GGUF"]
+    assert manager.validate_capabilities(["org/model-GGUF"], _hf_home(cache_root / "models")) == ["org/model-GGUF"]
     # … the complete family in one path stays available.
     _write_cached(
         cache_root / "models" / ".hf_cache",
         "org/model-GGUF",
         ["model-GGUF-Q4_K_M-00001-of-00002.gguf", "model-GGUF-Q4_K_M-00002-of-00002.gguf"],
     )
-    assert manager.validate_capabilities(["org/model-GGUF"]) == []
+    assert manager.validate_capabilities(["org/model-GGUF"], _hf_home(cache_root / "models")) == []
     # The auto-selected quant is the resolver's choice — Q4_K_M over a
     # co-cached Q4_K_S — and a complete Q4_K_M stays available with the
     # other quant alongside.
@@ -254,7 +283,7 @@ def test_validate_capabilities_bare_repo_incomplete_shards_report_missing(tmp_pa
             "model-GGUF-Q4_K_S.gguf",
         ],
     )
-    assert manager.validate_capabilities(["org/model-GGUF"]) == []
+    assert manager.validate_capabilities(["org/model-GGUF"], _hf_home(cache_root / "models")) == []
     # … while a PARTIAL auto-selected Q4_K_M stays missing even though the
     # co-cached Q4_K_S is complete — the lane serves the resolved quant.
     shard_root = tmp_path / "root2"
@@ -269,7 +298,9 @@ def test_validate_capabilities_bare_repo_incomplete_shards_report_missing(tmp_pa
         "org/model-GGUF",
         ["model-GGUF-Q4_K_M-00001-of-00002.gguf", "model-GGUF-Q4_K_S.gguf"],
     )
-    assert shard_manager.validate_capabilities(["org/model-GGUF"]) == ["org/model-GGUF"]
+    assert shard_manager.validate_capabilities(["org/model-GGUF"], _hf_home(shard_root / "models")) == [
+        "org/model-GGUF"
+    ]
 
 
 def test_validate_capabilities_blank_hf_home_falls_back(tmp_path: Path, monkeypatch) -> None:
@@ -285,9 +316,9 @@ def test_validate_capabilities_blank_hf_home_falls_back(tmp_path: Path, monkeypa
         lane_port_end=16110,
     )
     _write_cached(cache_root / "models" / ".hf_cache", "org/some-model")
-    assert manager.validate_capabilities(["org/some-model"]) == []
+    assert manager.validate_capabilities(["org/some-model"], _hf_home(cache_root / "models")) == []
     monkeypatch.setenv("HF_HOME", "   ")
-    assert manager.validate_capabilities(["org/some-model"]) == []
+    assert manager.validate_capabilities(["org/some-model"], _hf_home(cache_root / "models")) == []
 
 
 # ---------------------------------------------------------------------------
