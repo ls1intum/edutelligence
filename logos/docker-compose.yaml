@@ -437,12 +437,19 @@ services:
       LOGOS_AGENT_TRIGGERS_ENABLED: "${LOGOS_AGENT_TRIGGERS_ENABLED:-true}"
       LOGOS_AGENT_DEPLOY_ENABLED: "${LOGOS_AGENT_DEPLOY_ENABLED:-false}"
       LOGOS_AGENT_DEV_BASE_URL: "${LOGOS_AGENT_DEV_BASE_URL:-https://logos-dev.aet.cit.tum.de}"
+      # The volume that backs the runner's per-session state (the pause mark).
+      # Named to match the volume below so the child container's bind source
+      # resolves to the same storage the runner writes the mark into.
+      LOGOS_AGENT_STATE_VOLUME: "${LOGOS_AGENT_STATE_VOLUME:-agent_state}"
     volumes:
       # Needed to create session containers. This is the one privileged thing
       # the runner holds — and precisely what it never passes on: session
       # containers get no socket, no root, and no capabilities.
       - /var/run/docker.sock:/var/run/docker.sock
       - agent_artifacts:/var/lib/logos-agent/artifacts
+      # Runner-owned session state, shared with the child read-only: a pause
+      # mark written here is the mark the agent container reads.
+      - agent_state:/var/lib/logos-agent/state
     expose:
       - "8082"
     # On purpose *not* attached to the agent network: the runner controls
@@ -534,6 +541,7 @@ volumes:
   data_volume:
   postgres_data:
   agent_artifacts:
+  agent_state:
 
 networks:
   internal:

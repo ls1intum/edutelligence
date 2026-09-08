@@ -1011,6 +1011,12 @@ class SessionManager:
             await docker_engine.ensure_volume(
                 workspace["volume_name"], labels={"logos.agent.workspace": workspace["name"]}
             )
+            # The state the runner writes for a session (the pause mark) must
+            # reach the child container, and a bind source is resolved on the
+            # daemon host — so it is backed by a named volume, whose
+            # daemon-visible mountpoint is what the child mounts, exactly as
+            # the artefact volume is handled below.
+            await docker_engine.ensure_volume(settings.state_volume, labels={"logos.agent.state": "session-state"})
             # The per-session artefact directory, resolved to the host path of
             # the volume it lives in: the session sees exactly this directory
             # at /artifacts, never the shared volume around it.
@@ -1030,6 +1036,12 @@ class SessionManager:
             # screenshot is unreadable to the sandbox otherwise.
             images = await self._collect_attachments(sid, str(session.get("task") or ""))
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
+            # The child's state bind source is the state volume's mountpoint on
+            # the daemon host, not `state_dir(sid)` — that is a path inside the
+            # runner container, which the daemon would read as a different,
+            # host-local directory, so the child would mount a directory the
+            # runner never writes the mark into.
+            state_host_path = str(Path(await docker_engine.volume_mountpoint(settings.state_volume)) / str(sid))
 
             # Boundary: the next step hands a GitHub token to a container.
             # A cancel that arrived during the awaits above has already
@@ -1079,8 +1091,11 @@ class SessionManager:
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
                 # The agent's container is the one that reads the pause mark;
-                # the helper phases never do, and stay without the mount.
-                state_host_path=str(state_dir(sid)),
+                # the helper phases never do, and stay without the mount. The
+                # source is the state volume's mountpoint, so the mark the
+                # runner wrote into its in-container `state_root` is the same
+                # directory the child mounts read-only.
+                state_host_path=state_host_path,
                 session_id=sid,
             )
             # Boundary: the container exists but has not run. Give it back

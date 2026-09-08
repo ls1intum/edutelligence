@@ -281,6 +281,13 @@ class Settings:
     # read-only, so a mark the runner writes into it cannot be written back
     # by the agent that reads it.
     state_root: str = os.getenv("LOGOS_AGENT_STATE_ROOT", "/var/lib/logos-agent/state")
+    # The volume backing `state_root`. Named like the artefact volume and kept
+    # off it for the same reason: the session container mounts it read-only,
+    # so a mark the runner writes into it cannot be written back by the agent
+    # that reads it. The child's bind source is resolved to this volume's
+    # daemon-visible mountpoint, not the runner's in-container path — see the
+    # launch in `sessions.py`.
+    state_volume: str = os.getenv("LOGOS_AGENT_STATE_VOLUME", "logos_agent_state")
 
     @property
     def session_token_is_runner_token(self) -> bool:

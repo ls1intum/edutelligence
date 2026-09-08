@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from app.config import settings
@@ -244,6 +245,97 @@ class TestLaunchAndSupervision:
         # writes into /artifacts itself — a per-session prefix here would put
         # its output one directory too deep.
         assert agent["env"]["LOGOS_ARTIFACT_DIR"] == "/artifacts"
+
+    async def test_the_pause_mark_reaches_the_child_through_the_state_volume(self, monkeypatch, tmp_path):
+        # The pause mark lives in the runner's in-container `state_root`,
+        # which in a deployment is the state volume's storage mounted into the
+        # runner. The child's bind source, however, is resolved on the *daemon*
+        # host: handing it the container-local path would mount a different,
+        # host-local directory the runner never writes into, so the mark would
+        # arrive empty and a frozen session would misread the platform's pause
+        # as a model refusal. Backing the mark by the state volume — and
+        # resolving that volume's daemon-visible mountpoint for the child —
+        # keeps both sides on the same storage.
+        #
+        # This models that topology with one shared storage seen under two
+        # names: `state_root` (in-container, a symlink onto the storage) and
+        # the daemon's mountpoint (the raw storage path). The two paths differ
+        # — which is the whole bug — yet they hold the same bytes.
+        from app import sessions
+        from app.config import INTERRUPTION_FILE
+
+        storage = tmp_path / "state-volume-storage"  # the state volume's storage
+        storage.mkdir()
+        container_view = tmp_path / "container-state"  # the runner's in-container path
+        container_view.symlink_to(storage)  # ...is that volume, under another name
+        artifacts_storage = tmp_path / "artifacts-storage"
+
+        patched = replace(sessions.settings, artifact_root=str(tmp_path), state_root=str(container_view))
+        monkeypatch.setattr(sessions, "settings", patched)
+        monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+        created: list = []
+        container_ids = iter(["cid-prepare", "cid-7"])
+
+        # The daemon sees each named volume's raw storage at its own
+        # mountpoint. The state volume and the artefact volume are different
+        # directories, which is what proves the child is bound to the state
+        # volume and not merely to "a mountpoint."
+        mountpoints = {
+            patched.artifact_volume: str(artifacts_storage),
+            patched.state_volume: str(storage),
+        }
+
+        async def fake_mountpoint(name):
+            return mountpoints.get(name, str(tmp_path / f"volume-{name}"))
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return next(container_ids)
+
+        async def fake_start(cid):
+            if cid == "cid-7":
+                raise RuntimeError("start failed")
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", fake_mountpoint)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", fake_start)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(
+            sessions.db, "get_session", self._async_value({"container_id": None, "deploy_to_dev": False})
+        )
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._launch(self.SESSION)
+
+        agent = created[-1]
+        # The child's state bind source is the state volume's daemon-visible
+        # mountpoint, not the runner's in-container `state_dir` — the latter
+        # is a path inside the runner, which the daemon reads as a host-local
+        # directory no mark ever lands in.
+        assert agent["state_host_path"] == str(storage / "7")
+        assert agent["state_host_path"] != str(sessions.state_dir(7))
+        # ...and it is specifically the state volume, resolved on its own, not
+        # the artefact volume it sits beside.
+        assert agent["state_host_path"] != agent["artifact_host_path"]
+        assert agent["artifact_host_path"] == str(artifacts_storage / "7")
+
+        # Because both names point at the same volume, the mark the runner
+        # writes into its in-container state directory is the same bytes the
+        # child mounts read-only: a pause is still visible on the way out of
+        # an invocation.
+        sessions.manager._say_it_was_interrupted(7)
+        marker = Path(agent["state_host_path"]) / INTERRUPTION_FILE
+        assert marker.read_text().strip() == "paused"
 
     async def test_paused_time_does_not_count_towards_the_session_timeout(self, monkeypatch, tmp_path):
         # A session that yields while the platform is busy must not burn its
