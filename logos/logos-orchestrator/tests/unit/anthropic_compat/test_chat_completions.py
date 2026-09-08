@@ -595,3 +595,37 @@ def test_a_streamed_refusal_reaches_the_client():
     out += translator.finish()
     answer = "".join(d["delta"]["text"] for n, d in _events(out) if n == "content_block_delta")
     assert answer == "I can't help with that."
+
+
+def test_disable_parallel_tool_use_is_carried_over():
+    """A turn the client limited to one tool call must stay limited.
+
+    Chat Completions defaults `parallel_tool_calls` to true, so dropping the
+    Anthropic flag lets the model make several calls — several side effects
+    where the client asked for one.
+    """
+    request = {
+        "model": "m",
+        "max_tokens": 8,
+        "messages": [],
+        "tools": [{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+    }
+    assert to_chat_completions(request)["parallel_tool_calls"] is False
+
+    # Absent or false leaves the upstream default alone.
+    for choice in ({"type": "auto"}, {"type": "auto", "disable_parallel_tool_use": False}):
+        assert "parallel_tool_calls" not in to_chat_completions({**request, "tool_choice": choice})
+
+
+def test_parallel_tool_calls_is_not_sent_without_tools():
+    # OpenAI rejects it when no tools are supplied.
+    result = to_chat_completions(
+        {
+            "model": "m",
+            "max_tokens": 8,
+            "messages": [],
+            "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+        }
+    )
+    assert "parallel_tool_calls" not in result

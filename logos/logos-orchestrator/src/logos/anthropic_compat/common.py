@@ -203,6 +203,17 @@ def parse_arguments(raw: Any) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"_raw": parsed}
 
 
+def disables_parallel_tool_use(tool_choice: Any) -> bool:
+    """Whether the client asked for at most one tool call per turn.
+
+    Anthropic expresses that as a flag on ``tool_choice``; both OpenAI
+    surfaces spell it ``parallel_tool_calls`` and default it to true. Dropping
+    it lets a turn the client deliberately limited produce several calls — and
+    for an agent that is several side effects instead of one.
+    """
+    return isinstance(tool_choice, dict) and bool(tool_choice.get("disable_parallel_tool_use"))
+
+
 def anthropic_tools(tools: Any) -> List[Dict[str, Any]]:
     """Anthropic tool definitions -> OpenAI ``function`` definitions.
 

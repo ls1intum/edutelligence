@@ -22,6 +22,7 @@ from logos.anthropic_compat.common import (
     AnthropicStreamWriter,
     SSEDecoder,
     anthropic_tools,
+    disables_parallel_tool_use,
     image_data_url,
     json_arguments,
     new_message_id,
@@ -68,6 +69,8 @@ def to_responses(payload: Dict[str, Any]) -> Dict[str, Any]:
         choice = _tool_choice(payload.get("tool_choice"))
         if choice is not None:
             result["tool_choice"] = choice
+        if disables_parallel_tool_use(payload.get("tool_choice")):
+            result["parallel_tool_calls"] = False
 
     effort = _reasoning_effort(payload)
     if effort:

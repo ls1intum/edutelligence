@@ -393,3 +393,30 @@ def test_a_streamed_refusal_reaches_the_client():
     out += translator.feed(_sse("response.completed", {"response": {"status": "completed"}}))
     answer = "".join(d["delta"]["text"] for n, d in _events(out) if n == "content_block_delta")
     assert answer == "I can't."
+
+
+def test_disable_parallel_tool_use_is_carried_over():
+    """The Responses API defaults parallel_tool_calls to true as well."""
+    request = {
+        "model": "m",
+        "max_tokens": 8,
+        "messages": [],
+        "tools": [{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "any", "disable_parallel_tool_use": True},
+    }
+    assert to_responses(request)["parallel_tool_calls"] is False
+
+    for choice in ({"type": "any"}, {"type": "any", "disable_parallel_tool_use": False}):
+        assert "parallel_tool_calls" not in to_responses({**request, "tool_choice": choice})
+
+
+def test_parallel_tool_calls_is_not_sent_without_tools():
+    result = to_responses(
+        {
+            "model": "m",
+            "max_tokens": 8,
+            "messages": [],
+            "tool_choice": {"type": "any", "disable_parallel_tool_use": True},
+        }
+    )
+    assert "parallel_tool_calls" not in result

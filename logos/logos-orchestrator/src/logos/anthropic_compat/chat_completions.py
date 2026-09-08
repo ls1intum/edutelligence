@@ -17,6 +17,7 @@ from logos.anthropic_compat.common import (
     AnthropicStreamWriter,
     SSEDecoder,
     anthropic_tools,
+    disables_parallel_tool_use,
     image_data_url,
     is_reasoning_model,
     json_arguments,
@@ -100,6 +101,9 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         choice = _tool_choice(payload.get("tool_choice"))
         if choice is not None:
             result["tool_choice"] = choice
+        # Only meaningful alongside tools — OpenAI rejects it otherwise.
+        if disables_parallel_tool_use(payload.get("tool_choice")):
+            result["parallel_tool_calls"] = False
 
     # Only a reasoning model understands it; on gpt-4.1 and every other older
     # deployment it is an unrecognised argument.
