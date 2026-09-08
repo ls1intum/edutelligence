@@ -31,11 +31,8 @@ from logos.anthropic_compat.common import (
     system_to_text,
     tool_result_text,
     usage_block,
+    usage_extras,
 )
-
-# Usage keys Logos adds to a cloud response after the fact; see the same
-# constant in chat_completions.py.
-_LOGOS_USAGE_EXTRAS = ("cost", "cost_currency")
 
 
 def to_responses(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -190,9 +187,7 @@ def _usage(body: Dict[str, Any]) -> Dict[str, Any]:
         usage.get("output_tokens", 0),
         details.get("cached_tokens", 0),
     )
-    for extra in _LOGOS_USAGE_EXTRAS:
-        if extra in usage:
-            result[extra] = usage[extra]
+    result.update(usage_extras(usage))
     return result
 
 
@@ -363,6 +358,7 @@ class ResponsesStreamTranslator:
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
                 cached_tokens=details.get("cached_tokens"),
+                extras=usage_extras(usage),
             )
             self._stop_reason = _stop_reason(response, saw_tool_call=bool(self._tools))
             return self.finish()

@@ -420,3 +420,34 @@ def test_parallel_tool_calls_is_not_sent_without_tools():
         }
     )
     assert "parallel_tool_calls" not in result
+
+
+def test_the_terminal_event_carries_the_settled_usage():
+    """The Responses API reports usage in response.completed, after the text."""
+    translator = ResponsesStreamTranslator("m")
+    out = translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    out += translator.feed(_sse("response.output_text.delta", {"output_index": 0, "delta": "Hello"}))
+    out += translator.feed(
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 1234,
+                        "output_tokens": 7,
+                        "input_tokens_details": {"cached_tokens": 500},
+                        "cost": 0.0042,
+                        "cost_currency": "EUR",
+                    },
+                }
+            },
+        )
+    )
+
+    usage = next(d for n, d in _events(out) if n == "message_delta")["usage"]
+    assert usage["input_tokens"] == 1234
+    assert usage["output_tokens"] == 7
+    assert usage["cache_read_input_tokens"] == 500
+    assert usage["cost"] == 0.0042
+    assert usage["cost_currency"] == "EUR"

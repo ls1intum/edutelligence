@@ -629,3 +629,40 @@ def test_parallel_tool_calls_is_not_sent_without_tools():
         }
     )
     assert "parallel_tool_calls" not in result
+
+
+def test_the_terminal_event_carries_the_settled_usage():
+    """message_start goes out before the upstream reports usage.
+
+    chat/completions sends its counts in a final usage-only chunk, long after
+    the first token — so message_start can only carry zeros, and message_delta
+    is the one event that can correct them. Reporting output tokens alone left
+    every translated streaming answer looking like it had no prompt at all.
+    """
+    translator = ChatCompletionsStreamTranslator("m")
+    out = translator.feed(_sse({"id": "c", "model": "m", "choices": [{"delta": {"content": "Hello"}}]}))
+    out += translator.feed(_sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
+    out += translator.feed(
+        _sse(
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1234,
+                    "completion_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 500},
+                    # Added by _StreamingCostEnricher on the way through.
+                    "cost": 0.0042,
+                    "cost_currency": "EUR",
+                },
+            }
+        )
+    )
+    out += translator.feed(b"data: [DONE]\n\n")
+
+    usage = next(d for n, d in _events(out) if n == "message_delta")["usage"]
+    assert usage["input_tokens"] == 1234
+    assert usage["output_tokens"] == 7
+    assert usage["cache_read_input_tokens"] == 500
+    # The native Messages path surfaces the cost; the translated one must too.
+    assert usage["cost"] == 0.0042
+    assert usage["cost_currency"] == "EUR"

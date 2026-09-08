@@ -28,18 +28,13 @@ from logos.anthropic_compat.common import (
     system_to_text,
     tool_result_text,
     usage_block,
+    usage_extras,
 )
 
 # Sampling parameters that carry over to a non-reasoning model. ``top_k`` is
 # deliberately absent: chat/completions has no equivalent, and forwarding it
 # is a 400 on OpenAI and Azure. Reasoning models take none of these.
 _PASSTHROUGH_PARAMS = ("temperature", "top_p")
-
-# Usage keys Logos adds to a cloud response after the fact. They are not part
-# of either API, but the native Messages path surfaces them, so the translated
-# path has to as well or a cloud model's cost silently disappears for clients
-# that reach it through /v1/messages.
-_LOGOS_USAGE_EXTRAS = ("cost", "cost_currency")
 
 
 def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = None) -> Dict[str, Any]:
@@ -271,9 +266,7 @@ def from_chat_completion(body: Dict[str, Any], *, model_name: Optional[str] = No
         usage.get("completion_tokens", 0),
         details.get("cached_tokens", 0),
     )
-    for extra in _LOGOS_USAGE_EXTRAS:
-        if extra in usage:
-            result_usage[extra] = usage[extra]
+    result_usage.update(usage_extras(usage))
 
     return {
         "id": new_message_id(body.get("id")),
@@ -375,6 +368,7 @@ class ChatCompletionsStreamTranslator:
                 input_tokens=usage.get("prompt_tokens"),
                 output_tokens=usage.get("completion_tokens"),
                 cached_tokens=details.get("cached_tokens"),
+                extras=usage_extras(usage),
             )
 
         choices = frame.get("choices")

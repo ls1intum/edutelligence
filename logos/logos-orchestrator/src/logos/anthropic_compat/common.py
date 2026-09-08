@@ -266,6 +266,20 @@ def stop_reason(finish_reason: Any, *, saw_tool_call: bool = False) -> Optional[
     return "tool_use" if saw_tool_call and mapped == "end_turn" else mapped
 
 
+# Usage keys Logos adds to a cloud response after the fact — the priced cost of
+# the request. Not part of either API, but the native Messages path surfaces
+# them, so the translated path has to as well or a cloud model's cost silently
+# disappears for clients that reach it through /v1/messages.
+LOGOS_USAGE_EXTRAS = ("cost", "cost_currency")
+
+
+def usage_extras(usage: Any) -> Dict[str, Any]:
+    """The Logos-added usage fields present on an upstream usage object."""
+    if not isinstance(usage, dict):
+        return {}
+    return {key: usage[key] for key in LOGOS_USAGE_EXTRAS if key in usage}
+
+
 def usage_block(input_tokens: int, output_tokens: int, cached_tokens: int = 0) -> Dict[str, int]:
     """The ``usage`` object of an Anthropic message.
 
@@ -380,6 +394,7 @@ class AnthropicStreamWriter:
         self._input_tokens = 0
         self._output_tokens = 0
         self._cached_tokens = 0
+        self._usage_extras: Dict[str, Any] = {}
 
     @property
     def started(self) -> bool:
@@ -391,6 +406,7 @@ class AnthropicStreamWriter:
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
         cached_tokens: Optional[int] = None,
+        extras: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Remember token counts for the message_start / message_delta events."""
         if input_tokens:
@@ -399,6 +415,8 @@ class AnthropicStreamWriter:
             self._output_tokens = int(output_tokens)
         if cached_tokens:
             self._cached_tokens = int(cached_tokens)
+        if extras:
+            self._usage_extras.update(extras)
 
     def start(self) -> List[bytes]:
         """Emit ``message_start`` once; later calls are no-ops.
@@ -487,13 +505,19 @@ class AnthropicStreamWriter:
         out = self.start()
         out += self._close()
         self._finished = True
+        # The whole settled usage, not just the output count. Both upstream
+        # dialects report usage in a terminal frame, which arrives long after
+        # message_start has gone out with zeros — so this is the only event
+        # that can carry the real prompt, cache and cost figures.
+        final_usage: Dict[str, Any] = usage_block(self._input_tokens, self._output_tokens, self._cached_tokens)
+        final_usage.update(self._usage_extras)
         out.append(
             sse(
                 "message_delta",
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": reason or "end_turn", "stop_sequence": None},
-                    "usage": {"output_tokens": max(self._output_tokens, 0)},
+                    "usage": final_usage,
                 },
             )
         )
