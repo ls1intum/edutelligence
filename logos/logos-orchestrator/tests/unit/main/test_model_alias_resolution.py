@@ -181,6 +181,43 @@ async def test_list_models_includes_stored_aliases(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_models_hides_aliases_shared_between_models(monkeypatch):
+    """An alias belonging to two accessible models is ambiguous and must not
+    be advertised, while the unambiguous aliases of the same models stay
+    listed."""
+    fake_models = [
+        {"id": 1, "name": "llama-3.1-70b", "description": None, "aliases": ["local-fast", "local-most-powerful"]},
+        {"id": 2, "name": "gpt-4o", "description": None, "aliases": ["Local-Fast"]},
+    ]
+
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
+
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        response = await user_facing_mod.list_models(_make_request())
+
+    ids = [entry["id"] for entry in json.loads(response.body)["data"]]
+    assert ids == ["llama-3.1-70b", "local-most-powerful", "gpt-4o"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_dedupes_repeated_aliases(monkeypatch):
+    """The same alias stored twice for one model is listed once."""
+    fake_models = [
+        {"id": 1, "name": "llama-3.1-70b", "description": None, "aliases": ["local-fast", "local-fast"]},
+    ]
+
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
+
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        response = await user_facing_mod.list_models(_make_request())
+
+    ids = [entry["id"] for entry in json.loads(response.body)["data"]]
+    assert ids == ["llama-3.1-70b", "local-fast"]
+
+
+@pytest.mark.asyncio
 async def test_list_models_aliased_entry_carries_the_model_context(monkeypatch):
     """An alias id reports the context window of the lanes serving its model."""
     models = [

@@ -41,7 +41,9 @@ async def list_models(request: Request):
     current API key has access to (Union of Team models and specific API Key models).
     Stored aliases of an accessible model are listed as additional model ids
     right after their model, so logical names (e.g. 'local-most-powerful')
-    can be discovered and used directly in requests.
+    can be discovered and used directly in requests. An alias that belongs to
+    more than one accessible model is omitted: it cannot be resolved, so
+    advertising it would promise a model id that retrieval rejects.
 
     Returns:
         JSONResponse matching the OpenAI GET /v1/models spec.
@@ -52,6 +54,13 @@ async def list_models(request: Request):
         models = db.get_models_for_api_key(auth.api_key_id)
 
     stats = _served_context_window_stats()
+    # An alias that (case-insensitively) belongs to more than one accessible
+    # model cannot be resolved at request time, so it is not advertised.
+    alias_owners: dict[str, set[str]] = {}
+    for model in models:
+        for alias in model.get("aliases") or []:
+            alias_owners.setdefault(str(alias).strip().lower(), set()).add(model["name"])
+
     data = []
     for model in models:
         name = model["name"]
@@ -66,7 +75,12 @@ async def list_models(request: Request):
                 **_model_context_fields(stats.get(name)),
             }
         )
+        seen_aliases: set[str] = set()
         for alias in model.get("aliases") or []:
+            alias_key = str(alias).strip().lower()
+            if alias_key in seen_aliases or len(alias_owners.get(alias_key, set())) != 1:
+                continue
+            seen_aliases.add(alias_key)
             data.append(
                 {
                     "id": alias,
