@@ -27,7 +27,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
+from logos.anthropic_compat import (
+    UpstreamDialect,
+    error_body,
+    sse,
+    stream_translator,
+    translate_error,
+    translate_response,
+)
 from logos.auth import AuthContext, authenticate_api_key
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
@@ -3927,6 +3934,15 @@ async def _schedule_stream_resume(
     return context
 
 
+# Native-dialect (Messages, Responses) events that open or pad a stream
+# without any generated output — the gate holds them back the same way a
+# role-only chat delta is held. Block, item and part announcements are
+# checked field by field instead (they can carry text or structure);
+# everything else is output, so the gate only ever holds a frame it has
+# positively identified as metadata.
+_NATIVE_METADATA_EVENTS = frozenset({"message_start", "ping", "response.created", "response.in_progress"})
+
+
 class _SsePreCommitGate:
     """Decides, across transport chunks, when a text stream's generated
     output starts.
@@ -3948,12 +3964,19 @@ class _SsePreCommitGate:
     - a data line that parses to a completion frame carrying no generated
       text — a chat frame whose deltas have neither content nor a
       structured key (tool calls, function calls, audio), a legacy
-      ``/v1/completions`` frame whose ``choices[].text`` is empty — is
-      protocol metadata: hold it;
-    - anything else — real content, a structured delta, a legacy
-      ``choices[].text`` that carries text, data that does not parse, a
-      non-data line, a terminal event — is output: the stream starts,
-      when in doubt.
+      ``/v1/completions`` frame whose ``choices[].text`` is empty — or to
+      a native-dialect event that carries no output (the Messages
+      ``message_start`` / ``ping`` envelope, the Responses
+      ``response.created`` / ``response.in_progress`` envelope, a
+      block/item/part announcement that is provably empty) — is protocol
+      metadata: hold it;
+    - an ``event:`` line makes no decision: the native dialects name every
+      event on its own line, the name carries no output, and the data line
+      that follows decides;
+    - anything else — real content, a structured delta, a native event
+      that carries text or structure, a legacy ``choices[].text`` that
+      carries text, data that does not parse, a non-data line, a terminal
+      event — is output: the stream starts, when in doubt.
 
     Binary (audio-upload) streams are never gated: their payload is not SSE
     and every byte is output.
@@ -3982,6 +4005,11 @@ class _SsePreCommitGate:
         text = line.decode("utf-8", errors="replace").strip()
         if not text:
             return False  # event separator — no decision
+        if text.startswith("event:"):
+            # Native dialects (Messages, Responses) name every event on its
+            # own line; the name carries no generated output — the data
+            # line that follows decides.
+            return False
         if not text.startswith("data: "):
             return True  # non-data SSE field or a non-SSE body — output
         if text == "data: [DONE]":
@@ -3990,21 +4018,78 @@ class _SsePreCommitGate:
             blob = json.loads(text[6:])
         except json.JSONDecodeError:
             return True  # complete data line that does not parse — output
-        if not isinstance(blob, dict) or not isinstance(blob.get("choices"), list):
-            return True  # non-chat protocol event or degenerate frame — output
-        for choice in blob["choices"]:
-            if not isinstance(choice, dict):
+        if not isinstance(blob, dict):
+            return True  # degenerate frame — output
+        if isinstance(blob.get("choices"), list):
+            for choice in blob["choices"]:
+                if not isinstance(choice, dict):
+                    return True
+                if choice.get("text"):
+                    # Legacy /v1/completions carries the generated output in
+                    # choices[].text instead of a delta — output.
+                    return True
+                delta = choice.get("delta", {})
+                if not isinstance(delta, dict):
+                    return True
+                if delta.get("content") or any(key in delta for key in _STRUCTURED_DELTA_KEYS):
+                    return True  # real content or a structured delta — output
+            return False
+        # A native-dialect event (Messages, Responses) names itself in
+        # ``type`` instead of using ``choices``.
+        event_type = blob.get("type")
+        if isinstance(event_type, str):
+            return _SsePreCommitGate._native_event_carries_output(event_type, blob)
+        return True  # no choices and no event type — degenerate frame — output
+
+    @staticmethod
+    def _native_event_carries_output(event_type: str, blob: Dict[str, Any]) -> bool:
+        """Whether one native-dialect event (Messages, Responses) carries
+        generated output.
+
+        The event name is the payload's ``type``. The pure envelope events
+        (``message_start``, ``ping``, ``response.created``,
+        ``response.in_progress``) never do. The block, item and part
+        announcements are metadata only while they are provably empty — a
+        tool block names itself at birth, a part can open with text — so
+        those are checked field by field. Everything else — a content
+        delta with text, a terminal event, an unknown type — is output:
+        the gate may start the stream early, never late.
+        """
+        if event_type in _NATIVE_METADATA_EVENTS:
+            return False
+        if event_type == "content_block_start":
+            block = blob.get("content_block")
+            if not isinstance(block, dict):
                 return True
-            if choice.get("text"):
-                # Legacy /v1/completions carries the generated output in
-                # choices[].text instead of a delta — output.
+            # A tool block announces its id and name at once — structured
+            # output from the first byte.
+            if block.get("type") not in ("text", "thinking"):
                 return True
-            delta = choice.get("delta", {})
+            return bool(block.get("text"))  # a text block can open with text
+        if event_type == "content_block_delta":
+            delta = blob.get("delta")
             if not isinstance(delta, dict):
                 return True
-            if delta.get("content") or any(key in delta for key in _STRUCTURED_DELTA_KEYS):
-                return True  # real content or a structured delta — output
-        return False
+            # input_json_delta carries a tool call's arguments — structured
+            # output; a thinking delta is as invisible as vLLM's
+            # reasoning_content is on the chat path.
+            if delta.get("type") not in ("text_delta", "thinking_delta"):
+                return True
+            return bool(delta.get("text"))
+        if event_type == "response.output_item.added":
+            item = blob.get("item")
+            if not isinstance(item, dict):
+                return True
+            # A function-call item announces its name at once.
+            return item.get("type") not in ("message", "reasoning")
+        if event_type == "response.content_part.added":
+            part = blob.get("part")
+            if not isinstance(part, dict):
+                return True
+            if part.get("type") not in ("output_text", "refusal"):
+                return True
+            return bool(part.get("text"))
+        return True
 
 
 async def _streaming_response(
@@ -4431,17 +4516,25 @@ async def _streaming_response(
                                             error_message = f"Stream resume failed: {resumed_error}"
                         if not resume_opened:
                             # Once bytes have reached the client, only SSE can
-                            # carry the synthetic OpenAI error frame without
-                            # corrupting its protocol.
+                            # carry the synthetic error frame without
+                            # corrupting its protocol — in the dialect the
+                            # client is reading.
                             if not is_audio_upload_path(request_path or ""):
-                                _, error_body = coerce_upstream_error(500, {"error": str(e)})
                                 # The last upstream chunk may have ended
                                 # inside an SSE event. Close it before
                                 # emitting recovery frames so clients can
                                 # parse the synthetic error independently.
                                 yield b"\n\n"
-                                yield f"data: {json.dumps(error_body)}\n\n".encode()
-                                yield b"data: [DONE]\n\n"
+                                if context.anthropic_dialect == UpstreamDialect.NATIVE:
+                                    # A native Messages client reads Anthropic
+                                    # events verbatim: its failure is an
+                                    # ``event: error`` frame, and its protocol
+                                    # has no ``[DONE]``.
+                                    yield sse("error", error_body(str(e)))
+                                else:
+                                    _, openai_error = coerce_upstream_error(500, {"error": str(e)})
+                                    yield f"data: {json.dumps(openai_error)}\n\n".encode()
+                                    yield b"data: [DONE]\n\n"
                             if error_message is None:
                                 error_message = str(e)
                             break

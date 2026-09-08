@@ -642,6 +642,253 @@ async def test_a_legacy_completion_text_chunk_starts_the_stream(monkeypatch):
     assert body == first + second + done_frame
 
 
+def _native_messages_context() -> SimpleNamespace:
+    from logos.anthropic_compat import UpstreamDialect
+
+    return SimpleNamespace(
+        provider_id=PROVIDER_ID,
+        provider_type="logosnode",
+        lane_id="lane-1",
+        anthropic_dialect=UpstreamDialect.NATIVE,
+        model_name="test-model",
+    )
+
+
+_MESSAGES_START = (
+    b"event: message_start\n"
+    b'data: {"type": "message_start", "message": {"id": "msg_1", "type": "message", '
+    b'"role": "assistant", "content": [], "model": "test-model", "stop_reason": null, '
+    b'"usage": {"input_tokens": 10, "output_tokens": 1}}}\n\n'
+)
+_MESSAGES_BLOCK_START = (
+    b"event: content_block_start\n"
+    b'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}\n\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_a_native_messages_stream_failing_before_content_is_not_a_committed_200(monkeypatch):
+    """End to end: a native /v1/messages stream opens with protocol
+    metadata (``message_start``, the block announcement) that carries no
+    generated output — the native counterpart of the role-only chat delta.
+    A worker failure before the first content token must still come back
+    as a pre-stream JSON error the internal retry can re-dispatch, not a
+    committed 200 stream."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    # One pre-token attempt: the test pins the buffering, not the same-lane
+    # retry that exists for the just-woken race.
+    monkeypatch.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 0, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            _native_messages_context(),
+            {"model": "test-model", "max_tokens": 100, "messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-native-messages-fail",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+            request_path="/v1/messages",
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # Only envelope events so far — no generated output yet.
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _MESSAGES_START})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _MESSAGES_BLOCK_START})
+    # Worker failure before the first content token.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(
+        response, StreamingResponse
+    ), "the failure after native Messages metadata was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_a_native_responses_stream_failing_before_content_is_not_a_committed_200(monkeypatch):
+    """End to end: a native /v1/responses stream opens with
+    ``response.created`` / ``response.in_progress`` — neither carries
+    generated output. A worker failure before the first content delta must
+    still come back as a pre-stream JSON error the internal retry can
+    re-dispatch, not a committed 200 stream."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    # One pre-token attempt: the test pins the buffering, not the same-lane
+    # retry that exists for the just-woken race.
+    monkeypatch.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 0, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            _native_messages_context(),
+            {"model": "test-model", "max_output_tokens": 100, "input": "hi"},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-native-responses-fail",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+            request_path="/v1/responses",
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    await _feed(
+        registry,
+        cmd_id,
+        {
+            "type": "stream_chunk",
+            "chunk": (
+                b"event: response.created\n"
+                b'data: {"type": "response.created", "response": {"id": "resp_1", '
+                b'"status": "in_progress", "model": "test-model", "output": []}}\n\n'
+            ),
+        },
+    )
+    await _feed(
+        registry,
+        cmd_id,
+        {
+            "type": "stream_chunk",
+            "chunk": (
+                b"event: response.in_progress\n"
+                b'data: {"type": "response.in_progress", "response": {"id": "resp_1", "status": "in_progress"}}\n\n'
+            ),
+        },
+    )
+    # Worker failure before the first content delta.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not isinstance(
+        response, StreamingResponse
+    ), "the failure after Responses metadata was committed as a 200 stream"
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_a_native_messages_mid_stream_failure_emits_an_anthropic_error_event(monkeypatch):
+    """End to end: when a native /v1/messages stream fails after content and
+    no resume is available, the fallback frame must be one the client can
+    parse — an Anthropic ``event: error`` frame, not the OpenAI error data
+    frame plus ``[DONE]``, which are protocol noise to a Messages client."""
+    from fastapi.responses import StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            _native_messages_context(),
+            {"model": "test-model", "max_tokens": 100, "messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-native-messages-midfail",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+            request_path="/v1/messages",
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # Envelope metadata (held), then the first content token (commits the 200).
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _MESSAGES_START})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _MESSAGES_BLOCK_START})
+    delta = (
+        b"event: content_block_delta\n"
+        b'data: {"type": "content_block_delta", "index": 0, '
+        b'"delta": {"type": "text_delta", "text": "Hi"}}\n\n'
+    )
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": delta})
+    # Worker failure mid-stream; no resume is available in this setup, so
+    # the fallback error frame is what the client receives.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+    await _drain_pending_tasks()
+
+    # The held envelope is replayed ahead of the content, then the failure
+    # arrives as an Anthropic error event — and nothing after it.
+    assert body == (
+        _MESSAGES_START + _MESSAGES_BLOCK_START + delta + b"\n\n" + b"event: error\n"
+        b'data: {"type": "error", "error": {"type": "api_error", "message": "lane died"}}\n\n'
+    )
+    assert b"[DONE]" not in body
+
+
 # ---------------------------------------------------------------------------
 # Non-streaming path — same exposure, same fix
 # ---------------------------------------------------------------------------
