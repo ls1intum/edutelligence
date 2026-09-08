@@ -263,14 +263,11 @@ class RequestPipeline:
             # drops. Filtering privacy *before* the exclusion below also keeps
             # the single-node lift from ever restoring a privacy-ineligible
             # placement — those are already gone when the lift re-adds nodes.
-            threshold = (request.policy or ProxyPolicy()).get(
-                "threshold_privacy", "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
-            )
+            threshold = (request.policy or ProxyPolicy()).get("threshold_privacy", "CLOUD_NOT_IN_EU_BY_US_PROVIDER")
             deployments = [
                 d
                 for d in deployments
-                if d["model_id"] == request.pinned_model_id
-                and _privacy_ok(threshold, d.get("privacy_level", "LOCAL"))
+                if d["model_id"] == request.pinned_model_id and _privacy_ok(threshold, d.get("privacy_level", "LOCAL"))
             ]
             if request.exclude_provider_ids:
                 without_failed = [d for d in deployments if d["provider_id"] not in request.exclude_provider_ids]

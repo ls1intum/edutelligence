@@ -273,9 +273,7 @@ async def test_pinned_retry_drops_privacy_ineligible_deployments_without_exclusi
     ]
     pipeline, _classifier, scheduler = _build_pipeline()
 
-    await pipeline.process(
-        _pinned_request(deployments=deployments, policy={"threshold_privacy": "LOCAL"})
-    )
+    await pipeline.process(_pinned_request(deployments=deployments, policy={"threshold_privacy": "LOCAL"}))
 
     seen = [d["provider_id"] for d in scheduler.requests[0].deployments]
     assert seen == [1]

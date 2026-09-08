@@ -4035,8 +4035,10 @@ class _SsePreCommitGate:
                 # content: a thinking model streams it before any content, and
                 # buffering it would defer the gate past a whole reasoning
                 # phase — and make a post-reasoning failure look output-less.
-                if delta.get("content") or delta.get("reasoning_content") or any(
-                    key in delta for key in _STRUCTURED_DELTA_KEYS
+                if (
+                    delta.get("content")
+                    or delta.get("reasoning_content")
+                    or any(key in delta for key in _STRUCTURED_DELTA_KEYS)
                 ):
                     return True  # real content, reasoning, or a structured delta — output
             return False

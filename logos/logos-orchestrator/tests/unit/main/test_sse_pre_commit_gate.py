@@ -75,7 +75,4 @@ def test_has_output_fires_on_first_reasoning_chunk():
     # A role-only open is metadata; the reasoning delta that follows starts
     # the stream — no ordinary text is ever needed.
     assert gate.has_output(b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n') is False
-    assert (
-        gate.has_output(b'data: {"choices": [{"delta": {"reasoning_content": "thinking"}}]}\n')
-        is True
-    )
+    assert gate.has_output(b'data: {"choices": [{"delta": {"reasoning_content": "thinking"}}]}\n') is True
