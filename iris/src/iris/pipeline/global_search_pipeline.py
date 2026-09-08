@@ -425,6 +425,30 @@ class GlobalSearchPipeline(SubPipeline):
         )
 
     @staticmethod
+    def _candidate_reference_date(candidate: EntityCandidateDTO):
+        """First parseable calendar anchor of the instance, UTC-normalized."""
+        for prop in (
+            "start_date",
+            "release_date",
+            "visible_date",
+            "exam_start_date",
+            "exam_visible_date",
+            "due_date",
+            "end_date",
+        ):
+            value = getattr(candidate, prop, None)
+            if not value:
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        return None
+
+    @staticmethod
     def _render_entity_sources(
         entity_candidates: list[EntityCandidateDTO] | None,
     ) -> list[EntitySourceDTO]:
@@ -445,6 +469,9 @@ class GlobalSearchPipeline(SubPipeline):
                     snippet=render_entity_card(candidate),
                     link=candidate.link,
                     exercise_type=candidate.exercise_type,
+                    reference_date=GlobalSearchPipeline._candidate_reference_date(
+                        candidate
+                    ),
                 )
             )
         return sources

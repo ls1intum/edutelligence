@@ -37,6 +37,7 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
     _Candidate,
     _is_entity,
     _SearchTelemetry,
+    dedupe_semester_twins,
 )
 
 _SETTINGS_JSON = {
@@ -269,6 +270,65 @@ class TestEntityRerankGate:
         assert kept[0] is deduped[0]
         assert [c.dto.title for c in kept[1:]] == ["e0", "e1", "e2"]  # capped at 3
         assert telemetry.entity_kept == 3
+
+
+# ------------------------------------------------------- semester twin dedup
+
+
+class TestSemesterTwinDedup:
+    """Twins of a repeated course collapse to the current instance."""
+
+    NOW = datetime(2026, 9, 8, tzinfo=timezone.utc)
+
+    def _source(self, title, course="Patterns", ref=None, etype="lecture_unit"):
+        source = _entity_source(title=title, etype=etype)
+        source.course = CourseInfo(id=1, name=course)
+        source.reference_date = ref
+        return source
+
+    def _at(self, year, month):
+        return datetime(year, month, 1, tzinfo=timezone.utc)
+
+    def test_released_twins_collapse_to_most_recent(self):
+        old = self._source("Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9))
+        cur = self._source("Mediator", "PSE", self._at(2026, 3))
+        kept = dedupe_semester_twins([old, cur], "what is the mediator", now=self.NOW)
+        assert kept == [cur]
+
+    def test_future_twins_collapse_to_soonest(self):
+        near = self._source("Mediator", "PSE", self._at(2027, 3))
+        far = self._source("Mediator (WS27/28)", "PSE (WS27/28)", self._at(2028, 3))
+        kept = dedupe_semester_twins([far, near], "mediator pattern", now=self.NOW)
+        assert kept == [near]
+
+    def test_released_beats_future(self):
+        future = self._source("Mediator", "PSE", self._at(2027, 3))
+        released = self._source("Mediator", "PSE", self._at(2026, 3))
+        kept = dedupe_semester_twins([future, released], "mediator", now=self.NOW)
+        assert kept == [released]
+
+    def test_dated_query_keeps_all_twins(self):
+        old = self._source("Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9))
+        cur = self._source("Mediator", "PSE", self._at(2026, 3))
+        kept = dedupe_semester_twins([old, cur], "mediator in WS23/24", now=self.NOW)
+        assert kept == [old, cur]
+
+    def test_distinct_courses_are_not_merged(self):
+        a = self._source("W01 Introduction", "Deep Learning", self._at(2026, 3))
+        b = self._source("W01 Introduction", "Patterns", self._at(2026, 3))
+        assert len(dedupe_semester_twins([a, b], "introduction", now=self.NOW)) == 2
+
+    def test_undatable_twins_keep_first_seen_order(self):
+        first = self._source("Mediator", "PSE")
+        second = self._source("Mediator", "PSE")
+        kept = dedupe_semester_twins([first, second], "mediator", now=self.NOW)
+        assert kept == [first]
+
+    def test_render_parses_reference_date_as_utc(self):
+        source = GlobalSearchPipeline._render_entity_sources(
+            [_candidate_dto(startDate="2026-03-01T10:00:00")]
+        )[0]
+        assert source.reference_date == datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc)
 
 
 # --------------------------------------------------------------- pipeline logic

@@ -1,7 +1,8 @@
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from weaviate import WeaviateClient
@@ -167,6 +168,77 @@ class _Candidate:
     unit_key: tuple[Any, Any, Any]
 
 
+_SEMESTER_PAREN_RE = re.compile(
+    r"\s*\((?:ws\s?\d{2}/\d{2}|ss\s?\d{2})\)\s*$", re.IGNORECASE
+)
+_DATED_QUERY_RE = re.compile(
+    r"(?:\bws|\bss)\s?\d{2}|\b20\d{2}\b|semester", re.IGNORECASE
+)
+
+
+def _strip_semester(text: str) -> str:
+    stripped = (text or "").strip()
+    while True:
+        shorter = _SEMESTER_PAREN_RE.sub("", stripped)
+        if shorter == stripped:
+            return shorter.lower()
+        stripped = shorter
+
+
+def _twin_key(source: EntitySourceDTO) -> tuple[str, str, str]:
+    course_name = source.course.name if source.course else ""
+    return (
+        source.entity_type,
+        _strip_semester(course_name),
+        _strip_semester(source.title),
+    )
+
+
+def _prefers_instance(
+    challenger: EntitySourceDTO, incumbent: EntitySourceDTO, now: datetime
+) -> bool:
+    a, b = challenger.reference_date, incumbent.reference_date
+    if a is None or b is None:
+        return a is not None  # a dated instance beats an undatable one
+    a_released, b_released = a <= now, b <= now
+    if a_released != b_released:
+        return a_released  # already-visible material beats future material
+    if a_released:
+        return a > b  # among released twins, the most recent run
+    return a < b  # among future twins, the soonest upcoming
+
+
+def dedupe_semester_twins(
+    entity_sources: list[EntitySourceDTO],
+    query: str,
+    now: datetime | None = None,
+) -> list[EntitySourceDTO]:
+    """Collapse semester twins of a repeated course to one instance.
+
+    Twins (same type, same suffix-stripped course and title) are relevance
+    ties by construction, so which one wins a context slot would otherwise
+    be arbitrary — and the answer LLM cannot prefer the current run of a
+    course it never sees. Among twins the most recent already-visible
+    instance survives (else the soonest upcoming). A query that names a
+    semester or year is exempt: the student may be asking about an old run.
+    Distinct offerings (series, cross-listings, other courses) have their
+    own keys and are never merged.
+    """
+    if not entity_sources or _DATED_QUERY_RE.search(query):
+        return entity_sources
+    now = now or datetime.now(timezone.utc)
+    best: dict[tuple[str, str, str], EntitySourceDTO] = {}
+    order: list[tuple[str, str, str]] = []
+    for source in entity_sources:
+        key = _twin_key(source)
+        if key not in best:
+            best[key] = source
+            order.append(key)
+        elif _prefers_instance(source, best[key], now):
+            best[key] = source
+    return [best[key] for key in order]
+
+
 def _is_entity(candidate: "_Candidate") -> bool:
     return isinstance(candidate.dto, EntitySourceDTO)
 
@@ -308,6 +380,8 @@ class LectureGlobalSearchRetrieval:
                 "Access context yields no accessible courses; skipping search."
             )
             return []
+        if entity_sources:
+            entity_sources = dedupe_semester_twins(entity_sources, query)
         query_embedding = self.embed_retrieval_query(query)
         return self._run_hybrid_search(
             query=query,

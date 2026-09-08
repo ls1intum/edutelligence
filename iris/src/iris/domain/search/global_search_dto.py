@@ -149,6 +149,10 @@ class EntitySourceDTO(BaseModel):
     # answers this, but this material seems related" state. The pipeline
     # phrases that as navigation. Never serialized.
     via_pointer_tier: bool = Field(default=False, exclude=True)
+    # Internal: the instance's own calendar anchor (start/release date), used
+    # to prefer the current semester instance among title-identical twins of
+    # a repeated course. Never serialized.
+    reference_date: datetime | None = Field(default=None, exclude=True)
 
 
 class GlobalSearchRequestDTO(BaseModel):
