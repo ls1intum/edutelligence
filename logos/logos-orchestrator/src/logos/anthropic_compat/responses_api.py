@@ -166,12 +166,16 @@ def _stop_reason(body: Dict[str, Any], *, saw_tool_call: bool) -> str:
     The Responses API reports completion as a status plus an
     ``incomplete_details.reason`` rather than a per-choice finish reason.
     """
-    if saw_tool_call:
-        return "tool_use"
+    # Truncation wins over the tool call. A response can run out of
+    # max_output_tokens while a function call is still being generated, and
+    # reporting tool_use there tells the client to execute arguments that are
+    # cut off mid-JSON; max_tokens tells it the turn was truncated instead.
     details = body.get("incomplete_details")
     reason = details.get("reason") if isinstance(details, dict) else None
     if reason == "max_output_tokens" or body.get("status") == "incomplete":
         return "max_tokens"
+    if saw_tool_call:
+        return "tool_use"
     return "end_turn"
 
 
@@ -266,6 +270,9 @@ class ResponsesStreamTranslator:
         return out
 
     def error(self, message: str, error_type: str = "api_error") -> List[bytes]:
+        # Whatever was collected belongs to a turn that did not finish; the
+        # error is the terminal event and nothing may follow it.
+        self._tools = {}
         return self._ensure_writer().error(message, error_type)
 
     def _ensure_writer(self) -> AnthropicStreamWriter:
@@ -288,7 +295,12 @@ class ResponsesStreamTranslator:
         # for clients that read only the data lines.
         event = name or str(frame.get("type") or "")
 
-        if event in ("response.failed", "error"):
+        # A transport failure after partial output is appended by the executor
+        # as a bare ``data: {"error": ...}`` frame with no event name, followed
+        # by [DONE]. Falling through to the terminal events there would make a
+        # truncated answer look like a completed one, so an error payload is
+        # recognised whatever the frame is called.
+        if event in ("response.failed", "error") or isinstance(frame.get("error"), (dict, str)):
             # ``error`` is an object in the spec, but upstreams do send a bare
             # string; dropping that shape would replace the real cause with the
             # generic fallback. Same tolerance as the chat/completions

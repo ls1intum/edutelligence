@@ -18,6 +18,7 @@ from logos.anthropic_compat.common import (
     SSEDecoder,
     anthropic_tools,
     image_data_url,
+    is_reasoning_model,
     json_arguments,
     new_message_id,
     normalize_content,
@@ -26,12 +27,11 @@ from logos.anthropic_compat.common import (
     system_to_text,
     tool_result_text,
     usage_block,
-    wants_max_completion_tokens,
 )
 
-# Sampling parameters that carry over unchanged. ``top_k`` is deliberately
-# absent: chat/completions has no equivalent, and forwarding it is a 400 on
-# OpenAI and Azure.
+# Sampling parameters that carry over to a non-reasoning model. ``top_k`` is
+# deliberately absent: chat/completions has no equivalent, and forwarding it
+# is a 400 on OpenAI and Azure. Reasoning models take none of these.
 _PASSTHROUGH_PARAMS = ("temperature", "top_p")
 
 # Usage keys Logos adds to a cloud response after the fact. They are not part
@@ -64,16 +64,22 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         "messages": messages,
     }
 
+    # The two OpenAI families take mutually exclusive parameter sets, and the
+    # wrong one is a 400 before the model sees anything: a reasoning model
+    # rejects max_tokens, temperature and top_p, everything older rejects
+    # reasoning_effort. Anthropic clients supply max_tokens always, a
+    # temperature routinely and an effort on every Claude Code request, so
+    # forwarding all of them unconditionally breaks one family or the other.
+    reasoning = is_reasoning_model(model_name or payload.get("model"))
+
     max_tokens = payload.get("max_tokens")
     if max_tokens is not None:
-        key = (
-            "max_completion_tokens" if wants_max_completion_tokens(model_name or payload.get("model")) else "max_tokens"
-        )
-        result[key] = max_tokens
+        result["max_completion_tokens" if reasoning else "max_tokens"] = max_tokens
 
-    for name in _PASSTHROUGH_PARAMS:
-        if payload.get(name) is not None:
-            result[name] = payload[name]
+    if not reasoning:
+        for name in _PASSTHROUGH_PARAMS:
+            if payload.get(name) is not None:
+                result[name] = payload[name]
 
     if payload.get("stop_sequences"):
         result["stop"] = payload["stop_sequences"]
@@ -91,7 +97,9 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         if choice is not None:
             result["tool_choice"] = choice
 
-    effort = _reasoning_effort(payload)
+    # Only a reasoning model understands it; on gpt-4.1 and every other older
+    # deployment it is an unrecognised argument.
+    effort = _reasoning_effort(payload) if reasoning else None
     if effort:
         result["reasoning_effort"] = effort
 
@@ -311,6 +319,9 @@ class ChatCompletionsStreamTranslator:
 
     def error(self, message: str, error_type: str = "api_error") -> List[bytes]:
         """Report a mid-stream failure in the Anthropic protocol."""
+        # Whatever was collected belongs to a turn that did not finish; the
+        # error is the terminal event and nothing may follow it.
+        self._tools = {}
         return self._ensure_writer().error(message, error_type)
 
     def _ensure_writer(self) -> AnthropicStreamWriter:

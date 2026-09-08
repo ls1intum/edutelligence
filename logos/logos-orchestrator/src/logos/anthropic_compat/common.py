@@ -30,10 +30,10 @@ from typing import Any, Dict, List, Optional, Tuple
 # by the time a path reaches here.
 MESSAGES_PATH = "v1/messages"
 
-# Models that reject ``max_tokens`` on chat/completions and require
-# ``max_completion_tokens`` instead: OpenAI's o-series and the gpt-5 family,
-# under both their bare names and any vendor prefix ("openai/gpt-5.1").
-_MAX_COMPLETION_TOKENS_RE = re.compile(r"^(?:o\d|gpt-5)", re.IGNORECASE)
+# OpenAI's reasoning families — the o-series and gpt-5 — under both their bare
+# names and any vendor prefix ("openai/gpt-5.1"). They take a different
+# parameter set on chat/completions than every older model.
+_REASONING_MODEL_RE = re.compile(r"^(?:o\d|gpt-5)", re.IGNORECASE)
 
 
 class UpstreamDialect(str, Enum):
@@ -58,18 +58,27 @@ def is_messages_path(request_path: Optional[str]) -> bool:
     return path == MESSAGES_PATH
 
 
+def is_reasoning_model(model_name: Optional[str]) -> bool:
+    """Whether this model is one of the OpenAI reasoning families.
+
+    The two families take mutually exclusive parameter sets on
+    chat/completions, and getting it wrong is a 400 before the model sees
+    anything: a reasoning model rejects ``max_tokens``, ``temperature`` and
+    ``top_p``, while everything older rejects ``reasoning_effort``. Only the
+    name is available to decide — the served name, with any vendor prefix
+    stripped.
+    """
+    name = (model_name or "").rsplit("/", 1)[-1]
+    return bool(_REASONING_MODEL_RE.match(name))
+
+
 def wants_max_completion_tokens(model_name: Optional[str]) -> bool:
     """Whether this model needs ``max_completion_tokens`` on chat/completions.
 
     Anthropic requires ``max_tokens`` on every request, so the translation
     always has a value to forward; only its name differs by model family.
-    Sending ``max_tokens`` to a reasoning model is a hard 400 from OpenAI and
-    Azure ("Use 'max_completion_tokens' instead"), and sending
-    ``max_completion_tokens`` to an older deployment is equally rejected, so
-    the choice cannot be made by sending both.
     """
-    name = (model_name or "").rsplit("/", 1)[-1]
-    return bool(_MAX_COMPLETION_TOKENS_RE.match(name))
+    return is_reasoning_model(model_name)
 
 
 def new_message_id(upstream_id: Any) -> str:
@@ -381,8 +390,15 @@ class AnthropicStreamWriter:
             self._cached_tokens = int(cached_tokens)
 
     def start(self) -> List[bytes]:
-        """Emit ``message_start`` once; later calls are no-ops."""
-        if self._started:
+        """Emit ``message_start`` once; later calls are no-ops.
+
+        Also the single gate on the finished state: every content method goes
+        through here, so once the stream has been closed — by ``stop`` or by
+        ``error`` — nothing more can reach the client. A translator that still
+        holds buffered content when the turn fails would otherwise emit it
+        after the terminal event.
+        """
+        if self._started or self._finished:
             return []
         self._started = True
         return [
@@ -406,7 +422,7 @@ class AnthropicStreamWriter:
 
     def text(self, text: str) -> List[bytes]:
         """Append text, opening a text block if one is not already open."""
-        if not text:
+        if not text or self._finished:
             return []
         out = self.start()
         out += self._open("text:0", {"type": "text", "text": ""})
@@ -424,6 +440,8 @@ class AnthropicStreamWriter:
 
     def tool_use(self, key: str, tool_id: str, name: str) -> List[bytes]:
         """Open a ``tool_use`` block for one upstream tool call."""
+        if self._finished:
+            return []
         out = self.start()
         out += self._open(
             f"tool:{key}",
@@ -433,7 +451,7 @@ class AnthropicStreamWriter:
 
     def tool_arguments(self, key: str, partial_json: str) -> List[bytes]:
         """Append argument text to an already-open ``tool_use`` block."""
-        if not partial_json or self._open_key != f"tool:{key}":
+        if not partial_json or self._finished or self._open_key != f"tool:{key}":
             return []
         return [
             sse(

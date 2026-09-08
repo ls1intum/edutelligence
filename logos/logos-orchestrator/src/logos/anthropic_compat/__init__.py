@@ -60,20 +60,24 @@ def dialect_for(
 ) -> UpstreamDialect:
     """Which API surface a resolved upstream serves for a Messages request.
 
-    Workernodes run vLLM, which serves ``/v1/messages`` natively, and so do
-    Anthropic and Logos cloud upstreams — all three keep the pre-existing
-    verbatim forward. Everything else is OpenAI-shaped, and the choice between
-    its two surfaces follows the per-model endpoint: a deployment stored
-    against ``responses`` (which is where ``classify_azure_operation`` puts the
-    gpt-5.x family) serves no chat/completions route to fall back to.
+    The resolved URL decides first, because it is the surface the request is
+    actually posted to. An operator can pin a per-model endpoint by hand, and
+    the model sync deliberately preserves one — so even a provider that serves
+    the Messages API can end up addressed at ``chat/completions``, and sending
+    an Anthropic body there is a 400. Only when the URL names neither surface
+    does the provider type decide: a workernode runs vLLM, and Anthropic and
+    Logos cloud upstreams serve the Messages API themselves, so all three keep
+    the verbatim forward.
     """
+    path = (forward_url or "").split("?", 1)[0].rstrip("/")
+    if path.endswith("/responses"):
+        return UpstreamDialect.RESPONSES
+    if path.endswith("/chat/completions"):
+        return UpstreamDialect.CHAT_COMPLETIONS
     if (provider_type or "").lower() == "logosnode":
         return UpstreamDialect.NATIVE
     if (cloud_provider_type or "").lower() in _NATIVE_CLOUD_PROVIDERS:
         return UpstreamDialect.NATIVE
-    path = (forward_url or "").split("?", 1)[0].rstrip("/")
-    if path.endswith("/responses"):
-        return UpstreamDialect.RESPONSES
     return UpstreamDialect.CHAT_COMPLETIONS
 
 

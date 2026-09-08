@@ -169,3 +169,27 @@ async def test_azure_responses_deployment_rewrite_applies_to_the_translated_body
     assert payload["model"] == "gpt-56-luna"
     assert payload["instructions"] == "Be brief."
     assert payload["max_output_tokens"] == 32
+
+
+@pytest.mark.asyncio
+async def test_a_logos_provider_with_a_pinned_chat_endpoint_is_translated(monkeypatch):
+    """A hand-set per-model endpoint bypasses the Messages-path rewrite.
+
+    The absolute-endpoint branch returns the stored URL as-is, so a Logos
+    provider whose model was pinned to chat/completions — a configuration the
+    UI allows and the model sync preserves — used to be classified NATIVE and
+    have the Anthropic body posted there unchanged.
+    """
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="logos",
+        base_url="https://logos.aet.cit.tum.de/v1",
+        endpoint="https://logos.aet.cit.tum.de/v1/chat/completions",
+    )
+    assert context.forward_url == "https://logos.aet.cit.tum.de/v1/chat/completions"
+    assert context.anthropic_dialect is UpstreamDialect.CHAT_COMPLETIONS
+
+    _, payload = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
+    assert "system" not in payload
+    assert payload["messages"][0] == {"role": "system", "content": "Be brief."}

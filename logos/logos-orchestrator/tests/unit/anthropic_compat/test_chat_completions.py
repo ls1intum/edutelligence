@@ -177,10 +177,41 @@ def test_tools_and_tool_choice_are_translated():
     assert result["tool_choice"] == {"type": "function", "function": {"name": "Bash"}}
 
 
-def test_effort_is_carried_over_for_the_normalizer_to_clamp():
+def test_effort_reaches_a_reasoning_model_for_the_normalizer_to_clamp():
     # normalize_reasoning_effort runs after this and owns the value itself.
-    result = to_chat_completions({"model": "m", "max_tokens": 8, "messages": [], "output_config": {"effort": "high"}})
+    result = to_chat_completions(
+        {"model": "gpt-5.6-luna", "max_tokens": 8, "messages": [], "output_config": {"effort": "high"}}
+    )
     assert result["reasoning_effort"] == "high"
+
+
+def test_the_two_openai_families_get_mutually_exclusive_parameters():
+    """Sending both sets is a 400 on one family or the other.
+
+    gpt-4.1 and every other older deployment reject ``reasoning_effort`` as an
+    unrecognised argument; the o-series and gpt-5 reject ``temperature`` and
+    ``top_p``. Claude Code supplies an effort on every request and a
+    temperature routinely, so this cannot be left to the client.
+    """
+    request = {
+        "max_tokens": 8,
+        "messages": [],
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "output_config": {"effort": "high"},
+    }
+
+    older = to_chat_completions({**request, "model": "gpt-4.1-nano"})
+    assert older["temperature"] == 0.3 and older["top_p"] == 0.9
+    assert older["max_tokens"] == 8
+    assert "reasoning_effort" not in older
+
+    for name in ("gpt-5.6-luna", "o3-mini", "openai/gpt-5.1"):
+        reasoning = to_chat_completions({**request, "model": name})
+        assert reasoning["reasoning_effort"] == "high", name
+        assert reasoning["max_completion_tokens"] == 8, name
+        assert "temperature" not in reasoning and "top_p" not in reasoning, name
+        assert "max_tokens" not in reasoning, name
 
 
 # ── response ────────────────────────────────────────────────────────────────
@@ -497,3 +528,29 @@ def test_a_turn_that_ends_in_a_tool_call_always_reports_tool_use(finish_reason):
     out = translator.finish()
 
     assert next(d for n, d in _events(out) if n == "message_delta")["delta"]["stop_reason"] == "tool_use"
+
+
+def test_no_content_is_emitted_after_a_mid_stream_error():
+    """The error event is terminal — nothing may follow it.
+
+    Buffered tool calls outlive the failure, and the HTTP generator calls
+    finish() after feeding the last chunk, so without a gate a tool block (and
+    even message_start, when nothing had been emitted yet) would appear after
+    the error and make a failed turn look like a completed one.
+    """
+    translator = ChatCompletionsStreamTranslator("m")
+    translator.feed(_sse({"id": "c", "model": "m", "choices": [{"delta": {"role": "assistant"}}]}))
+    translator.feed(_tool_delta(0, call_id="t1", name="Bash", arguments="{}"))
+
+    events = _events(translator.error("connection reset"))
+    assert [name for name, _ in events] == ["error"]
+    # Whatever the caller does next must stay silent.
+    assert translator.finish() == []
+    assert translator.feed(_tool_delta(0, arguments='{"more":1}')) == []
+
+
+def test_an_error_before_any_output_emits_only_the_error():
+    translator = ChatCompletionsStreamTranslator("m")
+    events = _events(translator.error("upstream gone"))
+    assert [name for name, _ in events] == ["error"]
+    assert translator.finish() == []

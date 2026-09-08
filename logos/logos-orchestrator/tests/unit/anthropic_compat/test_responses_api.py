@@ -318,3 +318,54 @@ def _tool_inputs(events):
         elif name == "content_block_delta" and data["delta"].get("type") == "input_json_delta":
             collected[current] += data["delta"]["partial_json"]
     return {tool: json.loads(raw) for tool, raw in collected.items()}
+
+
+def test_a_truncated_function_call_reports_max_tokens_not_tool_use():
+    """Running out of max_output_tokens mid-call is a length stop.
+
+    Reporting tool_use there hands the client arguments that are cut off
+    mid-JSON and tells it to execute them.
+    """
+    result = from_response(
+        {
+            "id": "r",
+            "model": "m",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [{"type": "function_call", "call_id": "fc_1", "name": "Bash", "arguments": '{"command":"rm -'}],
+        }
+    )
+    assert result["stop_reason"] == "max_tokens"
+
+
+def test_an_unnamed_error_frame_is_not_mistaken_for_a_completed_turn():
+    """The executor appends a bare data: {"error": ...} frame, then [DONE].
+
+    It carries no event name, so falling through to the terminal events would
+    report end_turn and make a truncated answer look successful.
+    """
+    translator = ResponsesStreamTranslator("m")
+    translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    translator.feed(_sse("response.output_text.delta", {"output_index": 0, "delta": "partial"}))
+
+    out = translator.feed(b'data: {"error": {"message": "connection reset", "type": "api_error"}}\n\n')
+    out += translator.feed(b"data: [DONE]\n\n")
+
+    events = _events(out)
+    assert events[-1][0] == "error"
+    assert events[-1][1]["error"]["message"] == "connection reset"
+    assert "message_stop" not in [name for name, _ in events]
+
+
+def test_no_content_is_emitted_after_a_mid_stream_error():
+    translator = ResponsesStreamTranslator("m")
+    translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    translator.feed(
+        _sse(
+            "response.output_item.added",
+            {"output_index": 0, "item": {"type": "function_call", "call_id": "fc_1", "name": "Bash"}},
+        )
+    )
+    events = _events(translator.error("connection reset"))
+    assert [name for name, _ in events] == ["error"]
+    assert translator.finish() == []

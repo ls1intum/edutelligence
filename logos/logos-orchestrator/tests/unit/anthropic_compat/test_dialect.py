@@ -108,3 +108,41 @@ def test_error_bodies_become_anthropic_errors():
     # An already-Anthropic body is left alone rather than nested twice.
     already = {"type": "error", "error": {"type": "api_error", "message": "x"}}
     assert translate_error(already) is already
+
+
+def test_a_pinned_chat_endpoint_wins_over_a_native_provider_type():
+    """The URL decides: it is the surface the request is actually posted to.
+
+    An operator can pin a per-model endpoint by hand and the model sync
+    preserves one, so a Logos provider — which does serve the Messages API —
+    can still end up addressed at chat/completions. Trusting the provider type
+    there forwards the Anthropic body unchanged and the upstream rejects it.
+    """
+    assert (
+        dialect_for(
+            provider_type="cloud",
+            cloud_provider_type="logos",
+            forward_url="https://logos.aet.cit.tum.de/v1/chat/completions",
+        )
+        is UpstreamDialect.CHAT_COMPLETIONS
+    )
+    assert (
+        dialect_for(
+            provider_type="cloud",
+            cloud_provider_type="anthropic",
+            forward_url="https://gateway.test/v1/responses",
+        )
+        is UpstreamDialect.RESPONSES
+    )
+
+
+def test_a_native_provider_keeps_the_messages_route():
+    # Nothing changes when the URL names no OpenAI surface.
+    assert (
+        dialect_for(provider_type="cloud", cloud_provider_type="logos", forward_url="https://logos.test/v1/messages")
+        is UpstreamDialect.NATIVE
+    )
+    assert (
+        dialect_for(provider_type="logosnode", cloud_provider_type=None, forward_url="logosnode://provider/4/lane/a")
+        is UpstreamDialect.NATIVE
+    )
