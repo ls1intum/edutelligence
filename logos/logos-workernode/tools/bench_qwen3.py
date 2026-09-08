@@ -166,7 +166,7 @@ async def main():
     print(f"Model: {model}")
     print(f"Max tokens: {MAX_TOKENS}")
     print(f"Concurrency levels: {concurrency_levels}")
-    print(f"\nWarming up...")
+    print("\nWarming up...")
     await warmup(url, model)
 
     all_results = []

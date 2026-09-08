@@ -422,7 +422,6 @@ def _make_lane(
         model_name=model_name,
         runtime_state=runtime_state,
         sleep_state="awake",
-        is_vllm=True,
         active_requests=active_requests,
         queue_waiting=queue_waiting,
         requests_running=requests_running,

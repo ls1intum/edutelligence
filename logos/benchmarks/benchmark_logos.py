@@ -3006,16 +3006,30 @@ def _apply_benchmark_workernode_config_via_ssh(
 
         lines = env_res.stdout.splitlines()
         new_lines = []
+        models_mount_present = False
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("LOGOS_TMPFS_CACHE_PATH="):
                 new_lines.append("LOGOS_TMPFS_CACHE_PATH=")
             elif stripped.startswith("TMPFS_SIZE="):
                 new_lines.append("TMPFS_SIZE=0")
-            elif local_cache_path and stripped.startswith("LOGOS_MODELS_MOUNT="):
-                new_lines.append(f"LOGOS_MODELS_MOUNT={local_cache_path}")
+            elif stripped.startswith("LOGOS_MODELS_MOUNT="):
+                # Compose resolves LOGOS_MODELS_MOUNT before the legacy
+                # OLLAMA_MODELS_MOUNT, so this line is authoritative for the
+                # mount the benchmark actually uses. Set it when a local cache
+                # path is given, keep it unchanged otherwise.
+                if local_cache_path:
+                    new_lines.append(f"LOGOS_MODELS_MOUNT={local_cache_path}")
+                else:
+                    new_lines.append(line)
+                models_mount_present = True
             else:
                 new_lines.append(line)
+        if local_cache_path and not models_mount_present:
+            # No LOGOS_MODELS_MOUNT line existed — e.g. a legacy-only .env that
+            # carries only OLLAMA_MODELS_MOUNT. Append one, or the old mount
+            # would stay active and the override would be silently ignored.
+            new_lines.append(f"LOGOS_MODELS_MOUNT={local_cache_path}")
         new_env = "\n".join(new_lines) + "\n"
 
         env_write_res = subprocess.run(
@@ -5079,12 +5093,18 @@ def _wipe_calibration_and_weights_via_ssh(
             )
             weight_note = f" + weights ({weight_cache_path})"
         else:
+            # Prefer the new LOGOS_MODELS_MOUNT; fall back to the legacy
+            # OLLAMA_MODELS_MOUNT so a not-yet-migrated .env still wipes the
+            # weights Compose actually mounted (the same one-release fallback
+            # the compose file uses).
             parts.append(
                 f'{sudo}sh -c \'wp=$(grep -E "^LOGOS_MODELS_MOUNT=" {env_path} 2>/dev/null '
                 f'| head -1 | cut -d= -f2- | tr -d \\"); '
+                f'[ -n "$wp" ] || wp=$(grep -E "^OLLAMA_MODELS_MOUNT=" {env_path} 2>/dev/null '
+                f'| head -1 | cut -d= -f2- | tr -d \\"); '
                 f'if [ -n "$wp" ] && [ "$wp" != "/" ]; then rm -rf "$wp"/* "$wp"/.[!.]* 2>/dev/null; fi; true\''
             )
-            weight_note = " + weights (from .env LOGOS_MODELS_MOUNT)"
+            weight_note = " + weights (from .env LOGOS_MODELS_MOUNT/OLLAMA_MODELS_MOUNT)"
         remote_cmd = " ; ".join(parts)
         print(f"  [calib] {host}: wiping calibration state + model weights ...")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
