@@ -78,7 +78,9 @@ def test_tool_call_and_result_become_top_level_items():
         }
     )
     assert result["input"] == [
-        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "running"}]},
+        # input_text, not output_text: an output item would also need an id
+        # and a status, and a request message carries neither.
+        {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "running"}]},
         {"type": "function_call", "call_id": "toolu_1", "name": "Bash", "arguments": '{"command": "ls"}'},
         {"type": "function_call_output", "call_id": "toolu_1", "output": "a.py"},
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "thanks"}]},
@@ -255,3 +257,64 @@ def test_multibyte_character_split_across_chunks_survives():
     split = raw.index("ö".encode()) + 1  # mid-character
     out = translator.feed(raw[:split]) + translator.feed(raw[split:])
     assert "".join(d["delta"]["text"] for n, d in _events(out) if n == "content_block_delta") == "Größe 🎉"
+
+
+def test_assistant_history_uses_request_content_types():
+    """Replayed assistant text must be a request message, not an output item.
+
+    ``output_text`` belongs to an output item, which also carries an ``id`` and
+    a ``status``; emitting it without them is not a valid input item, so the
+    second turn of any conversation could be rejected outright.
+    """
+    result = to_responses(
+        {
+            "model": "m",
+            "max_tokens": 8,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "again"},
+            ],
+        }
+    )
+    kinds = {part["type"] for item in result["input"] for part in item["content"]}
+    assert kinds == {"input_text"}
+    assert all("id" not in item and "status" not in item for item in result["input"])
+
+
+def test_interleaved_function_call_arguments_are_not_lost():
+    """Fragments of a call that is no longer the open block must survive.
+
+    Only one Anthropic content block is open at a time, so relaying fragments
+    as they arrive drops everything belonging to any other call — leaving
+    truncated JSON that the client would hand to the tool.
+    """
+    translator = ResponsesStreamTranslator("m")
+    out = []
+    out += translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    for index, call_id, name in ((0, "fc_0", "Bash"), (1, "fc_1", "Read")):
+        out += translator.feed(
+            _sse(
+                "response.output_item.added",
+                {"output_index": index, "item": {"type": "function_call", "call_id": call_id, "name": name}},
+            )
+        )
+    out += translator.feed(_sse("response.function_call_arguments.delta", {"output_index": 0, "delta": '{"cmd":'}))
+    out += translator.feed(_sse("response.function_call_arguments.delta", {"output_index": 1, "delta": '{"path":"a"}'}))
+    out += translator.feed(_sse("response.function_call_arguments.delta", {"output_index": 0, "delta": '"ls"}'}))
+    out += translator.feed(_sse("response.completed", {"response": {"status": "completed"}}))
+
+    assert _tool_inputs(_events(out)) == {"fc_0": {"cmd": "ls"}, "fc_1": {"path": "a"}}
+
+
+def _tool_inputs(events):
+    """Reassemble each streamed tool_use block into its parsed input."""
+    collected: dict[str, str] = {}
+    current = None
+    for name, data in events:
+        if name == "content_block_start" and data["content_block"]["type"] == "tool_use":
+            current = data["content_block"]["id"]
+            collected.setdefault(current, "")
+        elif name == "content_block_delta" and data["delta"].get("type") == "input_json_delta":
+            collected[current] += data["delta"]["partial_json"]
+    return {tool: json.loads(raw) for tool, raw in collected.items()}

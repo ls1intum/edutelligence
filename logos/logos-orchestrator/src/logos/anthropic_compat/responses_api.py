@@ -86,14 +86,18 @@ def _translate_message(message: Dict[str, Any]) -> List[Dict[str, Any]]:
     role = message.get("role")
     blocks = normalize_content(message.get("content"))
     is_assistant = role == "assistant"
-    text_type = "output_text" if is_assistant else "input_text"
 
     items: List[Dict[str, Any]] = []
     parts: List[Dict[str, Any]] = []
     for block in blocks:
         kind = block.get("type")
         if kind == "text":
-            parts.append({"type": text_type, "text": str(block.get("text") or "")})
+            # ``input_text`` for every role, the assistant's own history
+            # included. ``output_text`` belongs to an output item, which also
+            # carries an ``id`` and a ``status`` this translation has nothing
+            # to fill in — sending it without them can be rejected outright,
+            # so a second turn that replays an assistant answer would 400.
+            parts.append({"type": "input_text", "text": str(block.get("text") or "")})
         elif kind == "image" and not is_assistant:
             url = image_data_url(block)
             if url:
@@ -233,7 +237,11 @@ class ResponsesStreamTranslator:
         self._model = str(model_name or "")
         self._writer: Optional[AnthropicStreamWriter] = None
         self._stop_reason: Optional[str] = None
-        self._saw_tool_call = False
+        # Output index -> {"id", "name", "arguments"}, insertion-ordered.
+        # Collected rather than relayed for the same reason as in the
+        # chat/completions translator: one Anthropic content block is open at
+        # a time, so a delta belonging to any other call would be dropped.
+        self._tools: Dict[str, Dict[str, str]] = {}
 
     def feed(self, chunk: Any) -> List[bytes]:
         out: List[bytes] = []
@@ -243,7 +251,19 @@ class ResponsesStreamTranslator:
 
     def finish(self) -> List[bytes]:
         writer = self._ensure_writer()
-        return writer.stop(self._stop_reason or ("tool_use" if self._saw_tool_call else "end_turn"))
+        saw_tool_call = bool(self._tools)
+        out = self._flush_tools(writer)
+        out.extend(writer.stop(self._stop_reason or ("tool_use" if saw_tool_call else "end_turn")))
+        return out
+
+    def _flush_tools(self, writer: AnthropicStreamWriter) -> List[bytes]:
+        """Write each collected function call as one complete content block."""
+        out: List[bytes] = []
+        for key, call in self._tools.items():
+            out.extend(writer.tool_use(key, call["id"], call["name"]))
+            out.extend(writer.tool_arguments(key, call["arguments"]))
+        self._tools = {}
+        return out
 
     def error(self, message: str, error_type: str = "api_error") -> List[bytes]:
         return self._ensure_writer().error(message, error_type)
@@ -296,19 +316,21 @@ class ResponsesStreamTranslator:
         if event == "response.output_item.added":
             item = frame.get("item") if isinstance(frame.get("item"), dict) else {}
             if item.get("type") == "function_call":
-                self._saw_tool_call = True
-                return writer.tool_use(
-                    str(frame.get("output_index", 0)),
-                    str(item.get("call_id") or item.get("id") or ""),
-                    str(item.get("name") or ""),
+                entry = self._tools.setdefault(
+                    str(frame.get("output_index", 0)), {"id": "", "name": "", "arguments": ""}
                 )
+                entry["id"] = str(item.get("call_id") or item.get("id") or "")
+                entry["name"] = str(item.get("name") or "")
             return []
 
         if event == "response.output_text.delta":
             return writer.text(str(frame.get("delta") or ""))
 
         if event == "response.function_call_arguments.delta":
-            return writer.tool_arguments(str(frame.get("output_index", 0)), str(frame.get("delta") or ""))
+            key = str(frame.get("output_index", 0))
+            entry = self._tools.setdefault(key, {"id": "", "name": "", "arguments": ""})
+            entry["arguments"] += str(frame.get("delta") or "")
+            return []
 
         if event in ("response.completed", "response.incomplete"):
             response = frame.get("response") if isinstance(frame.get("response"), dict) else {}
@@ -319,7 +341,7 @@ class ResponsesStreamTranslator:
                 output_tokens=usage.get("output_tokens"),
                 cached_tokens=details.get("cached_tokens"),
             )
-            self._stop_reason = _stop_reason(response, saw_tool_call=self._saw_tool_call)
+            self._stop_reason = _stop_reason(response, saw_tool_call=bool(self._tools))
             return self.finish()
 
         return []

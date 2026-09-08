@@ -230,7 +230,19 @@ class CloudModelSyncService:
         any_new_models = False
         async with httpx.AsyncClient() as client:
             for provider in providers:
-                changed, new_models = await self._sync_provider(provider, client)
+                try:
+                    changed, new_models = await self._sync_provider(provider, client)
+                except Exception:  # noqa: BLE001
+                    # One provider must never cost the others their sync. The
+                    # cycle only runs on an interval, so an exception escaping
+                    # here would leave every provider after this one unsynced
+                    # until the misconfiguration is noticed.
+                    logger.exception(
+                        "Cloud model sync: provider %s (%s) failed; continuing with the rest",
+                        provider.get("id"),
+                        provider.get("name"),
+                    )
+                    continue
                 any_models_changed = any_models_changed or changed
                 any_new_models = any_new_models or new_models
 
@@ -251,7 +263,21 @@ class CloudModelSyncService:
             return False, False
 
         headers = {"Accept": "application/json"}
-        auth = cloud_auth_header(provider.get("auth_name"), provider.get("auth_format"), provider.get("api_key"))
+        try:
+            auth = cloud_auth_header(provider.get("auth_name"), provider.get("auth_format"), provider.get("api_key"))
+        except (ValueError, KeyError, IndexError) as exc:
+            # auth_format is free text an operator typed, and it is applied with
+            # str.format — "Bearer {" or "Bearer {name}" raise here. Report which
+            # provider needs fixing instead of failing the pass.
+            logger.warning(
+                "Cloud model sync: provider %s (%s) skipped — its auth format is not a valid "
+                "template for the key (%s: %s)",
+                pid,
+                name,
+                type(exc).__name__,
+                exc,
+            )
+            return False, False
         if auth is not None:
             # Never put a provider key on the wire in the clear. Same rule the
             # benchmark path applies to the same credentials: HTTPS, or plain

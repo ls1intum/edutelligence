@@ -356,3 +356,48 @@ def test_non_finite_env_values_fall_back(monkeypatch, raw):
     value = cloud_model_sync._env_number("LOGOS_CLOUD_MODEL_SYNC_INTERVAL_S", 900, minimum=1)
     assert value == 900
     assert int(value) == 900  # what module import actually does
+
+
+@pytest.mark.parametrize("auth_format", ["Bearer {", "Bearer {name}", "Bearer {1}"])
+@pytest.mark.asyncio
+async def test_a_malformed_auth_format_only_skips_its_own_provider(monkeypatch, auth_format):
+    """auth_format is free text applied with str.format.
+
+    "Bearer {" raises ValueError, "{name}" KeyError, "{1}" IndexError. Before
+    this was caught, the first such provider aborted the whole pass, so every
+    provider after it stopped syncing on every cycle.
+    """
+    called = []
+    service = _run(
+        monkeypatch,
+        [
+            _provider(id=4, name="broken", auth_name="Authorization", auth_format=auth_format),
+            _provider(id=5, name="healthy", base_url="https://good.example/v1"),
+        ],
+        lambda url, headers: called.append(url) or LOGOS_LISTING,
+    )
+    await service.run_once()
+
+    assert called == ["https://good.example/v1/models"]
+    assert DummyDB.instances[-1].synced == {5: ["Qwen/Qwen3.8-27B", "gpt-4.1-nano"]}
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_provider_failure_does_not_stop_the_others(monkeypatch):
+    """The cycle only runs on an interval, so it must survive one bad provider."""
+
+    def fetch(url, headers):  # noqa: ARG001
+        if "broken" in url:
+            raise RuntimeError("boom")
+        return LOGOS_LISTING
+
+    service = _run(
+        monkeypatch,
+        [
+            _provider(id=4, name="broken", base_url="https://broken.example/v1"),
+            _provider(id=5, name="healthy", base_url="https://good.example/v1"),
+        ],
+        fetch,
+    )
+    await service.run_once()
+    assert 5 in DummyDB.instances[-1].synced

@@ -270,8 +270,8 @@ class ChatCompletionsStreamTranslator:
     """Rewrites a chat/completions SSE stream as an Anthropic Messages stream.
 
     Fed the upstream's bytes as they arrive and returns the Anthropic bytes to
-    forward. Both streams are incremental, so nothing is buffered beyond the
-    partial SSE event the decoder is still assembling.
+    forward. Text is relayed as it arrives; tool calls are the exception and
+    are held until the turn ends — see :meth:`_tool_call`.
     """
 
     def __init__(self, model_name: Optional[str] = None) -> None:
@@ -279,11 +279,10 @@ class ChatCompletionsStreamTranslator:
         self._model = str(model_name or "")
         self._writer: Optional[AnthropicStreamWriter] = None
         self._finish_reason: Optional[str] = None
-        self._saw_tool_call = False
-        # Upstream tool-call index -> whether its content block is already
-        # open. Arguments stream in as fragments after the opening delta names
-        # the call, and only the first fragment carries the id and name.
-        self._open_tools: set = set()
+        # Upstream tool-call index -> {"id", "name", "arguments"}, in the order
+        # the indices first appeared. Insertion-ordered, so the blocks come out
+        # in the order the model produced them.
+        self._tools: Dict[str, Dict[str, str]] = {}
 
     def feed(self, chunk: Any) -> List[bytes]:
         out: List[bytes] = []
@@ -292,9 +291,20 @@ class ChatCompletionsStreamTranslator:
         return out
 
     def finish(self) -> List[bytes]:
-        """Close the Anthropic stream when the upstream bytes run out."""
+        """Emit the collected tool calls, then close the Anthropic stream."""
         writer = self._ensure_writer()
-        return writer.stop(stop_reason(self._finish_reason, saw_tool_call=self._saw_tool_call))
+        out = self._flush_tools(writer)
+        out.extend(writer.stop(stop_reason(self._finish_reason, saw_tool_call=bool(self._tools))))
+        return out
+
+    def _flush_tools(self, writer: AnthropicStreamWriter) -> List[bytes]:
+        """Write each collected tool call as one complete content block."""
+        out: List[bytes] = []
+        for key, call in self._tools.items():
+            out.extend(writer.tool_use(key, call["id"], call["name"]))
+            out.extend(writer.tool_arguments(key, call["arguments"]))
+        self._tools = {}
+        return out
 
     def error(self, message: str, error_type: str = "api_error") -> List[bytes]:
         """Report a mid-stream failure in the Anthropic protocol."""
@@ -353,21 +363,30 @@ class ChatCompletionsStreamTranslator:
 
         for call in delta.get("tool_calls") or []:
             if isinstance(call, dict):
-                out.extend(self._tool_call(writer, call))
+                self._tool_call(call)
 
         if choice.get("finish_reason"):
             self._finish_reason = str(choice["finish_reason"])
         return out
 
-    def _tool_call(self, writer: AnthropicStreamWriter, call: Dict[str, Any]) -> List[bytes]:
+    def _tool_call(self, call: Dict[str, Any]) -> None:
+        """Collect one tool-call delta; nothing is emitted yet.
+
+        The Anthropic protocol keeps exactly one content block open at a time,
+        while chat/completions may interleave the deltas of parallel tool calls
+        by index. Relaying them as they arrive therefore drops every fragment
+        that belongs to a call other than the one currently open — silently, and
+        what is left is truncated JSON that the client hands to the tool. So the
+        fragments are accumulated per index and written out as whole blocks in
+        :meth:`finish`. Only the first delta of a call carries its id and name.
+        """
         key = str(call.get("index", 0))
         function = call.get("function") if isinstance(call.get("function"), dict) else {}
-        out: List[bytes] = []
-        if key not in self._open_tools:
-            self._open_tools.add(key)
-            self._saw_tool_call = True
-            out.extend(writer.tool_use(key, str(call.get("id") or ""), str(function.get("name") or "")))
+        entry = self._tools.setdefault(key, {"id": "", "name": "", "arguments": ""})
+        if call.get("id"):
+            entry["id"] = str(call["id"])
+        if function.get("name"):
+            entry["name"] = str(function["name"])
         arguments = function.get("arguments")
-        if isinstance(arguments, str) and arguments:
-            out.extend(writer.tool_arguments(key, arguments))
-        return out
+        if isinstance(arguments, str):
+            entry["arguments"] += arguments

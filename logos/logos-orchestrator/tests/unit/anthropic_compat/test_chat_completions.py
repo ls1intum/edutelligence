@@ -396,3 +396,84 @@ def test_streaming_switch_is_forwarded_without_stream_options():
     result = to_chat_completions({"model": "m", "max_tokens": 8, "messages": [], "stream": True})
     assert result["stream"] is True
     assert "stream_options" not in result
+
+
+def _tool_inputs(events):
+    """Reassemble each streamed tool_use block into its parsed input."""
+    collected: dict[str, str] = {}
+    current = None
+    for name, data in events:
+        if name == "content_block_start" and data["content_block"]["type"] == "tool_use":
+            current = data["content_block"]["id"]
+            collected.setdefault(current, "")
+        elif name == "content_block_delta" and data["delta"].get("type") == "input_json_delta":
+            collected[current] += data["delta"]["partial_json"]
+    return {tool: json.loads(raw) for tool, raw in collected.items()}
+
+
+def _tool_delta(index, *, call_id=None, name=None, arguments=None):
+    call = {"index": index, "function": {}}
+    if call_id:
+        call["id"] = call_id
+    if name:
+        call["function"]["name"] = name
+    if arguments is not None:
+        call["function"]["arguments"] = arguments
+    return _sse({"choices": [{"delta": {"tool_calls": [call]}}]})
+
+
+def test_interleaved_parallel_tool_arguments_are_not_lost():
+    """A fragment for a call that is not the open block must still land.
+
+    Only one Anthropic content block is open at a time. Relaying fragments as
+    they arrive dropped everything belonging to any other call — silently, and
+    what reached the client was truncated JSON it would have handed to the
+    tool.
+    """
+    translator = ChatCompletionsStreamTranslator("m")
+    out = translator.feed(_sse({"id": "c", "model": "m", "choices": [{"delta": {"role": "assistant"}}]}))
+    out += translator.feed(_tool_delta(0, call_id="call_0", name="Bash", arguments='{"cmd":'))
+    out += translator.feed(_tool_delta(1, call_id="call_1", name="Read", arguments='{"path":"a"}'))
+    out += translator.feed(_tool_delta(0, arguments='"ls"}'))
+    out += translator.feed(_sse({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}))
+    out += translator.feed(b"data: [DONE]\n\n")
+
+    events = _events(out)
+    assert _tool_inputs(events) == {"call_0": {"cmd": "ls"}, "call_1": {"path": "a"}}
+    assert next(d for n, d in events if n == "message_delta")["delta"]["stop_reason"] == "tool_use"
+
+
+def test_parallel_tool_blocks_keep_the_order_the_model_produced():
+    translator = ChatCompletionsStreamTranslator("m")
+    out = translator.feed(_sse({"id": "c", "model": "m", "choices": [{"delta": {"role": "assistant"}}]}))
+    out += translator.feed(_tool_delta(0, call_id="first", name="A", arguments="{}"))
+    out += translator.feed(_tool_delta(1, call_id="second", name="B", arguments="{}"))
+    out += translator.finish()
+
+    starts = [d["content_block"] for n, d in _events(out) if n == "content_block_start"]
+    assert [block["id"] for block in starts] == ["first", "second"]
+    assert [block["name"] for block in starts] == ["A", "B"]
+
+
+def test_text_still_streams_while_tool_calls_are_collected():
+    """Only tool arguments wait; prose is relayed as it arrives."""
+    translator = ChatCompletionsStreamTranslator("m")
+    first = translator.feed(_sse({"id": "c", "model": "m", "choices": [{"delta": {"content": "thinking"}}]}))
+    assert [name for name, _ in _events(first)] == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+    ]
+
+    rest = translator.feed(_tool_delta(0, call_id="t", name="A", arguments="{}")) + translator.finish()
+    names = [name for name, _ in _events(rest)]
+    # The text block is closed before the tool block opens, and the tool block
+    # is complete before the terminal events.
+    assert names == [
+        "content_block_stop",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
