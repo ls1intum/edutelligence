@@ -109,7 +109,11 @@ def _capture_logosnode_provider_snapshot(
                     )
 
     sample["snapshot_id"] = snapshot_id
-    asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
+    # Keep a strong reference: an unheld task can be garbage-collected before
+    # it runs, which would silently drop the runtime sample.
+    task = asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
+    _main._background_tasks.add(task)
+    task.add_done_callback(_main._background_tasks.discard)
 
 
 def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> None:
