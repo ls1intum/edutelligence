@@ -40,7 +40,7 @@
          slice of each key.
 
          Originally numbered 020; main's later migrations have since taken
-         019-025, so the file moved to 026 (logicalFilePath keeps the old name
+         019-026, so the file moved to 027 (logicalFilePath keeps the old name
          for environments that already ran it). LiquibaseChangelogOrderTest
          requires strictly increasing numbers in master.xml.
 
