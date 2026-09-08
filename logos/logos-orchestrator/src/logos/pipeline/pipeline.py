@@ -257,7 +257,21 @@ class RequestPipeline:
         deployments = request.deployments
         eligible_provider_ids: frozenset[int] | None = None
         if request.pinned_model_id is not None:
-            deployments = [d for d in deployments if d["model_id"] == request.pinned_model_id]
+            # A pinned retry skips _classify, so re-apply the privacy policy
+            # here: without it a LOCAL-only payload would fail over to a cloud
+            # or third-party deployment of the same model after the local lane
+            # drops. Filtering privacy *before* the exclusion below also keeps
+            # the single-node lift from ever restoring a privacy-ineligible
+            # placement — those are already gone when the lift re-adds nodes.
+            threshold = (request.policy or ProxyPolicy()).get(
+                "threshold_privacy", "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
+            )
+            deployments = [
+                d
+                for d in deployments
+                if d["model_id"] == request.pinned_model_id
+                and _privacy_ok(threshold, d.get("privacy_level", "LOCAL"))
+            ]
             if request.exclude_provider_ids:
                 without_failed = [d for d in deployments if d["provider_id"] not in request.exclude_provider_ids]
                 if without_failed:

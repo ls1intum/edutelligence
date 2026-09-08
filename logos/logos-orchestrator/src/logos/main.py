@@ -4031,8 +4031,14 @@ class _SsePreCommitGate:
                 delta = choice.get("delta", {})
                 if not isinstance(delta, dict):
                     return True
-                if delta.get("content") or any(key in delta for key in _STRUCTURED_DELTA_KEYS):
-                    return True  # real content or a structured delta — output
+                # reasoning_content (vLLM chat path) is generated output like
+                # content: a thinking model streams it before any content, and
+                # buffering it would defer the gate past a whole reasoning
+                # phase — and make a post-reasoning failure look output-less.
+                if delta.get("content") or delta.get("reasoning_content") or any(
+                    key in delta for key in _STRUCTURED_DELTA_KEYS
+                ):
+                    return True  # real content, reasoning, or a structured delta — output
             return False
         # A native-dialect event (Messages, Responses) names itself in
         # ``type`` instead of using ``choices``.
@@ -4071,11 +4077,13 @@ class _SsePreCommitGate:
             if not isinstance(delta, dict):
                 return True
             # input_json_delta carries a tool call's arguments — structured
-            # output; a thinking delta is as invisible as vLLM's
-            # reasoning_content is on the chat path.
+            # output. A text_delta carries its output in ``text`` and a
+            # thinking_delta in ``thinking``; both are generated output, so a
+            # long reasoning stream starts the gate (and a post-reasoning
+            # failure keeps a resumable prefix) instead of being buffered.
             if delta.get("type") not in ("text_delta", "thinking_delta"):
                 return True
-            return bool(delta.get("text"))
+            return bool(delta.get("text") or delta.get("thinking"))
         if event_type == "response.output_item.added":
             item = blob.get("item")
             if not isinstance(item, dict):

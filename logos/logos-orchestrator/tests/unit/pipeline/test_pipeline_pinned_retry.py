@@ -234,6 +234,73 @@ async def test_non_pinned_request_stays_model_wide():
 
 
 @pytest.mark.asyncio
+async def test_pinned_retry_never_fails_over_across_privacy_tiers():
+    """A pinned retry keeps the model but must not cross the request's
+    privacy policy: a LOCAL-only payload whose local lane failed must stay on
+    the local node instead of failing over to a cloud deployment of the same
+    model. Pinned requests skip _classify, so the privacy filter is
+    re-applied at the deployment-selection step, before the failed-provider
+    exclusion (and its single-node lift) runs."""
+    deployments = [
+        {"model_id": 27, "provider_id": 1, "type": "logosnode", "privacy_level": "LOCAL"},
+        {"model_id": 27, "provider_id": 2, "type": "cloud", "privacy_level": "CLOUD_NOT_IN_EU_BY_US_PROVIDER"},
+    ]
+    pipeline, _classifier, scheduler = _build_pipeline()
+
+    # The local node (provider 1) already failed. Without the privacy filter
+    # the exclusion would lift to the cloud node (provider 2); with it the
+    # cloud node is gone before the lift, so the local node is retried.
+    await pipeline.process(
+        _pinned_request(
+            deployments=deployments,
+            policy={"threshold_privacy": "LOCAL"},
+            exclude_provider_ids=frozenset({1}),
+        )
+    )
+
+    seen = [d["provider_id"] for d in scheduler.requests[0].deployments]
+    assert seen == [1]
+    assert frozenset(scheduler.requests[0].eligible_provider_ids) == frozenset({1})
+
+
+@pytest.mark.asyncio
+async def test_pinned_retry_drops_privacy_ineligible_deployments_without_exclusion():
+    """Even with no failed provider to exclude, a pinned retry only sees the
+    privacy-eligible placements of its model."""
+    deployments = [
+        {"model_id": 27, "provider_id": 1, "type": "logosnode", "privacy_level": "LOCAL"},
+        {"model_id": 27, "provider_id": 2, "type": "cloud", "privacy_level": "THIRD_PARTY_HARDWARE"},
+    ]
+    pipeline, _classifier, scheduler = _build_pipeline()
+
+    await pipeline.process(
+        _pinned_request(deployments=deployments, policy={"threshold_privacy": "LOCAL"})
+    )
+
+    seen = [d["provider_id"] for d in scheduler.requests[0].deployments]
+    assert seen == [1]
+
+
+@pytest.mark.asyncio
+async def test_pinned_retry_keeps_tiers_the_policy_allows():
+    """A permissive policy (third-party hardware) lets a pinned retry keep the
+    cloud placement alongside the local one — the privacy filter removes only
+    what the policy forbids, not every non-local deployment."""
+    deployments = [
+        {"model_id": 27, "provider_id": 1, "type": "logosnode", "privacy_level": "LOCAL"},
+        {"model_id": 27, "provider_id": 2, "type": "cloud", "privacy_level": "CLOUD_NOT_IN_EU_BY_US_PROVIDER"},
+    ]
+    pipeline, _classifier, scheduler = _build_pipeline()
+
+    await pipeline.process(
+        _pinned_request(deployments=deployments, policy={"threshold_privacy": "THIRD_PARTY_HARDWARE"})
+    )
+
+    seen = sorted(d["provider_id"] for d in scheduler.requests[0].deployments)
+    assert seen == [1, 2]
+
+
+@pytest.mark.asyncio
 async def test_context_resolve_call_is_cut_off_at_the_remaining_retry_budget():
     """A retry rebuilt with seconds left on the overall deadline must not sit
     inside a single resolve_context() call well past it: the resolver can
