@@ -1087,6 +1087,140 @@ class TestCycleDedupAdditionalLanes:
         actions = planner._compute_replication_actions([1, 2], [("X", 2.5)], {"X": 1}, {"X"}, set())
         assert actions == []
 
+    def test_demand_plans_a_load_per_feasible_worker_in_one_cycle(self):
+        """The removed cluster copy cap used to block the second worker's
+        speculative copy here; the cap is gone and VRAM feasibility is the
+        boundary. With the dedup off, every worker with headroom plans its
+        own additional copy of a hot model in one cycle — a worker that
+        cannot fit the model without evicting stays out (extra copies never
+        evict)."""
+        host_a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        host_b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        host_c = _MockProvider(
+            provider_id=3,
+            name="C",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=10_000,
+            profiles={"X": _profile()},
+        )
+        planner_a = _planner(host_a, score=2.5, replicate=True)
+        planner_b = _planner(host_b, score=2.5, replicate=True)
+        planner_c = _planner(host_c, score=2.5, replicate=True)
+        # C cannot fit a second copy without evicting: the placement picker
+        # reports an eviction set, and extra copies never evict.
+        planner_c._pick_cold_load_placement = lambda *a, **k: (
+            "0",
+            [(_lane("planner-X", "X", "running"), "stop", None)],
+        )
+        cycle_planned_models: set = set()
+        cycle_planned_additional_models: set = set()
+        cluster = {"X": 3}  # three loaded copies — nothing gates on this now
+
+        actions = []
+        for provider_id, provider, planner in (
+            (1, host_a, planner_a),
+            (2, host_b, planner_b),
+            (3, host_c, planner_c),
+        ):
+            actions.extend(
+                planner._compute_demand_actions(
+                    provider_id,
+                    provider.lanes,
+                    cycle_planned_models=cycle_planned_models,
+                    cycle_planned_additional_models=cycle_planned_additional_models,
+                    cluster_lanes_by_model=cluster,
+                )
+            )
+
+        loads = [a for a in actions if a.action == "load"]
+        # Both VRAM-feasible workers plan their own copy, one per worker —
+        # assert the (worker, model) pairs so both loads landing on one
+        # worker would fail.
+        assert sorted((a.provider_id, a.model_name) for a in loads) == [(1, "X"), (2, "X")]
+        assert [a.lane_id for a in loads if a.provider_id == 1] == ["planner-X-2"]
+        assert [a.lane_id for a in loads if a.provider_id == 2] == ["planner-X-2"]
+        assert not [a for a in loads if a.provider_id == 3]
+
+
+# ---------------------------------------------------------------------------
+# The eviction count sees confirmed loaded lanes only
+# ---------------------------------------------------------------------------
+
+
+class TestEvictionCountSeesOnlyLoadedLanes:
+    """``cluster_lanes_by_model`` feeds the replicas-first eviction pass,
+    which decides which lanes are dispensable replicas. A load planned
+    earlier in the same cycle can still be dropped by VRAM validation or
+    fail at dispatch — counting it would let the pass evict a model's only
+    live copy on the assumption of a sibling that never materialised."""
+
+    def test_planned_load_does_not_expose_the_last_loaded_copy(self):
+        """Worker A's pass plans X's first cold load; worker B hosts the
+        only loaded copy of X. The shared cycle count must stay at 1, so
+        B's replicas-first pass — later in the cycle, before A's load has
+        survived validation or dispatch — still treats B's lane as the
+        last copy and refuses to evict it."""
+        worker_a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        worker_b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[_lane("planner-X", "X", "running")],
+            capabilities=["X"],
+            available_vram_mb=50_000,
+            profiles={"X": _profile()},
+        )
+        planner_a = _planner(worker_a, score=2.5, replicate=True)
+        planner_b = _planner(worker_b, score=2.5, replicate=True)
+        # The cycle's loaded count: X is loaded exactly once, on B.
+        cluster = {"X": 1}
+
+        actions_a = planner_a._compute_demand_actions(
+            1,
+            worker_a.lanes,
+            cycle_planned_models=set(),
+            cycle_planned_additional_models=set(),
+            cluster_lanes_by_model=cluster,
+        )
+        assert ("load", 1, "planner-X") in [(a.action, a.provider_id, a.lane_id) for a in actions_a]
+        # A's planned load is not a loaded lane: the count must not grow.
+        assert cluster == {"X": 1}
+
+        # B needs 5 GB on GPU 0; its X lane frees ~20 GB, so it covers the
+        # deficit — it is only protected because it is the last loaded copy.
+        planner_b._demand.get_score = lambda *_: 0.0
+        eviction = planner_b._find_eviction_set(
+            provider_id=2,
+            required_gpus=frozenset({0}),
+            per_gpu_deficit={0: 5000.0},
+            lanes=worker_b.lanes,
+            profiles=worker_b.profiles,
+            replicas_only=True,
+            cluster_lanes_by_model=cluster,
+        )
+        assert eviction is None
+
 
 # ---------------------------------------------------------------------------
 # Lane id reservation is worker-wide, not per-model

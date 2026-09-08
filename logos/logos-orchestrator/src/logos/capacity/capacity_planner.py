@@ -770,9 +770,11 @@ class CapacityPlanner:
         # cycle. Consumed by:
         #   - replicas-first eviction (Pass 1 in the eviction picker),
         #   - speculative replication (skip models not loaded anywhere yet).
-        # Only built when at least one consumer is enabled. The demand and
-        # replication passes increment it as they plan loads, so a worker
-        # later in the cycle sees copies planned earlier in the same one.
+        # Only built when at least one consumer is enabled. It is never
+        # mutated within the cycle: loads planned mid-cycle are not loaded
+        # lanes — VRAM validation or dispatch can still drop them — and
+        # counting them would let the eviction pass treat a model's only
+        # live copy as a dispensable replica.
         cluster_lanes_by_model = (
             self._count_loaded_lanes_per_model()
             if (self._replica_first_eviction or self._replicate_on_free_vram)
@@ -2363,6 +2365,12 @@ class CapacityPlanner:
         count is decremented so the *last* remaining copy of any model is
         never picked in this pass. Callers should fall back to a normal
         (non-replicas-only) call when this pass cannot cover the deficit.
+
+        The count must reflect confirmed loaded lanes only: loads planned
+        earlier in the same cycle are not counted, because VRAM validation
+        or dispatch can still drop them, and this pass must not evict a
+        last live copy on the assumption of a sibling that may never
+        materialise.
 
         ``target_lane_id`` is the lane_id of the lane about to be woken (wake
         path only; cold load has no existing wakee and passes ``None``). That
@@ -4119,12 +4127,6 @@ class CapacityPlanner:
                     )
                 )
                 planned_models.add(model_name)
-                # Bump the cycle's cluster copy count: a first lane on
-                # another worker is a copy just like an additional one, so
-                # the replicas-first eviction picker (which protects a
-                # model's last copy) sees the fresh copy in later passes.
-                if cluster_lanes_by_model is not None:
-                    cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                 if is_additional_lane:
                     planned_additional_models.add(model_name)
             else:
@@ -4203,9 +4205,6 @@ class CapacityPlanner:
                         )
                     )
                     planned_models.add(model_name)
-                    # Same cluster-count bump as the no-eviction branch.
-                    if cluster_lanes_by_model is not None:
-                        cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                     if is_additional_lane:
                         planned_additional_models.add(model_name)
                 else:
@@ -4258,8 +4257,6 @@ class CapacityPlanner:
                 # Phase 1.3: capability-seed must also feed cycle dedup so a
                 # second provider doesn't seed the same model in the same cycle.
                 planned_models.add(model_name)
-                if cluster_lanes_by_model is not None:
-                    cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
 
         # Phase 1.3: lift this provider's planned models into the cycle-wide
         # set so subsequent providers in the iteration order skip them.
@@ -4419,8 +4416,6 @@ class CapacityPlanner:
                     )
                 )
                 cycle_planned_models.add(model_name)
-                if cluster_lanes_by_model is not None:
-                    cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                 logger.info(
                     "Speculative replica for model=%s onto worker=%s "
                     "(current replicas=%d, free_vram=%.0fMB, needed=%.0fMB)",
