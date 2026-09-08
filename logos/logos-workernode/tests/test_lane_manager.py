@@ -3105,8 +3105,6 @@ class TestValidateCapabilities:
         (models_path / "org-model").mkdir(parents=True)
         missing = self._manager(str(models_path)).validate_capabilities(["org-model"], str(tmp_path / "elsewhere-hf"))
         assert missing == []
-
-
 # ── reactive re-plan hook on every staggered sleep ───────────────────────────
 
 
