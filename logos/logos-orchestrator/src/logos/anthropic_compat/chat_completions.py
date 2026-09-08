@@ -293,8 +293,11 @@ class ChatCompletionsStreamTranslator:
     def finish(self) -> List[bytes]:
         """Emit the collected tool calls, then close the Anthropic stream."""
         writer = self._ensure_writer()
+        # Read before flushing — _flush_tools empties the collection, and the
+        # stop reason has to know the turn ended in a tool call.
+        saw_tool_call = bool(self._tools)
         out = self._flush_tools(writer)
-        out.extend(writer.stop(stop_reason(self._finish_reason, saw_tool_call=bool(self._tools))))
+        out.extend(writer.stop(stop_reason(self._finish_reason, saw_tool_call=saw_tool_call)))
         return out
 
     def _flush_tools(self, writer: AnthropicStreamWriter) -> List[bytes]:

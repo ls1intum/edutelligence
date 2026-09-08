@@ -7,6 +7,8 @@ protocol, whose event ordering clients parse strictly.
 
 import json
 
+import pytest
+
 from logos.anthropic_compat.chat_completions import (
     ChatCompletionsStreamTranslator,
     from_chat_completion,
@@ -477,3 +479,21 @@ def test_text_still_streams_while_tool_calls_are_collected():
         "message_delta",
         "message_stop",
     ]
+
+
+@pytest.mark.parametrize("finish_reason", [None, "stop"])
+def test_a_turn_that_ends_in_a_tool_call_always_reports_tool_use(finish_reason):
+    """The stop reason must survive the tool flush.
+
+    Not every upstream sends ``finish_reason: tool_calls`` — some send ``stop``,
+    some send nothing before the stream ends. A client that reads ``end_turn``
+    there stops the agent loop instead of running the tool.
+    """
+    translator = ChatCompletionsStreamTranslator("m")
+    translator.feed(_sse({"id": "c", "model": "m", "choices": [{"delta": {"role": "assistant"}}]}))
+    translator.feed(_tool_delta(0, call_id="t1", name="Bash", arguments="{}"))
+    if finish_reason:
+        translator.feed(_sse({"choices": [{"delta": {}, "finish_reason": finish_reason}]}))
+    out = translator.finish()
+
+    assert next(d for n, d in _events(out) if n == "message_delta")["delta"]["stop_reason"] == "tool_use"
