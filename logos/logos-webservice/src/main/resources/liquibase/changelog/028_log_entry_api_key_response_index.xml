@@ -2,7 +2,6 @@
 <databaseChangeLog
     xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    logicalFilePath="liquibase/changelog/021_log_entry_api_key_response_index.xml"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
@@ -30,15 +29,16 @@
          of the window are index-driven.
 
          Originally numbered 021; main's later migrations have since taken
-         019-026, so the file moved to 028 (logicalFilePath keeps the old name
-         for environments that already ran it). LiquibaseChangelogOrderTest
-         requires strictly increasing numbers in master.xml.
+         019-026, so the file moved to 028 (LiquibaseChangelogOrderTest
+         requires strictly increasing numbers in master.xml). No environment
+         has run the earlier number, so the changeSet id carries the
+         current one.
 
          Runs outside a transaction so CONCURRENTLY can build the index without
          locking log_entry against the logos-orchestrator, which keeps writing
          to this table while logos-webservice is redeployed (same rationale as
          012/014/027). -->
-    <changeSet id="021-log-entry-api-key-response-index" author="logos" runInTransaction="false">
+    <changeSet id="028-log-entry-api-key-response-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_api_key_timestamp_response"/></not>
         </preConditions>

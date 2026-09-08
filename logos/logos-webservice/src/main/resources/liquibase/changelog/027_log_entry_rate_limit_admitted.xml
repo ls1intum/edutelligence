@@ -2,7 +2,6 @@
 <databaseChangeLog
     xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    logicalFilePath="liquibase/changelog/020_log_entry_rate_limit_admitted.xml"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
@@ -22,7 +21,7 @@
            NULL  — no limit configured for that key/provider class, or a
                    pre-migration row (never rejected, so counted).
          The query filters `IS DISTINCT FROM FALSE` accordingly. -->
-    <changeSet id="020-log-entry-rate-limit-admitted" author="logos">
+    <changeSet id="027-log-entry-rate-limit-admitted" author="logos">
         <addColumn tableName="log_entry">
             <column name="rate_limit_admitted" type="BOOLEAN"/>
         </addColumn>
@@ -40,15 +39,16 @@
          slice of each key.
 
          Originally numbered 020; main's later migrations have since taken
-         019-026, so the file moved to 027 (logicalFilePath keeps the old name
-         for environments that already ran it). LiquibaseChangelogOrderTest
-         requires strictly increasing numbers in master.xml.
+         019-026, so the file moved to 027 (LiquibaseChangelogOrderTest
+         requires strictly increasing numbers in master.xml). No environment
+         has run the earlier number, so the changeSet ids carry the
+         current one.
 
          Runs outside a transaction so CONCURRENTLY can build the index without
          locking log_entry against the logos-orchestrator, which keeps writing
          to this table while logos-webservice is redeployed (same rationale as
          012). -->
-    <changeSet id="020-log-entry-api-key-forwarding-index" author="logos" runInTransaction="false">
+    <changeSet id="027-log-entry-api-key-forwarding-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_api_key_timestamp_forwarding"/></not>
         </preConditions>
