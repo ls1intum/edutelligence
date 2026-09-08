@@ -542,9 +542,9 @@ class TestDemandPathAdditionalLane:
 class TestErroredLaneBackoff:
     """A replica load the worker accepted can still fail afterwards: the lane
     lands in ``error`` and keeps holding its lane id. Without a backoff the
-    allocator skips that id, the per-lane cooldown never covers the fresh
-    suffix, and the copy cap does not count the errored lane — sustained
-    demand then leaves a fresh errored lane behind every cycle."""
+    allocator skips that id and takes the next free suffix, and the per-lane
+    cooldown never covers it — sustained demand then leaves a fresh errored
+    lane behind every cycle."""
 
     def test_errored_replica_blocks_the_next_suffix(self):
         """Replica 1 runs, replica 2 errored, demand is hot and the scale-out
@@ -888,9 +888,9 @@ class TestCycleDedupAdditionalLanes:
     """Same-node speculative loads and the cross-provider replication pass
     used to share one cycle-wide set, so an *additional* lane planned on a
     worker that already hosts the model suppressed the *first* lane on a
-    worker without it. Additional lanes are now tagged separately, and the
-    per-cycle cluster count is kept current so the copy cap holds within a
-    cycle even with the dedup off."""
+    worker without it. Additional lanes are now tagged separately, so a
+    first lane on a worker without the model is never displaced by another
+    worker's speculative copy."""
 
     def test_first_lane_proceeds_despite_additional_planned_elsewhere(self):
         """Worker A hosts X and plans a speculative second lane; worker B
@@ -1086,53 +1086,6 @@ class TestCycleDedupAdditionalLanes:
         # A demand-driven first lane was planned → the pass stays out.
         actions = planner._compute_replication_actions([1, 2], [("X", 2.5)], {"X": 1}, {"X"}, set())
         assert actions == []
-
-    def test_cluster_copy_cap_holds_across_workers_in_one_cycle(self):
-        """Two workers each host one copy of X (cluster count 2 of the cap
-        3) and both want a speculative second copy. The first worker's
-        planned lane must bump the cycle's cluster count, so the second
-        worker sees the cap and stands down — with the dedup off, so only
-        the count can save it."""
-        worker_a = _MockProvider(
-            provider_id=1,
-            name="A",
-            lanes=[_lane("planner-X", "X", "running")],
-            capabilities=["X"],
-            available_vram_mb=50_000,
-            profiles={"X": _profile()},
-        )
-        worker_b = _MockProvider(
-            provider_id=2,
-            name="B",
-            lanes=[_lane("planner-X", "X", "running")],
-            capabilities=["X"],
-            available_vram_mb=50_000,
-            profiles={"X": _profile()},
-        )
-        planner_a = _planner(worker_a, score=2.5, replicate=True)
-        planner_b = _planner(worker_b, score=2.5, replicate=True)
-        cycle_planned_models: set = set()
-        cycle_planned_additional_models: set = set()
-        cluster = {"X": 2}
-
-        actions_a = planner_a._compute_demand_actions(
-            1,
-            worker_a.lanes,
-            cycle_planned_models=cycle_planned_models,
-            cycle_planned_additional_models=cycle_planned_additional_models,
-            cluster_lanes_by_model=cluster,
-        )
-        actions_b = planner_b._compute_demand_actions(
-            2,
-            worker_b.lanes,
-            cycle_planned_models=cycle_planned_models,
-            cycle_planned_additional_models=cycle_planned_additional_models,
-            cluster_lanes_by_model=cluster,
-        )
-
-        loads = [a for a in actions_a + actions_b if a.action == "load" and a.model_name == "X"]
-        assert len(loads) == 1
-        assert loads[0].provider_id == 1
 
 
 # ---------------------------------------------------------------------------

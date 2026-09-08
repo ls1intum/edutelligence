@@ -4119,10 +4119,10 @@ class CapacityPlanner:
                     )
                 )
                 planned_models.add(model_name)
-                # Every planned load bumps the cycle's cluster count — a
-                # first lane on another worker is a copy for the cap just
-                # as much as an additional one, and a worker later in the
-                # cycle must see it.
+                # Bump the cycle's cluster copy count: a first lane on
+                # another worker is a copy just like an additional one, so
+                # the replicas-first eviction picker (which protects a
+                # model's last copy) sees the fresh copy in later passes.
                 if cluster_lanes_by_model is not None:
                     cluster_lanes_by_model[model_name] = cluster_lanes_by_model.get(model_name, 0) + 1
                 if is_additional_lane:
