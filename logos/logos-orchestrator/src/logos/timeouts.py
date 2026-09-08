@@ -43,6 +43,26 @@ def global_timeout_s(default: float) -> float:
     return value if value > 0 else default
 
 
+def queue_wait_window_s(request_timeout_s: float | None = None) -> float:
+    """The queue window a request may spend waiting for a lane.
+
+    The default/global window bounds *every* request, including the unstamped
+    ones (async jobs) that have no client budget to recompute. The request's
+    own ``timeout_s`` — the value the client actually waits on — may only
+    narrow that window, never widen it, so no request holds a queue slot past
+    the window. A non-positive or invalid ``request_timeout_s`` is treated as
+    absent, mirroring ``main._client_timeout_s``.
+    """
+    window = global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S)
+    if request_timeout_s is None:
+        return window
+    try:
+        value = float(request_timeout_s)
+    except (TypeError, ValueError):
+        return window
+    return min(window, value) if value > 0 else window
+
+
 def remaining_queue_wait_s(ingress_at: float | None, request_timeout_s: float | None = None) -> float | None:
     """Queue-wait budget left for a request that entered the orchestrator at
     ``ingress_at`` (a ``time.monotonic()`` stamp taken at request ingress).
@@ -66,12 +86,4 @@ def remaining_queue_wait_s(ingress_at: float | None, request_timeout_s: float | 
     """
     if ingress_at is None:
         return None
-    window = global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S)
-    if request_timeout_s is not None:
-        try:
-            value = float(request_timeout_s)
-        except (TypeError, ValueError):
-            value = 0.0
-        if value > 0:
-            window = min(window, value)
-    return max(0.0, window - (time.monotonic() - ingress_at))
+    return max(0.0, queue_wait_window_s(request_timeout_s) - (time.monotonic() - ingress_at))

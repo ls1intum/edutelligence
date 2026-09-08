@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
-from logos.timeouts import DEFAULT_QUEUE_WAIT_TIMEOUT_S, global_timeout_s, remaining_queue_wait_s
+from logos.timeouts import queue_wait_window_s, remaining_queue_wait_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
@@ -800,9 +800,11 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
 
         try:
-            timeout = (
-                request.timeout_s if request.timeout_s else global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S)
-            )  # bounded queue wait (or LOGOS_TIMEOUT_S)
+            # The configured window (or LOGOS_TIMEOUT_S) bounds even unstamped
+            # requests (async jobs): the request's own timeout may only
+            # shorten it, never extend it, so no request holds a queue slot
+            # past the window.
+            timeout = queue_wait_window_s(request.timeout_s)
             # Recompute the client budget now, immediately before the wait,
             # rather than trusting a value fixed at request construction: the
             # synchronous scoring phase above (per-candidate SDI refreshes can

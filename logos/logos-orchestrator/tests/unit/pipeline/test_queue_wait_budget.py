@@ -162,3 +162,23 @@ async def test_short_request_timeout_binds_the_remaining_budget():
     assert time.monotonic() - ingress_at <= 4.0 + 1.5
     # The entry must not linger in the queue after the timeout.
     assert scheduler._queue_mgr.get_total_depth_all() == 0
+
+
+async def test_unstamped_wait_is_capped_at_the_configured_window(monkeypatch):
+    """Without an ingress stamp the configured window still bounds the wait.
+
+    Async jobs carry no ``ingress_at`` stamp, so there is no client budget
+    left to recompute — but the configured queue window still applies: an
+    explicit request timeout may only shorten the window, never extend it.
+    Without the cap a job with a 400s timeout would hold its queue slot for
+    400s although the configured window is 280s.
+    """
+    monkeypatch.setenv("LOGOS_TIMEOUT_S", "2")  # small window keeps the test fast
+    scheduler = _make_scheduler()
+    wait = await _queue_request(scheduler, _make_request("req-1", timeout_s=400.0))
+    with pytest.raises(QueueTimeoutError) as excinfo:
+        await asyncio.wait_for(wait, timeout=10.0)
+    # The cap must be the configured 2s window, not the 400s request timeout.
+    assert excinfo.value.timeout_s == pytest.approx(2.0)
+    # The entry must not linger in the queue after the timeout.
+    assert scheduler._queue_mgr.get_total_depth_all() == 0
