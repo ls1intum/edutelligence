@@ -177,6 +177,10 @@ public class ProviderService {
         return raw == null || raw.isBlank() ? null : raw;
     }
 
+    // Shared across calls — mirrors ApiKeyFactory's static SecureRandom.
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final Base64.Encoder API_KEY_ENCODER = Base64.getUrlEncoder().withoutPadding();
+
     /**
      * Generate a URL-safe random API key. Matches the orchestrator's
      * {@code secrets.token_urlsafe(48)} (48 random bytes, base64url, no
@@ -185,8 +189,8 @@ public class ProviderService {
      */
     private static String generateApiKey() {
         byte[] bytes = new byte[48];
-        new SecureRandom().nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        SECURE_RANDOM.nextBytes(bytes);
+        return API_KEY_ENCODER.encodeToString(bytes);
     }
 
     private static ProviderType parseProviderType(String raw) {

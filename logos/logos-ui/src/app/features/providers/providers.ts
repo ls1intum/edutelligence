@@ -372,7 +372,10 @@ export class Providers implements OnInit {
       await this.fetchProviders();
       this.addOpen.set(false);
       const generatedKey: string = (res && (res as { api_key?: string }).api_key) || '';
-      if (generatedKey) {
+      // Only surface the key when we actually generated one, i.e. the operator
+      // left the key field empty. An operator-supplied key is echoed back by the
+      // backend too, and there is nothing new to show for that case.
+      if (generatedKey && payload.api_key === undefined) {
         this.createdKeyName.set(payload.name);
         this.createdKey.set(generatedKey);
         this.createdKeyCopied.set(false);

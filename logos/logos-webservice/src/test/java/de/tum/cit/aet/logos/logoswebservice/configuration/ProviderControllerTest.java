@@ -86,7 +86,8 @@ class ProviderControllerTest {
                     + "\"auth_name\":\"\",\"auth_format\":\"{}\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").value("Created Provider."))
-           .andExpect(jsonPath("$.api_key").isString());
+           .andExpect(jsonPath("$.api_key")
+               .value(org.hamcrest.Matchers.matchesPattern("[A-Za-z0-9_-]{64}")));
     }
 
     @Test
