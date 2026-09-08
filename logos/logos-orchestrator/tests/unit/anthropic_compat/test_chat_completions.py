@@ -196,22 +196,32 @@ def test_the_two_openai_families_get_mutually_exclusive_parameters():
     request = {
         "max_tokens": 8,
         "messages": [],
+        "system": "Be brief.",
         "temperature": 0.3,
         "top_p": 0.9,
+        "stop_sequences": ["END"],
         "output_config": {"effort": "high"},
     }
 
     older = to_chat_completions({**request, "model": "gpt-4.1-nano"})
     assert older["temperature"] == 0.3 and older["top_p"] == 0.9
     assert older["max_tokens"] == 8
+    assert older["stop"] == ["END"]
+    assert older["messages"][0] == {"role": "system", "content": "Be brief."}
     assert "reasoning_effort" not in older
 
-    for name in ("gpt-5.6-luna", "o3-mini", "openai/gpt-5.1"):
+    for name in ("gpt-5.6-luna", "o1", "o3-mini", "openai/gpt-5.1"):
         reasoning = to_chat_completions({**request, "model": name})
         assert reasoning["reasoning_effort"] == "high", name
         assert reasoning["max_completion_tokens"] == 8, name
         assert "temperature" not in reasoning and "top_p" not in reasoning, name
         assert "max_tokens" not in reasoning, name
+        # o3, o4-mini and the models after them reject stop sequences.
+        assert "stop" not in reasoning, name
+        # o1 and its successors replaced the system role with "developer" and
+        # reject a system-role message outright — and Claude Code sends a
+        # system prompt on every turn.
+        assert reasoning["messages"][0] == {"role": "developer", "content": "Be brief."}, name
 
 
 # ── response ────────────────────────────────────────────────────────────────

@@ -49,11 +49,22 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
     (``metadata``, ``top_k``, server-side tools) are dropped rather than
     forwarded.
     """
+    # The two OpenAI families take mutually exclusive parameter sets, and the
+    # wrong one is a 400 before the model sees anything: a reasoning model
+    # rejects max_tokens, temperature, top_p, stop and the system role, while
+    # everything older rejects reasoning_effort and knows no developer role.
+    # Anthropic clients supply max_tokens always, a system prompt on every
+    # Claude Code turn, and a temperature and an effort routinely — so this
+    # cannot be left to the client to get right.
+    reasoning = is_reasoning_model(model_name or payload.get("model"))
+
     messages: List[Dict[str, Any]] = []
 
     system = system_to_text(payload.get("system"))
     if system:
-        messages.append({"role": "system", "content": system})
+        # Reasoning models replaced the system role with "developer"; o1 and
+        # its successors reject a system-role message outright.
+        messages.append({"role": "developer" if reasoning else "system", "content": system})
 
     for message in payload.get("messages") or []:
         if isinstance(message, dict):
@@ -64,14 +75,6 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         "messages": messages,
     }
 
-    # The two OpenAI families take mutually exclusive parameter sets, and the
-    # wrong one is a 400 before the model sees anything: a reasoning model
-    # rejects max_tokens, temperature and top_p, everything older rejects
-    # reasoning_effort. Anthropic clients supply max_tokens always, a
-    # temperature routinely and an effort on every Claude Code request, so
-    # forwarding all of them unconditionally breaks one family or the other.
-    reasoning = is_reasoning_model(model_name or payload.get("model"))
-
     max_tokens = payload.get("max_tokens")
     if max_tokens is not None:
         result["max_completion_tokens" if reasoning else "max_tokens"] = max_tokens
@@ -80,9 +83,10 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         for name in _PASSTHROUGH_PARAMS:
             if payload.get(name) is not None:
                 result[name] = payload[name]
+        # o3, o4-mini and the models after them reject stop sequences too.
+        if payload.get("stop_sequences"):
+            result["stop"] = payload["stop_sequences"]
 
-    if payload.get("stop_sequences"):
-        result["stop"] = payload["stop_sequences"]
     if payload.get("stream") is not None:
         # Only the switch itself. ``stream_options.include_usage`` — which a
         # chat/completions upstream needs before it reports token counts — is
