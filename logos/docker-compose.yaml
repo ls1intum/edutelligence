@@ -438,9 +438,12 @@ services:
       LOGOS_AGENT_DEPLOY_ENABLED: "${LOGOS_AGENT_DEPLOY_ENABLED:-false}"
       LOGOS_AGENT_DEV_BASE_URL: "${LOGOS_AGENT_DEV_BASE_URL:-https://logos-dev.aet.cit.tum.de}"
       # The volume that backs the runner's per-session state (the pause mark).
-      # Named to match the volume below so the child container's bind source
-      # resolves to the same storage the runner writes the mark into.
-      LOGOS_AGENT_STATE_VOLUME: "${LOGOS_AGENT_STATE_VOLUME:-agent_state}"
+      # It must name the *actual* Docker volume behind the mount below. A
+      # compose volume with no explicit name is project-scoped
+      # (<project>_agent_state), which is not this name — so the volume is given
+      # a literal name and this matches it. That is what keeps the child's bind
+      # source on the same storage the runner writes the mark into.
+      LOGOS_AGENT_STATE_VOLUME: "${LOGOS_AGENT_STATE_VOLUME:-logos_agent_state}"
     volumes:
       # Needed to create session containers. This is the one privileged thing
       # the runner holds — and precisely what it never passes on: session
@@ -541,7 +544,12 @@ volumes:
   data_volume:
   postgres_data:
   agent_artifacts:
+  # Named literally (not project-scoped) so its Docker name is exactly the
+  # value LOGOS_AGENT_STATE_VOLUME hands to the runner: a bind source is
+  # resolved on the daemon host, so the two must name the same volume, or the
+  # child mounts a directory the runner never writes the pause mark into.
   agent_state:
+    name: logos_agent_state
 
 networks:
   internal:
