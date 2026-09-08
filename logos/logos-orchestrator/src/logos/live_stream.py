@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from logos.responses import extract_token_usage
+from logos.billing.finalize import finalize_billing_inputs
 
 # Anthropic Messages SSE event types the accumulator acts on. The stream also
 # emits content_block_start/stop and ping, which carry neither text nor usage.
@@ -182,6 +182,15 @@ class _StreamingLogAccumulator:
     # output_tokens is settled. message_start's is a one-token placeholder
     # that must not stand in for the running count; see streamed_tokens.
     _messages_final_usage: bool = False
+    # The client may close immediately after receiving the protocol's terminal
+    # event. Treat that as a completed response, even if the worker transport's
+    # following stream_end frame has not been consumed yet.
+    terminal_event_received: bool = False
+    # An upstream ``data: {"error": {...}}`` frame delivered mid-stream with an
+    # HTTP 200 (a content filter, context-length, or rate limit that fired after
+    # generation began). The bytes are forwarded to the client, but the request
+    # is not a success.
+    upstream_error: Optional[Dict[str, Any]] = None
     # Text deltas seen so far. The exact completion count only arrives with the
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
@@ -303,7 +312,12 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
+        if not stripped:
+            return
+        if stripped == "data: [DONE]":
+            self.terminal_event_received = True
+            return
+        if not stripped.startswith("data: "):
             return
         try:
             blob = json.loads(stripped[6:])
@@ -312,11 +326,23 @@ class _StreamingLogAccumulator:
         if not isinstance(blob, dict):
             return
 
+        blob_error = blob.get("error")
+        if isinstance(blob_error, dict) and blob_error:
+            self.upstream_error = blob_error
+            return
+        if isinstance(blob_error, str) and blob_error:
+            self.upstream_error = {"message": blob_error}
+            return
+
         event_type = blob.get("type")
         if isinstance(event_type, str) and event_type.startswith("response."):
+            if event_type in {"response.completed", "response.incomplete", "response.failed"}:
+                self.terminal_event_received = True
             self._consume_responses_event(event_type, blob)
             return
         if isinstance(event_type, str) and event_type in _MESSAGES_EVENT_TYPES:
+            if event_type == "message_stop":
+                self.terminal_event_received = True
             self._consume_messages_event(event_type, blob)
             return
 
@@ -351,6 +377,20 @@ class _StreamingLogAccumulator:
             response = blob.get("response")
             if isinstance(response, dict):
                 self.responses_final = response
+            # A terminal ``response.failed`` is the Responses-API equivalent of a
+            # mid-stream ``data: {"error": {...}}`` frame: generation began, the
+            # bytes reached the client, but the request is not a success and must
+            # not be billed. ``response.incomplete`` is deliberately excluded: it
+            # means the generation stopped at max_output_tokens or a content
+            # filter, and the partial output it carries is real, billed usage.
+            if event_type == "response.failed":
+                err = response.get("error") if isinstance(response, dict) else None
+                if isinstance(err, dict) and err:
+                    self.upstream_error = err
+                elif isinstance(err, str) and err:
+                    self.upstream_error = {"message": err}
+                else:
+                    self.upstream_error = {"message": "Responses API stream reported response.failed"}
 
     def _consume_messages_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Anthropic Messages SSE event.
@@ -403,21 +443,16 @@ class _StreamingLogAccumulator:
         self.messages_usage = merged
 
 
-def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
-    if not isinstance(response_payload, dict):
-        return {}
-    usage = response_payload.get("usage")
-    if isinstance(usage, dict):
-        extracted = extract_token_usage(usage)
-        if extracted:
-            return extracted
-    duration = response_payload.get("duration")
-    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-        return extract_token_usage({"seconds": duration})
-    if isinstance(duration, str):
-        try:
-            parsed_duration = float(duration)
-        except ValueError:
-            return {}
-        return extract_token_usage({"seconds": parsed_duration})
-    return {}
+def _usage_tokens_from_payload(
+    response_payload: Any,
+    request_payload: Any = None,
+    path: str = "",
+    billable_request: bool = True,
+) -> Dict[str, int]:
+    """Canonical token usage for a response, merged with the derived non-token
+    billable quantities (``billed_requests``, characters, images, ...) so the
+    stored ``usage_tokens`` rows carry everything ``logos_price_usage`` prices."""
+    usage, _ = finalize_billing_inputs(request_payload, response_payload, path)
+    if not billable_request:
+        usage.pop("billed_requests", None)
+    return usage

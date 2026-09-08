@@ -39,6 +39,9 @@ async def list_models(request: Request):
 
     Returns an OpenAI-compatible response listing all models the user's
     current API key has access to (Union of Team models and specific API Key models).
+    Stored aliases of an accessible model are listed as additional model ids
+    right after their model, so logical names (e.g. 'local-most-powerful')
+    can be discovered and used directly in requests.
 
     Returns:
         JSONResponse matching the OpenAI GET /v1/models spec.
@@ -49,16 +52,30 @@ async def list_models(request: Request):
         models = db.get_models_for_api_key(auth.api_key_id)
 
     stats = _served_context_window_stats()
-    data = [
-        {
-            "id": model["name"],
-            "object": "model",
-            "created": _SERVER_START_TIME,
-            "owned_by": "logos",
-            **_model_context_fields(stats.get(model["name"])),
-        }
-        for model in models
-    ]
+    data = []
+    for model in models:
+        name = model["name"]
+        # Aliases resolve to the same model, so they carry the context-window
+        # fields of the lanes serving it.
+        data.append(
+            {
+                "id": name,
+                "object": "model",
+                "created": _SERVER_START_TIME,
+                "owned_by": "logos",
+                **_model_context_fields(stats.get(name)),
+            }
+        )
+        for alias in model.get("aliases") or []:
+            data.append(
+                {
+                    "id": alias,
+                    "object": "model",
+                    "created": _SERVER_START_TIME,
+                    "owned_by": "logos",
+                    **_model_context_fields(stats.get(name)),
+                }
+            )
 
     return JSONResponse(content={"object": "list", "data": data})
 
@@ -88,10 +105,7 @@ async def retrieve_model(model_id: str, request: Request):
         model = db.get_model_for_api_key(auth.api_key_id, model_id)
         if not model:
             models = db.get_models_for_api_key(auth.api_key_id)
-            canonical_model_name = _resolve_requested_model_name(
-                model_id,
-                [str(entry.get("name") or "").strip() for entry in models],
-            )
+            canonical_model_name = _resolve_requested_model_name(model_id, models)
             if canonical_model_name is not None:
                 model = next(
                     (entry for entry in models if entry.get("name") == canonical_model_name),
@@ -117,18 +131,15 @@ def _resolve_accessible_model_name(api_key_id: int, model_id: str) -> Optional[s
     """Canonical name of ``model_id`` if this key may use it, else None.
 
     Shared by the model endpoints below: they all have to accept the same
-    aliases (planner-sanitized underscores, case differences) and all have to
-    refuse a model the key has no permission for.
+    aliases (stored alternative names, planner-sanitized underscores, case
+    differences) and all have to refuse a model the key has no permission for.
     """
     with DBManager() as db:
         model = db.get_model_for_api_key(api_key_id, model_id)
         if model:
             return model["name"]
         models = db.get_models_for_api_key(api_key_id)
-        return _resolve_requested_model_name(
-            model_id,
-            [str(entry.get("name") or "").strip() for entry in models],
-        )
+        return _resolve_requested_model_name(model_id, models)
 
 
 @router.post("/v1/models/{model_id:path}/warmup", tags=["user-facing"])

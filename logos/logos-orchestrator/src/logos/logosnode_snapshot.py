@@ -22,6 +22,7 @@ not affect connectedness — patch
 import datetime
 from typing import Any, Dict, Optional
 
+from logos.dbutils.dbmanager import derived_reported_context_length
 from logos.timeouts import _env_int
 
 # Kept here (rather than in ``timeouts.py`` with the other ``_LOGOSNODE_*``
@@ -91,33 +92,64 @@ def _planner_model_alias(model_name: str) -> str:
 
 def _resolve_requested_model_name(
     requested_name: str,
-    available_model_names: list[str],
+    available_models: list[Dict[str, Any]],
 ) -> Optional[str]:
-    """Resolve user-supplied model ids to canonical DB model names.
+    """Resolve a user-supplied model id to a canonical DB model name.
 
-    Accepts exact OpenAI-style model names as stored in the DB and also the
-    planner-safe alias form where ``/``, ``:``, and spaces are rewritten as
-    underscores. This lets users copy model ids from lane names or worker logs
-    without breaking access-controlled model lookup.
+    ``available_models`` are the accessible model rows (each with a ``name``
+    and, optionally, an ``aliases`` list of stored alternative names).
+
+    Matches, in order of precedence:
+    1. the canonical name as stored in the DB,
+    2. a stored alias of the model (e.g. a logical tag like
+       ``local-most-powerful`` that can be re-pointed at another model),
+    3. the planner-safe alias form where ``/``, ``:``, and spaces are
+       rewritten as underscores (lets users copy model ids from lane names
+       or worker logs without breaking access-controlled model lookup).
+
+    All matching is case-insensitive. Every level must resolve to a single
+    unambiguous model to be accepted: the schema does not enforce
+    case-insensitive uniqueness of model names, so two models whose names
+    only differ in case make a canonical request ambiguous, and a stored
+    alias that matches several models does not fall through to the planner
+    aliases (a stored name is an explicit assignment and wins over the
+    derived form). Ambiguous requests resolve to ``None``.
     """
     requested = str(requested_name or "").strip()
     if not requested:
         return None
+    requested_lc = requested.lower()
 
-    alias_matches: set[str] = set()
-    for raw_name in available_model_names:
-        canonical = str(raw_name or "").strip()
+    canonical_matches: set[str] = set()
+    stored_alias_matches: set[str] = set()
+    planner_alias_matches: set[str] = set()
+    for entry in available_models:
+        canonical = str((entry or {}).get("name") or "").strip()
         if not canonical:
             continue
-        if canonical == requested:
-            return canonical
+        if canonical.lower() == requested_lc:
+            canonical_matches.add(canonical)
+            continue
 
         sanitized = _planner_model_alias(canonical)
-        if requested in {sanitized, f"planner-{sanitized}"}:
-            alias_matches.add(canonical)
+        if requested_lc in {sanitized.lower(), f"planner-{sanitized.lower()}"}:
+            planner_alias_matches.add(canonical)
+        for alias in entry.get("aliases") or []:
+            if str(alias).strip().lower() == requested_lc:
+                stored_alias_matches.add(canonical)
 
-    if len(alias_matches) == 1:
-        return next(iter(alias_matches))
+    if len(canonical_matches) == 1:
+        return next(iter(canonical_matches))
+    if canonical_matches:
+        # duplicate normalized model names — no way to tell which one was meant
+        return None
+    if len(stored_alias_matches) == 1:
+        return next(iter(stored_alias_matches))
+    if stored_alias_matches:
+        # an ambiguous stored alias must not fall through to planner aliases
+        return None
+    if len(planner_alias_matches) == 1:
+        return next(iter(planner_alias_matches))
     return None
 
 
@@ -260,29 +292,20 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
 def _profile_native_context_length(profile: dict) -> int:
     """Largest context window a model could ever be served with here.
 
-    The model's own architectural limit (``max_context_length``) when the
-    worker reported it, otherwise the widest window any calibrated KV point
-    reached. This is the "all-time maximum" — what the model offers when a
-    lane gets all the KV cache it wants — as opposed to the window a lane
-    happens to run with right now.
+    The widest window the model's profile reports — its own architectural
+    limit (``max_context_length``), the ``--max-model-len`` calibration settled
+    on (``calibration_max_model_len``), or the widest point of the calibrated
+    KV sweep — whichever is largest. This is the "all-time maximum" the model
+    offers, as opposed to the window a lane happens to run with right now.
+
+    Reading ``calibration_max_model_len`` matters on its own: a model
+    calibration capped its ``--max-model-len`` to fit the pinned KV budget and
+    recorded no wider KV point, so the calibrated cap is the only context the
+    profile reports. Ignoring it made such a model look context-unknown (and
+    the client fall back to a guessed window) while its worker sat connected
+    and ready to serve it at exactly that width (#829).
     """
-    if not isinstance(profile, dict):
-        return 0
-
-    def _as_len(value) -> int:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return 0
-        return value if value > 0 else 0
-
-    native = _as_len(profile.get("max_context_length"))
-    pairs = profile.get("kv_cache_to_max_model_len_pairs")
-    if isinstance(pairs, list):
-        for item in pairs:
-            if isinstance(item, dict):
-                native = max(native, _as_len(item.get("max_model_len")))
-    return native
+    return derived_reported_context_length(profile)
 
 
 def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any]:
@@ -303,6 +326,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
+        "telemetry_available": bool(devices.get("telemetry_available", devices.get("nvidia_smi_available", False))),
         "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
@@ -544,7 +568,13 @@ def _build_live_local_provider_sample(
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
-    if devices.get("nvidia_smi_available"):
+    # telemetry_available is the backend-neutral successor to
+    # nvidia_smi_available: it means "the worker measured this on real
+    # hardware", whether that hardware reports through nvidia-smi or through
+    # Metal's device_info. Metal workers set it and leave nvidia_smi_available
+    # False, so gating on the old field alone would discard their free-memory
+    # reading and fall back to the coarser total-minus-used estimate.
+    if devices.get("telemetry_available") or devices.get("nvidia_smi_available"):
         remaining_vram_mb = float(devices.get("free_memory_mb") or 0.0)
     elif total_vram_mb > 0:
         remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)

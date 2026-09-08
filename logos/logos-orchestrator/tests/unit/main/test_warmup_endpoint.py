@@ -164,7 +164,10 @@ async def test_accepts_a_stored_alias(wired):
     """Alt tags work the same as on the other model endpoints."""
     demand, _planner = wired
     monkeypatch_models = [{"id": 1, "name": "qwen-27b", "description": None, "aliases": ["local-flagship"]}]
-    with patch.object(main, "DBManager", lambda: DummyDB(monkeypatch_models)):
+    with (
+        patch.object(main, "DBManager", lambda: DummyDB(monkeypatch_models)),
+        patch.object(user_facing_mod, "DBManager", lambda: DummyDB(monkeypatch_models)),
+    ):
         body = json.loads((await _warmup("local-flagship")).body)
 
     assert body["model"] == "qwen-27b"

@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main
+from logos.routers import user_facing as user_facing_mod
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -169,11 +170,11 @@ async def test_list_models_includes_stored_aliases(monkeypatch):
         {"id": 2, "name": "gpt-4o", "description": None, "aliases": []},
     ]
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
 
     ids = [entry["id"] for entry in json.loads(response.body)["data"]]
     assert ids == ["llama-3.1-70b", "local-most-powerful", "local-fast", "gpt-4o"]
@@ -196,12 +197,12 @@ async def test_list_models_aliased_entry_carries_the_model_context(monkeypatch):
         }
     }
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=models))
     monkeypatch.setattr(main, "_logosnode_registry", registry)
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
 
     entries = {entry["id"]: entry for entry in json.loads(response.body)["data"]}
     assert entries["local-big"]["max_model_len"] == 40960
@@ -217,11 +218,11 @@ async def test_retrieve_model_by_stored_alias(monkeypatch):
     fake_models = [
         {"id": 1, "name": "llama-3.1-70b", "description": None, "aliases": ["local-most-powerful"]},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.retrieve_model("local-most-powerful", _make_request())
+        response = await user_facing_mod.retrieve_model("local-most-powerful", _make_request())
 
     data = json.loads(response.body)
     assert data["id"] == "llama-3.1-70b"
@@ -232,11 +233,11 @@ async def test_retrieve_model_by_case_variant(monkeypatch):
     fake_models = [
         {"id": 1, "name": "Qwen/Qwen2.5-0.5B-Instruct", "description": None, "aliases": []},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.retrieve_model("qwen/qwen2.5-0.5b-instruct", _make_request())
+        response = await user_facing_mod.retrieve_model("qwen/qwen2.5-0.5b-instruct", _make_request())
 
     data = json.loads(response.body)
     assert data["id"] == "Qwen/Qwen2.5-0.5B-Instruct"
@@ -248,11 +249,11 @@ async def test_retrieve_model_alias_of_inaccessible_model_is_denied(monkeypatch)
     fake_models = [
         {"id": 1, "name": "gpt-4o", "description": None, "aliases": []},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
         with pytest.raises(HTTPException) as exc:
-            await main.retrieve_model("local-most-powerful", _make_request())
+            await user_facing_mod.retrieve_model("local-most-powerful", _make_request())
 
     assert exc.value.status_code == 404

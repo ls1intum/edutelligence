@@ -96,3 +96,9 @@ class InternalSleepLaneRequest(BaseModel):
 class InternalWakeLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
+
+
+class InternalBenchmarkRequest(BaseModel):
+    model_provider_id: int = Field(gt=0)
+    samples: int = Field(default=5, gt=0, le=100)
+    max_output_tokens: int = Field(default=512, gt=0, le=4096)
