@@ -41,11 +41,15 @@ def _pdf_base64(page_count: int) -> str:
 
 
 def _dto(
-    pdf_base64: str = "", transcription: dict = None, attachment_version: int = 2
+    pdf_base64: str = "",
+    transcription: dict = None,
+    attachment_version: int = 2,
+    content_fingerprint: str = None,
 ) -> IngestionPipelineExecutionDto:
     lecture_unit = {
         "pdfFile": pdf_base64,
         "attachmentVersion": attachment_version,
+        "contentFingerprint": content_fingerprint,
         "lectureUnitId": 3,
         "lectureId": 2,
         "courseId": 1,
@@ -210,6 +214,16 @@ def test_audit_fails_a_structurally_broken_unit(audit_kwargs, expected_problem):
 
     assert exc_info.value.error_code == INGESTION_AUDIT_FAILED
     assert expected_problem in str(exc_info.value)
+
+
+def test_audit_fails_when_the_stored_fingerprint_does_not_match():
+    dto = _dto(pdf_base64=_pdf_base64(2), content_fingerprint="v1:expected")
+    audit = _audit(chunk_pages=[1, 2], segment_pages=[1, 2])
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        audit.verify(dto)
+
+    assert "instead of 'v1:expected'" in str(exc_info.value)
 
 
 def test_audit_fails_when_expected_transcript_rows_are_missing():

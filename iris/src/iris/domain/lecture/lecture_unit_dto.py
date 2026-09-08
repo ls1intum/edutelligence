@@ -18,3 +18,4 @@ class LectureUnitDTO(BaseModel):
     video_link: Optional[str] = ""
     base_url: str
     lecture_unit_summary: Optional[str] = ""
+    content_fingerprint: Optional[str] = None

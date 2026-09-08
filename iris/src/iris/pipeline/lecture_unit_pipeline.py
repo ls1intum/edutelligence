@@ -146,6 +146,7 @@ class LectureUnitPipeline(SubPipeline):
                     LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
                         LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
                     ),
+                    LectureUnitSchema.CONTENT_FINGERPRINT.value: lecture_unit.content_fingerprint,
                 },
                 vector=embedding,
             )

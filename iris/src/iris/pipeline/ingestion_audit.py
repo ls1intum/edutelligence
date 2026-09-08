@@ -262,10 +262,24 @@ class IngestionAudit:
         rows = self.unit_collection.query.fetch_objects(
             filters=self._identity_filter(dto, LectureUnitSchema),
             limit=10,
-            return_properties=[LectureUnitSchema.LECTURE_UNIT_ID.value],
+            return_properties=[
+                LectureUnitSchema.LECTURE_UNIT_ID.value,
+                LectureUnitSchema.CONTENT_FINGERPRINT.value,
+            ],
         ).objects
         if len(rows) != 1:
             return [f"expected exactly one lecture unit row, found {len(rows)}"]
+
+        expected_fingerprint = dto.lecture_unit.content_fingerprint
+        if expected_fingerprint is not None:
+            stored_fingerprint = rows[0].properties.get(
+                LectureUnitSchema.CONTENT_FINGERPRINT.value
+            )
+            if stored_fingerprint != expected_fingerprint:
+                return [
+                    f"unit row carries fingerprint {stored_fingerprint!r} "
+                    f"instead of {expected_fingerprint!r}"
+                ]
         return []
 
     @staticmethod

@@ -397,6 +397,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
             video_link=self.dto.lecture_unit.video_link,
             base_url=self.dto.settings.artemis_base_url,
+            content_fingerprint=self.dto.lecture_unit.content_fingerprint,
         )
 
     def _run_ingestion(

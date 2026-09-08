@@ -127,6 +127,7 @@ def test_metadata_baseline_is_captured_before_transcription_processing():
         lecture_unit_name="Unit",
         lecture_unit_link="content-link",
         video_link="video-link",
+        content_fingerprint=None,
     )
     dto = SimpleNamespace(
         lecture_unit=lecture_unit,

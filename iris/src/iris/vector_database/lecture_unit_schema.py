@@ -31,6 +31,7 @@ class LectureUnitSchema(Enum):
     VIDEO_LINK = "video_link"
     RELEASE_DATE = "release_date"
     SLIDE_VISIBILITY = "slide_visibility"
+    CONTENT_FINGERPRINT = "content_fingerprint"
 
 
 def _add_property_if_missing(collection: Collection, new_property: Property) -> None:
@@ -67,6 +68,15 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureUnitSchema.SLIDE_VISIBILITY.value,
                 description="Latest serialized slide visibility snapshot from Artemis",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.CONTENT_FINGERPRINT.value,
+                description="Fingerprint of the ingested source content, stamped verbatim as sent by Artemis",
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
@@ -161,6 +171,12 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
             Property(
                 name=LectureUnitSchema.SLIDE_VISIBILITY.value,
                 description="Latest serialized slide visibility snapshot from Artemis",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSchema.CONTENT_FINGERPRINT.value,
+                description="Fingerprint of the ingested source content, stamped verbatim as sent by Artemis",
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),

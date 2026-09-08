@@ -525,6 +525,7 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
         video_link="https://video.example/fresh",
         base_url="https://artemis.example",
         lecture_unit_summary="",
+        content_fingerprint=None,
     )
 
     with (
@@ -589,6 +590,7 @@ def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_starte
         video_link="",
         base_url="https://artemis.example",
         lecture_unit_summary="",
+        content_fingerprint=None,
     )
 
     with (
@@ -635,6 +637,7 @@ def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fail
         video_link="",
         base_url="https://artemis.example",
         lecture_unit_summary="",
+        content_fingerprint=None,
     )
 
     with (

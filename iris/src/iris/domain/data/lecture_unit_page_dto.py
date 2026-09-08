@@ -33,6 +33,7 @@ class LectureUnitPageDTO(BaseModel):
     display_page_numbers: Optional[list[int]] = Field(
         default=None, alias="displayPageNumbers"
     )
+    content_fingerprint: Optional[str] = Field(default=None, alias="contentFingerprint")
 
     @field_validator("video_source_type", mode="before")
     @classmethod

@@ -239,6 +239,7 @@ def test_update_pipeline_forwards_stage_error_code_once():
             lecture_unit_link="",
             video_link=None,
             transcription=None,
+            content_fingerprint=None,
         ),
         settings=SimpleNamespace(
             authentication_token="run-1",
