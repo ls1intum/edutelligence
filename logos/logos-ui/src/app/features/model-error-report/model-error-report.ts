@@ -9,6 +9,8 @@ import {
   viewChild,
 } from '@angular/core';
 import { NgClass } from '@angular/common';
+import { BenchmarkSettingsEditor } from './benchmark-settings-editor';
+import { BenchmarkSettings, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
 import {
   CdkVirtualScrollViewport,
   ScrollingModule,
@@ -255,6 +257,7 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
   imports: [
     RouterLink,
     NgClass,
+    BenchmarkSettingsEditor,
     ScrollingModule,
     ErrorMessageComponent,
     DataTableComponent,
@@ -338,11 +341,30 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkPairs = signal<readonly ModelBenchmarkPair[]>([]);
   readonly benchmarkRuns = signal<readonly ModelBenchmarkRun[]>([]);
   readonly performanceLoading = signal(false);
+  private performanceRequestVersion = 0;
   readonly performanceError = signal(false);
   readonly benchmarkStartingPairId = signal<number | null>(null);
   readonly benchmarkCancellingJobId = signal<number | null>(null);
   readonly benchmarkStartError = signal<string | null>(null);
   readonly benchmarkSampleSize = signal(5);
+  readonly benchmarkSettings = signal<BenchmarkSettings>({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: {} });
+  readonly benchmarkSettingsValid = signal(true);
+  readonly selectedBenchmarkPairId = signal<number | null>(null);
+  readonly selectedBenchmarkPair = computed<ModelBenchmarkPair | null>(() => this.benchmarkPairs().find(
+    pair => pair.model_provider_id === this.selectedBenchmarkPairId(),
+  ) ?? this.benchmarkPairs()[0] ?? null);
+
+
+  useBenchmarkConfiguration(benchmark: ModelProviderBenchmark): void {
+    this.benchmarkSettings.set(settingsFromBenchmark(benchmark));
+    this.benchmarkSampleSize.set(Math.min(100, Math.max(1, benchmark.sample_size)));
+    document.getElementById('benchmark-runner')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  hasServingOverrides(): boolean {
+    return Object.keys(this.benchmarkSettings().serving_overrides).length > 0;
+  }
+
   readonly benchmarkSampleLabel = computed(
     () => this.formatSampleCount(this.benchmarkSampleSize()),
   );
@@ -687,6 +709,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     if (modelId == null) {
       return;
     }
+    const requestVersion = ++this.performanceRequestVersion;
+    this.clearPerformancePoll();
 
     if (!silent) {
       this.performanceLoading.set(true);
@@ -695,43 +719,49 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
     try {
       const response = await this.modelService.getBenchmarks(modelId);
+      if (this.destroyed || requestVersion !== this.performanceRequestVersion) return;
       this.performance.set(response.benchmarks);
       this.benchmarkPairs.set(response.pairs ?? []);
       this.benchmarkRuns.set(response.runs ?? []);
     } catch {
-      if (!silent) {
+      if (this.destroyed || requestVersion !== this.performanceRequestVersion) return;
+      if (!silent || this.performanceLoading()) {
         this.performance.set([]);
         this.benchmarkPairs.set([]);
         this.benchmarkRuns.set([]);
         this.performanceError.set(true);
       }
     } finally {
-      if (!silent) {
+      if (!this.destroyed && requestVersion === this.performanceRequestVersion) {
         this.performanceLoading.set(false);
+        this.schedulePerformancePoll();
       }
-      this.schedulePerformancePoll();
     }
   }
 
   async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
-    if (this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+    if ((this.selectedBenchmarkPair() && this.selectedBenchmarkPair()!.model_provider_id !== pair.model_provider_id) || !this.benchmarkSettingsValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
       return;
     }
+    const settings = structuredClone(this.benchmarkSettings());
+    const sampleSize = this.benchmarkSampleSize();
     const confirmed = window.confirm(
-      `Start the benchmark on ${pair.provider_name} · ${pair.model_name}?\n\nConfirm that this provider is currently safe for benchmark traffic. The benchmark runs at low priority and stops automatically when production load is detected.`,
+      `Start the benchmark on ${pair.provider_name} · ${pair.model_name}?\n\nThe benchmark runs alongside other requests. Concurrent traffic can affect the measured performance.${this.hasServingOverrides() ? "\n\nThe selected vLLM settings will be applied to this worker and may reload the model. They remain active after the run." : ""}`,
     );
     if (!confirmed) return;
 
     this.benchmarkStartingPairId.set(pair.model_provider_id);
     this.benchmarkStartError.set(null);
     try {
-      await this.modelService.startBenchmark(pair.model_provider_id, this.benchmarkSampleSize());
+      await this.modelService.startBenchmark(pair.model_provider_id, sampleSize, settings);
       await this.loadPerformance(this.modelId(), true);
     } catch (error) {
       const response = error instanceof HttpErrorResponse ? error.error : null;
       const nestedError = response?.error;
-      const message = response?.detail
-        ?? (typeof nestedError === 'string' ? nestedError : nestedError?.message);
+      const detail = response?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map(issue => `${issue.loc?.slice(1).join('.') ?? 'Setting'}: ${issue.msg}`).join('; ')
+        : detail ?? (typeof nestedError === 'string' ? nestedError : nestedError?.message);
       this.benchmarkStartError.set(
         typeof message === 'string' ? message : 'Could not start the benchmark.',
       );
@@ -742,6 +772,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   async cancelBenchmark(run: ModelBenchmarkRun): Promise<void> {
+    if (this.benchmarkCancellingJobId() !== null || !this.isBenchmarkActive(run)) return;
     this.benchmarkCancellingJobId.set(run.id);
     this.benchmarkStartError.set(null);
     try {
@@ -774,6 +805,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     if (run.status === 'pending') return `Queued for ${run.request.provider_name}`;
     if (run.status === 'running') {
       if (run.result.stage === 'preparing_worker') return `Preparing ${run.request.provider_name}`;
+      if (run.result.stage === 'reconfiguring_worker') return `Applying vLLM settings on ${run.request.provider_name} · model may restart`;
+      if (run.result.stage === 'waiting_for_model') return `Waiting for the model on ${run.request.provider_name} to become ready`;
       if (run.result.stage === 'warming_up') return `Warming up ${run.request.provider_name}`;
       if (run.result.stage === 'benchmarking') {
         const started = run.result.started_samples ?? 0;

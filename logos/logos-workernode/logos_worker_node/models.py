@@ -203,6 +203,22 @@ class VllmConfig(BaseModel):
         "whose head dimensions exceed V1 attention kernel limits.",
     )
 
+    @property
+    def parallel_gpu_count(self) -> int:
+        """Number of GPUs required by tensor and pipeline parallelism."""
+        pipeline = 1
+        for index, arg in enumerate(self.extra_args):
+            if arg == "--pipeline-parallel-size":
+                raw = self.extra_args[index + 1] if index + 1 < len(self.extra_args) else ""
+            elif arg.startswith("--pipeline-parallel-size="):
+                raw = arg.split("=", 1)[1]
+            else:
+                continue
+            if not raw.isdigit() or int(raw) < 1:
+                raise ValueError("pipeline_parallel_size must be a positive integer.")
+            pipeline = int(raw)
+        return self.tensor_parallel_size * pipeline
+
     @field_validator("chat_template")
     @classmethod
     def _validate_chat_template(cls, value: str) -> str:
@@ -560,6 +576,10 @@ class LaneConfig(BaseModel):
     flash_attention: bool = True
     gpu_devices: str = ""
     vllm_config: VllmConfig | None = None
+    auto_tensor_parallel: bool = Field(
+        default=True,
+        description="Allow calibrated profiles and GPU sizing to select TP. Disabled after a manual TP change.",
+    )
 
     @field_validator("gpu_devices")
     @classmethod
@@ -577,11 +597,11 @@ class LaneConfig(BaseModel):
             self.vllm_config = VllmConfig()
 
         explicit_gpu_count = _gpu_device_count(self.gpu_devices)
-        tp_size = self.vllm_config.tensor_parallel_size
-        if explicit_gpu_count is not None and tp_size > explicit_gpu_count:
+        required_gpus = self.vllm_config.parallel_gpu_count
+        if explicit_gpu_count is not None and required_gpus > explicit_gpu_count:
             raise ValueError(
-                "vLLM tensor_parallel_size is larger than the lane's explicit gpu_devices set "
-                f"({tp_size} > {explicit_gpu_count})."
+                "vLLM tensor × pipeline parallel size exceeds the lane's explicit gpu_devices set "
+                f"({required_gpus} > {explicit_gpu_count})."
             )
         return self
 
@@ -767,6 +787,7 @@ class WorkerRuntimeStatus(BaseModel):
     timestamp: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
+    gpu_devices: str = "all"
     host_memory: HostMemorySummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)

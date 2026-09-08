@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from logos.benchmarks.configuration import BenchmarkSettings, ServingOverrides
+
 DATASET = "openai/gsm8k"
 _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
 _SERVING_KEYS = {
@@ -189,8 +191,10 @@ def build_scenario(
     max_output_tokens: int,
     report_path: Path,
     request_headers: dict[str, str] | None = None,
+    settings: BenchmarkSettings | None = None,
 ) -> dict[str, Any]:
-    """Build the fixed, reproducible GSM8K scenario used by Logos."""
+    """Build a reproducible scenario from the selected text dataset."""
+    settings = settings or BenchmarkSettings()
     backend: dict[str, Any] = {
         "kind": "openai_http",
         "target": target.rstrip("/"),
@@ -210,10 +214,14 @@ def build_scenario(
         backend["extras"]["headers"] = dict(request_headers)
 
     return {
-        "metadata": {"labels": {"dataset": DATASET, "purpose": "logos-model-provider-performance"}},
+        "metadata": {"labels": {"dataset": settings.dataset, "purpose": "logos-model-provider-performance"}},
         "spec": {
             "backend": backend,
-            "profile": {"kind": "synchronous"},
+            "profile": (
+                {"kind": "synchronous"}
+                if settings.profile == "synchronous"
+                else {"kind": "concurrent", "streams": settings.concurrency}
+            ),
             "constraints": [
                 {"kind": "max_requests", "count": samples},
                 {"kind": "max_errors", "count": 1},
@@ -221,20 +229,52 @@ def build_scenario(
             "data": [
                 {
                     "kind": "huggingface",
-                    "source": DATASET,
-                    "load_kwargs": {"name": "main", "split": "test"},
+                    "source": settings.dataset,
+                    "load_kwargs": {"name": settings.subset, "split": settings.split},
                 }
             ],
             "data_column_mapper": {
                 "kind": "generative_column_mapper",
-                "column_mappings": {"text_column": "question"},
+                "column_mappings": {"text_column": settings.text_column},
             },
             "data_loader": {"kind": "pytorch", "samples": samples, "shuffle": False},
-            "seed": {"kind": "static", "value": 42},
+            "seed": {"kind": "static", "value": settings.seed},
             "metrics": {"kind": "generative", "sample_size": 0},
             "outputs": [{"kind": "json", "path": str(report_path)}],
         },
     }
+
+
+_EXTRA_SERVING_FLAGS = {
+    "pipeline_parallel_size": "--pipeline-parallel-size",
+    "max_num_batched_tokens": "--max-num-batched-tokens",
+    "hf_overrides": "--hf-overrides",
+}
+
+
+def apply_serving_overrides(current: dict[str, Any], overrides: ServingOverrides) -> dict[str, Any]:
+    """Merge selected values while preserving unrelated worker configuration."""
+    result = dict(current)
+    extra_args = list(result.get("extra_args") or [])
+    for key, value in overrides.model_dump(exclude_none=True).items():
+        flag = _EXTRA_SERVING_FLAGS.get(key)
+        if flag is None:
+            result[key] = value
+            continue
+        cleaned = []
+        index = 0
+        while index < len(extra_args):
+            arg = str(extra_args[index])
+            if arg == flag:
+                index += 2
+                continue
+            if not arg.startswith(flag + "="):
+                cleaned.append(arg)
+            index += 1
+        extra_args = cleaned + [flag, json.dumps(value) if isinstance(value, dict) else str(value)]
+    if extra_args or "extra_args" in result:
+        result["extra_args"] = extra_args
+    return result
 
 
 def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -> dict[str, Any]:
@@ -256,6 +296,19 @@ def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -
         if not isinstance(vllm_config, dict):
             vllm_config = {}
         result = {key: vllm_config[key] for key in _SERVING_KEYS if key in vllm_config}
+        extra_args = list(vllm_config.get("extra_args") or [])
+        for key, flag in _EXTRA_SERVING_FLAGS.items():
+            for index, arg in enumerate(extra_args):
+                raw = (
+                    extra_args[index + 1]
+                    if arg == flag and index + 1 < len(extra_args)
+                    else str(arg).split("=", 1)[1] if str(arg).startswith(flag + "=") else None
+                )
+                if raw is not None:
+                    try:
+                        result[key] = json.loads(raw)
+                    except (ValueError, TypeError):
+                        result[key] = raw
         if "kv_cache_memory_bytes" in result:
             result["kv_cache_memory"] = result.pop("kv_cache_memory_bytes")
         if lane_config.get("gpu_devices"):
@@ -272,6 +325,7 @@ def successful_summary(
     model_provider_id: int,
     expected_samples: int,
     serving_configuration: dict[str, Any],
+    dataset: str = DATASET,
 ) -> dict[str, Any]:
     """Normalize exactly one complete, error-free benchmark result."""
     for benchmark in report.get("benchmarks", []):
@@ -301,7 +355,7 @@ def successful_summary(
                 "benchmark": redact_secrets(benchmark.get("config", {})),
                 "serving": serving_configuration,
             },
-            "dataset": DATASET,
+            "dataset": dataset,
             "sample_size": total,
             "metrics": metrics,
             "recorded_at": recorded_at,
@@ -323,6 +377,7 @@ async def run_benchmark_job(
     request_headers: dict[str, str] | None = None,
     worker_preparer: Callable[[], Awaitable[bool]] | None = None,
     worker_session_is_current: Callable[[], bool] | None = None,
+    settings: BenchmarkSettings | None = None,
 ) -> None:
     """Execute GuideLLM outside the event loop and update the shared job row."""
     from logos.dbutils.dbmanager import DBManager
@@ -335,6 +390,7 @@ async def run_benchmark_job(
             result_payload={"stage": "preparing_worker", "started_samples": 0, "total_samples": samples},
         )
 
+    settings = settings or BenchmarkSettings()
     owner_task = asyncio.current_task()
 
     async def renew_lease() -> None:
@@ -360,9 +416,7 @@ async def run_benchmark_job(
             raise RuntimeError("GuideLLM executable is not installed in the orchestrator")
 
         if worker_preparer is not None and not await worker_preparer():
-            raise RuntimeError(
-                "The selected worker could not safely load the benchmark model without interrupting production"
-            )
+            raise RuntimeError("The worker did not prepare the benchmark model. Check its connection and model logs.")
 
         with DBManager() as db:
             db.update_job_status(
@@ -396,6 +450,7 @@ async def run_benchmark_job(
                 max_output_tokens=max_output_tokens,
                 report_path=report_path,
                 request_headers=request_headers,
+                settings=settings,
             )
             scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
             scenario_path.chmod(0o600)
@@ -443,6 +498,7 @@ async def run_benchmark_job(
                 model_provider_id=model_provider_id,
                 expected_samples=samples,
                 serving_configuration=serving_configuration,
+                dataset=settings.dataset,
             )
 
         with DBManager() as db:

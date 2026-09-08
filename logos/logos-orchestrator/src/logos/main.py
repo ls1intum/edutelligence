@@ -29,14 +29,12 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
+from logos.benchmarks.configuration import BenchmarkSettings
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
     BENCHMARK_PHASE_HEADER,
     BENCHMARK_PROVIDER_HEADER,
     BENCHMARK_TOKEN_HEADER,
-)
-from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
-from logos.benchmarks.guidellm_runner import (
     benchmark_affinity_headers,
     benchmark_affinity_token,
     credential_transport_is_secure,
@@ -45,6 +43,8 @@ from logos.benchmarks.guidellm_runner import (
     resolve_benchmark_target,
     run_benchmark_job,
 )
+from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
+from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
@@ -2546,16 +2546,61 @@ class _InternalAddLaneRequest(BaseModel):
     lane: dict[str, Any]
 
 
-class _InternalBenchmarkRequest(BaseModel):
+class _InternalBenchmarkRequest(BenchmarkSettings):
     model_provider_id: int = Field(gt=0)
     samples: int = Field(default=5, gt=0, le=100)
     max_output_tokens: int = Field(default=512, gt=0, le=4096)
 
 
+class _DatasetSearchRequest(BaseModel):
+    query: str = Field(default="gsm8k", min_length=1, max_length=200)
+
+
+class _DatasetMetadataRequest(BaseModel):
+    dataset: str = Field(max_length=200, pattern=r"^[\w.-]+/[\w.-]+$")
+    subset: str | None = Field(default=None, max_length=200)
+    split: str | None = Field(default=None, max_length=100)
+
+
+@app.post("/internal/model_benchmarks/datasets/search", tags=["admin"])
+async def internal_search_benchmark_datasets(data: _DatasetSearchRequest, request: Request):
+    """Search public Hugging Face datasets for the benchmark picker."""
+    _require_internal_secret(request)
+    return await search_datasets(data.query)
+
+
+@app.post("/internal/model_benchmarks/datasets/metadata", tags=["admin"])
+async def internal_benchmark_dataset_metadata(data: _DatasetMetadataRequest, request: Request):
+    """Inspect dataset columns and splits without downloading the dataset."""
+    _require_internal_secret(request)
+    return await dataset_metadata(data.dataset, data.subset, data.split)
+
+
+class _BenchmarkLimitsRequest(BaseModel):
+    model_provider_id: int = Field(gt=0)
+
+
+@app.post("/internal/model_benchmarks/limits", tags=["admin"])
+async def internal_benchmark_worker_limits(data: _BenchmarkLimitsRequest, request: Request):
+    _require_internal_secret(request)
+    with DBManager() as db:
+        target = db.get_model_provider_benchmark_target(data.model_provider_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Provider-model pair not found")
+    snapshot = _logosnode_registry.peek_runtime_snapshot(int(target["provider_id"]))
+    if not _logosnode_snapshot_is_connected(snapshot):
+        raise HTTPException(status_code=503, detail="Worker is offline. Hardware limits are unavailable.")
+    return worker_limits(snapshot, str(target["model_name"]))
+
+
 @app.post("/internal/model_benchmarks/run", tags=["admin"])
 async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request: Request):
-    """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
+    """Queue a configured GuideLLM run for one exact provider-model pair."""
     _require_internal_secret(request)
+
+    metadata = await dataset_metadata(data.dataset, data.subset, data.split)
+    if data.text_column not in metadata["text_columns"]:
+        raise HTTPException(status_code=400, detail="Select a valid text column for the dataset.")
 
     # One orchestrator process owns benchmark execution. Serialize the short
     # check-and-create section in memory so simultaneous starts cannot both
@@ -2566,6 +2611,12 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
+        if data.serving_overrides.model_dump(exclude_none=True) and (
+            provider_type != "logosnode" or _capacity_planner is None
+        ):
+            raise HTTPException(
+                status_code=400, detail="Serving overrides require a Logos worker with capacity planning"
+            )
         endpoint = str(target.get("target") or "").strip()
         if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
@@ -2596,6 +2647,10 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
                 raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
 
         model_name = str(target["model_name"])
+        try:
+            validate_worker_overrides(data.serving_overrides, worker_limits(runtime_snapshot, model_name))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
         job_payload = {
             "model_provider_id": data.model_provider_id,
@@ -2603,9 +2658,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             "provider_name": target["provider_name"],
             "model_id": target["model_id"],
             "model_name": model_name,
-            "dataset": BENCHMARK_DATASET,
-            "subset": "main",
-            "split": "test",
+            **data.model_dump(exclude={"model_provider_id", "samples", "max_output_tokens"}),
             "samples": data.samples,
             "max_output_tokens": data.max_output_tokens,
             "provider_session_id": runtime_snapshot.get("session_id") if runtime_snapshot else None,
@@ -2638,6 +2691,24 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
         else None
     )
 
+    if worker_preparer is not None and data.serving_overrides.model_dump(exclude_none=True):
+
+        def report_preparation_stage(stage):
+            with DBManager() as db:
+                db.update_job_status(
+                    job_id,
+                    JobStatus.RUNNING.value,
+                    result_payload={"stage": stage, "started_samples": 0, "total_samples": data.samples},
+                )
+
+        def worker_preparer():
+            return _capacity_planner.prepare_configured_benchmark_lane(
+                provider_id,
+                model_name,
+                data.serving_overrides,
+                progress_callback=report_preparation_stage,
+            )
+
     task = asyncio.create_task(
         run_benchmark_job(
             job_id=job_id,
@@ -2646,6 +2717,7 @@ async def internal_run_model_benchmark(data: _InternalBenchmarkRequest, request:
             model=model_name,
             api_key=None if is_internal_worker_benchmark else api_key or None,
             samples=data.samples,
+            settings=data,
             max_output_tokens=data.max_output_tokens,
             serving_configuration=serving_configuration,
             serving_configuration_getter=lambda: extract_serving_configuration(
@@ -2766,6 +2838,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
             user_id=None,
             environment=auth.environment,
             log_level=auth.log_level,
+            input_payload=sanitized_payload_for_logging(body),
             request_id=request_id,
         )
     log_id = int(log_result["log-id"])

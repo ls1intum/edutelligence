@@ -2725,3 +2725,22 @@ async def test_sharded_checkpoint_skipped_for_speculative_lane(monkeypatch, tmp_
     plain = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
     await handle._maybe_prepare_sharded_checkpoint(plain)
     assert handle._sharded_model_dir is not None
+
+
+def test_auto_gmu_resizes_calibrated_kv_allocation_when_tp_changes() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        residency_source="calibrated",
+        tensor_parallel_size=2,
+        loaded_vram_mb=15988,
+        kv_budget_mb=4096,
+    )
+    handle = VllmProcessHandle("lane", 15000, OllamaConfig(), model_profiles=profiles, per_gpu_total_mb=lambda: 16384)
+    lane = LaneConfig(
+        model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="4G")
+    )
+    assert handle._resolve_gmu(lane.vllm_config, lane) == pytest.approx(11892 / 16384)
+    lane.vllm_config.gpu_memory_utilization = 0.9
+    assert handle._resolve_gmu(lane.vllm_config, lane) == 0.9

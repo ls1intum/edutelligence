@@ -1,4 +1,5 @@
 import { Injectable, inject } from '@angular/core';
+import { BenchmarkSettings, BenchmarkWorkerLimits, DatasetMetadata, DEFAULT_BENCHMARK_SETTINGS } from '../../features/model-error-report/benchmark-settings';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
@@ -21,17 +22,35 @@ export class ModelManagementService {
     );
   }
 
-  startBenchmark(modelProviderId: number, sampleSize: number): Promise<StartModelBenchmarkResponse> {
+  startBenchmark(modelProviderId: number, sampleSize: number, settings: BenchmarkSettings = DEFAULT_BENCHMARK_SETTINGS): Promise<StartModelBenchmarkResponse> {
     return firstValueFrom(
       this.http.post<StartModelBenchmarkResponse>(
         '/api/logosdb/model_benchmarks/run',
         {
           model_provider_id: modelProviderId,
           sample_size: sampleSize,
-          max_output_tokens: 512,
+          ...settings,
         },
       ),
     );
+  }
+
+  getBenchmarkWorkerLimits(modelProviderId: number): Promise<BenchmarkWorkerLimits> {
+    return firstValueFrom(this.http.post<BenchmarkWorkerLimits>(
+      '/api/logosdb/model_benchmarks/limits', { model_provider_id: modelProviderId },
+    ));
+  }
+
+  searchBenchmarkDatasets(query: string): Promise<{ datasets: { id: string }[] }> {
+    return firstValueFrom(this.http.post<{ datasets: { id: string }[] }>(
+      '/api/logosdb/model_benchmarks/datasets/search', { query },
+    ));
+  }
+
+  getBenchmarkDatasetMetadata(dataset: string, subset?: string, split?: string): Promise<DatasetMetadata> {
+    return firstValueFrom(this.http.post<DatasetMetadata>(
+      '/api/logosdb/model_benchmarks/datasets/metadata', { dataset, subset, split },
+    ));
   }
 
   cancelBenchmark(jobId: number): Promise<{ job_id: number; status: string }> {

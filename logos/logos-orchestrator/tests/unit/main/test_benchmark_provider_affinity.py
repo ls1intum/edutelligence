@@ -7,6 +7,11 @@ import pytest
 import logos as main
 
 
+@pytest.fixture(autouse=True)
+def mock_dataset_metadata(monkeypatch):
+    monkeypatch.setattr(main, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
+
+
 def _job(*, status="running", provider_id=20, model_id=1, model_name="org/model"):
     return {
         "status": status,
@@ -360,7 +365,12 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
             return {"log-id": 99}, 200
 
     request = MagicMock()
-    request.json = AsyncMock(return_value={"model": "org/model"})
+    body = {
+        "model": "org/model",
+        "messages": [{"role": "user", "content": "What is 2 + 2?"}],
+        "max_tokens": 32,
+    }
+    request.json = AsyncMock(return_value=body)
     request.headers = {main.BENCHMARK_JOB_HEADER: "7"}
     planner = MagicMock()
     planner.prepare_benchmark_lane = AsyncMock(return_value=True)
@@ -381,6 +391,7 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
             "user_id": None,
             "environment": "model-provider-benchmark",
             "log_level": "FULL",
+            "input_payload": body,
             "request_id": execute.await_args.kwargs["request_id"],
         }
     ]

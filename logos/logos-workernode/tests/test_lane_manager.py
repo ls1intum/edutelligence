@@ -4,7 +4,7 @@ import asyncio
 import socket
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -2906,6 +2906,207 @@ async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
     await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
     assert "org_left-model" in manager._handles  # noqa: SLF001
     manager.end_calibration_session()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy_lane", ["benchmark-lane", "other-lane"])
+async def test_benchmark_reconfigure_only_protects_requests_on_restarted_lane(busy_lane) -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15100, lane_port_end=15110, gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=1))
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._active_requests[busy_lane] = 1
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 2}}
+    if busy_lane == "benchmark-lane":
+        with pytest.raises(RuntimeError, match="still has 1 active request"):
+            await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_benchmark_reconfigure_unchanged_settings_allow_active_requests() -> None:
+    manager = LaneManager(OllamaConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._active_requests["benchmark-lane"] = 1
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    await manager.reconfigure_lane("benchmark-lane", {"model": current.model}, require_idle=True)
+    manager._restart_lane_unlocked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_tp1_survives_calibrated_tp2_and_config_roundtrip() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        engine="vllm", residency_source="calibrated", tensor_parallel_size=2, base_residency_mb=10000
+    )
+    manager = LaneManager(OllamaConfig(), model_profiles=profiles, gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 1}}
+    await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+    requested = manager._restart_lane_unlocked.await_args.args[1]
+    # Restarts and serialization must not reintroduce the calibrated TP=2.
+    persisted = LaneConfig.model_validate(requested.model_dump())
+    assert persisted.auto_tensor_parallel is False
+    assert manager._auto_tensor_parallel(persisted).vllm_config.tensor_parallel_size == 1
+    # Automatic lanes keep the existing calibrated-profile behavior.
+    automatic = persisted.model_copy(update={"auto_tensor_parallel": True})
+    assert manager._auto_tensor_parallel(automatic).vllm_config.tensor_parallel_size == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override", [{"gpu_memory_utilization": 0.7}, {"kv_cache_memory_bytes": "2G"}, {"enable_prefix_caching": False}]
+)
+async def test_benchmark_restarts_for_spawn_time_vllm_settings(override) -> None:
+    manager = LaneManager(OllamaConfig())
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    await manager.reconfigure_lane(
+        "benchmark-lane", {"vllm_config": {**current.vllm_config.model_dump(), **override}}, require_idle=True
+    )
+    manager._restart_lane_unlocked.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("static", [False, True])
+async def test_manual_parallel_change_replaces_only_automatic_gpu_pins(static) -> None:
+    manager = LaneManager(OllamaConfig(), gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True, gpu_devices="0")
+    manager._handles["lane"] = _StubHandle(current)
+    if static:
+        manager._static_lane_ids.add("lane")
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 2}}
+    if static:
+        with pytest.raises(ValueError, match="explicit gpu_devices"):
+            await manager.reconfigure_lane("lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("lane", updates, require_idle=True)
+        requested = manager._restart_lane_unlocked.await_args.args[1]
+        assert requested.gpu_devices == ""
+        assert requested.vllm_config.parallel_gpu_count == 2
+        assert requested.auto_tensor_parallel is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tp,pp,pool", [(38, 1, "all"), (2, 2, "all"), (2, 1, "0")])
+async def test_impossible_parallelism_rejected_before_restart(tp, pp, pool) -> None:
+    manager = LaneManager(OllamaConfig(gpu_devices=pool), gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    updates = {
+        "vllm_config": {
+            **current.vllm_config.model_dump(),
+            "tensor_parallel_size": tp,
+            "extra_args": ["--pipeline-parallel-size", str(pp)],
+        }
+    }
+    with pytest.raises(ValueError, match="requires .* GPUs"):
+        await manager.reconfigure_lane("lane", updates, require_idle=True)
+    manager._restart_lane_unlocked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tp_restart_refreshes_released_vram_and_resizes_per_rank_cache(monkeypatch) -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        residency_source="calibrated",
+        tensor_parallel_size=2,
+        loaded_vram_mb=15988,
+        base_residency_mb=15988,
+        kv_budget_mb=4096,
+    )
+    current = LaneConfig(
+        model="org/model",
+        vllm=True,
+        gpu_devices="0,1",
+        vllm_config=VllmConfig(tensor_parallel_size=2, kv_cache_memory_bytes="4G"),
+    )
+    old = _StubHandle(current)
+    free = 8000
+
+    async def refresh():
+        nonlocal free
+        assert old.destroyed
+        free = 13000
+
+    async def snapshot():
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id=f"gpu{i}", kind="nvidia", memory_total_mb=16384, memory_free_mb=free, extra={"index": i}
+                )
+                for i in range(2)
+            ],
+        )
+
+    manager = LaneManager(
+        OllamaConfig(),
+        model_profiles=profiles,
+        gpu_device_count=lambda: 2,
+        gpu_snapshot=snapshot,
+        gpu_force_poll=refresh,
+    )
+    manager._handles["lane"] = old
+    manager._port_alloc._used["lane"] = 15000
+    new = MagicMock(init=AsyncMock(), spawn=AsyncMock(), destroy=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: new)
+    requested = current.model_copy(
+        update={
+            "gpu_devices": "",
+            "auto_tensor_parallel": False,
+            "vllm_config": current.vllm_config.model_copy(update={"tensor_parallel_size": 1}),
+        }
+    )
+    await manager._restart_lane_unlocked("lane", requested)
+    placed = new.spawn.await_args.args[0]
+    assert placed.vllm_config.tensor_parallel_size == 1
+    assert placed.gpu_devices in {"0", "1"}
+    assert manager._estimate_lane_vram_mb(placed) == 11892
+    assert manager._handles["lane"] is new
+
+
+@pytest.mark.asyncio
+async def test_failed_restart_placement_removes_dead_lane_bookkeeping() -> None:
+    lane = LaneConfig(model="org/model", vllm=True)
+    old = _StubHandle(lane)
+    manager = _manager_with_handles({"lane": old})
+    manager._port_alloc._used["lane"] = 15000
+    manager._active_requests["lane"] = 0
+    manager._starting_deadlines["lane"] = 123
+    manager._auto_place_gpu_devices = AsyncMock(side_effect=RuntimeError("No GPU fits"))
+    with pytest.raises(RuntimeError, match="No GPU fits"):
+        await manager._restart_lane_unlocked("lane", lane)
+    assert old.destroyed and old.closed
+    assert "lane" not in manager._handles
+    assert manager._port_alloc.get_port("lane") is None
+    assert "lane" not in manager._active_requests
+    assert "lane" not in manager._starting_deadlines
 
 
 class TestValidateCapabilities:

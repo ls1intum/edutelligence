@@ -82,3 +82,11 @@ def test_logos_config_extracts_inline_capability_overrides() -> None:
         "kv_budget_mb": 2048,
         "max_context_length": 4096,
     }
+
+
+@pytest.mark.parametrize("args", [["--pipeline-parallel-size", "2"], ["--pipeline-parallel-size=2"]])
+def test_lane_config_counts_pipeline_parallel_gpus(args) -> None:
+    config = VllmConfig(tensor_parallel_size=2, extra_args=args)
+    assert config.parallel_gpu_count == 4
+    with pytest.raises(ValidationError, match="explicit gpu_devices"):
+        LaneConfig(model="org/model", vllm=True, gpu_devices="0,1", vllm_config=config)

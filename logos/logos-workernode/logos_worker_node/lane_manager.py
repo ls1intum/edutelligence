@@ -15,7 +15,7 @@ from logos_worker_node.calibration import calibration_gpu_slice
 from logos_worker_node.host_ram import measure_process_tree_host_ram_mb
 from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.metal_process import MetalVllmProcessHandle
-from logos_worker_node.model_profiles import ModelProfileRegistry
+from logos_worker_node.model_profiles import ModelProfileRegistry, reconfigured_vram_mb
 from logos_worker_node.models import (
     DeviceSummary,
     LaneAction,
@@ -832,7 +832,9 @@ class LaneManager:
                     return
             await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
 
-    async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
+    async def reconfigure_lane(
+        self, lane_id: str, updates: dict[str, Any], *, require_idle: bool = False
+    ) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
         async with self._lock:
             handle = self._handles.get(lane_id)
@@ -853,9 +855,44 @@ class LaneManager:
             if not changed:
                 return await self._get_status_unlocked(lane_id)
 
+            parallel_changed = False
+            if current.vllm_config is not None and current_data.get("vllm_config"):
+                requested_vllm = VllmConfig(**current_data["vllm_config"])
+                parallel_changed = (
+                    requested_vllm.tensor_parallel_size != current.vllm_config.tensor_parallel_size
+                    or requested_vllm.parallel_gpu_count != current.vllm_config.parallel_gpu_count
+                )
+                if parallel_changed:
+                    current_data["auto_tensor_parallel"] = False
+                    # Automatic placement belongs to the old parallel topology.
+                    # Static operator pins remain authoritative.
+                    if lane_id not in self._static_lane_ids:
+                        current_data["gpu_devices"] = ""
             new_lc = LaneConfig(**current_data)
+            if parallel_changed:
+                available = self._gpu_device_count()
+                pool = self._global_config.gpu_devices
+                if pool and pool.lower() != "all":
+                    available = min(available, len(set(self._parse_gpu_selector(pool))))
+                required = new_lc.vllm_config.parallel_gpu_count
+                if required > available:
+                    raise ValueError(
+                        f"Tensor × pipeline parallel size requires {required} GPUs, "
+                        f"but this worker provides only {available}."
+                    )
             self._validate_vllm_runtime_requirements([new_lc])
-            if _lane_needs_restart(current, new_lc):
+            # Benchmark settings include spawn-time options such as KV cache size
+            # that the planner's automatic tuning deliberately excludes.
+            restart_needed = _lane_needs_restart(current, new_lc) or (
+                require_idle and current.vllm_config != new_lc.vllm_config
+            )
+            if restart_needed:
+                active = self._active_requests.get(lane_id, 0)
+                if require_idle and active > 0:
+                    raise RuntimeError(
+                        f"Cannot apply vLLM settings: model '{current.model}' still has {active} active request(s). "
+                        "Wait for them to finish, or run the benchmark with the current settings."
+                    )
                 await self._restart_lane_unlocked(lane_id, new_lc)
             prom.LANE_TRANSITIONS_TOTAL.labels(action="reconfigure").inc()
 
@@ -1487,6 +1524,8 @@ class LaneManager:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
         Policy:
+        - Manual TP changes disable auto_tensor_parallel for this lane, so
+          later restarts keep the selected value instead of the profile's TP.
         - A calibrated profile's tensor_parallel_size is the single source of
           truth — the profile's residency and KV data were measured under that
           TP, so the lane must run at it. It wins over whatever TP the
@@ -1505,6 +1544,8 @@ class LaneManager:
           OOM failures.
         """
         if not lane_config.vllm or lane_config.vllm_config is None:
+            return lane_config
+        if not lane_config.auto_tensor_parallel:
             return lane_config
         vc = lane_config.vllm_config
         gpu_count = self._gpu_device_count()
@@ -1712,7 +1753,13 @@ class LaneManager:
         # it is smaller, mirroring the orchestrator's _estimate_model_loaded_vram.
         if profile.residency_source == "calibrated" and base_mb > 0:
             observed = float(profile.loaded_vram_mb or 0.0)
-            return min(base_mb, observed) if observed > 0 else base_mb
+            measured = min(base_mb, observed) if observed > 0 else base_mb
+            vc = lane_config.vllm_config
+            if vc is not None:
+                return reconfigured_vram_mb(
+                    profile, measured, vc.parallel_gpu_count, self._parse_memory_to_mb(vc.kv_cache_memory_bytes)
+                )
+            return measured
 
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
@@ -1869,7 +1916,7 @@ class LaneManager:
             # lane may only take the leftover GPUs (issue #592).
             held = set(self._calibration_gpu_subset)
             allowed_rows = [row for row in allowed_rows if int(row["index"]) not in held]
-        tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
+        tp_size = lane_config.vllm_config.parallel_gpu_count
         if len(allowed_rows) < tp_size:
             if self._calibration_gpu_subset:
                 # Fail fast rather than fall back to cuda:0 (a held slice GPU):
@@ -2062,7 +2109,7 @@ class LaneManager:
 
         tp_size = 1
         if lane_config.vllm_config:
-            tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
+            tp_size = lane_config.vllm_config.parallel_gpu_count
         per_gpu_needed_mb = total_needed_mb / tp_size
 
         # Which GPU indices will this lane use?
@@ -2281,48 +2328,55 @@ class LaneManager:
             logger.warning("Restart '%s': failed to destroy old handle", lane_id, exc_info=True)
         await old_handle.close()
 
-        new_config = await self._auto_place_gpu_devices(lane_id, new_config)
-
-        # Spawn new process on the same port
-        new_handle = _create_handle(
-            lane_id,
-            port,
-            self._global_config,
-            self._vllm_engine_config,
-            new_config,
-            model_profiles=self._model_profiles,
-            per_gpu_total_mb=self._per_gpu_vram_mb,
-            metal_config=self._metal_config,
-        )
-        await new_handle.init()
-
-        self._record_event(
-            lane_id,
-            "restart_spawn_new",
-            model=new_config.model,
-            port=port,
-        )
-        logger.info(
-            "Restart '%s': spawning new %s process on port %d",
-            lane_id,
-            "vllm" if new_config.vllm else "ollama",
-            port,
-        )
-
+        new_handle = None
         try:
+            # The collector still contains the old process's allocation after
+            # destroy(). Refresh and allow CUDA reclamation before placement.
+            if self._gpu_force_poll is not None:
+                await self._gpu_force_poll()
+            await self._wait_for_vram_headroom(lane_id, new_config)
+            new_config = await self._auto_place_gpu_devices(lane_id, new_config)
+
+            # Spawn new process on the same port
+            new_handle = _create_handle(
+                lane_id,
+                port,
+                self._global_config,
+                self._vllm_engine_config,
+                new_config,
+                model_profiles=self._model_profiles,
+                per_gpu_total_mb=self._per_gpu_vram_mb,
+                metal_config=self._metal_config,
+            )
+            await new_handle.init()
+
+            self._record_event(
+                lane_id,
+                "restart_spawn_new",
+                model=new_config.model,
+                port=port,
+            )
+            logger.info(
+                "Restart '%s': spawning new %s process on port %d",
+                lane_id,
+                "vllm" if new_config.vllm else "ollama",
+                port,
+            )
+
             await new_handle.spawn(new_config)
         except Exception as exc:
             logger.error(
-                "Restart '%s' failed during spawn: %s",
+                "Restart '%s' failed during preparation or spawn: %s",
                 lane_id,
                 exc,
             )
             self._record_event(lane_id, "restart_failed", model=new_config.model, details=str(exc))
-            try:
-                await new_handle.destroy()
-            except Exception:
-                pass
-            await new_handle.close()
+            if new_handle is not None:
+                try:
+                    await new_handle.destroy()
+                except Exception:
+                    pass
+                await new_handle.close()
             # Lane is now dead — remove it from handles and release all
             # bookkeeping so the dead lane is not reported as active.
             self._handles.pop(lane_id, None)

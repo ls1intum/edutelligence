@@ -114,6 +114,7 @@
   @include glass-surface;
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   padding: 9px 15px;
@@ -269,3 +270,43 @@
   color: rgb(var(--color-typography-300));
 }
 
+.rr-content-button {
+  padding: 5px 10px;
+  border: 1px solid rgb(var(--color-outline-200));
+  border-radius: 6px;
+  background: rgb(var(--color-surface-0));
+  color: rgb(var(--color-typography-100));
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+
+  &[aria-selected='true'] { border-color: rgb(var(--color-primary-500)); color: rgb(var(--color-primary-500)); }
+  &:disabled { opacity: 0.5; cursor: wait; }
+  &:focus-visible { outline: 2px solid rgb(var(--color-primary-500)); outline-offset: 2px; }
+}
+
+.rr-payload {
+  flex: 0 0 100%;
+  min-width: 0;
+  border-top: 1px solid rgb(var(--color-outline-200));
+  padding-top: 10px;
+  color: rgb(var(--color-typography-100));
+  font-size: var(--font-size-sm);
+
+  pre {
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 12px;
+    background: rgb(var(--color-surface-0));
+    border-radius: 6px;
+  }
+}
+
+.rr-payload__toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  [role='tablist'] { display: flex; gap: 6px; }
+}

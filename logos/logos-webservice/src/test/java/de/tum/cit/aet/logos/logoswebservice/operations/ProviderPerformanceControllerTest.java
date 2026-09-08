@@ -46,6 +46,22 @@ class ProviderPerformanceControllerTest {
     @MockitoBean OrchestratorWorkerAdminClient orchestratorWorkerAdminClient;
 
     @Test
+    void benchmarkLimits_returnsWorkerGpuCount() throws Exception {
+        when(orchestratorWorkerAdminClient.benchmarkLimits(Map.of("model_provider_id", 31)))
+            .thenReturn(ResponseEntity.ok(Map.of("gpu_count", 2, "current", Map.of("tensor_parallel_size", 1))));
+        mvc.perform(post("/logosdb/model_benchmarks/limits").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"model_provider_id\":31}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.gpu_count").value(2));
+    }
+
+    @Test
+    void benchmarkLimits_requiresAuthentication() throws Exception {
+        mvc.perform(post("/logosdb/model_benchmarks/limits")
+                .contentType("application/json").content("{\"model_provider_id\":31}"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void providerPerformance_returnsMetricsPerProviderModelPair() throws Exception {
         mvc.perform(post("/logosdb/provider_performance")
                 .with(TestJwt.logosAdmin())
@@ -289,7 +305,7 @@ class ProviderPerformanceControllerTest {
 
     @Test
     void runModelBenchmark_forwardsFixedSmallRunToOrchestrator() throws Exception {
-        when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 5, 512))
+        when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 5, 512, Map.of()))
             .thenReturn(ResponseEntity.accepted().body(Map.of(
                 "job_id", 42,
                 "status", "pending",
@@ -303,6 +319,36 @@ class ProviderPerformanceControllerTest {
            .andExpect(status().isAccepted())
            .andExpect(jsonPath("$.job_id").value(42))
            .andExpect(jsonPath("$.status").value("pending"));
+    }
+
+    @Test
+    void runModelBenchmark_forwardsDatasetAndServingSettings() throws Exception {
+        Map<String, Object> settings = Map.of("dataset", "org/prompts", "subset", "default", "split", "train",
+            "text_column", "prompt", "profile", "concurrent", "concurrency", 4, "seed", 7,
+            "serving_overrides", Map.of("tensor_parallel_size", 2));
+        when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 12, 256, settings))
+            .thenReturn(ResponseEntity.accepted().body(Map.of("job_id", 43, "status", "pending")));
+        mvc.perform(post("/logosdb/model_benchmarks/run").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("""
+                    {"model_provider_id":7001,"sample_size":12,"max_output_tokens":256,
+                     "dataset":"org/prompts","subset":"default","split":"train","text_column":"prompt",
+                     "profile":"concurrent","concurrency":4,"seed":7,"serving_overrides":{"tensor_parallel_size":2}}
+                    """))
+            .andExpect(status().isAccepted()).andExpect(jsonPath("$.job_id").value(43));
+    }
+
+    @Test
+    void datasetSearch_requiresAdminAndForwardsQuery() throws Exception {
+        when(orchestratorWorkerAdminClient.benchmarkDatasets("search", Map.of("query", "gsm8k")))
+            .thenReturn(ResponseEntity.ok(Map.of("datasets", java.util.List.of(Map.of("id", "openai/gsm8k")))));
+        mvc.perform(post("/logosdb/model_benchmarks/datasets/search").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"query\":\"gsm8k\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.datasets[0].id").value("openai/gsm8k"));
+        for (String operation : java.util.List.of("search", "metadata")) {
+            mvc.perform(post("/logosdb/model_benchmarks/datasets/" + operation).with(TestJwt.testUser())
+                    .contentType("application/json").content("{}"))
+                .andExpect(status().isForbidden());
+        }
     }
 
     @Test

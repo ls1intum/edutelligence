@@ -35,6 +35,7 @@ from typing import Any, AsyncIterator, Callable, ClassVar
 
 import httpx
 
+from logos_worker_node.model_profiles import ModelProfileRegistry, reconfigured_vram_mb
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
     LaneConfig,
@@ -1634,9 +1635,12 @@ class VllmProcessHandle:
         # so gmu must divide by the TP the lane actually runs at. Using the profile's
         # TP=1 for a TP=2 lane over-reserves (gmu 0.95 instead of 0.5) and fails the
         # co-residence memory floor check when another lane is already resident.
-        tp = vc.tensor_parallel_size or getattr(profile, "tensor_parallel_size", None)
+        tp = vc.parallel_gpu_count
         if not loaded or not tp or tp <= 0:
             return None
+        loaded = reconfigured_vram_mb(
+            profile, float(loaded), tp, ModelProfileRegistry._parse_kv_cache_to_mb(vc.kv_cache_memory_bytes)
+        )
         per_gpu_total = self._per_gpu_total_mb()
         if per_gpu_total <= 0:
             return None

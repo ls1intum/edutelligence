@@ -961,3 +961,13 @@ def test_timing_fields_default_to_none_on_legacy_records():
     assert profile is not None
     assert profile.cold_load_time_s is None
     assert profile.wake_from_sleep_time_s is None
+
+
+@pytest.mark.parametrize("tp,cache,expected", [(2, 4096, 15988), (1, 4096, 11892), (2, 8192, 24180), (1, 0, 15988)])
+def test_reconfigured_vram_replaces_only_known_per_rank_cache(tp, cache, expected):
+    from logos_worker_node.model_profiles import reconfigured_vram_mb
+
+    profile = ModelProfileRecord(residency_source="calibrated", tensor_parallel_size=2, kv_budget_mb=4096)
+    assert reconfigured_vram_mb(profile, 15988, tp, cache) == expected
+    profile.kv_budget_mb = None
+    assert reconfigured_vram_mb(profile, 15988, tp, cache) == 15988

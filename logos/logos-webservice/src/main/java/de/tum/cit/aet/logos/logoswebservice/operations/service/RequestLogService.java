@@ -11,6 +11,9 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogProjection;
@@ -25,9 +28,30 @@ public class RequestLogService {
     private static final int LATEST_REQUESTS_MAX_PAGE_SIZE = 50;
 
     private final LogEntryRepository logEntryRepository;
+    private final ObjectMapper objectMapper;
 
-    public RequestLogService(LogEntryRepository logEntryRepository) {
+    public RequestLogService(LogEntryRepository logEntryRepository, ObjectMapper objectMapper) {
         this.logEntryRepository = logEntryRepository;
+        this.objectMapper = objectMapper;
+    }
+
+    /** Load stored content for one request, preserving absent payloads as null. */
+    public Map<String, Object> getRequestPayloads(String requestId) {
+        var payload = logEntryRepository.findRequestPayloads(requestId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Request not found"));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("input_payload", parsePayload(payload.getInputPayload()));
+        result.put("response_payload", parsePayload(payload.getResponsePayload()));
+        return result;
+    }
+
+    private Object parsePayload(String text) {
+        if (text == null) return null;
+        try {
+            return objectMapper.readValue(text, Object.class);
+        } catch (Exception e) {
+            return text;
+        }
     }
 
     /** Unfiltered newest page of the range, without a row count — the live push. */

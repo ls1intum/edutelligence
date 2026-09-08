@@ -1,0 +1,126 @@
+<div class="settings-editor">
+  <h4>Next benchmark</h4>
+  <p>Choose a public Hugging Face dataset with a text column. GuideLLM downloads and caches the data when the run starts.</p>
+  <div class="dataset-search">
+    <label>Find a dataset
+      <input type="search" [ngModel]="query()" (ngModelChange)="query.set($event)"
+        (keydown.enter)="search(); $event.preventDefault()" placeholder="Dataset name or owner/name" />
+    </label>
+    <button type="button" (click)="search()" [disabled]="searching() || !query().trim()">{{ searching() ? 'Searching…' : 'Search Hugging Face' }}</button>
+  </div>
+  @if (results().length) {
+    <div class="dataset-results" aria-label="Dataset search results">
+      @for (result of results(); track result.id) {
+        <button type="button" (click)="inspectDataset(result.id)" [disabled]="loading()">{{ result.id }}</button>
+      }
+    </div>
+  }
+  <div class="selected-dataset"><strong>{{ settings().dataset }}</strong>
+    <div class="dataset-actions">
+      <a [href]="viewerUrl()" target="_blank" rel="noopener noreferrer">Open in Hugging Face <span aria-hidden="true">↗</span><span class="sr-only"> (new tab)</span></a>
+      <button type="button" (click)="inspectDataset(settings().dataset, settings().subset, settings().split)" [disabled]="loading()">{{ loading() ? 'Loading options…' : 'Reload options' }}</button>
+    </div>
+  </div>
+  @if (error()) { <p role="alert" class="settings-error">{{ error() }}</p> }
+  <div class="settings-grid">
+    <label>Configuration
+      <select [ngModel]="settings().subset" (ngModelChange)="inspectDataset(settings().dataset, $event)" [disabled]="loading()">
+        @for (subset of subsets(); track subset) { <option [value]="subset">{{ subset }}</option> }
+      </select>
+    </label>
+    <label>Split
+      <select [ngModel]="settings().split" (ngModelChange)="inspectDataset(settings().dataset, settings().subset, $event)" [disabled]="loading()">
+        @for (split of splits(); track split) { <option [value]="split">{{ split }}</option> }
+      </select>
+    </label>
+    <label>Prompt column
+      <select [ngModel]="settings().text_column" (ngModelChange)="update('text_column', $event)" [disabled]="loading()">
+        @for (column of columns(); track column) { <option [value]="column">{{ column }}</option> }
+      </select>
+    </label>
+    <label>Max output tokens
+      <input type="number" min="1" max="4096" step="1" required [ngModel]="settings().max_output_tokens" (ngModelChange)="update('max_output_tokens', $event)" />
+    </label>
+    <label>Profile
+      <select [ngModel]="settings().profile" (ngModelChange)="update('profile', $event)">
+        <option value="synchronous">Sequential</option><option value="concurrent">Concurrent</option>
+      </select>
+    </label>
+    <label>Concurrent requests
+      <input type="number" min="1" max="32" step="1" required [disabled]="settings().profile === 'synchronous'" [ngModel]="settings().concurrency" (ngModelChange)="update('concurrency', $event)" />
+    </label>
+    <label>Seed
+      <input type="number" min="0" max="2147483647" step="1" required [ngModel]="settings().seed" (ngModelChange)="update('seed', $event)" />
+    </label>
+  </div>
+  <details class="dataset-preview" open>
+    <summary>Dataset preview</summary>
+    @if (loading()) {
+      <p role="status">Loading examples…</p>
+    } @else if (previewMatchesSelection() && metadata()?.preview_rows?.length) {
+      <p>First {{ metadata()!.preview_rows!.length }} entries · {{ settings().subset }}/{{ settings().split }}. Answers come from the dataset; they are not model responses.</p>
+      <div class="dataset-preview__rows" role="region" aria-label="Dataset examples" tabindex="0">
+        @for (row of metadata()!.preview_rows!; track row.row_index) {
+          <article class="dataset-preview__row">
+            <h5>Example {{ row.row_index + 1 }}</h5>
+            <dl>
+              @for (column of previewColumns(); track column) {
+                <div>
+                  <dt>{{ column }} @if (column === settings().text_column) { <span class="prompt-badge">Prompt</span> }</dt>
+                  <dd>{{ row.cells[column] ?? 'No value' }}</dd>
+                  @if (row.truncated_columns.includes(column)) { <small>Excerpt — open Hugging Face for the full text.</small> }
+                </div>
+              }
+            </dl>
+          </article>
+        }
+      </div>
+    } @else {
+      <p>No preview available. Use the Hugging Face link above to explore this dataset.</p>
+    }
+  </details>
+  <details>
+    <summary>vLLM settings for the next run</summary>
+    <p>Applies to the selected Logos worker before the benchmark and may reload the model. Changed settings remain active afterwards. Empty fields keep the current worker value.</p>
+    @if (pair()?.provider_type === 'logosnode') {
+      <p>{{ pair()!.provider_name }}: {{ limits()?.gpu_count ?? 'unknown' }} GPUs available for this model.
+        Limits include GPU assignments. Model architecture and available memory can impose additional restrictions.</p>
+      <button type="button" (click)="loadLimits()" [disabled]="limitsLoading()">{{ limitsLoading() ? 'Loading limits…' : 'Reload worker limits' }}</button>
+      @if (limitsError()) { <p role="alert" class="settings-error">{{ limitsError() }}</p> }
+    }
+    @for (message of validationErrors(); track message) { <p role="alert" class="settings-error">{{ message }}</p> }
+    <button type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">Keep current worker settings</button>
+    <div class="settings-grid">
+      @for (field of fields; track field.key) {
+        <label>{{ field.label }}
+          @if (field.key === 'tensor_parallel_size' || field.key === 'pipeline_parallel_size') {
+            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)"
+              [disabled]="limits()?.gpu_count == null || limitsLoading()">
+              <option [ngValue]="''">Keep current ({{ limits()?.current?.[field.key] ?? 'auto' }})</option>
+              @if (settings().serving_overrides[field.key] != null && !parallelOptions(field.key).includes(+$any(settings().serving_overrides[field.key]))) {
+                <option [ngValue]="settings().serving_overrides[field.key]" disabled>{{ settings().serving_overrides[field.key] }} — unavailable</option>
+              }
+              @for (value of parallelOptions(field.key); track value) { <option [ngValue]="value">{{ value }}</option> }
+            </select>
+          } @else if (choices[field.key]) {
+            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
+              <option [ngValue]="''">Keep current</option>
+              @for (value of choices[field.key]; track value) { <option [ngValue]="value">{{ value }}</option> }
+            </select>
+          } @else if (field.type === 'boolean') {
+            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
+              <option [ngValue]="''">Keep current</option><option [ngValue]="true">Enabled</option><option [ngValue]="false">Disabled</option>
+            </select>
+          } @else {
+            <input [type]="field.type" [attr.min]="field.min ?? null" [attr.max]="field.max ?? null" [attr.step]="field.step ?? 1"
+              [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)" placeholder="Keep current" />
+          }
+        </label>
+      }
+    </div>
+    <label>Hugging Face model overrides (JSON)
+      <textarea rows="3" [ngModel]="hfOverrides()" (ngModelChange)="setHfOverrides($event)" placeholder="{}"></textarea>
+    </label>
+    @if (jsonError()) { <p role="alert" class="settings-error">{{ jsonError() }}</p> }
+  </details>
+</div>

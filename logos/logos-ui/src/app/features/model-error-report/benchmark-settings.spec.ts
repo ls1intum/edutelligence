@@ -1,0 +1,103 @@
+import { benchmarkErrorMessage } from './benchmark-settings';
+import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
+import { ModelManagementService } from '../../core/services/model-management.service';
+import { ModelProviderBenchmark } from '../../shared/models/provider.model';
+import { DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
+
+const recorded = {
+  dataset: 'org/prompts', sample_size: 12,
+  configuration: {
+    scenario: { spec: { data: [{ load_kwargs: { name: 'default', split: 'validation' } }],
+      data_column_mapper: { column_mappings: { text_column: 'prompt' } },
+      profile: { kind: 'concurrent', streams: [4] }, seed: { value: 7 },
+      backend: { extras: { body: { max_tokens: 123 } } } } },
+    serving: { tensor_parallel_size: 2, enable_prefix_caching: false, kv_cache_memory: 1024,
+      command: 'vllm serve model', hf_overrides: { nested: { value: 1 } } },
+  },
+} as unknown as ModelProviderBenchmark;
+
+describe('Next benchmark settings', () => {
+  it('copies the recorded dataset, normalized concurrency and serving values into an independent draft', () => {
+    const draft = settingsFromBenchmark(recorded);
+    expect(draft).toMatchObject({ dataset: 'org/prompts', subset: 'default', split: 'validation',
+      text_column: 'prompt', profile: 'concurrent', concurrency: 4, seed: 7, max_output_tokens: 123,
+      serving_overrides: { enable_prefix_caching: false, kv_cache_memory_bytes: '1024' } });
+    expect(draft.serving_overrides['command']).toBeUndefined();
+    (draft.serving_overrides['hf_overrides'] as any).nested.value = 2;
+    expect((recorded.configuration['serving'] as any).hf_overrides.nested.value).toBe(1);
+  });
+
+  it('uses editable defaults for old reports with no captured settings', () => {
+    const draft = settingsFromBenchmark({ ...recorded, dataset: 'openai/gsm8k', configuration: {} });
+    expect(draft).toEqual(DEFAULT_BENCHMARK_SETTINGS);
+  });
+
+  it('sends the edited draft to the API rather than fixed GSM8K settings', async () => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    const service = TestBed.inject(ModelManagementService);
+    const http = TestBed.inject(HttpTestingController);
+    const draft = settingsFromBenchmark(recorded);
+    const pending = service.startBenchmark(31, 12, draft);
+    const request = http.expectOne('/api/logosdb/model_benchmarks/run');
+    expect(request.request.body).toEqual({ model_provider_id: 31, sample_size: 12, ...draft });
+    request.flush({ job_id: 7, status: 'pending' });
+    await pending;
+    http.verify();
+  });
+});
+
+import { BenchmarkSettingsEditor } from './benchmark-settings-editor';
+
+describe('Benchmark settings editor values', () => {
+  it('converts numeric worker settings and preserves explicit false', () => {
+    TestBed.configureTestingModule({ providers: [{ provide: ModelManagementService, useValue: {
+      getBenchmarkDatasetMetadata: async () => ({ dataset: 'openai/gsm8k', subset: 'main', split: 'test',
+        splits: [{ subset: 'main', split: 'test' }], text_columns: ['question'] }),
+    } }] });
+    const editor = TestBed.runInInjectionContext(() => new BenchmarkSettingsEditor());
+    editor.setServing('tensor_parallel_size', '2');
+    editor.setServing('gpu_memory_utilization', '0.8');
+    editor.setServing('enable_prefix_caching', false);
+    editor.setServing('kv_cache_memory_bytes', '4G');
+    expect(editor.settings().serving_overrides).toEqual({ tensor_parallel_size: 2,
+      gpu_memory_utilization: 0.8, enable_prefix_caching: false, kv_cache_memory_bytes: '4G' });
+    editor.setServing('tensor_parallel_size', '');
+    expect(editor.settings().serving_overrides['tensor_parallel_size']).toBeUndefined();
+  });
+});
+
+import { servingValidationErrors } from './benchmark-settings';
+
+describe('Worker-specific benchmark limits', () => {
+  const limits = { gpu_count: 2, gpu_memory_bytes: 24 * 1024 ** 3, current: { tensor_parallel_size: 1 } };
+  it.each([38, 3, 1.5, 0])('rejects TP=%s on a two-GPU worker', tp => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: tp } }, limits).length).toBeGreaterThan(0);
+  });
+  it('allows TP=3 when the selected worker has three GPUs', () => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: 3 } }, { ...limits, gpu_count: 3 })).toEqual([]);
+  });
+  it('rejects combinations that oversubscribe GPUs and respects current values', () => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { pipeline_parallel_size: 2 } }, { ...limits, current: { tensor_parallel_size: 2 } })[0]).toContain('requires 4 GPUs');
+  });
+  it.each([
+    { kv_cache_memory_bytes: '999G' }, { kv_cache_memory_bytes: '0' }, { kv_cache_memory_bytes: '1GB' },
+    { max_num_batched_tokens: 8, max_num_seqs: 32 }, { dtype: 'invalid' }, { gpu_memory_utilization: 5 },
+  ])('rejects invalid serving values %j', overrides => {
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: overrides }, limits).length).toBeGreaterThan(0);
+  });
+  it('does not invent GPU availability when telemetry is missing', () => {
+    expect(servingValidationErrors(DEFAULT_BENCHMARK_SETTINGS, null)).toEqual([]);
+    expect(servingValidationErrors({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: 1 } }, null)[0]).toContain('unavailable');
+  });
+});
+
+
+describe('benchmarkErrorMessage', () => {
+  it('shows structured worker errors and never renders objects as text', () => {
+    expect(benchmarkErrorMessage({ error: { error: { message: 'Worker is offline.' } } }, 'Unavailable')).toBe('Worker is offline.');
+    expect(benchmarkErrorMessage({ error: { detail: 'Unknown dataset' } }, 'Unavailable')).toBe('Unknown dataset');
+    expect(benchmarkErrorMessage({ error: { error: { code: 'OFFLINE' } } }, 'Unavailable')).toBe('Unavailable');
+  });
+});
