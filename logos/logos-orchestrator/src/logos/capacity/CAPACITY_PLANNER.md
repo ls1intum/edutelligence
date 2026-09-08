@@ -279,8 +279,7 @@ In the cold-load branch of `_compute_demand_actions`, the first lane of a model 
 
 - behind `LOGOS_REPLICATE_ON_FREE_VRAM` (default off),
 - sustained demand: `eff ≥ DEMAND_REPLICATION_FLOOR` (2.0),
-- free VRAM **without eviction** — an extra copy must never push out another model's lane,
-- the cluster-wide copy cap `MAX_REPLICAS_PER_MODEL` not reached.
+- free VRAM **without eviction** — an extra copy must never push out another model's lane.
 
 So a hot model on a roomy node grows by one lane per cycle while the demand stays sustained and VRAM stays free, and stops at whichever of those runs out; a model that cools down stops growing and its surplus lanes follow the regular idle-reclaim/drain behaviour. Waking the model's own sleeping lane stays exactly as before (wake floor / queued demand) — that is not an additional copy. Request routing already balances across replicas: `select_lane_for_model` ranks all lanes of the model by queue depth / running count / TTFT, and the admission gate sums per-lane headroom ("a busy lane must not mask an idle sibling").
 

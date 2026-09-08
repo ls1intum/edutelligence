@@ -6,9 +6,9 @@ entry): the planner derives scale-out from the live signals, the same
 principle that dropped ``models.parallel``. A model's additional lane on a
 worker that already runs it is speculative scale-out — the same deal as the
 cross-provider replication pass: behind ``LOGOS_REPLICATE_ON_FREE_VRAM``,
-sustained demand (``DEMAND_REPLICATION_FLOOR``), free VRAM without eviction,
-and the cluster-wide copy cap. The operator's manual "Load lane" adds one
-more lane instead of no-opping once a lane exists.
+sustained demand (``DEMAND_REPLICATION_FLOOR``), and free VRAM without
+eviction. The operator's manual "Load lane" adds one more lane instead of
+no-opping once a lane exists.
 
 The pieces under test:
 
@@ -19,7 +19,7 @@ The pieces under test:
   once that id exists (re-checked under the per-lane lock);
 * the demand path — the first lane keeps the full load semantics; an
   additional lane needs the replication flag + sustained demand + no
-  eviction + cluster cap headroom.
+  eviction.
 """
 
 from __future__ import annotations
@@ -473,10 +473,11 @@ class TestDemandPathAdditionalLane:
 
         assert planner._compute_demand_actions(1, provider.lanes) == []
 
-    def test_additional_lane_respects_the_cluster_copy_cap(self):
-        """The model already has MAX_REPLICAS_PER_MODEL copies cluster-wide —
-        this worker would be the 4th: the scale-out stops at the cap, same
-        as the cross-provider pass."""
+    def test_additional_lane_has_no_cluster_copy_cap(self):
+        """The model already has three copies cluster-wide — this worker would
+        be the fourth. There is no hard copy cap: VRAM (the no-eviction rule)
+        is the bound, so with sustained demand and free VRAM the extra lane is
+        still planned. (3 is the value the removed cap used to block at.)"""
         provider = _MockProvider(
             provider_id=1,
             name="A",
@@ -487,11 +488,9 @@ class TestDemandPathAdditionalLane:
         )
         planner = _planner(provider, score=2.5, replicate=True)
 
-        actions = planner._compute_demand_actions(
-            1, provider.lanes, cluster_lanes_by_model={"X": CapacityPlanner.MAX_REPLICAS_PER_MODEL}
-        )
+        actions = planner._compute_demand_actions(1, provider.lanes, cluster_lanes_by_model={"X": 3})
 
-        assert actions == []
+        assert [a.lane_id for a in actions if a.action == "load"] == ["planner-X-2"]
 
     def test_sleeper_wakes_even_while_siblings_run(self):
         """Waking the model's own sleeping lane is not an additional copy —
@@ -1401,10 +1400,10 @@ class TestInFlightLaneIdReservation:
 
 
 class TestCycleAccountingFirstLanes:
-    """The per-cycle cluster count and the "additional only" tag must track
-    first lanes too: with the cross-provider best-first ranker off, the
-    cycle-wide dedup and the copy cap are all that keeps a hot model from
-    loading past MAX_REPLICAS_PER_MODEL in one cycle."""
+    """The per-cycle "additional only" tag must track first lanes too: a
+    speculative additional lane tags the model additional-only, but the
+    moment a worker plans a first lane the tag ends — and the cycle-wide
+    first-lane dedup then suppresses any second first lane for the model."""
 
     @staticmethod
     def _provider(provider_id: int, name: str, lanes: List[LaneSchedulerSignals]) -> _MockProvider:
@@ -1469,201 +1468,6 @@ class TestCycleAccountingFirstLanes:
             cluster_lanes_by_model=cluster,
         )
         assert actions_c == []
-
-    def test_first_load_counts_towards_the_cap_for_later_additional_gates(self):
-        """Two live copies (A, C) plus B's demand-driven first lane reach
-        the cap before A's and C's passes run: both additional lanes must
-        stand down. With the count ignoring first loads, A's additional
-        would still pass its gate and push the cluster to four copies."""
-        host_a = self._provider(1, "A", [_lane("planner-foo", "foo", "running")])
-        empty_b = self._provider(2, "B", [])
-        host_c = self._provider(3, "C", [_lane("planner-foo", "foo", "running")])
-        # Dedup off: only the cap — fed by the cycle's cluster count — can
-        # save this one.
-        planner_a = self._planner_for(host_a, dedup=False)
-        planner_b = self._planner_for(empty_b, dedup=False)
-        planner_c = self._planner_for(host_c, dedup=False)
-        cycle_planned_models: set = set()
-        cycle_planned_additional_models: set = set()
-        cluster = {"foo": 2}
-
-        # Provider pass order: B (first lane) before A and C (additional).
-        actions_b = planner_b._compute_demand_actions(
-            2,
-            [],
-            cycle_planned_models=cycle_planned_models,
-            cycle_planned_additional_models=cycle_planned_additional_models,
-            cluster_lanes_by_model=cluster,
-        )
-        actions_a = planner_a._compute_demand_actions(
-            1,
-            host_a.lanes,
-            cycle_planned_models=cycle_planned_models,
-            cycle_planned_additional_models=cycle_planned_additional_models,
-            cluster_lanes_by_model=cluster,
-        )
-        actions_c = planner_c._compute_demand_actions(
-            3,
-            host_c.lanes,
-            cycle_planned_models=cycle_planned_models,
-            cycle_planned_additional_models=cycle_planned_additional_models,
-            cluster_lanes_by_model=cluster,
-        )
-
-        loads = [a for a in actions_a + actions_b + actions_c if a.action == "load" and a.model_name == "foo"]
-        assert [(a.provider_id, a.lane_id) for a in loads] == [(2, "planner-foo")]
-
-
-# ---------------------------------------------------------------------------
-# The cluster cap counts copies a scale-out accepted but has not finished
-# ---------------------------------------------------------------------------
-
-
-class TestInFlightCopiesCountTowardTheCap:
-    """The demand pass's active set treats an unfailed starting replica as
-    an existing copy of the model — which is what justifies planning yet
-    another. A cap that only saw loaded/running would therefore plan a
-    fresh suffix every cycle during a multi-minute startup, more copies
-    than MAX_REPLICAS_PER_MODEL can hold."""
-
-    def _provider(self, lanes: List[LaneSchedulerSignals]) -> _MockProvider:
-        return _MockProvider(
-            provider_id=1,
-            name="A",
-            lanes=lanes,
-            capabilities=["X"],
-            available_vram_mb=50_000,
-            profiles={"X": _profile()},
-        )
-
-    def _demand_actions(self, planner: CapacityPlanner, provider: _MockProvider):
-        # What _run_cycle builds for the two cap inputs: loaded/running from
-        # the live report, plus starting copies from the same report.
-        return planner._compute_demand_actions(
-            1,
-            provider.lanes,
-            cluster_lanes_by_model=planner._count_loaded_lanes_per_model(),
-            cluster_starting_lanes_by_model=planner._count_starting_lanes_per_model(),
-        )
-
-    def test_cap_reached_by_starting_copies_blocks_the_next_suffix(self):
-        """One running plus two starting copies is the cap (3): a fourth
-        suffix would exceed MAX_REPLICAS_PER_MODEL once the startups land,
-        so the scale-out stops — every cycle, not just the last one."""
-        provider = self._provider(
-            [
-                _lane("planner-X", "X", "running"),
-                _lane("planner-X-2", "X", "starting"),
-                _lane("planner-X-3", "X", "starting"),
-            ]
-        )
-        planner = _planner(provider, score=2.5, replicate=True)
-
-        actions = self._demand_actions(planner, provider)
-
-        assert [a.lane_id for a in actions if a.action == "load"] == []
-
-    def test_two_copies_with_one_starting_leaves_room_for_one_more(self):
-        """1 + 2 = 3 is the cap, so the third copy is planned while the
-        second is still starting — the block is at the cap, not on
-        'anything is starting'."""
-        provider = self._provider(
-            [
-                _lane("planner-X", "X", "running"),
-                _lane("planner-X-2", "X", "starting"),
-            ]
-        )
-        planner = _planner(provider, score=2.5, replicate=True)
-
-        actions = self._demand_actions(planner, provider)
-
-        assert [a.lane_id for a in actions if a.action == "load"] == ["planner-X-3"]
-
-    def test_a_failed_starting_lane_does_not_count(self):
-        """The demand pass's active set excludes a starting lane whose load
-        failed (the persistent marker) — the cap does the same: a broken
-        copy is backoff material, not headroom."""
-        provider = self._provider(
-            [
-                _lane("planner-X", "X", "running"),
-                _lane("planner-X-2", "X", "starting"),
-                _lane("planner-X-3", "X", "starting"),
-            ]
-        )
-        planner = _planner(provider, score=2.5, replicate=True)
-        planner._load_failed_ids().add((1, "planner-X-3"))
-
-        assert planner._count_starting_lanes_per_model() == {"X": 1}
-
-
-class TestInFlightCopiesCountTowardTheReplicationCap:
-    """The cross-provider replication pass holds the same cap: a replica
-    still starting on one worker is a copy the cluster has committed to,
-    not headroom for another one."""
-
-    def _two_provider_planner(self, lanes_1: List[LaneSchedulerSignals]):
-        provider_1 = _MockProvider(
-            provider_id=1,
-            name="A",
-            lanes=lanes_1,
-            capabilities=["X"],
-            available_vram_mb=50_000,
-            profiles={"X": _profile()},
-        )
-        # A second, empty worker with capability: a valid replica target,
-        # so an empty result is the cap's doing, not a lack of targets.
-        provider_2 = _MockProvider(
-            provider_id=2,
-            name="B",
-            lanes=[],
-            capabilities=["X"],
-            available_vram_mb=50_000,
-            profiles={"X": _profile()},
-        )
-        planner = _planner(provider_1, score=2.5, replicate=True)
-        planner._facade = _MockFacade([provider_1, provider_2])
-        return planner
-
-    def test_replication_stops_when_starting_copies_reach_the_cap(self):
-        planner = self._two_provider_planner(
-            [
-                _lane("planner-X", "X", "running"),
-                _lane("planner-X-2", "X", "starting"),
-                _lane("planner-X-3", "X", "starting"),
-            ]
-        )
-
-        actions = planner._compute_replication_actions(
-            [1, 2],
-            [("X", 2.5)],
-            planner._count_loaded_lanes_per_model(),
-            set(),
-            None,
-            None,
-            cluster_starting_lanes_by_model=planner._count_starting_lanes_per_model(),
-        )
-
-        assert actions == []
-
-    def test_replication_still_places_beneath_the_cap(self):
-        planner = self._two_provider_planner(
-            [
-                _lane("planner-X", "X", "running"),
-                _lane("planner-X-2", "X", "starting"),
-            ]
-        )
-
-        actions = planner._compute_replication_actions(
-            [1, 2],
-            [("X", 2.5)],
-            planner._count_loaded_lanes_per_model(),
-            set(),
-            None,
-            None,
-            cluster_starting_lanes_by_model=planner._count_starting_lanes_per_model(),
-        )
-
-        assert [(a.provider_id, a.lane_id) for a in actions] == [(2, "planner-X")]
 
 
 # ---------------------------------------------------------------------------

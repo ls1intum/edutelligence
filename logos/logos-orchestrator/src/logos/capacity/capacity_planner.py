@@ -119,10 +119,13 @@ class CapacityPlanner:
     # can opportunistically load another copy — a second lane on the SAME
     # worker (intra-node scale-out in the demand pass, e.g. two 8B instances
     # sharing VRAM) or a lane on another worker (the cross-provider pass) —
-    # without eviction. Caps and floors below; rollout is behind
-    # LOGOS_REPLICATE_ON_FREE_VRAM (default off).
+    # without eviction. Rollout is behind LOGOS_REPLICATE_ON_FREE_VRAM
+    # (default off); the only other gate is the sustained-demand floor below.
+    # There is deliberately no hard copy cap: the no-eviction rule bounds each
+    # copy to genuinely free VRAM, growth is at most one lane per worker plus
+    # one cross-provider replica per cycle, and idle replicas are reaped by the
+    # idle path when demand subsides — VRAM is the real limit, not a magic N.
     DEMAND_REPLICATION_FLOOR = 2.0  # twice DEMAND_LOAD_FLOOR — sustained hot
-    MAX_REPLICAS_PER_MODEL = 3  # safety cap; never more than N copies cluster-wide
 
     # Cross-provider best-first ranking: rough seconds-to-serve cost model.
     # Used by _rank_providers_for_demanded_models to pick the cheapest worker
@@ -766,26 +769,14 @@ class CapacityPlanner:
         # Count loaded lanes per model across the entire cluster, once per
         # cycle. Consumed by:
         #   - replicas-first eviction (Pass 1 in the eviction picker),
-        #   - speculative replication (skip models already at MAX_REPLICAS).
+        #   - speculative replication (skip models not loaded anywhere yet).
         # Only built when at least one consumer is enabled. The demand and
         # replication passes increment it as they plan loads, so a worker
-        # later in the cycle sees copies planned earlier in the same one and
-        # the cluster cap holds even with the cross-provider dedup off.
+        # later in the cycle sees copies planned earlier in the same one.
         cluster_lanes_by_model = (
             self._count_loaded_lanes_per_model()
             if (self._replica_first_eviction or self._replicate_on_free_vram)
             else None
-        )
-        # In-flight copies (see _count_starting_lanes_per_model): a scale-out
-        # the worker accepted but has not finished. The demand pass counts
-        # such a lane as an active copy of the model — which is what
-        # justifies planning yet another — so the cluster cap must count it
-        # too, or every cycle during a multi-minute startup plans a fresh
-        # suffix past MAX_REPLICAS_PER_MODEL. Loads planned in this same
-        # cycle need no separate count: both passes increment
-        # cluster_lanes_by_model as they plan.
-        cluster_starting_lanes_by_model = (
-            self._count_starting_lanes_per_model() if self._replicate_on_free_vram else None
         )
 
         for provider_id in provider_ids:
@@ -815,7 +806,6 @@ class CapacityPlanner:
                     cycle_planned_additional_models=cycle_planned_additional_models,
                     best_provider_for_model=best_provider_for_model,
                     cluster_lanes_by_model=cluster_lanes_by_model,
-                    cluster_starting_lanes_by_model=cluster_starting_lanes_by_model,
                     cycle_balance_wake_models=cycle_balance_wake_models,
                     cycle_reserved_lane_ids=cycle_reserved_lane_ids,
                 )
@@ -842,7 +832,6 @@ class CapacityPlanner:
                     cycle_planned_models,
                     cycle_planned_additional_models,
                     cycle_reserved_lane_ids,
-                    cluster_starting_lanes_by_model=cluster_starting_lanes_by_model,
                 )
             )
 
@@ -3097,33 +3086,6 @@ class CapacityPlanner:
                     counts[lane.model_name] = counts.get(lane.model_name, 0) + 1
         return counts
 
-    def _count_starting_lanes_per_model(self) -> dict[str, int]:
-        """Count in-flight (starting) lanes across the whole cluster, by model.
-
-        A scale-out the worker accepted but has not finished. The demand pass
-        counts such a lane as an active copy of the model (its ``active_lanes``
-        set excludes only stopped, error, sleeping, and failed lanes), so the
-        cluster-copy cap must count it as well — otherwise every cycle during
-        a multi-minute startup plans yet another suffix, exceeding
-        ``MAX_REPLICAS_PER_MODEL``. A starting lane whose load failed (the
-        persistent marker) does not count: the demand pass's active set
-        excludes it for the same reason.
-        """
-        counts: dict[str, int] = {}
-        failed = self._load_failed_ids()
-        for pid in self._facade.provider_ids():
-            try:
-                lanes = self._facade.get_all_provider_lane_signals(pid)
-            except Exception:
-                continue
-            for lane in lanes:
-                if lane.runtime_state != "starting":
-                    continue
-                if (pid, lane.lane_id) in failed:
-                    continue
-                counts[lane.model_name] = counts.get(lane.model_name, 0) + 1
-        return counts
-
     # ------------------------------------------------------------------
     # Cross-provider best-first ranking
     # ------------------------------------------------------------------
@@ -3438,7 +3400,6 @@ class CapacityPlanner:
         cycle_planned_additional_models: Optional[set[str]] = None,
         best_provider_for_model: Optional[dict[str, int]] = None,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
-        cluster_starting_lanes_by_model: Optional[dict[str, int]] = None,
         cycle_balance_wake_models: Optional[set[str]] = None,
         cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
     ) -> List[CapacityPlanAction]:
@@ -3989,11 +3950,10 @@ class CapacityPlanner:
             # ── COLD LOAD ────────────────────────────────────────────────────
             # An additional lane — the model already runs awake on this
             # worker — is speculative scale-out and gets the same deal as the
-            # cross-provider replication pass: sustained demand, the cluster-
-            # wide copy cap, and the replication flag. The no-eviction rule is
-            # enforced once the placement is known (an extra copy must never
-            # push out another model's lane). A first lane keeps the full load
-            # semantics below.
+            # cross-provider replication pass: sustained demand and the
+            # replication flag. The no-eviction rule is enforced once the
+            # placement is known (an extra copy must never push out another
+            # model's lane). A first lane keeps the full load semantics below.
             # A copy of this model on this worker that errored — or just
             # failed to confirm — still holds its lane id, and the allocator
             # would answer with the next free suffix: under sustained demand
@@ -4010,26 +3970,14 @@ class CapacityPlanner:
                 )
                 continue
             is_additional_lane = bool(active_lanes)
-            # The cap counts in-flight copies too: active_lanes above treats
-            # an unfailed starting replica as an existing copy — which is
-            # what justifies this scale-out — so a cap that only saw
-            # loaded/running would plan a fresh suffix every cycle during a
-            # multi-minute startup, past MAX_REPLICAS_PER_MODEL.
-            in_flight_copies = (cluster_starting_lanes_by_model or {}).get(model_name, 0)
-            if is_additional_lane and (
-                not self._replicate_on_free_vram
-                or eff < self.DEMAND_REPLICATION_FLOOR
-                or (cluster_lanes_by_model or {}).get(model_name, 0) + in_flight_copies >= self.MAX_REPLICAS_PER_MODEL
-            ):
+            if is_additional_lane and (not self._replicate_on_free_vram or eff < self.DEMAND_REPLICATION_FLOOR):
                 logger.info(
                     "Skipping additional lane of %s on worker=%s: extra copies need "
-                    "LOGOS_REPLICATE_ON_FREE_VRAM, eff=%.2f ≥ replication floor=%.1f, "
-                    "free VRAM without eviction, and cluster copies < %d",
+                    "LOGOS_REPLICATE_ON_FREE_VRAM and eff=%.2f ≥ replication floor=%.1f",
                     model_name,
                     self._facade.get_provider_name(provider_id) or provider_id,
                     eff,
                     self.DEMAND_REPLICATION_FLOOR,
-                    self.MAX_REPLICAS_PER_MODEL,
                 )
                 continue
 
@@ -4339,7 +4287,6 @@ class CapacityPlanner:
         cycle_planned_models: set[str],
         cycle_planned_additional_models: Optional[set[str]] = None,
         cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
-        cluster_starting_lanes_by_model: Optional[dict[str, int]] = None,
     ) -> list[CapacityPlanAction]:
         """Cross-provider replication pass — runs once per cycle.
 
@@ -4351,9 +4298,10 @@ class CapacityPlanner:
           - has enough free VRAM to load it *without* eviction
             (``loaded_vram_mb + tp × PER_GPU_COLD_START_MB``), and
           - passes the per-GPU feasibility gate.
-        Emit a single ``load`` action onto that worker. At most one new
-        replica per model per cycle; capped at ``MAX_REPLICAS_PER_MODEL``
-        copies cluster-wide.
+        Emit a single ``load`` action onto that worker — at most one new
+        replica per model per cycle, onto a worker that does not already
+        host it (the cross-worker distribution; the demand pass owns
+        intra-node additional lanes).
 
         Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
 
@@ -4386,14 +4334,6 @@ class CapacityPlanner:
             current_replicas = cluster_lanes_by_model.get(model_name, 0)
             if current_replicas == 0:
                 continue  # not loaded anywhere yet → main demand pass owns first load
-            # In-flight copies count against the cap like the demand pass
-            # does: a replica still starting on some worker is a copy the
-            # cluster has committed to, not headroom for another one.
-            if (
-                current_replicas + (cluster_starting_lanes_by_model or {}).get(model_name, 0)
-                >= self.MAX_REPLICAS_PER_MODEL
-            ):
-                continue
 
             for pid in provider_ids:
                 if not self._is_plannable(pid):
@@ -4474,8 +4414,7 @@ class CapacityPlanner:
                         reason=(
                             f"Speculative replica: demand eff={score:.2f} ≥ "
                             f"floor={self.DEMAND_REPLICATION_FLOOR}, "
-                            f"current_replicas={current_replicas}, "
-                            f"max={self.MAX_REPLICAS_PER_MODEL}"
+                            f"current_replicas={current_replicas}"
                         ),
                     )
                 )
@@ -6253,12 +6192,11 @@ class CapacityPlanner:
         lane lands in ``error`` — or the confirmation times out with the lane
         stuck — and it keeps holding its lane id for as long as it exists.
         Left unchecked, ``_next_lane_id_for_model`` skips that id and answers
-        with the next free suffix, the per-lane load-failure cooldown never
-        covers the new id, and the cluster-copy cap does not count the
-        errored lane — so sustained demand would allocate a fresh errored
-        lane every cycle. Back off while any lane of the model is in error
-        state or load-failure cooldown, or the replica-1 id is cooling down
-        after its lane already left the worker.
+        with the next free suffix, and the per-lane load-failure cooldown
+        never covers the new id — so sustained demand would allocate a fresh
+        errored lane every cycle. Back off while any lane of the model is in
+        error state or load-failure cooldown, or the replica-1 id is cooling
+        down after its lane already left the worker.
         """
         if self._lane_is_in_load_failure_cooldown(provider_id, self._planner_lane_id(model_name)):
             return "replica lane in load-failure cooldown"
