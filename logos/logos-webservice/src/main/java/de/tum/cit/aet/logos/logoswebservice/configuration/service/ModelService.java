@@ -398,7 +398,10 @@ public class ModelService {
             boolean supportsFunctionCalling,
             boolean supportsVision,
             boolean supportsReasoning) {
-        modelRepository.findById(modelId)
+        // findByIdForUpdate, not findById: the lock taken here is held until this
+        // transaction commits, so a catalog sync running in parallel waits for the
+        // override instead of overwriting it (see ModelRepository).
+        modelRepository.findByIdForUpdate(modelId)
             .orElseThrow(() -> new IllegalArgumentException("Model not found: " + modelId));
         modelCapabilitiesPersistenceService.setManualCapabilities(
             modelId,
@@ -411,7 +414,10 @@ public class ModelService {
 
     @Transactional
     public Map<String, Object> resetModelCapabilities(Integer modelId) {
-        Model model = modelRepository.findById(modelId)
+        // Read the name under the row lock: the re-sync below matches it against
+        // the persisted name, so a rename that lands between the two would
+        // otherwise make the re-sync a no-op.
+        Model model = modelRepository.findByIdForUpdate(modelId)
             .orElseThrow(() -> new IllegalArgumentException("Model not found: " + modelId));
         modelCapabilitiesPersistenceService.clearManualOverride(modelId);
         // Synchronous re-sync so the response (and the UI) reflects the catalog state
@@ -421,7 +427,8 @@ public class ModelService {
         return capabilitiesState(modelId);
     }
 
-    private Map<String, Object> capabilitiesState(Integer modelId) {
+    /** The capability flags a client should show for a model, row or no row. */
+    public Map<String, Object> capabilitiesState(Integer modelId) {
         ModelCapabilities capabilities = modelCapabilitiesRepository.findByModelId(modelId)
             .orElse(null);
         Map<String, Object> m = new LinkedHashMap<>();

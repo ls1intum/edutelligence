@@ -75,9 +75,14 @@ export class ModelManagementService {
     return res.model_id;
   }
 
-  /** the application server replies `{ result }` only; no model body is returned. */
-  async updateModel(payload: UpdateModelPayload): Promise<void> {
-    await firstValueFrom(this.http.post('/api/logosdb/update_model_info', payload));
+  /**
+   * The backend replies `{ result }`; a request that carries a name also gets
+   * `capabilities`, the state the catalog re-sync left behind for the new name.
+   */
+  updateModel(payload: UpdateModelPayload): Promise<UpdateModelResponse> {
+    return firstValueFrom(
+      this.http.post<UpdateModelResponse>('/api/logosdb/update_model_info', payload),
+    );
   }
 
   deleteModel(id: number): Promise<void> {
@@ -141,6 +146,12 @@ export interface ModelCapability {
   supports_vision: boolean;
   supports_reasoning: boolean;
   manual_override: boolean;
+}
+
+export interface UpdateModelResponse {
+  result: string;
+  /** Only present when the request carried a name, i.e. when a re-sync ran. */
+  capabilities?: ModelCapabilityState;
 }
 
 /** State map returned by set/reset_model_capabilities. */

@@ -15,23 +15,38 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelCapabilities;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelCapabilitiesRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 
 class ModelCapabilitiesUpdaterServiceUnitTest {
 
     private ModelCapabilitiesRepository capabilitiesRepository;
+    private ModelRepository modelRepository;
     private ModelCapabilitiesUpdaterService svc;
 
     @BeforeEach
     void setUp() {
         capabilitiesRepository = mock(ModelCapabilitiesRepository.class);
+        modelRepository = mock(ModelRepository.class);
         svc = new ModelCapabilitiesUpdaterService(
             null,
             null,
             null,
-            new ModelCapabilitiesPersistenceService(capabilitiesRepository)
+            new ModelCapabilitiesPersistenceService(capabilitiesRepository, modelRepository)
         );
+    }
+
+    /**
+     * The persistence layer re-reads the model under a row lock and only writes
+     * when the persisted name still is the one the sync resolved against the
+     * catalog, so every store test has to say what that persisted name is.
+     */
+    private void givenModelNamed(String name) {
+        Model model = new Model();
+        model.setName(name);
+        when(modelRepository.findByIdForUpdate(5001)).thenReturn(Optional.of(model));
     }
 
     // --- normalizeModelName ---
@@ -121,6 +136,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
                 "supports_reasoning", true
             )
         );
+        givenModelNamed("gpt-4");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
 
@@ -137,6 +153,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         Map<String, Object> catalog = Map.of(
             "gpt-4", Map.of("max_output_tokens", 8192)
         );
+        givenModelNamed("gpt-4");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
 
@@ -153,6 +170,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         catalog.put("gpt-4", Map.of("supports_function_calling", true));
         catalog.put("azure/gpt-4", Map.of("supports_vision", true));
         catalog.put("openrouter/openai/gpt-4", Map.of("supports_reasoning", true));
+        givenModelNamed("gpt-4");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
 
@@ -170,6 +188,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         );
         ModelCapabilities existing = new ModelCapabilities(5001, true, false, true);
         when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(existing));
+        givenModelNamed("gpt-4");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
@@ -184,6 +203,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
             "gpt-4o", Map.of("supports_function_calling", true)
         );
         when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.empty());
+        givenModelNamed("gpt-4");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
@@ -204,6 +224,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
 
         ModelCapabilities existing = new ModelCapabilities(5001, true, false, true);
         when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(existing));
+        givenModelNamed("sample_spec");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "sample_spec")).isFalse();
 
@@ -219,11 +240,30 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
 
         ModelCapabilities existing = new ModelCapabilities(5001, true, false, true);
         when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(existing));
+        givenModelNamed("gpt-4");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
         verify(capabilitiesRepository, never()).save(any());
         verify(capabilitiesRepository).delete(existing);
+    }
+
+    @Test
+    void extractAndStore_supersededNameKeepsPreviousRow() {
+        // A rename that landed after this sync started owns the row: the persisted
+        // name no longer matches the name this sync resolved against the catalog,
+        // so neither a write nor a delete may touch the row.
+        Map<String, Object> catalog = Map.of(
+            "openai/gpt-4", Map.of("supports_function_calling", true)
+        );
+        ModelCapabilities existing = new ModelCapabilities(5001, false, false, false);
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(existing));
+        givenModelNamed("gpt-4o");
+
+        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
+
+        verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository, never()).delete(any());
     }
 
     @Test
