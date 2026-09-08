@@ -27,6 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
+from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
@@ -92,6 +93,7 @@ from logos.responses import extract_model, extract_service_tier, get_client_ip, 
 from logos.role_auth import require_logos_admin_key
 from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.cloud_model_sync import CloudModelSyncService
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.terminal_logging import (
@@ -212,6 +214,7 @@ _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
+_cloud_model_sync: Optional[CloudModelSyncService] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1869,6 +1872,8 @@ async def lifespan(app: FastAPI):
         await _calibration_orchestrator.stop()
     if _azure_deployment_sync:
         await _azure_deployment_sync.stop()
+    if _cloud_model_sync:
+        await _cloud_model_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -3367,6 +3372,17 @@ async def start_pipeline():
     )
     await _azure_deployment_sync.start()
 
+    # Every other cloud provider discovers its models over GET /v1/models, and
+    # the same pass records the context windows the upstream reports so
+    # /v1/models can republish them.
+    global _cloud_model_sync
+    _cloud_model_sync = CloudModelSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _cloud_model_sync.start()
+
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
         planner_enabled,
@@ -3773,7 +3789,11 @@ async def _streaming_response(
             is_streaming=True,
         )
         return JSONResponse(
-            content=error_body,
+            content=(
+                translate_error(error_body)
+                if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+                else error_body
+            ),
             status_code=corrected_sc,
             headers=_decision_response_headers(request_id, scheduling_stats),
         )
@@ -3977,7 +3997,13 @@ async def _streaming_response(
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-    response_headers["content-type"] = upstream_content_type or "text/event-stream"
+    # A translated response is an Anthropic event stream regardless of how the
+    # upstream labelled its own, so the client is told what it is actually
+    # about to parse rather than what the upstream sent.
+    translating_messages = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+    response_headers["content-type"] = (
+        "text/event-stream" if translating_messages else (upstream_content_type or "text/event-stream")
+    )
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
@@ -3986,11 +4012,29 @@ async def _streaming_response(
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
             else None
         )
+        # A Messages request forwarded to an upstream without a Messages route
+        # comes back as a chat/completions or Responses event stream; the
+        # client's SSE parser only understands the Anthropic one.
+        anthropic_stream = (
+            stream_translator(context.anthropic_dialect, model_name=context.model_name)
+            if context.anthropic_dialect is not None
+            else None
+        )
         error_message = None
         ttft_recorded = False
 
         def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
             return cost_enricher.feed(chunk) if cost_enricher else [chunk]
+
+        def client_chunks(chunk: bytes | str) -> list[bytes | str]:
+            """Record one upstream chunk and return what the client receives.
+
+            Logging, billing and the live view all read the upstream's own
+            frames, so the accumulator is fed before any translation — only
+            the bytes on the wire change shape.
+            """
+            stream_log.feed(chunk)
+            return anthropic_stream.feed(chunk) if anthropic_stream else [chunk]
 
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
@@ -3999,8 +4043,8 @@ async def _streaming_response(
             # Yield the already-peeked first chunk
             if first_chunk:
                 for outgoing_chunk in enriched_chunks(first_chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
                 if not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
@@ -4009,8 +4053,8 @@ async def _streaming_response(
 
             async for chunk in chunk_iter:
                 for outgoing_chunk in enriched_chunks(chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
                 _live_streams.update(request_id, stream_log.streamed_tokens())
                 if chunk and not ttft_recorded:
                     if log_id:
@@ -4019,17 +4063,28 @@ async def _streaming_response(
                     ttft_recorded = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
+            if anthropic_stream:
+                # Idempotent: a stream that already ended on [DONE] (or on the
+                # Responses API's terminal event) has emitted its message_stop,
+                # and this closes one that simply ran out of bytes.
+                for client_chunk in anthropic_stream.finish():
+                    yield client_chunk
         except Exception as exc:
             error_message = str(exc)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
-            # synthetic OpenAI error frame without corrupting its protocol.
-            if upstream_media_type == "text/event-stream":
+            # synthetic error frame without corrupting its protocol — in the
+            # dialect the client is reading, which is Anthropic's whenever the
+            # response was being translated.
+            if anthropic_stream:
+                for client_chunk in anthropic_stream.error(str(exc)):
+                    yield client_chunk
+            elif upstream_media_type == "text/event-stream":
                 import json as _json
 
                 _, error_body = coerce_upstream_error(500, {"error": str(exc)})
@@ -4364,6 +4419,18 @@ async def _sync_response(
         if not exec_result.success:
             status_code, response_payload = coerce_upstream_error(
                 status_code, response_payload or {"error": exec_result.error}
+            )
+
+        # A Messages request whose upstream has no Messages route was forwarded
+        # as chat/completions or a Responses call; the client still expects an
+        # Anthropic message back. Translated here, last, so that the logging,
+        # billing and rate-limit bookkeeping above all ran against the
+        # upstream's own OpenAI-shaped body.
+        if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE):
+            response_payload = (
+                translate_response(response_payload, context.anthropic_dialect, model_name=context.model_name)
+                if exec_result.success
+                else translate_error(response_payload)
             )
 
         # Return dict for async jobs, JSONResponse for sync endpoints
@@ -6294,11 +6361,41 @@ def _profile_native_context_length(profile: dict) -> int:
 _HISTORIC_MAX_CONTEXT_TTL_SECONDS = 10.0
 _historic_max_context_cache: tuple[float, dict[str, int]] | None = None
 
+# The cloud view is refreshed by the model sync (every 15 minutes by default),
+# so it is cached on the same terms as the historic maxima above.
+_cloud_context_cache: tuple[float, dict[str, dict[str, int]]] | None = None
+
 
 def _clear_historic_max_context_cache() -> None:
-    """Drop the cached historic maxima (used by the tests; production never needs it)."""
-    global _historic_max_context_cache
+    """Drop the cached context lookups (used by the tests; production never needs it)."""
+    global _historic_max_context_cache, _cloud_context_cache
     _historic_max_context_cache = None
+    _cloud_context_cache = None
+
+
+def _cloud_context_by_model() -> dict[str, dict[str, int]]:
+    """Model name -> the context windows cloud upstreams report for it.
+
+    The cloud counterpart of the logosnode runtime snapshots: a cloud provider
+    has no lane to inspect, so what it publishes on its own ``/v1/models`` is
+    the only measurement there is. ``CloudModelSyncService`` records it per
+    provider; this reduces it across providers. Returns an empty mapping when
+    the database cannot be reached, so a broken lookup reads as "no cloud
+    provider reports a window" for one TTL rather than failing the endpoint.
+    """
+    global _cloud_context_cache
+    now = time.monotonic()
+    cached = _cloud_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            contexts = db.get_cloud_context_by_model()
+    except Exception:
+        logger.warning("Failed to load the cloud context windows by model", exc_info=True)
+        return {}
+    _cloud_context_cache = (now, contexts)
+    return contexts
 
 
 def _historic_max_context_by_model() -> dict[str, int]:
@@ -6393,6 +6490,27 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
             model = lane["model"]
             _record(model, "current_min", window, keep_smallest=True)
             _record(model, "current_max", window)
+
+    # Cloud upstreams have no lane to read, so their windows come from what
+    # they publish themselves. Folded in on the same terms as a workernode's:
+    # current_min keeps the smallest, because a request may be routed to any
+    # deployment of the model — cloud or local — and only the smallest holds
+    # unconditionally. Without this a model served only through a cloud
+    # provider had no window at all, which is what made a downstream Logos
+    # instance hide the context its upstream had measured.
+    for model, entry in _cloud_context_by_model().items():
+        # One window an upstream serves is its own minimum, maximum and
+        # ceiling alike, so a partially-reported entry widens the same way a
+        # lane's single number does rather than leaving the other two blank.
+        current_min = entry.get("current_min")
+        current_max = entry.get("current_max") or current_min
+        overall = entry.get("overall") or current_max
+        if current_min:
+            _record(model, "current_min", current_min, keep_smallest=True)
+        if current_max:
+            _record(model, "current_max", current_max)
+        if overall:
+            _record(model, "overall", overall)
 
     # The live snapshots above only exist while workernodes are connected.
     # Top the "overall" figure up with the historic maximum the database keeps

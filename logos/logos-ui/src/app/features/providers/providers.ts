@@ -54,6 +54,7 @@ export class Providers implements OnInit {
     'bedrock',
     'deepseek',
     'groq',
+    'logos',
     'none',
   ];
   readonly privacyLevels: PrivacyLevel[] = [
