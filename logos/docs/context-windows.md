@@ -189,6 +189,54 @@ carries on. If a single turn grows past `window − reserve − 3000` it refuses
 send and asks for a `/compact` instead. Neither is an error the user has to
 recover from — the failure mode this replaces was a 400 from vLLM mid-turn.
 
+#### The floor: 37,024 tokens
+
+The deductions above are fixed, so there is a window below which Claude Code
+cannot run **at all** — and it is much higher than it looks. Its own opening
+prompt (system prompt plus the schemas of every tool it carries) is around
+13,000 tokens before the user has typed anything, and none of it is compactable:
+
+```text
+floor       = 13000 opening prompt + 20000 reservation + 3000 hard stop + 1024 headroom  = 37024
+comfortable = 13000 opening prompt + 20000 reservation + 13000 auto-compact + 1024        = 47024
+```
+
+A 32,768-token lane leaves `32768 − 20000 = 12768` tokens of input — one token
+short of the opening prompt. The session's **first** message comes back as
+
+```text
+This model's maximum context length is 32768 tokens. However, you requested
+20000 output tokens and your prompt contains at least 12769 input tokens
+```
+
+and there is nothing to compact, so it never recovers. Between the floor and
+47,024 the session runs but auto-compaction fires from the first message on.
+
+Two places enforce this, because a model can be chosen in either:
+
+- **The AI Tools page** disables such a model for Claude Code (`claudeCodeFitFor`
+  in `ai-tools.ts`), names the window in the option label and blocks the wizard
+  on the model step with the arithmetic spelled out. OpenCode is unaffected — it
+  is told what to reserve (`min(8192, context/2)`), so a narrow window costs it
+  reply length, not the session. The figure judged is
+  `max_model_len_current_min` — the one a request meets whichever deployment
+  answers — falling through to the wider figures only when it is absent, and a
+  model no lane serves is never judged.
+- **The wrapper** refuses to start and prints what is left, what it costs and
+  the `LOGOS_MAX_OUTPUT_TOKENS` value that would fit — measured against the
+  auto-compact point rather than the hard stop, since a reservation that only
+  clears the hard stop leaves a session compacting on every turn. `--check`
+  prints all of it without refusing anything, which is what makes it the thing
+  to run when a session will not start.
+
+Lowering the reservation is the only lever on the client side: at 32,768 tokens
+`LOGOS_MAX_OUTPUT_TOKENS=5744` makes the model usable with shorter replies. The
+better lever is the window — §2 and §3.
+
+The check the wrapper used to have (`headroom + reservation >= window`) only
+caught the arithmetic going negative, which a 32,768-token window passes
+comfortably while being unusable.
+
 The "auto-compact fires at ~60%" effect that started this work is these two
 fixed deductions — 33,000 tokens in total — as a share of a window that was
 already too small. It is not a percentage, and there is no knob to raise it:
@@ -246,6 +294,8 @@ capacity is tight; the routing in §3 gives them the best available shot.
 | Symptom | Cause |
 | --- | --- |
 | Claude Code compacts far earlier than the window suggests | The output reservation is being subtracted twice, or the session is running on `guaranteed` while `available` is much larger. Check `claude-logos --check`. |
+| `claude-logos` refuses to start with `BLOCKED` | The window is below the 37,024-token floor, so the session's first request would be rejected. Pick a wider model, or take the `LOGOS_MAX_OUTPUT_TOKENS` value the message names. |
+| The very first message of a session 400s with `you requested 20000 output tokens` | The lane came up narrower than the window the session was sized from — the cold-start case: with no lane up, only `max_model_len_overall` is known, and that is the widest window the model has *ever* been calibrated for, not what the planner will give a new lane from the capacity free right now. The next start sizes itself against the lane that is now up. |
 | `maximum context length is N tokens` 400s | The request landed on a deployment narrower than the estimate expected — most likely one that reports no window. Switch that wrapper to `LOGOS_CONTEXT_SOURCE=guaranteed`. |
 | A model is never placed on a node | The placement floor cannot be met there. Look for the "no calibrated KV point serves the required minimum" line and lower `min_context_fraction` for that model in the worker's config.yml. |
 | `max_model_len` absent from `/v1/models` | Nothing reports a window that always holds: a cloud model, a vLLM lane running at the model's native maximum (which the worker does not report), or every workernode offline. In the last case `max_model_len_overall` still carries the model's historic maximum, and the claude-logos wrapper sizes the session from it (startup line says "no lane is up yet"). |

@@ -1,0 +1,904 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    logicalFilePath="liquibase/changelog/022_token_cost_decomposition.xml"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Token cost formula: split usage into non-overlapping billable quantities,
+         price each via a fallback chain, generalise token_prices beyond per-token
+         units, add context/service-tier rows, route all cost reads through one
+         function. Spec: docs/superpowers/specs/2026-09-03-token-cost-formula-design.md -->
+
+    <changeSet id="022-1-schema-and-remap" author="logos">
+        <sql><![CDATA[
+            ALTER TABLE token_prices ADD COLUMN unit TEXT NOT NULL DEFAULT 'token';
+            ALTER TABLE token_prices ADD COLUMN min_context_tokens BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE token_prices ADD COLUMN service_tier TEXT NOT NULL DEFAULT 'default';
+            ALTER TABLE token_prices RENAME COLUMN price_per_k_token TO price_per_k_unit;
+
+            ALTER TABLE log_entry ADD COLUMN service_tier TEXT;
+            ALTER TABLE log_entry ADD COLUMN settled_cost_micro_cents BIGINT;
+
+            -- Response finalisation is retryable: keep the newest value for legacy
+            -- duplicates, then enforce idempotent writes.
+            DELETE FROM usage_tokens older
+            USING usage_tokens newer
+            WHERE older.log_entry_id = newer.log_entry_id
+              AND older.type_id = newer.type_id
+              AND older.id < newer.id;
+            ALTER TABLE usage_tokens
+                ADD CONSTRAINT uq_usage_tokens_log_type UNIQUE (log_entry_id, type_id);
+
+            -- Canonical billable-quantity types, referenced by name from price rows
+            -- and the decomposition function.
+            INSERT INTO token_types (name, description)
+            SELECT x.n, 'billable quantity'
+            FROM (VALUES
+                ('billed_input_uncached'),
+                ('billed_input_cache_read'),
+                ('billed_input_cache_write'),
+                ('billed_input_cache_write_1h'),
+                ('billed_input_audio'),
+                ('billed_input_audio_cache_read'),
+                ('billed_input_audio_cache_write'),
+                ('billed_input_image_tokens'),
+                ('billed_output_text'),
+                ('billed_output_reasoning'),
+                ('billed_output_audio'),
+                ('billed_output_image_tokens'),
+                ('billed_output_video_tokens'),
+                ('billed_citation_tokens'),
+                ('billed_input_characters'),
+                ('billed_output_characters'),
+                ('billed_requests'),
+                ('billed_input_images'),
+                ('billed_output_images'),
+                ('billed_input_pixels'),
+                ('billed_output_pixels'),
+                ('billed_ocr_pages'),
+                ('billed_ocr_credits'),
+                ('billed_annotation_pages'),
+                ('billed_search_queries'),
+                ('billed_search_queries_low'),
+                ('billed_search_queries_high'),
+                ('billed_search_prompts'),
+                ('billed_search_prompts_low'),
+                ('billed_search_prompts_high'),
+                ('billed_output_milliseconds')
+                ,('billed_output_milliseconds_1080p')
+                ,('billed_output_milliseconds_4k')
+                ,('billed_input_video_milliseconds')
+                ,('billed_input_video_milliseconds_above_8s')
+                ,('billed_input_video_milliseconds_above_15s')
+                ,('billed_google_maps_queries')
+                ,('billed_code_interpreter_sessions')
+                ,('billed_guardrail_automatedReasoningPolicyUnits')
+                ,('billed_guardrail_contentPolicyImageUnits')
+                ,('billed_guardrail_contentPolicyUnits')
+                ,('billed_guardrail_contextualGroundingPolicyUnits')
+                ,('billed_guardrail_sensitiveInformationPolicyFreeUnits')
+                ,('billed_guardrail_sensitiveInformationPolicyUnits')
+                ,('billed_guardrail_topicPolicyUnits')
+                ,('billed_guardrail_wordPolicyUnits')
+            ) AS x(n)
+            WHERE NOT EXISTS (SELECT 1 FROM token_types t WHERE t.name = x.n);
+
+            -- Old extraction stored provider spellings verbatim. Move those rows
+            -- onto the canonical vocabulary used by logos_price_usage; GREATEST
+            -- avoids double-charging rows holding both an alias and its canonical.
+            INSERT INTO token_types (name, description)
+            SELECT x.n, 'canonical usage quantity'
+            FROM (VALUES
+                ('prompt_cached_tokens'),
+                ('prompt_cache_write_tokens'),
+                ('prompt_cache_write_1h_tokens'),
+                ('completion_video_tokens'),
+                ('citation_tokens'),
+                -- Not a token count: a flag the orchestrator sets when the response
+                -- arrived in the native Anthropic/Bedrock shape (input_tokens is the
+                -- uncached remainder, cache reads/writes disjoint). logos_price_usage
+                -- reads it to pick the decomposition; never priced.
+                ('usage_shape_disjoint')
+            ) AS x(n)
+            WHERE NOT EXISTS (SELECT 1 FROM token_types t WHERE t.name = x.n);
+
+            WITH aliases(old_name, new_name) AS (
+                VALUES
+                    ('cache_read_input_tokens',       'prompt_cached_tokens'),
+                    ('cacheReadInputTokens',          'prompt_cached_tokens'),
+                    ('prompt_cache_hit_tokens',       'prompt_cached_tokens'),
+                    ('promptCacheHitTokens',          'prompt_cached_tokens'),
+                    ('cache_creation_input_tokens',   'prompt_cache_write_tokens'),
+                    ('cacheWriteInputTokens',         'prompt_cache_write_tokens'),
+                    ('cacheCreationInputTokens',      'prompt_cache_write_tokens'),
+                    ('prompt_created_cache_tokens',   'prompt_cache_write_tokens')
+            ), normalized AS (
+                SELECT ut.log_entry_id, target.id AS type_id, MAX(ut.token_count) AS token_count
+                FROM usage_tokens ut
+                JOIN token_types source ON source.id = ut.type_id
+                JOIN aliases a ON a.old_name = source.name
+                JOIN token_types target ON target.name = a.new_name
+                GROUP BY ut.log_entry_id, target.id
+            )
+            INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+            SELECT log_entry_id, type_id, token_count FROM normalized
+            ON CONFLICT (log_entry_id, type_id) DO UPDATE
+                SET token_count = GREATEST(usage_tokens.token_count, EXCLUDED.token_count);
+
+            DELETE FROM usage_tokens ut
+            USING token_types tt
+            WHERE tt.id = ut.type_id
+              AND tt.name IN (
+                  'cache_read_input_tokens', 'cacheReadInputTokens',
+                  'prompt_cache_hit_tokens', 'promptCacheHitTokens',
+                  'cache_creation_input_tokens', 'cacheWriteInputTokens',
+                  'cacheCreationInputTokens', 'prompt_created_cache_tokens'
+              );
+
+            -- Repoint existing price rows from old usage-type names onto the new
+            -- billable-quantity names (usage rows already normalized above).
+            WITH remap(old_name, new_name, new_unit) AS (
+                VALUES
+                    ('prompt_tokens',               'billed_input_uncached',    'token'),
+                    ('completion_tokens',           'billed_output_text',       'token'),
+                    ('prompt_cached_tokens',        'billed_input_cache_read',  'token'),
+                    ('completion_reasoning_tokens', 'billed_output_reasoning',  'token'),
+                    ('prompt_audio_tokens',         'billed_input_audio',       'token'),
+                    ('completion_audio_tokens',     'billed_output_audio',      'token'),
+                    ('audio_milliseconds',          'audio_milliseconds',       'millisecond')
+            )
+            UPDATE token_prices tp
+            SET type_id = nt.id,
+                unit = r.new_unit
+            FROM remap r
+            JOIN token_types ot ON ot.name = r.old_name
+            JOIN token_types nt ON nt.name = r.new_name
+            WHERE tp.type_id = ot.id;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-1b-cost-finalization-marker" author="logos">
+        <sql>
+            ALTER TABLE log_entry
+                ADD COLUMN IF NOT EXISTS cost_finalized BOOLEAN NOT NULL DEFAULT FALSE;
+        </sql>
+    </changeSet>
+
+    <changeSet id="022-2-resolve-unit-price" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_resolve_unit_price(
+                p_quantity       text,
+                p_model_id       integer,
+                p_provider_id    integer,
+                p_valid_at       timestamptz,
+                p_context_tokens bigint,
+                p_service_tier   text
+            ) RETURNS bigint
+            LANGUAGE sql STABLE AS $fn$
+                WITH chain(name, depth) AS (
+                    SELECT p_quantity, 0
+                    UNION ALL
+                    SELECT x.fb, x.d
+                    FROM (VALUES
+                        ('billed_input_cache_read',     'billed_input_uncached',    1),
+                        ('billed_input_cache_write',    'billed_input_uncached',    1),
+                        ('billed_input_cache_write_1h', 'billed_input_cache_write', 1),
+                        ('billed_input_cache_write_1h', 'billed_input_uncached',    2),
+                        ('billed_input_audio',          'billed_input_uncached',    1),
+                        ('billed_input_audio_cache_read','billed_input_audio',       1),
+                        ('billed_input_audio_cache_read','billed_input_cache_read',  2),
+                        ('billed_input_audio_cache_read','billed_input_uncached',    3),
+                        ('billed_input_audio_cache_write','billed_input_audio',      1),
+                        ('billed_input_audio_cache_write','billed_input_cache_write',2),
+                        ('billed_input_audio_cache_write','billed_input_uncached',   3),
+                        ('billed_input_image_tokens',   'billed_input_uncached',    1),
+                        ('billed_output_reasoning',     'billed_output_text',       1),
+                        ('billed_output_audio',         'billed_output_text',       1),
+                        ('billed_output_image_tokens',  'billed_output_text',       1)
+                        ,('billed_output_video_tokens', 'billed_output_text',       1)
+                        -- Most catalogues carry only the scalar search price, so
+                        -- fall size-suffixed low/high quantities back to it.
+                        ,('billed_search_queries_low',  'billed_search_queries',    1)
+                        ,('billed_search_queries_high', 'billed_search_queries',    1)
+                        ,('billed_search_prompts_low',  'billed_search_prompts',    1)
+                        ,('billed_search_prompts_high', 'billed_search_prompts',    1)
+                    ) AS x(orig, fb, d)
+                    WHERE x.orig = p_quantity
+                )
+                SELECT price.price_per_k_unit
+                FROM chain c
+                JOIN token_types tt ON tt.name = c.name
+                JOIN LATERAL (
+                    SELECT tp.price_per_k_unit
+                    FROM token_prices tp
+                    WHERE tp.type_id = tt.id
+                      AND tp.unit = CASE
+                          WHEN c.name LIKE '%characters' THEN 'character'
+                          WHEN c.name LIKE '%images' THEN 'image'
+                          WHEN c.name LIKE '%pixels' THEN 'pixel'
+                          WHEN c.name LIKE '%milliseconds%' OR c.name = 'audio_milliseconds' THEN 'millisecond'
+                          WHEN c.name LIKE '%pages' THEN 'page'
+                          WHEN c.name LIKE '%credits' THEN 'credit'
+                          WHEN c.name LIKE '%queries%' THEN 'query'
+                          WHEN c.name LIKE '%prompts%' THEN 'request'
+                          WHEN c.name = 'billed_requests' THEN 'request'
+                          WHEN c.name LIKE '%sessions' THEN 'session'
+                          WHEN c.name LIKE 'billed_guardrail_%' THEN 'unit'
+                          ELSE 'token'
+                      END
+                      AND (tp.model_id = p_model_id OR tp.model_id IS NULL)
+                      AND (tp.provider_id = p_provider_id OR tp.provider_id IS NULL)
+                      AND tp.valid_from <= p_valid_at
+                      AND tp.min_context_tokens <= COALESCE(p_context_tokens, 0)
+                      AND (tp.service_tier = COALESCE(p_service_tier, 'default')
+                           OR tp.service_tier = 'default')
+                    ORDER BY (tp.model_id = p_model_id) DESC NULLS LAST,
+                             (tp.provider_id = p_provider_id) DESC NULLS LAST,
+                             (tp.service_tier = COALESCE(p_service_tier, 'default')) DESC,
+                             tp.min_context_tokens DESC,
+                             tp.valid_from DESC,
+                             tp.id DESC
+                    LIMIT 1
+                ) price ON true
+                ORDER BY c.depth
+                LIMIT 1
+            $fn$;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-3-price-usage" author="logos" runOnChange="true">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_price_usage(
+                p_model_id     integer,
+                p_provider_id  integer,
+                p_valid_at     timestamptz,
+                p_service_tier text,
+                p_usage        jsonb
+            ) RETURNS bigint
+            LANGUAGE plpgsql STABLE AS $fn$
+            DECLARE
+                u jsonb := COALESCE(p_usage, '{}'::jsonb);
+                v_is_cloud  boolean;
+                v_disjoint_cache_provider boolean;
+                prompt bigint;    completion bigint;
+                cached bigint;    cwrite bigint;    cwrite1h bigint;   pmiss bigint;
+                paudio bigint;    caudio bigint;    reasoning bigint;
+                iaudio_read bigint; iaudio_write bigint;
+                pimage bigint; cimage bigint; cvideo bigint;
+                b_in_uncached bigint; b_in_read bigint; b_in_write bigint;
+                b_in_write1h bigint;  b_in_audio bigint;
+                b_in_audio_read bigint; b_in_audio_write bigint; b_in_image bigint;
+                b_out_text bigint;    b_out_reason bigint; b_out_audio bigint; b_out_image bigint;
+                b_out_video bigint;
+                disjoint boolean; hitmiss boolean;
+                ctx bigint;
+                has_input_token_price boolean;
+                has_output_token_price boolean;
+                has_ocr_page_price boolean;
+                has_input_image_token_price boolean;
+                has_input_pixel_price boolean;
+                has_output_image_token_price boolean;
+                has_output_pixel_price boolean;
+                has_video_8s_price boolean;
+                has_video_15s_price boolean;
+                total numeric := 0;
+                any_priced boolean := false;
+                unit_price bigint;
+                q record;
+            BEGIN
+                SELECT (provider_type = 'cloud'),
+                       (LOWER(cloud_provider_type::text) IN ('anthropic', 'bedrock'))
+                  INTO v_is_cloud, v_disjoint_cache_provider
+                FROM providers
+                WHERE id = p_provider_id;
+
+                IF NOT FOUND OR NOT v_is_cloud THEN
+                    RETURN NULL;
+                END IF;
+
+                prompt     := COALESCE((u->>'prompt_tokens')::bigint, 0);
+                completion := COALESCE((u->>'completion_tokens')::bigint, 0);
+                cached     := COALESCE((u->>'prompt_cached_tokens')::bigint, 0);
+                cwrite     := COALESCE((u->>'prompt_cache_write_tokens')::bigint, 0);
+                cwrite1h   := COALESCE((u->>'prompt_cache_write_1h_tokens')::bigint, 0);
+                pmiss      := COALESCE((u->>'prompt_cache_miss_tokens')::bigint, 0);
+                paudio     := COALESCE((u->>'prompt_audio_tokens')::bigint, 0);
+                caudio     := COALESCE((u->>'completion_audio_tokens')::bigint, 0);
+                reasoning  := COALESCE((u->>'completion_reasoning_tokens')::bigint, 0);
+                iaudio_read  := COALESCE((u->>'prompt_cache_read_audio_tokens')::bigint, 0);
+                iaudio_write := COALESCE((u->>'prompt_cache_write_audio_tokens')::bigint, 0);
+                pimage       := COALESCE((u->>'prompt_image_tokens')::bigint, 0);
+                cimage       := COALESCE((u->>'completion_image_tokens')::bigint, 0);
+                cvideo       := COALESCE((u->>'completion_video_tokens')::bigint, 0);
+
+                b_in_audio_read  := iaudio_read;
+                b_in_audio_write := iaudio_write;
+                b_in_image       := pimage;
+
+                -- Pick the decomposition from the payload shape, not the provider.
+                -- OpenAI/Azure/Gemini/Groq/DeepSeek report prompt_tokens as the
+                -- whole prompt with cache reads/writes as subsets; Anthropic and
+                -- Bedrock Converse report input_tokens as the uncached remainder
+                -- with cache reads/writes disjoint. A native model behind an
+                -- OpenAI-compatible surface reports the inclusive shape, so the
+                -- payload must prove it is disjoint:
+                --   * usage_shape_disjoint set: orchestrator normalized a native
+                --     cache spelling (cache_read_input_tokens / cache_creation*) no
+                --     OpenAI-compatible surface emits. Authoritative even when the
+                --     provider row's cloud_provider_type is missing or wrong.
+                --   * else, for an anthropic/bedrock provider: a cache-write count
+                --     is present, or prompt_cached_tokens exceeds prompt_tokens.
+                -- The flag also covers native cache-read-only turns (no cache-write
+                -- count, cached need not exceed input): previously a bounded
+                -- undercharge, now decomposed correctly, still never the
+                -- double-charge of issue #892. Pre-flag rows use the count proofs.
+                disjoint := (u ? 'usage_shape_disjoint')
+                         OR (v_disjoint_cache_provider
+                             AND ((u ? 'prompt_cache_write_tokens')
+                                  OR (u ? 'prompt_cache_write_1h_tokens')
+                                  OR cached > prompt));
+                hitmiss  := (u ? 'prompt_cache_miss_tokens');
+
+                IF disjoint THEN
+                    b_in_read     := GREATEST(cached - iaudio_read, 0);
+                    b_in_write    := GREATEST(cwrite - iaudio_write, 0);
+                    b_in_write1h  := cwrite1h;
+                    b_in_uncached := GREATEST(prompt - paudio - pimage, 0);
+                    b_in_audio    := GREATEST(paudio - iaudio_read - iaudio_write, 0);
+                ELSIF hitmiss THEN
+                    b_in_read     := GREATEST(cached - iaudio_read, 0);
+                    b_in_write    := 0;
+                    b_in_write1h  := 0;
+                    b_in_uncached := GREATEST(pmiss - paudio - pimage + iaudio_read + iaudio_write, 0);
+                    b_in_audio    := GREATEST(paudio - iaudio_read - iaudio_write, 0);
+                ELSE
+                    b_in_read     := GREATEST(cached - iaudio_read, 0);
+                    b_in_write    := GREATEST(cwrite - iaudio_write, 0);
+                    b_in_write1h  := cwrite1h;
+                    b_in_audio    := GREATEST(paudio - iaudio_read - iaudio_write, 0);
+                    b_in_uncached := GREATEST(
+                        prompt - cached - cwrite - cwrite1h - paudio - pimage
+                        + iaudio_read + iaudio_write, 0);
+                END IF;
+
+                b_out_audio  := caudio;
+                b_out_reason := reasoning;
+                b_out_image  := cimage;
+                b_out_video  := cvideo;
+                b_out_text   := GREATEST(completion - reasoning - caudio - cimage - cvideo, 0);
+
+                ctx := b_in_uncached + b_in_read + b_in_write + b_in_write1h
+                       + b_in_audio + b_in_audio_read + b_in_audio_write + b_in_image;
+
+                has_input_token_price :=
+                    logos_resolve_unit_price('billed_input_uncached', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_output_token_price :=
+                    logos_resolve_unit_price('billed_output_text', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                -- OCR is derived as both billed_ocr_pages and billed_ocr_credits
+                -- (one credit per page) so either vocabulary can price it. If pages
+                -- are priced, suppress credits so the page isn't billed twice.
+                has_ocr_page_price :=
+                    logos_resolve_unit_price('billed_ocr_pages', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                -- One input image yields up to three quantities (image tokens,
+                -- pixel area, flat count) for the same image. Charge only the most
+                -- specific one that is BOTH carried by this payload AND priced:
+                -- image tokens > pixels > flat per-image. The presence test
+                -- matters because billed_input_image_tokens falls back to
+                -- billed_input_uncached (022-2): resolving it alone is true for
+                -- almost every model, so a bare price check would zero a pixel or
+                -- flat-image count that has its own rate. Same shape as the video
+                -- surcharge gates below.
+                has_input_image_token_price := b_in_image > 0 AND
+                    logos_resolve_unit_price('billed_input_image_tokens', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_input_pixel_price := COALESCE((u->>'billed_input_pixels')::bigint, 0) > 0 AND
+                    logos_resolve_unit_price('billed_input_pixels', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                -- Generated images: same alternatives as input images, same
+                -- present-and-priced gate (billed_output_image_tokens falls back
+                -- to billed_output_text). Prefer image tokens, then pixels, then
+                -- the flat delivered-image count.
+                has_output_image_token_price := b_out_image > 0 AND
+                    logos_resolve_unit_price('billed_output_image_tokens', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_output_pixel_price := COALESCE((u->>'billed_output_pixels')::bigint, 0) > 0 AND
+                    logos_resolve_unit_price('billed_output_pixels', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_video_8s_price := (u ? 'billed_input_video_milliseconds_above_8s') AND
+                    logos_resolve_unit_price('billed_input_video_milliseconds_above_8s', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+                has_video_15s_price := (u ? 'billed_input_video_milliseconds_above_15s') AND
+                    logos_resolve_unit_price('billed_input_video_milliseconds_above_15s', p_model_id, p_provider_id,
+                                             p_valid_at, ctx, p_service_tier) IS NOT NULL;
+
+                FOR q IN
+                    SELECT x.name, x.qty
+                    FROM (VALUES
+                        ('billed_input_uncached',       b_in_uncached),
+                        ('billed_input_cache_read',     b_in_read),
+                        ('billed_input_cache_write',    b_in_write),
+                        ('billed_input_cache_write_1h', b_in_write1h),
+                        ('billed_input_audio',          b_in_audio),
+                        ('billed_input_audio_cache_read', b_in_audio_read),
+                        ('billed_input_audio_cache_write', b_in_audio_write),
+                        ('billed_input_image_tokens',   b_in_image),
+                        ('billed_output_text',          b_out_text),
+                        ('billed_output_reasoning',     b_out_reason),
+                        ('billed_output_audio',         b_out_audio),
+                        ('billed_output_image_tokens',  b_out_image),
+                        ('billed_output_video_tokens',  b_out_video),
+                        ('billed_citation_tokens',
+                             COALESCE((u->>'citation_tokens')::bigint, 0)),
+                        ('billed_requests',
+                             COALESCE((u->>'billed_requests')::bigint, 0)),
+                        ('billed_input_characters',
+                             CASE WHEN has_input_token_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_characters')::bigint, 0) END),
+                        ('billed_output_characters',
+                             CASE WHEN has_output_token_price THEN 0
+                                  ELSE COALESCE((u->>'billed_output_characters')::bigint, 0) END),
+                        ('billed_input_images',
+                             CASE WHEN has_input_image_token_price OR has_input_pixel_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_images')::bigint, 0) END),
+                        ('billed_output_images',
+                             CASE WHEN has_output_image_token_price OR has_output_pixel_price THEN 0
+                                  ELSE COALESCE((u->>'billed_output_images')::bigint, 0) END),
+                        ('billed_input_pixels',
+                             CASE WHEN has_input_image_token_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_pixels')::bigint, 0) END),
+                        ('billed_output_pixels',
+                             CASE WHEN has_output_image_token_price THEN 0
+                                  ELSE COALESCE((u->>'billed_output_pixels')::bigint, 0) END),
+                        ('audio_milliseconds',
+                             COALESCE((u->>'audio_milliseconds')::bigint, 0)),
+                        ('billed_output_milliseconds',
+                             COALESCE((u->>'billed_output_milliseconds')::bigint, 0)),
+                        ('billed_output_milliseconds_1080p',
+                             COALESCE((u->>'billed_output_milliseconds_1080p')::bigint, 0)),
+                        ('billed_output_milliseconds_4k',
+                             COALESCE((u->>'billed_output_milliseconds_4k')::bigint, 0)),
+                        ('billed_input_video_milliseconds',
+                             CASE WHEN has_video_8s_price OR has_video_15s_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_video_milliseconds')::bigint, 0) END),
+                        ('billed_input_video_milliseconds_above_8s',
+                             CASE WHEN has_video_15s_price THEN 0
+                                  ELSE COALESCE((u->>'billed_input_video_milliseconds_above_8s')::bigint, 0) END),
+                        ('billed_input_video_milliseconds_above_15s',
+                             COALESCE((u->>'billed_input_video_milliseconds_above_15s')::bigint, 0)),
+                        ('billed_ocr_pages',
+                             COALESCE((u->>'billed_ocr_pages')::bigint, 0)),
+                        ('billed_ocr_credits',
+                             CASE WHEN has_ocr_page_price THEN 0
+                                  ELSE COALESCE((u->>'billed_ocr_credits')::bigint, 0) END),
+                        ('billed_annotation_pages',
+                             COALESCE((u->>'billed_annotation_pages')::bigint, 0)),
+                        ('billed_search_queries',
+                             COALESCE((u->>'billed_search_queries')::bigint, 0)),
+                        ('billed_search_queries_low',
+                             COALESCE((u->>'billed_search_queries_low')::bigint, 0)),
+                        ('billed_search_queries_high',
+                             COALESCE((u->>'billed_search_queries_high')::bigint, 0)),
+                        ('billed_search_prompts',
+                             COALESCE((u->>'billed_search_prompts')::bigint, 0)),
+                        ('billed_search_prompts_low',
+                             COALESCE((u->>'billed_search_prompts_low')::bigint, 0)),
+                        ('billed_search_prompts_high',
+                             COALESCE((u->>'billed_search_prompts_high')::bigint, 0)),
+                        ('billed_google_maps_queries',
+                             COALESCE((u->>'billed_google_maps_queries')::bigint, 0)),
+                        ('billed_code_interpreter_sessions',
+                             COALESCE((u->>'billed_code_interpreter_sessions')::bigint, 0)),
+                        ('billed_guardrail_automatedReasoningPolicyUnits', COALESCE((u->>'billed_guardrail_automatedReasoningPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_contentPolicyImageUnits', COALESCE((u->>'billed_guardrail_contentPolicyImageUnits')::bigint, 0)),
+                        ('billed_guardrail_contentPolicyUnits', COALESCE((u->>'billed_guardrail_contentPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_contextualGroundingPolicyUnits', COALESCE((u->>'billed_guardrail_contextualGroundingPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_sensitiveInformationPolicyFreeUnits', COALESCE((u->>'billed_guardrail_sensitiveInformationPolicyFreeUnits')::bigint, 0)),
+                        ('billed_guardrail_sensitiveInformationPolicyUnits', COALESCE((u->>'billed_guardrail_sensitiveInformationPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_topicPolicyUnits', COALESCE((u->>'billed_guardrail_topicPolicyUnits')::bigint, 0)),
+                        ('billed_guardrail_wordPolicyUnits', COALESCE((u->>'billed_guardrail_wordPolicyUnits')::bigint, 0))
+                    ) AS x(name, qty)
+                    WHERE x.qty > 0
+                LOOP
+                    unit_price := logos_resolve_unit_price(
+                        q.name, p_model_id, p_provider_id, p_valid_at, ctx, p_service_tier);
+                    IF unit_price IS NOT NULL THEN
+                        any_priced := true;
+                        total := total + q.qty::numeric * unit_price / 1000.0;
+                    END IF;
+                END LOOP;
+
+                -- No pricing knowledge for this response: return NULL so the logs
+                -- UI omits the cost line rather than assert a confident zero
+                -- (budget_usage SUM()s over NULLs harmlessly).
+                IF NOT any_priced THEN
+                    RETURN NULL;
+                END IF;
+
+                -- Round once per response, not per dimension, to keep fractional
+                -- micro-cents.
+                RETURN ROUND(total)::bigint;
+            END;
+            $fn$;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-4-log-entry-cost-view" author="logos" runOnChange="true">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE VIEW log_entry_cost AS
+            SELECT le.id            AS log_entry_id,
+                   le.api_key_id    AS api_key_id,
+                   le.timestamp_request AS timestamp_request,
+                   -- success: price full usage (frozen snapshot if present, else
+                   -- live). error/timeout: price only what was measurably delivered
+                   -- -- never the flat per-request fee, nor request-only estimates
+                   -- (input characters/pixels/images/video ms; output images/pixels/
+                   -- milliseconds that fall back to the requested count). In-flight
+                   -- rows (result_status NULL) aren't priced. NULL when Logos has no
+                   -- pricing knowledge: logs UI omits the cost line, budget SUM()s
+                   -- ignore it.
+                   CASE
+                       WHEN le.result_status = 'success' THEN
+                           CASE WHEN le.cost_finalized THEN le.settled_cost_micro_cents
+                           ELSE logos_price_usage(le.model_id, le.provider_id,
+                                             COALESCE(le.timestamp_response, le.timestamp_request),
+                                             le.service_tier, pe.usage_json) END
+                       WHEN le.result_status IN ('error', 'timeout') THEN
+                           CASE WHEN le.cost_finalized THEN le.settled_cost_micro_cents
+                           ELSE logos_price_usage(le.model_id, le.provider_id,
+                                             COALESCE(le.timestamp_response, le.timestamp_request),
+                                             le.service_tier,
+                                             pe.usage_json - ARRAY[
+                                                 'billed_requests',
+                                                 'billed_input_characters',
+                                                 'billed_input_pixels',
+                                                 'billed_input_images',
+                                                 'billed_input_video_milliseconds',
+                                                 'billed_input_video_milliseconds_above_8s',
+                                                 'billed_input_video_milliseconds_above_15s',
+                                                 'billed_output_images',
+                                                 'billed_output_pixels',
+                                                 'billed_output_milliseconds',
+                                                 'billed_output_milliseconds_1080p',
+                                                 'billed_output_milliseconds_4k'
+                                             ]) END
+                   END AS cost_micro_cents
+            FROM log_entry le
+            LEFT JOIN LATERAL (
+                SELECT jsonb_object_agg(tt.name, ut.token_count) AS usage_json
+                FROM usage_tokens ut
+                JOIN token_types tt ON tt.id = ut.type_id
+                WHERE ut.log_entry_id = le.id
+            ) pe ON NOT le.cost_finalized
+                 AND le.result_status IN ('success', 'error', 'timeout');
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-5-budget-usage-rewrite" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            DROP VIEW budget_usage;
+            CREATE VIEW budget_usage AS
+            SELECT lec.api_key_id,
+                   DATE_TRUNC('month', lec.timestamp_request)::DATE AS month,
+                   COALESCE(SUM(lec.cost_micro_cents), 0) AS cost_micro_cents
+            FROM log_entry_cost lec
+            WHERE lec.api_key_id IS NOT NULL
+            GROUP BY lec.api_key_id, DATE_TRUNC('month', lec.timestamp_request)::DATE;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-6-index-and-gap-view" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            CREATE INDEX idx_token_prices_resolve
+                ON token_prices (type_id, valid_from DESC);
+
+            -- Budget admission scopes by API key and month; a composite index
+            -- avoids a bitmap merge before the expensive per-entry pricing.
+            CREATE INDEX idx_log_entry_api_key_timestamp_request
+                ON log_entry (api_key_id, timestamp_request)
+                WHERE api_key_id IS NOT NULL;
+
+            CREATE VIEW token_price_gaps AS
+            WITH observed AS (
+                SELECT ut.log_entry_id,
+                       CASE tt.name
+                           WHEN 'prompt_tokens' THEN 'billed_input_uncached'
+                           WHEN 'completion_tokens' THEN 'billed_output_text'
+                           WHEN 'prompt_cached_tokens' THEN 'billed_input_cache_read'
+                           WHEN 'prompt_cache_write_tokens' THEN 'billed_input_cache_write'
+                           WHEN 'prompt_cache_write_1h_tokens' THEN 'billed_input_cache_write_1h'
+                           WHEN 'prompt_audio_tokens' THEN 'billed_input_audio'
+                           WHEN 'prompt_image_tokens' THEN 'billed_input_image_tokens'
+                           WHEN 'prompt_cache_read_audio_tokens' THEN 'billed_input_audio_cache_read'
+                           WHEN 'prompt_cache_write_audio_tokens' THEN 'billed_input_audio_cache_write'
+                           WHEN 'completion_reasoning_tokens' THEN 'billed_output_reasoning'
+                           WHEN 'completion_audio_tokens' THEN 'billed_output_audio'
+                           WHEN 'completion_image_tokens' THEN 'billed_output_image_tokens'
+                           ELSE tt.name
+                       END AS quantity,
+                       ut.token_count
+                FROM usage_tokens ut
+                JOIN token_types tt ON tt.id = ut.type_id
+                WHERE tt.name <> 'total_tokens'
+                  AND (tt.name LIKE 'billed\_%'
+                       OR tt.name IN ('prompt_tokens', 'completion_tokens',
+                           'prompt_cached_tokens', 'prompt_cache_write_tokens',
+                           'prompt_cache_write_1h_tokens', 'prompt_audio_tokens',
+                           'prompt_image_tokens', 'prompt_cache_read_audio_tokens',
+                           'prompt_cache_write_audio_tokens',
+                           'completion_reasoning_tokens', 'completion_audio_tokens',
+                           'completion_image_tokens',
+                           'audio_milliseconds'))
+            )
+            SELECT le.model_id,
+                   le.provider_id,
+                   o.quantity,
+                   MIN(le.timestamp_request) AS first_seen,
+                   MAX(le.timestamp_request) AS last_seen,
+                   SUM(o.token_count) AS tokens
+            FROM observed o
+            JOIN log_entry le ON le.id = o.log_entry_id
+            JOIN token_types priced_type ON priced_type.name = o.quantity
+            WHERE o.token_count > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM token_prices tp
+                  WHERE tp.type_id = priced_type.id
+                    AND (tp.model_id = le.model_id OR tp.model_id IS NULL)
+                    AND (tp.provider_id = le.provider_id OR tp.provider_id IS NULL)
+                    AND tp.valid_from <= COALESCE(le.timestamp_response, le.timestamp_request)
+              )
+              -- Character counts are ignored when that direction has token
+              -- pricing; don't report those as catalogue gaps.
+              AND NOT (
+                  o.quantity IN ('billed_input_characters', 'billed_output_characters')
+                  AND EXISTS (
+                      SELECT 1
+                      FROM token_prices directional_tp
+                      JOIN token_types directional_tt ON directional_tt.id = directional_tp.type_id
+                      WHERE directional_tt.name = CASE o.quantity
+                          WHEN 'billed_input_characters' THEN 'billed_input_uncached'
+                          ELSE 'billed_output_text'
+                      END
+                        AND (directional_tp.model_id = le.model_id OR directional_tp.model_id IS NULL)
+                        AND (directional_tp.provider_id = le.provider_id OR directional_tp.provider_id IS NULL)
+                        AND directional_tp.valid_from <= COALESCE(le.timestamp_response, le.timestamp_request)
+                  )
+              )
+            GROUP BY le.model_id, le.provider_id, o.quantity;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-7-collapse-synthetic-price-sentinels" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            -- Older PriceUpdaterService invented a 2020-01-01 start for the first
+            -- observed price. Where a later real generation exists, drop the
+            -- sentinel and back-date the earliest one. Keep lone sentinels: the
+            -- only estimate for that dimension.
+            CREATE OR REPLACE FUNCTION logos_collapse_price_sentinels()
+            RETURNS integer
+            LANGUAGE plpgsql AS $fn$
+            DECLARE
+                changed integer;
+            BEGIN
+                WITH candidates AS (
+                    SELECT sentinel.id AS sentinel_id,
+                           earliest.id AS replacement_id
+                    FROM token_prices sentinel
+                    JOIN LATERAL (
+                        SELECT newer.id
+                        FROM token_prices newer
+                        WHERE newer.type_id = sentinel.type_id
+                          AND newer.model_id IS NOT DISTINCT FROM sentinel.model_id
+                          AND newer.provider_id IS NOT DISTINCT FROM sentinel.provider_id
+                          AND newer.unit = sentinel.unit
+                          AND newer.min_context_tokens = sentinel.min_context_tokens
+                          AND newer.service_tier = sentinel.service_tier
+                          AND newer.valid_from > sentinel.valid_from
+                        ORDER BY newer.valid_from, newer.id
+                        LIMIT 1
+                    ) earliest ON true
+                    WHERE sentinel.valid_from = TIMESTAMPTZ '2020-01-01 00:00:00+00'
+                ), removed AS (
+                    DELETE FROM token_prices tp
+                    USING candidates c
+                    WHERE tp.id = c.sentinel_id
+                    RETURNING c.replacement_id
+                )
+                UPDATE token_prices tp
+                SET valid_from = TIMESTAMPTZ '2020-01-01 00:00:00+00'
+                WHERE tp.id IN (SELECT replacement_id FROM removed);
+
+                GET DIAGNOSTICS changed = ROW_COUNT;
+                RETURN changed;
+            END;
+            $fn$;
+
+            SELECT logos_collapse_price_sentinels();
+
+            -- Snapshot historical successful requests after repairing legacy
+            -- prices, so future refreshes can't rewrite completed budget history.
+            UPDATE log_entry le
+            SET settled_cost_micro_cents = logos_price_usage(
+                le.model_id, le.provider_id,
+                COALESCE(le.timestamp_response, le.timestamp_request),
+                le.service_tier,
+                (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                 FROM usage_tokens ut
+                 JOIN token_types tt ON tt.id = ut.type_id
+                 WHERE ut.log_entry_id = le.id))
+            WHERE le.result_status = 'success'
+              AND le.settled_cost_micro_cents IS NULL;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-8-normalize-remaining-legacy-token-spellings" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            -- 022-1 folded the native cache-name aliases onto the canonical
+            -- vocabulary but left three pre-canonical spellings that the earliest
+            -- extraction code and hand-entered price rows used:
+            --   * a bare 'prompt' / 'completion' for the prompt and completion
+            --     token totals (later 'prompt_tokens' / 'completion_tokens');
+            --   * 'cached_tokens' for OpenAI's prompt_tokens_details.cached_tokens
+            --     stored without its 'prompt_' prefix (later 'prompt_cached_tokens').
+            -- logos_price_usage reads none of these, so a historical row carrying
+            -- them prices as if the quantity were zero: a 'prompt'/'completion'
+            -- response costs to NULL (no pricing knowledge -> free), and a
+            -- 'cached_tokens' turn, once finalized, would bill its whole prompt at
+            -- the uncached input rate with no cache-read discount. Fold them the
+            -- same way 022-1 did, GREATEST-merging into any canonical row that
+            -- already exists so a row holding both an alias and its canonical is
+            -- never double-counted.
+            CREATE OR REPLACE FUNCTION logos_normalize_legacy_token_spellings()
+            RETURNS integer
+            LANGUAGE plpgsql AS $fn$
+            DECLARE
+                changed integer;
+            BEGIN
+                -- The canonical target types are created by runtime extraction
+                -- (and 022-1 for prompt_cached_tokens); a database old enough to
+                -- carry these legacy spellings already has them. Migrate only
+                -- where the target exists and delete only what was migrated, so
+                -- a database that never saw the legacy names is left untouched
+                -- (and keeps ownership of any fixed token_types ids it seeds).
+                WITH aliases(old_name, new_name) AS (
+                    VALUES
+                        ('prompt',        'prompt_tokens'),
+                        ('completion',    'completion_tokens'),
+                        ('cached_tokens', 'prompt_cached_tokens')
+                ), normalized AS (
+                    SELECT ut.log_entry_id, target.id AS type_id,
+                           MAX(ut.token_count) AS token_count
+                    FROM usage_tokens ut
+                    JOIN token_types source ON source.id = ut.type_id
+                    JOIN aliases a ON a.old_name = source.name
+                    JOIN token_types target ON target.name = a.new_name
+                    GROUP BY ut.log_entry_id, target.id
+                ), upserted AS (
+                    INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+                    SELECT log_entry_id, type_id, token_count FROM normalized
+                    ON CONFLICT (log_entry_id, type_id) DO UPDATE
+                        SET token_count = GREATEST(usage_tokens.token_count,
+                                                   EXCLUDED.token_count)
+                    RETURNING 1
+                )
+                SELECT COUNT(*) INTO changed FROM upserted;
+
+                DELETE FROM usage_tokens ut
+                USING token_types tt, (VALUES
+                        ('prompt',        'prompt_tokens'),
+                        ('completion',    'completion_tokens'),
+                        ('cached_tokens', 'prompt_cached_tokens')
+                    ) AS a(old_name, new_name)
+                WHERE tt.id = ut.type_id
+                  AND tt.name = a.old_name
+                  AND EXISTS (SELECT 1 FROM token_types canon WHERE canon.name = a.new_name);
+
+                -- Repoint hand-entered price rows (bare 'prompt' / 'completion')
+                -- onto the billable-quantity names, but only where the
+                -- model/provider does not already carry a canonical row for the
+                -- same tuple. token_prices has no uniqueness on that tuple, so a
+                -- blind repoint could leave two resolvable rows and
+                -- logos_resolve_unit_price would silently pick one.
+                WITH remap(old_name, new_name) AS (
+                    VALUES ('prompt',     'billed_input_uncached'),
+                           ('completion', 'billed_output_text')
+                )
+                UPDATE token_prices tp
+                SET type_id = nt.id, unit = 'token'
+                FROM remap r
+                JOIN token_types ot ON ot.name = r.old_name
+                JOIN token_types nt ON nt.name = r.new_name
+                WHERE tp.type_id = ot.id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM token_prices existing
+                      WHERE existing.type_id = nt.id
+                        AND existing.model_id IS NOT DISTINCT FROM tp.model_id
+                        AND existing.provider_id IS NOT DISTINCT FROM tp.provider_id
+                        AND existing.unit = 'token'
+                        AND existing.min_context_tokens = tp.min_context_tokens
+                        AND existing.service_tier = tp.service_tier
+                        AND existing.valid_from = tp.valid_from
+                  );
+
+                -- A price row still on a legacy type is a duplicate of a
+                -- canonical row (the repoint above skipped it); drop it.
+                DELETE FROM token_prices tp
+                USING token_types tt
+                WHERE tt.id = tp.type_id AND tt.name IN ('prompt', 'completion');
+
+                -- Drop the legacy types only once nothing references them, so a
+                -- row that could not be migrated (canonical target absent) keeps
+                -- its type instead of being cascade-deleted.
+                DELETE FROM token_types tt
+                WHERE tt.name IN ('prompt', 'completion', 'cached_tokens')
+                  AND NOT EXISTS (SELECT 1 FROM usage_tokens ut WHERE ut.type_id = tt.id)
+                  AND NOT EXISTS (SELECT 1 FROM token_prices tp WHERE tp.type_id = tt.id);
+
+                RETURN changed;
+            END;
+            $fn$;
+
+            SELECT logos_normalize_legacy_token_spellings();
+
+            -- Snapshot the successful requests that now price to a real value
+            -- instead of NULL. Mirrors 022-7: only rows without a frozen cost, so
+            -- already-settled budget history is untouched.
+            UPDATE log_entry le
+            SET settled_cost_micro_cents = logos_price_usage(
+                le.model_id, le.provider_id,
+                COALESCE(le.timestamp_response, le.timestamp_request),
+                le.service_tier,
+                (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                 FROM usage_tokens ut
+                 JOIN token_types tt ON tt.id = ut.type_id
+                 WHERE ut.log_entry_id = le.id))
+            WHERE le.result_status = 'success'
+              AND le.settled_cost_micro_cents IS NULL;
+        ]]></sql>
+    </changeSet>
+
+    <changeSet id="022-9-snapshot-finalized-error-costs" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            -- Budget admission runs for every cloud request. Freeze the measurable
+            -- delivered cost of historical errors/timeouts too, so the hot path
+            -- normally sums stored integers instead of rebuilding usage JSON and
+            -- resolving catalogue prices for every prior failed request.
+            UPDATE log_entry le
+            SET settled_cost_micro_cents = logos_price_usage(
+                le.model_id, le.provider_id,
+                COALESCE(le.timestamp_response, le.timestamp_request),
+                le.service_tier,
+                (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                 FROM usage_tokens ut
+                 JOIN token_types tt ON tt.id = ut.type_id
+                 WHERE ut.log_entry_id = le.id) - ARRAY[
+                    'billed_requests',
+                    'billed_input_characters',
+                    'billed_input_pixels',
+                    'billed_input_images',
+                    'billed_input_video_milliseconds',
+                    'billed_input_video_milliseconds_above_8s',
+                    'billed_input_video_milliseconds_above_15s',
+                    'billed_output_images',
+                    'billed_output_pixels',
+                    'billed_output_milliseconds',
+                    'billed_output_milliseconds_1080p',
+                    'billed_output_milliseconds_4k'
+                ])
+            WHERE le.result_status IN ('error', 'timeout')
+              AND le.settled_cost_micro_cents IS NULL;
+
+            -- NULL is a valid finalized value: it means the catalogue has no
+            -- pricing knowledge for that response. Keep that distinct from a
+            -- snapshot failure so unknown-cost rows are not repriced forever.
+            UPDATE log_entry
+            SET cost_finalized = TRUE
+            WHERE result_status IN ('success', 'error', 'timeout');
+        ]]></sql>
+    </changeSet>
+
+</databaseChangeLog>

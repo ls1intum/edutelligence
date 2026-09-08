@@ -6,6 +6,8 @@
 
 See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
 
+See the [agent runner](logos-agent/README.md) for how Logos runs coding agents in isolated containers on its own spare serving capacity, and the boundaries those sessions work within.
+
 # Setup
 
 ## Prerequisites

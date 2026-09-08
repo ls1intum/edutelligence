@@ -3,6 +3,8 @@ export interface Model {
   name: string;
   description: string | null;
   tags: string | null;
+  /** Comma-joined alternative names the model can be requested by. */
+  aliases: string | null;
   weight_latency: number | null;
   weight_accuracy: number | null;
   weight_cost: number | null;
@@ -15,6 +17,7 @@ export interface AddModelPayload {
   name: string;
   description?: string;
   tags?: string;
+  aliases?: string[];
   worse_latency_id?: number;
   worse_accuracy_id?: number;
   worse_cost_id?: number;
@@ -26,6 +29,8 @@ export interface UpdateModelPayload {
   name?: string;
   description?: string;
   tags?: string;
+  /** Full replacement list; an empty list removes all aliases. */
+  aliases?: string[];
   weight_latency?: number;
   weight_accuracy?: number;
   weight_cost?: number;

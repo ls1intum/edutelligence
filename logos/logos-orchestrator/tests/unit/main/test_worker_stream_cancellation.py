@@ -309,7 +309,9 @@ async def test_a_429_lane_answer_is_a_pre_stream_error_not_a_committed_200(monke
 
     response_task = asyncio.ensure_future(
         main._streaming_response(
-            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            SimpleNamespace(
+                provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None
+            ),
             {"messages": [{"role": "user", "content": "hi"}]},
             42,
             PROVIDER_ID,
@@ -369,7 +371,9 @@ async def test_a_role_only_first_frame_is_not_a_committed_200_when_the_lane_then
 
     response_task = asyncio.ensure_future(
         main._streaming_response(
-            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            SimpleNamespace(
+                provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None
+            ),
             {"messages": [{"role": "user", "content": "hi"}]},
             42,
             PROVIDER_ID,
@@ -443,7 +447,9 @@ async def test_a_split_first_frame_is_not_a_committed_200_when_the_lane_then_fai
 
     response_task = asyncio.ensure_future(
         main._streaming_response(
-            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            SimpleNamespace(
+                provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None
+            ),
             {"messages": [{"role": "user", "content": "hi"}]},
             42,
             PROVIDER_ID,
@@ -513,7 +519,9 @@ async def test_a_split_first_frame_is_held_until_it_completes_then_replayed(monk
 
     response_task = asyncio.ensure_future(
         main._streaming_response(
-            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            SimpleNamespace(
+                provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None
+            ),
             {"messages": [{"role": "user", "content": "hi"}]},
             42,
             PROVIDER_ID,
@@ -586,7 +594,9 @@ async def test_a_legacy_completion_text_chunk_starts_the_stream(monkeypatch):
 
     response_task = asyncio.ensure_future(
         main._streaming_response(
-            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            SimpleNamespace(
+                provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None
+            ),
             {"prompt": "Say hello"},
             42,
             PROVIDER_ID,
@@ -747,7 +757,7 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -800,7 +810,12 @@ async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkey
     # frame has to be fed while the call is in flight, not after it returns.
     response_task = asyncio.ensure_future(
         main._streaming_response(
-            SimpleNamespace(provider_id=PROVIDER_ID, provider_type="logosnode", lane_id="lane-1"),
+            SimpleNamespace(
+                provider_id=PROVIDER_ID,
+                provider_type="logosnode",
+                lane_id="lane-1",
+                anthropic_dialect=None,
+            ),
             {"messages": [{"role": "user", "content": "hi"}]},
             42,
             PROVIDER_ID,
@@ -903,16 +918,17 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
 # ---------------------------------------------------------------------------
 
 
-async def _run_streamer(monkeypatch, *, abandon_after: int | None):
+async def _run_streamer(monkeypatch, *, abandon_after: int | None, chunks: list[bytes] | None = None):
     from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
     import logos as main
 
-    chunks = [
-        b'data: {"id":"c1","choices":[{"delta":{"content":"hel"}}]}\n\n',
-        b'data: {"id":"c2","choices":[{"delta":{"content":"lo"}}]}\n\n',
-        b"data: [DONE]\n\n",
-    ]
+    if chunks is None:
+        chunks = [
+            b'data: {"id":"c1","choices":[{"delta":{"content":"hel"}}]}\n\n',
+            b'data: {"id":"c2","choices":[{"delta":{"content":"lo"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ]
 
     async def fake_send_stream_command(**kwargs):  # noqa: ARG001
         for chunk in chunks:
@@ -936,7 +952,7 @@ async def _run_streamer(monkeypatch, *, abandon_after: int | None):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -991,3 +1007,59 @@ async def test_the_recorded_reason_says_how_far_it_got(monkeypatch):
     makes the number actionable."""
     calls = await _run_streamer(monkeypatch, abandon_after=1)
     assert "token(s)" in calls[-1]["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_a_responses_api_failed_event_is_not_billed_or_recorded_as_success(monkeypatch):
+    """A terminal ``response.failed`` frame closes the stream cleanly, so
+    ``stream_completed`` is True; the request still failed and must be neither
+    billed nor logged as a success."""
+    calls = await _run_streamer(
+        monkeypatch,
+        abandon_after=None,
+        chunks=[
+            b'data: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+            b'data: {"type":"response.failed","response":{"id":"resp_1","status":"failed",'
+            b'"error":{"code":"server_error","message":"the model is overloaded"}}}\n\n',
+        ],
+    )
+    assert calls[-1]["result_status"] == "error"
+    assert "overloaded" in calls[-1]["error_message"]
+    assert "billed_requests" not in calls[-1]["usage_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_an_in_band_error_frame_is_not_billed_or_recorded_as_success(monkeypatch):
+    """A worker that passes an upstream ``data: {"error": ...}`` frame through
+    and then closes the stream normally still produced a failed request."""
+    calls = await _run_streamer(
+        monkeypatch,
+        abandon_after=None,
+        chunks=[
+            b'data: {"id":"c1","choices":[{"delta":{"content":"partial"}}]}\n\n',
+            b'data: {"error":{"message":"content flagged mid-stream","type":"invalid_request_error"}}\n\n',
+            b"data: [DONE]\n\n",
+        ],
+    )
+    assert calls[-1]["result_status"] == "error"
+    assert "content flagged mid-stream" in calls[-1]["error_message"]
+    assert "billed_requests" not in calls[-1]["usage_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_a_responses_api_incomplete_event_is_still_a_billed_success(monkeypatch):
+    """``response.incomplete`` (max_output_tokens / content filter) returns real
+    output the provider charges for, so it stays a billable success."""
+    calls = await _run_streamer(
+        monkeypatch,
+        abandon_after=None,
+        chunks=[
+            b'data: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+            b'data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomplete",'
+            b'"incomplete_details":{"reason":"max_output_tokens"},'
+            b'"usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15}}}\n\n',
+        ],
+    )
+    assert calls[-1]["result_status"] == "success"
+    assert calls[-1]["error_message"] is None
+    assert calls[-1]["usage_tokens"]["billed_requests"] == 1

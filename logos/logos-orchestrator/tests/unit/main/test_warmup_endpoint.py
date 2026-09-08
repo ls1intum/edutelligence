@@ -153,6 +153,28 @@ async def test_accepts_a_planner_sanitized_alias(wired):
 
 
 @pytest.mark.asyncio
+async def test_accepts_a_stored_alias(wired):
+    """Alt tags work the same as on the other model endpoints."""
+    demand, _planner = wired
+    monkeypatch_models = [{"id": 1, "name": "qwen-27b", "description": None, "aliases": ["local-flagship"]}]
+    with patch.object(main, "DBManager", lambda: DummyDB(monkeypatch_models)):
+        body = json.loads((await _warmup("local-flagship")).body)
+
+    assert body["model"] == "qwen-27b"
+    demand.record_latent_demand.assert_called_once_with("qwen-27b")
+
+
+@pytest.mark.asyncio
+async def test_accepts_case_variants(wired):
+    demand, _planner = wired
+
+    body = json.loads((await _warmup("QWEN-27B")).body)
+
+    assert body["model"] == "qwen-27b"
+    demand.record_latent_demand.assert_called_once_with("qwen-27b")
+
+
+@pytest.mark.asyncio
 async def test_survives_a_planner_that_is_not_running(monkeypatch):
     """Warmup is a nicety; it must never be the reason a session fails to start.
 

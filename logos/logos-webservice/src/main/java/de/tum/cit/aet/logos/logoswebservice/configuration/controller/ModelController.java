@@ -10,10 +10,14 @@ import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestClientResponseException;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCalibrationLogRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
@@ -34,15 +38,18 @@ public class ModelController {
     private final PriceUpdaterService priceUpdaterService;
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
+    private final ObjectMapper objectMapper;
 
     public ModelController(ModelService modelService,
                            PriceUpdaterService priceUpdaterService,
                            ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
-                           OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient) {
+                           OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient,
+                           ObjectMapper objectMapper) {
         this.modelService = modelService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
+        this.objectMapper = objectMapper;
     }
 
     @PostMapping("/get_models")
@@ -87,16 +94,20 @@ public class ModelController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
-        Map<String, Object> serviceResult = modelService.addModel(req);
-        Integer newModelId = (Integer) serviceResult.get("model_id");
-        if (newModelId != null && req.name() != null) {
-            priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
-            modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
-                newModelId,
-                req.name()
-            );
+        try {
+            Map<String, Object> serviceResult = modelService.addModel(req);
+            Integer newModelId = (Integer) serviceResult.get("model_id");
+            if (newModelId != null && req.name() != null) {
+                priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
+                    newModelId,
+                    req.name()
+                );
+            }
+            return ResponseEntity.ok(serviceResult);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
-        return ResponseEntity.ok(serviceResult);
     }
 
     @PostMapping("/update_model_info")
@@ -111,7 +122,12 @@ public class ModelController {
             }
             return response;
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+            // "Model not found: ..." is a lookup miss; alias validation
+            // failures are bad input.
+            int status = e.getMessage() != null && e.getMessage().startsWith("Model not found")
+                ? 404
+                : 400;
+            return ResponseEntity.status(status).body(Map.of("error", e.getMessage()));
         }
     }
 
@@ -147,6 +163,44 @@ public class ModelController {
                 Map.of("logs", orchestratorCalibrationLogsClient.getLogs((String) model.get("name")))))
             .<ResponseEntity<?>>map(r -> r)
             .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
+    /**
+     * On-demand fetch of one node's full calibration log straight from the
+     * worker. Backs the Complete-Logs tab's Download-full-logs button for
+     * successful calibrations, whose log is no longer stored in the DB.
+     */
+    @PostMapping("/get_model_calibration_log_full")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getModelCalibrationLogFull(
+            @RequestBody GetModelCalibrationLogRequestDTO req) {
+        if (req.id() == null || req.providerId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "id and provider_id are required"));
+        }
+        return modelService.getModel(req.id())
+            .<ResponseEntity<?>>map(model -> {
+                try {
+                    return orchestratorCalibrationLogsClient.fetchFullLog(req.providerId(), (String) model.get("name"));
+                } catch (RestClientResponseException e) {
+                    return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+                } catch (Exception e) {
+                    return ResponseEntity.status(503).body(Map.of("error", errorMessage(e)));
+                }
+            })
+            .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
+    /** Map.of rejects null values; some exceptions have a null message. */
+    private String errorMessage(Exception e) {
+        return e.getMessage() != null ? e.getMessage() : e.toString();
+    }
+
+    private Object parseOrWrap(String body) {
+        try {
+            return objectMapper.readValue(body, Map.class);
+        } catch (Exception e) {
+            return Map.of("error", body);
+        }
     }
 
     @PostMapping("/get_general_model_stats")

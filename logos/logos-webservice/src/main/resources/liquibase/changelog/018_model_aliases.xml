@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Alternative names (aliases) for models.
+
+         Applications can pin a logical name such as 'local-most-powerful'
+         instead of a concrete model: the alias resolves to whichever model
+         currently carries it, so pointing the alias at a different model
+         switches the application without any client-side change.
+
+         The alias is unique case-insensitively because model-name matching is
+         case-insensitive at the request boundary — two aliases that only
+         differ in case would be ambiguous to resolve. Rejecting aliases that
+         collide with a model name (case-insensitively) is enforced in the
+         webservice, since it needs to read the models table as well.
+
+         Rows disappear with their model (ON DELETE CASCADE); the model_id
+         index serves the per-model lookups from the webservice and the
+         string_agg subselects in the orchestrator's model list queries. -->
+    <changeSet id="018-model-aliases" author="logos">
+        <sql>
+            CREATE TABLE model_aliases (
+                id SERIAL PRIMARY KEY,
+                model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+                alias TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX uq_model_aliases_alias_ci ON model_aliases (LOWER(alias));
+            CREATE INDEX idx_model_aliases_model_id ON model_aliases (model_id);
+        </sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS model_aliases;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

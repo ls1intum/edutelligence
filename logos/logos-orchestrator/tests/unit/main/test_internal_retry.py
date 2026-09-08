@@ -961,7 +961,7 @@ async def test_logosnode_pre_token_failure_comes_back_as_json_error(retry_env):
     retry_env.setattr(main, "_pipeline", _FakePipeline([_fail_result("unused")]), raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1"),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
