@@ -280,6 +280,17 @@ class CitationRegistry:
         with self._lock:
             self._closed = True
 
+    def wait_for_workers(self) -> None:
+        """Wait for enrichment work that started before the registry closed."""
+        with self._lock:
+            pending = [
+                future
+                for future in self._enrichment_futures.values()
+                if not future.done()
+            ]
+        if pending:
+            wait(pending)
+
 
 def _run_in_thread(fn, *args) -> Future:
     """Run enrichment in a dedicated daemon thread."""

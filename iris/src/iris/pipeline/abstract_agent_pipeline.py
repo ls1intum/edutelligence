@@ -756,6 +756,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 self.post_agent_hook(state)
 
             state.citation_registry.close()
+            state.citation_registry.wait_for_workers()
 
             # A session title generated after the final result was sent still
             # needs to reach the client; attach it to the trailing callback.

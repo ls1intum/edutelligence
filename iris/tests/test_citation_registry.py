@@ -309,9 +309,21 @@ def test_tokens_from_a_call_finishing_after_close_can_be_drained():
         registry.render(handle, final=True)
 
     assert registry.drain_tokens() == []
-    release.set()
     registry.close()
-    registry._enrichment_futures[1].result(timeout=5)
+
+    wait_finished = threading.Event()
+
+    def wait_for_workers():
+        registry.wait_for_workers()
+        wait_finished.set()
+
+    waiter = threading.Thread(target=wait_for_workers)
+    waiter.start()
+    assert not wait_finished.wait(timeout=0.05)
+
+    release.set()
+    assert wait_finished.wait(timeout=5)
+    waiter.join(timeout=1)
     assert registry.drain_tokens() == [token]
     assert registry.drain_tokens() == []
 
