@@ -30,7 +30,7 @@ worker:
   auto_reboot_on_stuck_gpu: false
 
   # Persistent root for weights and caches. MUST be set on macOS — the default
-  # falls back to the ollama models path, which does not exist here.
+  # falls back to the worker models path, which does not exist here.
   cache_path: "~/logos-workernode-mlx/cache"
 
   # Bound the lane count explicitly. On unified memory an over-subscribed node
