@@ -75,27 +75,9 @@ public class ModelCapabilitiesUpdaterService {
         }
     }
 
-    boolean testExtractAndStoreCapabilities(
-            Map<String, Object> catalog,
-            int modelId,
-            String modelName) {
-        return extractAndStoreCapabilities(catalog, modelId, modelName);
-    }
-
-    String testExtractModelName(String catalogKey) {
-        return extractModelName(catalogKey);
-    }
-
-    String testNormalizeModelName(String modelName) {
-        return normalizeModelName(modelName);
-    }
-
-    boolean testModelNamesMatch(String requestedModelName, String catalogModelName) {
-        return modelNamesMatch(requestedModelName, catalogModelName);
-    }
-
+    // Package-private so the unit tests can drive the matching logic directly.
     @SuppressWarnings("unchecked")
-    private boolean extractAndStoreCapabilities(
+    boolean extractAndStoreCapabilities(
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
@@ -175,7 +157,7 @@ public class ModelCapabilitiesUpdaterService {
         }
     }
 
-    private String extractModelName(String catalogKey) {
+    String extractModelName(String catalogKey) {
         if (catalogKey == null || catalogKey.isBlank()) {
             return null;
         }
@@ -187,7 +169,7 @@ public class ModelCapabilitiesUpdaterService {
         return normalizeModelName(modelName);
     }
 
-    private String normalizeModelName(String modelName) {
+    String normalizeModelName(String modelName) {
         if (modelName == null) {
             return null;
         }
@@ -200,7 +182,7 @@ public class ModelCapabilitiesUpdaterService {
         return normalized;
     }
 
-    private boolean modelNamesMatch(
+    boolean modelNamesMatch(
             String requestedModelName,
             String catalogModelName) {
         if (requestedModelName == null || catalogModelName == null) {
