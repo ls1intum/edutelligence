@@ -401,3 +401,26 @@ async def test_an_unexpected_provider_failure_does_not_stop_the_others(monkeypat
     )
     await service.run_once()
     assert 5 in DummyDB.instances[-1].synced
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_upstream_is_discovered_with_its_own_conventions(monkeypatch):
+    """Anthropic's /v1/models needs the version header and x-api-key too."""
+    seen = {}
+    service = _run(
+        monkeypatch,
+        [
+            _provider(
+                cloud_provider_type="anthropic",
+                base_url="https://api.anthropic.com/v1",
+                api_key="sk-ant",
+            )
+        ],
+        lambda url, headers: seen.update(url=url, headers=headers) or LOGOS_LISTING,
+    )
+    await service.run_once()
+
+    assert seen["url"] == "https://api.anthropic.com/v1/models"
+    assert seen["headers"]["anthropic-version"]
+    assert seen["headers"]["x-api-key"] == "sk-ant"
+    assert "Authorization" not in seen["headers"]

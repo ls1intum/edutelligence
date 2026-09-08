@@ -564,3 +564,34 @@ def test_an_error_before_any_output_emits_only_the_error():
     events = _events(translator.error("upstream gone"))
     assert [name for name, _ in events] == ["error"]
     assert translator.finish() == []
+
+
+def test_a_safety_refusal_reaches_the_client():
+    """OpenAI returns a refusal with content null and its own field.
+
+    Reading only ``content`` turns that into an empty successful answer, so the
+    client shows nothing and never learns why.
+    """
+    result = from_chat_completion(
+        {
+            "id": "c",
+            "model": "gpt-4.1-nano",
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": None, "refusal": "I can't help with that."},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+    assert result["content"] == [{"type": "text", "text": "I can't help with that."}]
+
+
+def test_a_streamed_refusal_reaches_the_client():
+    translator = ChatCompletionsStreamTranslator("m")
+    out = translator.feed(
+        _sse({"id": "c", "model": "m", "choices": [{"delta": {"refusal": "I can't help with that."}}]})
+    )
+    out += translator.finish()
+    answer = "".join(d["delta"]["text"] for n, d in _events(out) if n == "content_block_delta")
+    assert answer == "I can't help with that."

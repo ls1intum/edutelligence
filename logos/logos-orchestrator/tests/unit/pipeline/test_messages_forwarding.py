@@ -193,3 +193,38 @@ async def test_a_logos_provider_with_a_pinned_chat_endpoint_is_translated(monkey
     _, payload = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
     assert "system" not in payload
     assert payload["messages"][0] == {"role": "system", "content": "Be brief."}
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_upstream_gets_its_mandatory_version_header(monkeypatch):
+    """Declaring Anthropic natively supported has to mean it works.
+
+    Anthropic rejects any request without `anthropic-version`, and it reads
+    `x-api-key` rather than the Authorization header the provider form's
+    placeholders produce — so a provider saved with those defaults would fail
+    on both counts.
+    """
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        api_key="sk-ant",
+    )
+    assert context.anthropic_dialect is UpstreamDialect.NATIVE
+    assert context.forward_url == "https://api.anthropic.com/v1/messages"
+
+    headers, payload = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
+    assert headers["anthropic-version"]
+    assert headers["x-api-key"] == "sk-ant"
+    assert "Authorization" not in headers
+    # Native means untouched.
+    assert payload["system"] == "Be brief."
+
+
+@pytest.mark.asyncio
+async def test_other_cloud_providers_get_no_protocol_headers(monkeypatch):
+    context = await _resolve(monkeypatch, "v1/messages")
+    headers, _ = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
+    assert "anthropic-version" not in headers
+    assert headers["Authorization"] == "Bearer sk-secret"

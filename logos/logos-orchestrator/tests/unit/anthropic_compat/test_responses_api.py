@@ -369,3 +369,27 @@ def test_no_content_is_emitted_after_a_mid_stream_error():
     events = _events(translator.error("connection reset"))
     assert [name for name, _ in events] == ["error"]
     assert translator.finish() == []
+
+
+def test_a_safety_refusal_reaches_the_client():
+    """A refusal is a content part of its own, not an output_text."""
+    result = from_response(
+        {
+            "id": "r",
+            "model": "m",
+            "status": "completed",
+            "output": [
+                {"type": "message", "role": "assistant", "content": [{"type": "refusal", "refusal": "I can't."}]}
+            ],
+        }
+    )
+    assert result["content"] == [{"type": "text", "text": "I can't."}]
+
+
+def test_a_streamed_refusal_reaches_the_client():
+    translator = ResponsesStreamTranslator("m")
+    translator.feed(_sse("response.created", {"response": {"id": "r", "model": "m"}}))
+    out = translator.feed(_sse("response.refusal.delta", {"output_index": 0, "delta": "I can't."}))
+    out += translator.feed(_sse("response.completed", {"response": {"status": "completed"}}))
+    answer = "".join(d["delta"]["text"] for n, d in _events(out) if n == "content_block_delta")
+    assert answer == "I can't."

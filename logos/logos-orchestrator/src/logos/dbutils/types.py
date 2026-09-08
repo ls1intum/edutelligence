@@ -1,3 +1,4 @@
+import os
 from typing import List, Optional, TypedDict
 from urllib.parse import urlparse
 
@@ -45,10 +46,22 @@ def infer_cloud_provider_type(
     return None
 
 
+# The API version every Anthropic endpoint requires on every request; without
+# it the call is rejected before it reaches a model. Pinned rather than
+# tracked: a newer version can change response shapes, so moving it is a
+# deliberate change.
+ANTHROPIC_VERSION = os.getenv("LOGOS_ANTHROPIC_VERSION", "2023-06-01")
+
+# Per-provider header conventions, for the ones that do not follow the
+# "Authorization: Bearer" default. Anthropic authenticates with x-api-key.
+_AUTH_DEFAULTS = {"anthropic": ("x-api-key", "{}")}
+
+
 def cloud_auth_header(
     auth_name: Optional[str],
     auth_format: Optional[str],
     api_key: Optional[str],
+    cloud_provider_type: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """The HTTP auth header a cloud provider's stored credentials produce.
 
@@ -59,6 +72,10 @@ def cloud_auth_header(
     Azure's "api-key") keeps its own name and defaults to the bare key rather
     than a Bearer prefix.
 
+    The default follows the provider type where that type does not use Bearer
+    — Anthropic reads ``x-api-key`` and ignores an Authorization header — so a
+    provider saved with the form's placeholders still authenticates.
+
     Returns ``None`` when there is no key to send, which is legitimate for an
     upstream that serves unauthenticated.
     """
@@ -67,11 +84,23 @@ def cloud_auth_header(
     if not api_key:
         return None
     if not name:
-        name = "Authorization"
-        fmt = fmt or "Bearer {}"
+        name, default_format = _AUTH_DEFAULTS.get((cloud_provider_type or "").lower(), ("Authorization", "Bearer {}"))
+        fmt = fmt or default_format
     elif not fmt:
         fmt = "{}"
     return name, fmt.format(api_key)
+
+
+def cloud_protocol_headers(cloud_provider_type: Optional[str]) -> dict[str, str]:
+    """Headers a provider's protocol requires on every request.
+
+    Anthropic rejects a request that carries no ``anthropic-version``, both for
+    inference and for the model list, so an Anthropic upstream is unusable
+    without it. Every other provider type needs nothing.
+    """
+    if (cloud_provider_type or "").lower() == "anthropic":
+        return {"anthropic-version": ANTHROPIC_VERSION}
+    return {}
 
 
 def get_unique_models_from_deployments(deployments: List[Deployment]) -> List[int]:

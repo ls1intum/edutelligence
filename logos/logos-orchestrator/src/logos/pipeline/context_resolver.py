@@ -8,13 +8,13 @@ Separates the "what to execute" (context resolution) from "how to execute" (exec
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode
 
 from logos.anthropic_compat import UpstreamDialect, dialect_for, forward_path_for, is_messages_path, translate_request
 from logos.dbutils.dbmanager import DBManager
-from logos.dbutils.types import cloud_auth_header
+from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 from logos.pipeline.effort_normalization import normalize_reasoning_effort
 from logos.request_content import is_multipart_payload, set_payload_field
@@ -46,6 +46,10 @@ class ExecutionContext:
     # ``None`` for every other route; ``NATIVE`` for upstreams that serve the
     # Messages API themselves and are forwarded verbatim.
     anthropic_dialect: Optional[UpstreamDialect] = None
+    # Headers the upstream's protocol requires on every request, beyond auth
+    # and content type — Anthropic's mandatory ``anthropic-version``. Empty for
+    # every other provider.
+    protocol_headers: Dict[str, str] = field(default_factory=dict)
 
 
 class ContextResolver:
@@ -124,7 +128,7 @@ class ContextResolver:
             # rather than an unauthenticated request.
             auth_value = auth_format.format(api_key or "")
             if provider_type != "logosnode":
-                header = cloud_auth_header(auth_name, auth_format, api_key)
+                header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
                 if header is None:
                     if auth_name or auth_format:
                         logger.error(
@@ -243,6 +247,7 @@ class ContextResolver:
             lane_id=lane_id,
             azure_responses_deployment=azure_responses_deployment,
             anthropic_dialect=anthropic_dialect,
+            protocol_headers=cloud_protocol_headers(cloud_type) if provider_type == "cloud" else {},
         )
 
     @staticmethod
@@ -262,6 +267,7 @@ class ContextResolver:
         # httpx must generate the multipart boundary for file-upload requests;
         # setting Content-Type manually would omit that required boundary.
         headers = {} if is_multipart_payload(payload) else {"Content-Type": "application/json"}
+        headers.update(getattr(context, "protocol_headers", None) or {})
         if context.auth_header and context.auth_value:
             headers[context.auth_header] = context.auth_value
 

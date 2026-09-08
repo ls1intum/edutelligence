@@ -35,7 +35,7 @@ import httpx
 
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
-from logos.dbutils.types import cloud_auth_header
+from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
 
 logger = logging.getLogger(__name__)
 
@@ -262,9 +262,12 @@ class CloudModelSyncService:
             logger.warning("Cloud model sync: provider %s (%s) skipped: %s", pid, name, exc)
             return False, False
 
-        headers = {"Accept": "application/json"}
+        cloud_type = provider.get("cloud_provider_type")
+        headers = {"Accept": "application/json", **cloud_protocol_headers(cloud_type)}
         try:
-            auth = cloud_auth_header(provider.get("auth_name"), provider.get("auth_format"), provider.get("api_key"))
+            auth = cloud_auth_header(
+                provider.get("auth_name"), provider.get("auth_format"), provider.get("api_key"), cloud_type
+            )
         except (ValueError, KeyError, IndexError) as exc:
             # auth_format is free text an operator typed, and it is applied with
             # str.format — "Bearer {" or "Bearer {name}" raise here. Report which

@@ -208,8 +208,14 @@ def from_response(body: Dict[str, Any], *, model_name: Optional[str] = None) -> 
         kind = item.get("type")
         if kind == "message":
             for part in item.get("content") or []:
-                if isinstance(part, dict) and part.get("type") == "output_text" and part.get("text"):
-                    content.append({"type": "text", "text": str(part["text"])})
+                if not isinstance(part, dict):
+                    continue
+                # A refusal is a content part of its own, with the explanation
+                # under a matching key. Reading only output_text turns it into
+                # an empty successful answer.
+                text = part.get("text") if part.get("type") == "output_text" else part.get("refusal")
+                if text:
+                    content.append({"type": "text", "text": str(text)})
         elif kind == "function_call":
             saw_tool_call = True
             content.append(
@@ -335,7 +341,9 @@ class ResponsesStreamTranslator:
                 entry["name"] = str(item.get("name") or "")
             return []
 
-        if event == "response.output_text.delta":
+        if event in ("response.output_text.delta", "response.refusal.delta"):
+            # A streamed refusal is delivered on its own event; relaying only
+            # the text one would end the turn with nothing to show.
             return writer.text(str(frame.get("delta") or ""))
 
         if event == "response.function_call_arguments.delta":

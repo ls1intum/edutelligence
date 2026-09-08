@@ -238,6 +238,11 @@ def from_chat_completion(body: Dict[str, Any], *, model_name: Optional[str] = No
     if isinstance(text, list):
         # Some upstreams answer in the multimodal list form even for plain text.
         text = "".join(part.get("text") or "" for part in text if isinstance(part, dict))
+    if not text:
+        # A safety refusal arrives with content null and the explanation in its
+        # own field. Dropping it turns a refusal into an empty successful
+        # answer, so the client never learns why nothing came back.
+        text = message.get("refusal")
     if text:
         content.append({"type": "text", "text": str(text)})
 
@@ -375,7 +380,9 @@ class ChatCompletionsStreamTranslator:
 
         out: List[bytes] = []
         delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
-        text = delta.get("content")
+        # A streamed safety refusal carries its text in its own field; relaying
+        # only "content" would end the turn with nothing to show.
+        text = delta.get("content") or delta.get("refusal")
         if isinstance(text, str) and text:
             out.extend(writer.text(text))
 
