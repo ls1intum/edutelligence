@@ -36,76 +36,76 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
 
     @Test
     void normalize_nullReturnsNull() {
-        assertThat(svc.testNormalizeModelName(null)).isNull();
+        assertThat(svc.normalizeModelName(null)).isNull();
     }
 
     @Test
     void normalize_trimsAndLowercases() {
-        assertThat(svc.testNormalizeModelName("  GPT-4  ")).isEqualTo("gpt-4");
+        assertThat(svc.normalizeModelName("  GPT-4  ")).isEqualTo("gpt-4");
     }
 
     @Test
     void normalize_stripsProviderPath() {
-        assertThat(svc.testNormalizeModelName("openai/gpt-4")).isEqualTo("gpt-4");
-        assertThat(svc.testNormalizeModelName("openrouter/openai/gpt-4")).isEqualTo("gpt-4");
+        assertThat(svc.normalizeModelName("openai/gpt-4")).isEqualTo("gpt-4");
+        assertThat(svc.normalizeModelName("openrouter/openai/gpt-4")).isEqualTo("gpt-4");
     }
 
     @Test
     void normalize_stripsTrailingPtOrItSuffix() {
-        assertThat(svc.testNormalizeModelName("gpt-4-pt")).isEqualTo("gpt-4");
-        assertThat(svc.testNormalizeModelName("llama-3-it")).isEqualTo("llama-3");
+        assertThat(svc.normalizeModelName("gpt-4-pt")).isEqualTo("gpt-4");
+        assertThat(svc.normalizeModelName("llama-3-it")).isEqualTo("llama-3");
     }
 
     @Test
     void normalize_leavesUnrelatedSuffixesAlone() {
-        assertThat(svc.testNormalizeModelName("gpt-4-32k")).isEqualTo("gpt-4-32k");
-        assertThat(svc.testNormalizeModelName("gpt-4")).isEqualTo("gpt-4");
+        assertThat(svc.normalizeModelName("gpt-4-32k")).isEqualTo("gpt-4-32k");
+        assertThat(svc.normalizeModelName("gpt-4")).isEqualTo("gpt-4");
     }
 
     // --- extractModelName ---
 
     @Test
     void extract_nullOrBlankKeyReturnsNull() {
-        assertThat(svc.testExtractModelName(null)).isNull();
-        assertThat(svc.testExtractModelName("   ")).isNull();
+        assertThat(svc.extractModelName(null)).isNull();
+        assertThat(svc.extractModelName("   ")).isNull();
     }
 
     @Test
     void extract_plainKeyIsNormalized() {
-        assertThat(svc.testExtractModelName("  GPT-4 ")).isEqualTo("gpt-4");
-        assertThat(svc.testExtractModelName("gpt-4-pt")).isEqualTo("gpt-4");
+        assertThat(svc.extractModelName("  GPT-4 ")).isEqualTo("gpt-4");
+        assertThat(svc.extractModelName("gpt-4-pt")).isEqualTo("gpt-4");
     }
 
     @Test
     void extract_takesLastPathSegment() {
-        assertThat(svc.testExtractModelName("azure/gpt-4")).isEqualTo("gpt-4");
-        assertThat(svc.testExtractModelName("openrouter/openai/gpt-4")).isEqualTo("gpt-4");
+        assertThat(svc.extractModelName("azure/gpt-4")).isEqualTo("gpt-4");
+        assertThat(svc.extractModelName("openrouter/openai/gpt-4")).isEqualTo("gpt-4");
     }
 
     // --- modelNamesMatch ---
 
     @Test
     void match_identicalNormalizedNamesMatch() {
-        assertThat(svc.testModelNamesMatch("gpt-4", "gpt-4")).isTrue();
+        assertThat(svc.modelNamesMatch("gpt-4", "gpt-4")).isTrue();
     }
 
     @Test
     void match_isExactNotPrefixOrFuzzy() {
         // matching is an exact equals on the already-normalized names
-        assertThat(svc.testModelNamesMatch("gpt-4", "gpt-4-turbo")).isFalse();
-        assertThat(svc.testModelNamesMatch("gpt-4", "gpt-4o")).isFalse();
+        assertThat(svc.modelNamesMatch("gpt-4", "gpt-4-turbo")).isFalse();
+        assertThat(svc.modelNamesMatch("gpt-4", "gpt-4o")).isFalse();
     }
 
     @Test
     void match_isCaseSensitiveBecauseNormalizationHappensBefore() {
-        assertThat(svc.testModelNamesMatch("GPT-4", "gpt-4")).isFalse();
+        assertThat(svc.modelNamesMatch("GPT-4", "gpt-4")).isFalse();
     }
 
     @Test
     void match_nullSidesNeverMatch() {
-        assertThat(svc.testModelNamesMatch(null, "gpt-4")).isFalse();
-        assertThat(svc.testModelNamesMatch("gpt-4", null)).isFalse();
-        assertThat(svc.testModelNamesMatch(null, null)).isFalse();
+        assertThat(svc.modelNamesMatch(null, "gpt-4")).isFalse();
+        assertThat(svc.modelNamesMatch("gpt-4", null)).isFalse();
+        assertThat(svc.modelNamesMatch(null, null)).isFalse();
     }
 
     // --- extractAndStoreCapabilities ---
@@ -120,7 +120,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
             )
         );
 
-        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
+        assertThat(svc.extractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
 
         verify(capabilitiesRepository).save(argThat((ModelCapabilities c) ->
             c.getModelId() == 5001
@@ -136,7 +136,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
             "gpt-4", Map.of("max_output_tokens", 8192)
         );
 
-        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
+        assertThat(svc.extractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
 
         verify(capabilitiesRepository).save(argThat((ModelCapabilities c) ->
             !c.getSupportsFunctionCalling()
@@ -152,7 +152,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         catalog.put("azure/gpt-4", Map.of("supports_vision", true));
         catalog.put("openrouter/openai/gpt-4", Map.of("supports_reasoning", true));
 
-        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
+        assertThat(svc.extractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
 
         verify(capabilitiesRepository).save(argThat((ModelCapabilities c) ->
             c.getSupportsFunctionCalling()
@@ -167,7 +167,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
             "gpt-4o", Map.of("supports_function_calling", true)
         );
 
-        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
+        assertThat(svc.extractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
         verify(capabilitiesRepository, never()).save(any());
     }
@@ -183,7 +183,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         ));
         catalog.put("gpt-4", Map.of("supports_function_calling", true));
 
-        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "sample_spec")).isFalse();
+        assertThat(svc.extractAndStoreCapabilities(catalog, 5001, "sample_spec")).isFalse();
 
         verify(capabilitiesRepository, never()).save(any());
     }
@@ -194,7 +194,7 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
         catalog.put("gpt-4", "not-a-model-entry");
         catalog.put("gpt-4o", Map.of("supports_function_calling", true));
 
-        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
+        assertThat(svc.extractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
         verify(capabilitiesRepository, never()).save(any());
     }
