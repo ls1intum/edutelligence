@@ -3255,3 +3255,52 @@ def test_calibration_source_fallback_takes_no_cache_use_reservation(tmp_path) ->
     assert seen_at_spawn == [set()]
     # ... and the run left the reservation table empty.
     assert cache.cache_use_reservations() == set()
+
+
+class _SelectionSpyCache(_FakeCalibrationCache):
+    """Records the outstanding reservations the moment ensure_cached_sync
+    returns the selected path — the exact instant a re-plan tick on the
+    event loop can observe the (already cached) entry."""
+
+    def __init__(self, root: Path, select: str) -> None:
+        super().__init__(root, select)
+        self.reserved_at_selection: list[set[str]] = []
+
+    def ensure_cached_sync(self, model: str) -> str:
+        path = super().ensure_cached_sync(model)
+        self.reserved_at_selection.append(self.cache_use_reservations())
+        return path
+
+
+def test_calibration_reserves_the_entry_before_the_selection_returns(tmp_path) -> None:
+    """Regression [high]: reserving only AFTER ensure_cached_sync returned
+    the tmpfs path left a gap in which the periodic re-plan (event loop,
+    while the probe runs in an executor) saw no cache-use reservation and
+    could reclaim the just-selected entry — spawn_vllm would then read a
+    deleted HF_HOME. The reservation must be live the moment the selection
+    returns, i.e. taken before ensure_cached_sync is called; a source
+    fallback still releases it immediately (see the sibling test)."""
+    cache = _SelectionSpyCache(tmp_path, "tmpfs")
+    patches = _patch_calibration_infra(wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")])
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # By the time the selection returned the tmpfs path, the entry was
+    # already reserved — no tick between selection and spawn can reclaim it.
+    assert cache.reserved_at_selection == [{"org/test-model"}]
+    # And the run still releases it on the way out.
+    assert cache.cache_use_reservations() == set()

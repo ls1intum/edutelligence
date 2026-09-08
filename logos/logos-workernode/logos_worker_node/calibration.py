@@ -1844,25 +1844,35 @@ def _calibrate_model_probe(
         # Lazy RAM cache: copy model into tmpfs on first real spawn.
         if not _ram_cached and model_cache is not None:
             logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
+            # Reserve BEFORE the selection returns: ensure_cached_sync hands
+            # back the tmpfs path the moment the entry is (already) cached,
+            # and the re-plan runs on the event loop while this probe runs
+            # in an executor — a tick in the gap between that return and a
+            # reservation taken after it can reclaim the just-selected
+            # entry, leaving spawn_vllm to read a deleted HF_HOME. The
+            # reservation is provisional: a source fallback reads no tmpfs
+            # bytes and is released immediately below; the calibrate_model
+            # wrapper's finally releases it on every other exit.
+            if not cache_use_reserved[0]:
+                model_cache.reserve_cache_use(model)
+                cache_use_reserved[0] = True
             _hf = model_cache.ensure_cached_sync(model) or None
             if _hf:
                 is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
                 if is_tmpfs:
                     hf_home = _hf
-                    # Only NOW does this run read the entry from tmpfs (every
-                    # later probe reuses this hf_home without re-checking the
-                    # floor), so only now must it stay pinned against the
-                    # re-plan: the calibrate_model wrapper's finally releases
-                    # it. A source fallback selects no tmpfs bytes and must
-                    # not pin the copy — reserving before the selection
-                    # protected an unused entry for the whole calibration
-                    # after a raised floor rejected it.
-                    if not cache_use_reserved[0]:
-                        model_cache.reserve_cache_use(model)
-                        cache_use_reserved[0] = True
                     logger.info("  [RAM cache] %s → loading from tmpfs", model)
                 else:
+                    # Source fallback (raised floor, full tmpfs, missing
+                    # weights): this run reads no tmpfs bytes, so the copy
+                    # must not stay pinned for the rest of the calibration.
+                    model_cache.release_cache_use(model)
+                    cache_use_reserved[0] = False
                     logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+            else:
+                # No usable path at all — nothing to pin.
+                model_cache.release_cache_use(model)
+                cache_use_reserved[0] = False
             _ram_cached = True
         # Remember where this probe's output starts so every later extraction
         # parses THIS probe rather than the tail of the shared append log.
