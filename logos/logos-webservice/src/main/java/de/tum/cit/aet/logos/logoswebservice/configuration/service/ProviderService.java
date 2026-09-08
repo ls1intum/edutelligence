@@ -1,5 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,18 +63,38 @@ public class ProviderService {
         if (req.privacyLevel() == null || !VALID_PRIVACY_LEVELS.contains(req.privacyLevel())) {
             throw new IllegalArgumentException("privacy_level is required and must be one of " + VALID_PRIVACY_LEVELS);
         }
+        ProviderType providerType = parseProviderType(req.providerType());
+
         Provider p = new Provider();
         p.setName(req.providerName());
         p.setBaseUrl(normalizeBaseUrl(req.baseUrl()));
-        p.setApiKey(req.apiKey());
         p.setAuthName(req.authName() != null ? req.authName() : "");
         p.setAuthFormat(req.authFormat() != null ? req.authFormat() : "");
-        p.setProviderType(parseProviderType(req.providerType()));
+        p.setProviderType(providerType);
         p.setCloudProviderType(parseCloudProviderType(req.cloudProviderType()));
         p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
+
+        // Logosnode providers authenticate their worker node with a shared key.
+        // When the caller did not supply one, generate a random key (mirroring
+        // the orchestrator's logosnode_register bootstrap) and echo it back in
+        // the response so the operator can use it to configure the worker.
+        // Cloud providers keep whatever key was sent.
+        String apiKey = req.apiKey();
+        if (providerType == ProviderType.logosnode && (apiKey == null || apiKey.isBlank())) {
+            apiKey = generateApiKey();
+        }
+        p.setApiKey(apiKey);
+
         p = providerRepository.save(p);
         orchestratorNotificationService.notifyRefresh(false);
-        return Map.of("result", "Created Provider.", "provider-id", p.getId());
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("result", "Created Provider.");
+        response.put("provider-id", p.getId());
+        if (providerType == ProviderType.logosnode && apiKey != null) {
+            response.put("api_key", apiKey);
+        }
+        return response;
     }
 
     @Transactional
@@ -153,6 +175,18 @@ public class ProviderService {
 
     private static String normalizeBaseUrl(String raw) {
         return raw == null || raw.isBlank() ? null : raw;
+    }
+
+    /**
+     * Generate a URL-safe random API key. Matches the orchestrator's
+     * {@code secrets.token_urlsafe(48)} (48 random bytes, base64url, no
+     * padding) so a key minted here is interchangeable with one minted by the
+     * {@code logosnode_register} bootstrap endpoint.
+     */
+    private static String generateApiKey() {
+        byte[] bytes = new byte[48];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     private static ProviderType parseProviderType(String raw) {

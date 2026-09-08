@@ -77,6 +77,43 @@ class ProviderControllerTest {
     }
 
     @Test
+    void addProvider_logosnodeGeneratesApiKeyWhenAbsent() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"local-node\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"logosnode\",\"privacy_level\":\"LOCAL\","
+                    + "\"auth_name\":\"\",\"auth_format\":\"{}\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Created Provider."))
+           .andExpect(jsonPath("$.api_key").isString());
+    }
+
+    @Test
+    void addProvider_logosnodeEchoesExplicitlyProvidedKey() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"local-node-2\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"logosnode\",\"privacy_level\":\"LOCAL\","
+                    + "\"auth_name\":\"\",\"auth_format\":\"{}\",\"api_key\":\"my-shared-key\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.api_key").value("my-shared-key"));
+    }
+
+    @Test
+    void addProvider_cloudDoesNotGenerateApiKey() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"cloud-p\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"cloud\",\"privacy_level\":\"CLOUD_IN_EU_BY_US_PROVIDER\","
+                    + "\"auth_name\":\"Authorization\",\"auth_format\":\"Bearer {}\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.api_key").doesNotExist());
+    }
+
+    @Test
     void updateProvider_updatesName() throws Exception {
         mvc.perform(post("/logosdb/update_provider")
                 .with(TestJwt.logosAdmin())

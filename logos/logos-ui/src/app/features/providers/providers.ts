@@ -182,6 +182,15 @@ export class Providers implements OnInit {
   addLoading = signal(false);
   addError = signal('');
 
+  // ── Created-provider key modal ───────────────────────────────────────────
+  // Logosnode providers are given a generated shared key on creation; the
+  // operator must be able to copy it to configure the worker node, so we
+  // surface it in a follow-up modal once the add flow succeeds.
+  createdKeyOpen = signal(false);
+  createdKeyName = signal('');
+  createdKey = signal('');
+  createdKeyCopied = signal(false);
+
   // ── Edit modal ────────────────────────────────────────────────────────────
   editTarget = signal<Provider | null>(null);
   editName = signal('');
@@ -359,14 +368,38 @@ export class Providers implements OnInit {
       privacy_level: this.addPrivacyLevel(),
     };
     try {
-      await this.providerService.addProvider(payload);
+      const res = await this.providerService.addProvider(payload);
       await this.fetchProviders();
       this.addOpen.set(false);
+      const generatedKey: string = (res && (res as { api_key?: string }).api_key) || '';
+      if (generatedKey) {
+        this.createdKeyName.set(payload.name);
+        this.createdKey.set(generatedKey);
+        this.createdKeyCopied.set(false);
+        this.createdKeyOpen.set(true);
+      }
     } catch {
       this.addError.set('Failed to add provider, please try again.');
     } finally {
       this.addLoading.set(false);
     }
+  }
+
+  async copyCreatedKey(): Promise<void> {
+    const key = this.createdKey();
+    if (!key) return;
+    try {
+      await navigator.clipboard.writeText(key);
+      this.createdKeyCopied.set(true);
+      setTimeout(() => this.createdKeyCopied.set(false), 2000);
+    } catch {
+      // Clipboard unavailable (e.g. non-secure context) — the key is still
+      // visible in the field above for manual copying.
+    }
+  }
+
+  closeCreatedKeyDialog(): void {
+    this.createdKeyOpen.set(false);
   }
 
   // ── Edit flow ─────────────────────────────────────────────────────────────
