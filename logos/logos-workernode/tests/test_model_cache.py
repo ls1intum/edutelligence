@@ -830,9 +830,7 @@ def _copy_with_floor_raised_midway(cache, monkeypatch, available_after: int) -> 
 
     async def copy_then_raise_floor(model_name: str) -> bool:
         cache.set_host_ram_floor_mb(100_000.0)
-        monkeypatch.setattr(
-            "logos_worker_node.model_cache._host_ram_available_bytes", lambda: available_after
-        )
+        monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: available_after)
         return await original_copy(model_name)
 
     monkeypatch.setattr(cache, "_copy_model", copy_then_raise_floor)
@@ -849,9 +847,7 @@ def _copy_sync_with_floor_raised_midway(cache, monkeypatch, available_after: int
 
     def copy_sync_then_raise_floor(model_name: str) -> bool:
         cache.set_host_ram_floor_mb(100_000.0)
-        monkeypatch.setattr(
-            "logos_worker_node.model_cache._host_ram_available_bytes", lambda: available_after
-        )
+        monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: available_after)
         return original_copy(model_name)
 
     monkeypatch.setattr(cache, "_copy_model_sync", copy_sync_then_raise_floor)
