@@ -114,8 +114,8 @@ class TestResolveWorkerCacheRoot:
     def test_non_metal_keeps_the_inherited_resolver(self, monkeypatch) -> None:
         monkeypatch.setattr(worker_main, "is_metal_backend", lambda: False)
         monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
-        root = worker_main._resolve_worker_cache_root(self._cfg("/usr/share/ollama/.ollama/models"))
-        assert root == "/usr/share/ollama/.ollama/models"
+        root = worker_main._resolve_worker_cache_root(self._cfg("/usr/share/logos/models"))
+        assert root == "/usr/share/logos/models"
 
 
 class TestPropagateCachePathToEnv:
