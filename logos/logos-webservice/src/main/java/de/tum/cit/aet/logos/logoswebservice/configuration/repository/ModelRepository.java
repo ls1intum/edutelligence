@@ -1,14 +1,28 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.repository;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
+import jakarta.persistence.LockModeType;
 
 public interface ModelRepository extends JpaRepository<Model, Integer> {
+
+    /**
+     * Locks the model row until the surrounding transaction ends. Every writer
+     * of the model's capability row takes this lock first — the manual override
+     * from Logos Admin and the catalog sync alike — so the manual-override
+     * guard, the model-name check and the write that follows them cannot be
+     * interleaved with a concurrent mutation of the same model.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM Model m WHERE m.id = :id")
+    Optional<Model> findByIdForUpdate(@Param("id") Integer id);
 
     boolean existsByNameIgnoreCase(String name);
 

@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -117,12 +118,17 @@ public class ModelController {
     public ResponseEntity<?> updateModelInfo(
             @RequestBody UpdateModelRequestDTO req) {
         try {
-            ResponseEntity<?> response = ResponseEntity.ok(modelService.updateModelInfo(req));
+            Map<String, Object> result = new LinkedHashMap<>(modelService.updateModelInfo(req));
             if (req.name() != null) {
                 priceUpdaterService.updatePricesForModelAsync(req.modelId(), req.name());
-                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), req.name());
+                // Capabilities resolve against a local catalog file, so this runs
+                // inline rather than async: the response then carries the state
+                // the rename produced, and the client does not have to keep the
+                // flags of the old name on screen until the next full reload.
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModel(req.modelId(), req.name());
+                result.put("capabilities", modelService.capabilitiesState(req.modelId()));
             }
-            return response;
+            return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             // "Model not found: ..." is a lookup miss; alias validation
             // failures are bad input.
@@ -231,6 +237,12 @@ public class ModelController {
         if (req.ids() == null || req.ids().isEmpty()) {
             return ResponseEntity.badRequest()
                 .body(Map.of("error", "ids are required"));
+        }
+        // A null element is malformed input, not a lookup miss: without this the
+        // service's "Model not found: null" would surface as a 404.
+        if (req.ids().contains(null)) {
+            return ResponseEntity.badRequest()
+                .body(Map.of("error", "ids must not contain null"));
         }
 
         try {

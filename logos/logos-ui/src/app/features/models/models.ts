@@ -331,7 +331,7 @@ export class Models implements OnInit {
       this.editCapReasoning() !== (storedCaps?.supports_reasoning ?? false);
     try {
       // Persist a changed capability override BEFORE the model info update:
-      // renaming the model triggers an async catalog re-sync, which must see
+      // renaming the model triggers a catalog re-sync, which must see
       // manual_override=true and therefore skip the row.
       if (capsChanged) {
         const caps = await this.modelService.setModelCapabilities(
@@ -342,7 +342,10 @@ export class Models implements OnInit {
         );
         this.applyCapabilityState(caps);
       }
-      await this.modelService.updateModel(payload);
+      const res = await this.modelService.updateModel(payload);
+      // A rename re-syncs the capabilities server-side; take the state the
+      // response reports so the chips never keep showing the old name's flags.
+      if (res.capabilities) this.applyCapabilityState(res.capabilities);
       this.models.update((list) =>
         list.map((m) =>
           m.id === target.id

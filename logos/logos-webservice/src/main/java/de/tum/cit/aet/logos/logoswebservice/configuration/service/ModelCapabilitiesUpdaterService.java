@@ -71,7 +71,9 @@ public class ModelCapabilitiesUpdaterService {
 
     public void updateCapabilitiesForModel(int modelId, String modelName) {
         Map<String, Object> fullCatalog = loadLocalCatalog();
-        if (fullCatalog == null) return;
+        // An empty catalog knows no model, so treating it as authoritative would
+        // delete every stored row — same guard as the daily refresh.
+        if (fullCatalog == null || fullCatalog.isEmpty()) return;
         try {
             extractAndStoreCapabilities(fullCatalog, modelId, modelName);
         } catch (Exception e) {
@@ -103,6 +105,8 @@ public class ModelCapabilitiesUpdaterService {
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
+        // Cheap short-circuit that spares the catalog scan; the binding check
+        // runs again inside applyCatalogCapabilities, under the row lock.
         if (modelCapabilitiesPersistenceService.isManualOverride(modelId)) {
             log.debug("capabilities_updater: skipping model '{}' (id={}): manual override is active", modelName, modelId);
             return false;
@@ -148,16 +152,15 @@ public class ModelCapabilitiesUpdaterService {
                 "capabilities_updater: model '{}' not found in local JSON registry, deleting stored capabilities",
                 modelName
             );
-            modelCapabilitiesPersistenceService.deleteModelCapabilities(modelId);
-            return false;
         }
-        modelCapabilitiesPersistenceService.updateModelCapabilities(
+        return modelCapabilitiesPersistenceService.applyCatalogCapabilities(
             modelId,
+            modelName,
+            found,
             supportsFunctionCalling,
             supportsVision,
             supportsReasoning
         );
-        return true;
     }
 
     @SuppressWarnings("unchecked")
