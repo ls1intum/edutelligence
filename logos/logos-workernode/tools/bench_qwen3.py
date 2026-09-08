@@ -158,7 +158,7 @@ async def main():
     url = os.environ.get("VLLM_URL", "http://localhost:8000/v1/chat/completions")
     model = "/tmp/qwen3-30b-a3b.gguf"
     print(f"\n{'='*60}")
-    print(f"BENCHMARK: qwen3:30b-a3b on vLLM (GGUF)")
+    print("BENCHMARK: qwen3:30b-a3b on vLLM (GGUF)")
     print(f"{'='*60}")
     concurrency_levels = [1, 4, 8, 16, 32]
 
@@ -186,7 +186,7 @@ async def main():
             print(f"  Errors:         {result['errors']}")
 
     print(f"\n{'='*60}")
-    print(f"SUMMARY: vLLM")
+    print("SUMMARY: vLLM")
     print(f"{'='*60}")
     print(
         f"{'N':>4s} {'Agg tok/s':>10s} {'Avg lat':>8s} {'P50 lat':>8s} {'P95 lat':>8s} {'TTFT ms':>8s} {'Errors':>6s}"
