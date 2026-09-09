@@ -844,9 +844,18 @@ class LaneManager:
                 errors=errors,
                 rolled_back=rolled_back,
             )
-            notify_added = bool(added_ids) and not rolled_back
+            # A successful add re-plans for the new lane set. A rolled-back
+            # apply MUST re-plan too: the in-flight re-plans above (per-add and
+            # per-restart) already sized the host-RAM floor to the PARTIALLY
+            # applied desired state, and _rollback_unlocked has since restored
+            # the original handles. Without a re-plan here the floor stays based
+            # on the abandoned desired state — a restored model with a larger
+            # sleeping footprint could sleep before the 60 s tick against an
+            # undersized reserve, reopening the host-OOM window the reserve
+            # exists to close.
+            notify_replan = bool(added_ids) or rolled_back
 
-        if notify_added:
+        if notify_replan:
             # Fire outside the lane lock: the hook runs the RAM-cache re-plan,
             # which re-reads lane state and must not be serialized behind it.
             await self._notify_lane_added()
