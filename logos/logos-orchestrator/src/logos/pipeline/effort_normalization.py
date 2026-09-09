@@ -28,7 +28,7 @@ entry in ``CHAT_TEMPLATE_EFFORT_SCALES``.
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
-# Snapshot of vLLM 0.27.1's ChatCompletionRequest.reasoning_effort Literal,
+# Snapshot of vLLM 0.29.0's ChatCompletionRequest.reasoning_effort Literal,
 # kept in sync with the workernode's VLLM_PIP_SPEC (the "Logos - Update
 # vLLM" workflow bumps that pin). It only drives the coverage test: runtime
 # normalization is drift-proof, since unknown values fall back to the

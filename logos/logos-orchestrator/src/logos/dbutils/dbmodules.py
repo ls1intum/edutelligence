@@ -24,10 +24,27 @@ Base = declarative_base()
 
 # Enum definition
 class ThresholdLevel(enum.Enum):
+    """Privacy levels — the single ordered definition, most trusted first.
+
+    The declaration order IS the trust ordering (index 0 = strictest);
+    pipeline.py derives PRIVACY_ORDER from it and dbmanager.py derives the
+    validation set, so a new level added here is known to router and
+    registration at once. Mirrors the Postgres enum threshold_enum
+    (liquibase 000 + 024) and the webservice Java enum of the same name —
+    keep those in sync.
+
+    The axis is "how much do we trust this deployment with our data".
+    THIRD_PARTY_HARDWARE covers hardware outside operator control (e.g. a
+    personal Mac running the MLX worker, see logos-workernode/MACOS.md):
+    its owner can inspect the running processes, so it orders below every
+    cloud tier and LOCAL keeps meaning "our datacentre".
+    """
+
     LOCAL = "LOCAL"
+    CLOUD_IN_EU_BY_EU_PROVIDER = "CLOUD_IN_EU_BY_EU_PROVIDER"
     CLOUD_IN_EU_BY_US_PROVIDER = "CLOUD_IN_EU_BY_US_PROVIDER"
     CLOUD_NOT_IN_EU_BY_US_PROVIDER = "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
-    CLOUD_IN_EU_BY_EU_PROVIDER = "CLOUD_IN_EU_BY_EU_PROVIDER"
+    THIRD_PARTY_HARDWARE = "THIRD_PARTY_HARDWARE"
 
 
 class LoggingLevel(enum.Enum):
@@ -60,6 +77,10 @@ class CloudProviderType(enum.Enum):
     BEDROCK = "bedrock"
     DEEPSEEK = "deepseek"
     GROQ = "groq"
+    # Another Logos instance used as an upstream. It serves every surface this
+    # one does, including the Anthropic Messages API, so requests reach it
+    # unchanged instead of being translated into an OpenAI dialect.
+    LOGOS = "logos"
 
 
 class User(Base):
@@ -209,6 +230,11 @@ class LogEntry(Base):
     queue_depth_at_arrival = Column(Integer)
     utilization_at_arrival = Column(Numeric)
     queue_wait_ms = Column(Numeric)
+    # Whether the key's rate limiter admitted the request. NULL when no limit
+    # is configured (the request was never checked) or for pre-migration
+    # rows; FALSE for a request the limiter rejected after scheduling. The
+    # usage window counts everything except explicit FALSE.
+    rate_limit_admitted = Column(Boolean, nullable=True)
     was_cold_start = Column(Boolean, default=False)
     load_duration_ms = Column(Numeric)
     available_vram_mb = Column(Integer)

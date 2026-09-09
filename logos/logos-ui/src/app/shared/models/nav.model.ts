@@ -9,4 +9,6 @@ export interface MenuItem {
   group: NavGroup;
   aliases?: string[];
   roles: UserRole[];
+  /** Only shown when the agent runner is actually running on this deployment. */
+  requiresAgent?: boolean;
 }
