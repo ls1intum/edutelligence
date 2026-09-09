@@ -22,7 +22,14 @@ from logos.anthropic_compat.chat_completions import (
     from_chat_completion,
     to_chat_completions,
 )
-from logos.anthropic_compat.common import MESSAGES_PATH, UpstreamDialect, error_body, is_messages_path, sse
+from logos.anthropic_compat.common import (
+    MESSAGES_PATH,
+    UpstreamDialect,
+    error_body,
+    is_messages_path,
+    is_responses_path,
+    sse,
+)
 from logos.anthropic_compat.responses_api import ResponsesStreamTranslator, from_response, to_responses
 
 __all__ = [
@@ -33,6 +40,7 @@ __all__ = [
     "error_body",
     "forward_path_for",
     "is_messages_path",
+    "is_responses_path",
     "sse",
     "stream_translator",
     "translate_error",

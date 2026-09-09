@@ -889,6 +889,101 @@ async def test_a_native_messages_mid_stream_failure_emits_an_anthropic_error_eve
     assert b"[DONE]" not in body
 
 
+def _responses_context() -> SimpleNamespace:
+    """The real /v1/responses context: the resolver sets ``anthropic_dialect``
+    only for Messages requests, so a Responses stream has no dialect marker —
+    the failure branch must decide from the request path."""
+    return SimpleNamespace(
+        provider_id=PROVIDER_ID,
+        provider_type="logosnode",
+        lane_id="lane-1",
+        anthropic_dialect=None,
+        model_name="test-model",
+    )
+
+
+_RESPONSES_CREATED = (
+    b"event: response.created\n"
+    b'data: {"type": "response.created", "response": {"id": "resp_1", '
+    b'"status": "in_progress", "model": "test-model", "output": []}}\n\n'
+)
+_RESPONSES_DELTA = (
+    b"event: response.output_text.delta\n"
+    b'data: {"type": "response.output_text.delta", "item_id": "item_1", '
+    b'"output_index": 0, "content_index": 0, "delta": "Hi"}\n\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_mid_stream_failure_emits_a_responses_failed_event(monkeypatch):
+    """End to end: when a /v1/responses stream fails after content and no
+    resume is available, the fallback frame must be the Responses terminal
+    failure — a ``response.failed`` event, not the chat-completions error
+    data frame plus ``[DONE]``, which a Responses client does not recognise
+    as its terminal failure protocol. The context is the real one:
+    ``anthropic_dialect=None``."""
+    from fastapi.responses import StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            _responses_context(),
+            {"model": "test-model", "max_output_tokens": 100, "input": "hi"},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-responses-midfail",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+            request_path="/v1/responses",
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # Envelope metadata (held), then the first content delta (commits the 200).
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _RESPONSES_CREATED})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _RESPONSES_DELTA})
+    # Worker failure mid-stream; no resume is available in this setup, so
+    # the fallback error frame is what the client receives.
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+    await _drain_pending_tasks()
+
+    # The held envelope is replayed ahead of the content, then the failure
+    # arrives as the Responses terminal event — echoing the id the stream
+    # announced — and nothing after it.
+    assert body == (
+        _RESPONSES_CREATED + _RESPONSES_DELTA + b"\n\n" + b"event: response.failed\n"
+        b'data: {"type": "response.failed", "response": {"id": "resp_1", "object": "response", '
+        b'"status": "failed", "error": {"code": "server_error", "message": "lane died"}}}\n\n'
+    )
+    assert b"[DONE]" not in body
+
+
 # ---------------------------------------------------------------------------
 # Non-streaming path — same exposure, same fix
 # ---------------------------------------------------------------------------

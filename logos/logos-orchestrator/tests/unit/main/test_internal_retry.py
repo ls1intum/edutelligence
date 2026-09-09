@@ -924,6 +924,61 @@ async def test_schedule_stream_resume_settles_the_attempt_even_when_the_resume_i
     assert _requests_in_flight() == in_flight_before, "the gauge must return to where it started"
 
 
+@pytest.mark.asyncio
+async def test_context_resolution_retry_settles_the_failed_attempt_before_reenqueueing(retry_env):
+    """A context-resolution failure is re-queued under the same request id,
+    replacing the tracked state: without a terminal for the failed attempt,
+    the final settlement of the retry leaves two enqueues with one outcome —
+    `enqueued` one ahead of the terminal totals per such retry. The
+    invariant — one terminal state per enqueue — is asserted on the real
+    counters."""
+    from logos.monitoring.recorder import MonitoringRecorder
+
+    recorder = MonitoringRecorder(db_factory=_FakeDB)
+    request_id = "req-ctx-retry-settle"
+    pipeline = _EnqueueTrackingPipeline(
+        recorder,
+        [
+            _fail_result("Failed to resolve execution context for model 27", provider_id=1, request_id=request_id),
+            _ok_result(provider_id=2, request_id=request_id),
+        ],
+    )
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    async def fake_sync(
+        context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats, **kw
+    ):
+        return JSONResponse(content={"ok": True}, status_code=200)
+
+    retry_env.setattr(main, "_sync_response", fake_sync)
+
+    before = _requests_total_counts()
+    in_flight_before = _requests_in_flight()
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id=request_id,
+    )
+
+    assert response.status_code == 200
+    assert len(pipeline.requests) == 2  # the failed attempt and the retry
+    # The execution path's final settlement closes the retried attempt.
+    recorder.record_complete(request_id, "success")
+
+    after = _requests_total_counts()
+    delta = {status: after.get(status, 0.0) - before.get(status, 0.0) for status in ("enqueued", "error", "success")}
+    assert delta["enqueued"] == 2  # the failed attempt and the retry
+    assert delta["error"] == 1  # the failed attempt, settled before the re-enqueue
+    assert delta["success"] == 1  # the final settlement of the retry
+    assert delta["error"] + delta["success"] == delta["enqueued"], "one terminal per enqueue must hold"
+    assert _requests_in_flight() == in_flight_before, "the gauge must return to where it started"
+
+
 # ---------------------------------------------------------------------------
 # Pre-token failures surface as JSON errors before commit (#815 phase 1)
 # ---------------------------------------------------------------------------

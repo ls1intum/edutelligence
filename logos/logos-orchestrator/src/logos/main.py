@@ -30,6 +30,7 @@ from grpclocal.grpc_server import LogosServicer
 from logos.anthropic_compat import (
     UpstreamDialect,
     error_body,
+    is_responses_path,
     sse,
     stream_translator,
     translate_error,
@@ -1386,6 +1387,11 @@ class _StreamingLogAccumulator:
     # event carries the full response including usage).
     responses_final: Optional[Dict[str, Any]] = None
     _saw_responses_events: bool = False
+    # The response id announced up front (``response.created`` and every
+    # event that carries the response object repeat it). Echoed into the
+    # synthetic ``response.failed`` terminal of a mid-flight failure, so a
+    # Responses client can correlate the failure with the stream it read.
+    responses_id: Optional[str] = None
     # Usage accumulated from an Anthropic Messages stream. Kept apart from
     # ``last_chunk`` because that stream ends on ``message_stop``, which carries
     # no usage and would otherwise erase the figures that arrived one event
@@ -1600,6 +1606,10 @@ class _StreamingLogAccumulator:
     def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
         self._saw_responses_events = True
+        if self.responses_id is None:
+            response = blob.get("response")
+            if isinstance(response, dict) and response.get("id"):
+                self.responses_id = str(response["id"])
         if event_type == "response.output_text.delta":
             delta = blob.get("delta")
             if isinstance(delta, str):
@@ -4541,6 +4551,30 @@ async def _streaming_response(
                                     # ``event: error`` frame, and its protocol
                                     # has no ``[DONE]``.
                                     yield sse("error", error_body(str(e)))
+                                elif is_responses_path(request_path or ""):
+                                    # A /v1/responses client reads
+                                    # ``event: response.*`` frames: its
+                                    # terminal failure is a
+                                    # ``response.failed`` event, and the
+                                    # chat-completions error frame plus
+                                    # ``[DONE]`` below is protocol noise to
+                                    # it. The context carries no dialect
+                                    # marker — the resolver sets one only for
+                                    # Messages requests — so the path
+                                    # decides, and the response id is echoed
+                                    # from the stream the client was reading.
+                                    yield sse(
+                                        "response.failed",
+                                        {
+                                            "type": "response.failed",
+                                            "response": {
+                                                "id": stream_log.responses_id or f"resp_{request_id or 'unknown'}",
+                                                "object": "response",
+                                                "status": "failed",
+                                                "error": {"code": "server_error", "message": str(e)},
+                                            },
+                                        },
+                                    )
                                 else:
                                     _, openai_error = coerce_upstream_error(500, {"error": str(e)})
                                     yield f"data: {json.dumps(openai_error)}\n\n".encode()
@@ -5582,6 +5616,18 @@ async def _execute_resource_mode(
             error_msg = result.error or "Pipeline processing failed"
             if retry_budget is not None and retry_budget.can_retry() and pipeline_error_is_retryable(error_msg):
                 _arm_internal_retry(retry_budget, result, request_id, error_msg)
+                # The failed attempt is still the request's open enqueue. The
+                # process() below re-enqueues the same id and replaces the
+                # tracked state, so without a terminal for the failed
+                # attempt, the final settlement would leave `enqueued` one
+                # ahead of the terminal totals. Settle it now — metrics only,
+                # via discard: the request itself is not done, so the log row
+                # keeps its place for the final settlement (same hand-off as
+                # the stream resume in _schedule_stream_resume). The id
+                # comes from the result's scheduling stats: it is what the
+                # pipeline actually enqueued under, including the generated
+                # fallback when the caller passed none.
+                _discard_in_flight(result.scheduling_stats.get("request_id") or request_id, "error")
                 # Back off first: the next request's queue-wait and context
                 # bounds must clamp to what is left in the deadline AFTER
                 # the sleep, or the wait could run past the deadline.
