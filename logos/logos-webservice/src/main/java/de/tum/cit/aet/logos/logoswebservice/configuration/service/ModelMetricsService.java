@@ -136,7 +136,8 @@ public class ModelMetricsService {
      */
     static final long PROVIDER_DERIVATION_LOCK_KEY_BASE = 0x50524F564944L; // "PROVID"
 
-    static long providerDerivationLockKey(int providerId) {
+    /** Public so the lock-concurrency tests acquire the very key production serializes on. */
+    public static long providerDerivationLockKey(int providerId) {
         return PROVIDER_DERIVATION_LOCK_KEY_BASE + providerId;
     }
 
