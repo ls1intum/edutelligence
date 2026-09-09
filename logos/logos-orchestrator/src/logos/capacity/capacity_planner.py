@@ -3022,6 +3022,12 @@ class CapacityPlanner:
             else:
                 needed_mb = 0.0
         else:
+            # Never-calibrated on a non-Metal provider can't actually load
+            # here (see _load_requires_calibration) — mark infeasible before
+            # it wins the ranking on a falsely cheap 4096 MB guess, leaving
+            # every provider that could serve it deferring to a dead end.
+            if self._load_requires_calibration(profile, provider_id):
+                return None
             target_cost = self.TARGET_ACTION_COST_S["load"]
             # Cold-load VRAM need = full base_residency (with KV+TP if profile knows).
             if profile is not None:

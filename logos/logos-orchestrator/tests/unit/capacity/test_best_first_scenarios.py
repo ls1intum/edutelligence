@@ -410,6 +410,28 @@ class TestEstimateDemandActionCost:
             CapacityPlanner.TARGET_ACTION_COST_S["load"] + CapacityPlanner.VICTIM_ACTION_COST_S["stop"]
         )
 
+    def test_cold_load_never_calibrated_on_non_metal_returns_none(self):
+        """A model with no profile on a non-Metal worker can't actually
+        cold-load there (see _load_requires_calibration), no matter how
+        much free VRAM the cheap 4096 MB guess would otherwise fit into.
+        """
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            profiles={},  # no profile for "X" at all
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is None
+
     def test_no_lane_no_evict_target_returns_none(self):
         """Pathological: needs eviction but no displaceable lanes → None (infeasible)."""
         provider = _MockProvider(
@@ -556,6 +578,37 @@ class TestRankProvidersForDemandedModels:
         )
         planner = _planner([a, b])
         planner._lane_load_failure_until[(a.provider_id, planner._planner_lane_id("X"))] = time.time() + 120.0
+
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id],
+            [("X", 1.5)],
+        )
+        assert winners == {"X": b.provider_id}
+
+    def test_a_never_calibrated_worker_does_not_win_over_a_feasible_one(self):
+        """A has no profile for X at all and would win on free-VRAM alone —
+        the cheap 4096 MB guess for an unknown model fits easily and no
+        eviction is needed. But A is not Metal, so it could never actually
+        load X (see _load_requires_calibration): the calibrated B, with less
+        free VRAM, must win instead of both providers deferring to a dead end.
+        """
+        a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=90_000,  # would otherwise win the free-VRAM tiebreak
+            profiles={},
+        )
+        b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
 
         winners = planner._rank_providers_for_demanded_models(
             [a.provider_id, b.provider_id],
