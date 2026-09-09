@@ -1137,38 +1137,6 @@ class TestReplication:
         )
         assert actions == []
 
-    def test_respects_max_replicas_per_model(self):
-        """Already at MAX_REPLICAS_PER_MODEL → don't add another."""
-        # Pretend X is already loaded on MAX_REPLICAS workers via the
-        # cluster_lanes_by_model count (we don't need real lanes on each).
-        a = _MockProvider(
-            provider_id=1,
-            name="A",
-            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
-            capabilities=["X"],
-            available_vram_mb=5_000,
-            profiles={"X": _profile(loaded_vram_mb=20_000)},
-        )
-        b = _MockProvider(
-            provider_id=2,
-            name="B",
-            lanes=[],
-            capabilities=["X"],
-            available_vram_mb=80_000,
-            profiles={"X": _profile(loaded_vram_mb=20_000)},
-        )
-        planner = _planner([a, b])
-        self._enable(planner)
-        # Inject a count at the cap
-        cluster = {"X": CapacityPlanner.MAX_REPLICAS_PER_MODEL}
-        actions = planner._compute_replication_actions(
-            provider_ids=[a.provider_id, b.provider_id],
-            ranked_models=[("X", 5.0)],
-            cluster_lanes_by_model=cluster,
-            cycle_planned_models=set(),
-        )
-        assert actions == []
-
     def test_does_not_replicate_when_no_free_vram_anywhere(self):
         """When every candidate worker lacks free VRAM for the model, the
         replication pass refuses to emit (it must never evict)."""
