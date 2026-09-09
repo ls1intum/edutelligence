@@ -421,7 +421,7 @@ public class ModelService {
         return m;
     }
 
-    private Map<String, Boolean> parseWeightOverrides(String json) {
+    Map<String, Boolean> parseWeightOverrides(String json) {
         if (json == null || json.isBlank()) return Map.of();
         try {
             // A jsonb NOT NULL column stores the JSON literal "null" as a valid
