@@ -2265,6 +2265,11 @@ async def prometheus_metrics(request: Request):
 
 class _RefreshPipelineRequest(BaseModel):
     rebuild_classifier: bool = False
+    # Set by the webservice when a provider itself changed, as opposed to a
+    # model link or a permission. A newly added cloud provider has no models
+    # until its /v1/models listing is read, and that otherwise waits for the
+    # next interval tick — a quarter of an hour of an empty model list.
+    sync_cloud_models: bool = False
 
 
 @app.post("/internal/refresh_pipeline", tags=["admin"])
@@ -2281,8 +2286,19 @@ async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Requ
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
     if not _pipeline or not _logosnode_facade or not _azure_facade:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
-    logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
+    logger.info(
+        "Pipeline refresh requested by Spring (rebuildClassifier=%s, syncCloudModels=%s)",
+        data.rebuild_classifier,
+        data.sync_cloud_models,
+    )
     await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
+    if data.sync_cloud_models and _cloud_model_sync is not None:
+        # Scheduled, not awaited: the pass contacts every cloud upstream in
+        # turn and the webservice is blocked on this response, so one
+        # unreachable provider would stall a provider edit for a full request
+        # timeout. The pass refreshes runtime state itself once it finds
+        # something, so nothing is lost by returning first.
+        _cloud_model_sync.request_refresh()
     return {"status": "ok"}
 
 

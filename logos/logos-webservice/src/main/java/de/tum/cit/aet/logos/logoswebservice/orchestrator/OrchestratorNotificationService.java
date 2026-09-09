@@ -30,6 +30,22 @@ public class OrchestratorNotificationService {
 
     @Async
     public void notifyRefresh(boolean rebuildClassifier) {
+        notifyRefresh(rebuildClassifier, false);
+    }
+
+    /**
+     * Announce a pipeline refresh to the orchestrator.
+     *
+     * @param rebuildClassifier whether the model classifier has to be rebuilt
+     * @param syncCloudModels   whether a cloud provider itself was added or changed. A new provider
+     *                          contributes no models until its {@code /v1/models} listing is read, and
+     *                          that otherwise waits for the orchestrator's 15-minute interval — long
+     *                          enough that an operator reads the empty list as a broken sync. The
+     *                          orchestrator schedules the pass and answers immediately, so this stays
+     *                          as cheap as a plain refresh.
+     */
+    @Async
+    public void notifyRefresh(boolean rebuildClassifier, boolean syncCloudModels) {
         if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
             return;
         }
@@ -38,7 +54,7 @@ public class OrchestratorNotificationService {
             headers.set("Authorization", "Bearer " + internalSecret);
             headers.set("Content-Type", "application/json");
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(
-                Map.of("rebuild_classifier", rebuildClassifier), headers
+                Map.of("rebuild_classifier", rebuildClassifier, "sync_cloud_models", syncCloudModels), headers
             );
             restTemplate.postForEntity(orchestratorUrl + "/internal/refresh_pipeline", request, Void.class);
         } catch (Exception e) {
