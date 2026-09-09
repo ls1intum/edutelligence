@@ -60,11 +60,6 @@
   color: rgb(var(--color-typography-0));
 }
 
-.model-state-emoji {
-  font-size: 1.6rem;
-  line-height: 1;
-}
-
 .model-desc {
   margin: 6px 0 0;
   color: rgb(var(--color-typography-700));
@@ -236,16 +231,6 @@
   }
 }
 
-.benchmark-tool {
-  flex-shrink: 0;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: rgb(var(--color-accent-green) / var(--opacity-soft));
-  color: rgb(var(--color-accent-green));
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-}
-
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -312,51 +297,6 @@
 }
 
 // ==========================================================================
-// Status Badges
-// ==========================================================================
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem 0.75rem;
-  border-radius: 999px;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--line-height-none);
-}
-
-.status-badge--success {
-  color: rgb(var(--color-success));
-  background:
-    rgb(
-      var(--color-success)
-      / var(--opacity-soft)
-    );
-  border:
-    1px solid
-    rgb(
-      var(--color-success)
-      / var(--opacity-border)
-    );
-}
-
-.status-badge--failure {
-  color: rgb(var(--color-error));
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-soft)
-    );
-  border:
-    1px solid
-    rgb(
-      var(--color-error)
-      / var(--opacity-border)
-    );
-}
-
-// ==========================================================================
 // Checklist Container
 // ==========================================================================
 
@@ -391,11 +331,6 @@
   font-weight: var(--font-weight-bold);
   text-transform: uppercase;
   letter-spacing: var(--letter-spacing-wide);
-}
-
-.checklist-emoji {
-  font-size: 1.5rem;
-  line-height: 1;
 }
 
 // ==========================================================================
@@ -486,14 +421,6 @@
   padding: 0;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-}
-
-.scope-badge--global {
-  color: rgb(var(--color-primary-500));
-}
-
-.scope-badge--node {
-  color: rgb(var(--color-accent-cyan));
 }
 
 .scope-badge--success {
@@ -595,32 +522,20 @@
   }
 }
 
+// Combined with the base .scope-node-button in the template — only the
+// color-related declarations need overriding here.
 .scope-node-button--success {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem 0.65rem;
   background:
     rgb(
       var(--color-success)
       / var(--opacity-soft)
     );
-  border:
-    1px solid
+  border-color:
     rgb(
       var(--color-success)
       / var(--opacity-border)
     );
-  border-radius: 999px;
   color: rgb(var(--color-success));
-  font: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  cursor: pointer;
-  transition:
-    background-color 0.15s,
-    border-color 0.15s,
-    color 0.15s;
 
   &:hover {
     background:
@@ -700,24 +615,8 @@
   cursor: help;
 }
 
-.reason-badge--unsupported {
-  color: rgb(var(--color-error));
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-faint)
-    );
-}
-
-.reason-badge--node {
-  color: rgb(var(--color-error));
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-faint)
-    );
-}
-
+.reason-badge--unsupported,
+.reason-badge--node,
 .reason-badge--observed {
   color: rgb(var(--color-error));
   background:
@@ -1006,12 +905,6 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.calibration-status__attempts {
-  margin-left: auto;
-  color: rgb(var(--color-typography-700));
-  font-size: var(--font-size-sm);
-}
-
 .calibration-status--success {
   border-color:
     rgb(
@@ -1064,50 +957,9 @@
   }
 }
 
-.calibration-status--unknown {
-  .calibration-status__icon {
-    color: rgb(var(--color-typography-700));
-    background:
-      rgb(
-        var(--color-typography-700)
-        / var(--opacity-soft)
-      );
-  }
-}
-
 // ==========================================================================
 // Log Errors
 // ==========================================================================
-
-.log-line--error {
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-soft)
-    );
-  border-left:
-    3px solid
-    rgb(var(--color-error));
-}
-
-.log-line--error .log-line-content {
-  color: rgb(var(--color-error));
-  font-weight: var(--font-weight-semibold);
-}
-
-.log-line--error .log-line-number {
-  color: rgb(var(--color-error));
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-faint)
-    );
-  border-right-color:
-    rgb(
-      var(--color-error)
-      / var(--opacity-border)
-    );
-}
 
 .log-line--highlighted {
   background:
