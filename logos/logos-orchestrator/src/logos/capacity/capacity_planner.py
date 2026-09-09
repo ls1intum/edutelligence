@@ -5493,11 +5493,12 @@ class CapacityPlanner:
     ) -> bool:
         """True when this profile must not be used to load a lane.
 
-        Calibrated/measured profiles always pass; everything else needs
-        a Metal/MLX provider (see _provider_is_metal).
+        No profile at all always fails, even on Metal — only an override
+        profile is exempt there, not having nothing (see load_lane_manually).
         """
-        is_calibrated = profile is not None and profile.residency_source in ("calibrated", "measured")
-        if is_calibrated:
+        if profile is None:
+            return True
+        if profile.residency_source in ("calibrated", "measured"):
             return False
         return not self._provider_is_metal(provider_id)
 
@@ -5512,11 +5513,10 @@ class CapacityPlanner:
         """Quick gate before emitting a planner-initiated load action.
 
         Refuses outright when the model has never been calibrated on this
-        node and the provider is not Metal/MLX — see
-        _load_requires_calibration. Past that gate, base_residency only
-        ever comes from a calibrated profile or a Metal override; a
-        Metal provider with no profile at all (a misconfigured override)
-        is refused too rather than guessed at from the model's name.
+        node and the provider is not Metal/MLX, and refuses a missing
+        profile outright too, even on Metal — see
+        _load_requires_calibration. Past that gate, base_residency comes
+        from the profile itself, never guessed at from the model's name.
 
         Checks base_residency + KV cache ≤ available_vram (with safety
         margin). For TP > 1 models, also checks per-GPU feasibility from
@@ -5542,15 +5542,15 @@ class CapacityPlanner:
             )
             return False
 
-        base_mb: Optional[float] = None
-        if profile is not None:
-            base_mb = profile.estimate_base_residency_mb()
+        # profile is guaranteed non-None here: _load_requires_calibration
+        # above already rejects a missing profile on every provider.
+        base_mb = profile.estimate_base_residency_mb()
         if base_mb is None:
-            # Only reachable on a Metal provider with no profile at all
-            # (see _load_requires_calibration) — a misconfigured override,
-            # not a case to guess a size for from the model's name.
+            # Defensive: a profile can pass the gate above yet still have
+            # no usable size (base_residency_mb, disk_size_bytes and the
+            # name heuristic all unset) — not a case to guess from the name.
             logger.info(
-                "Feasibility FAILED for %s: no profile/override data on " "worker=%s to estimate a size from",
+                "Feasibility FAILED for %s: no usable size data on " "worker=%s to estimate from",
                 model_name,
                 provider_id,
             )

@@ -93,6 +93,15 @@ def test_override_profile_is_refused_on_cuda():
     assert "never been calibrated" in reason
 
 
+def test_missing_profile_is_refused_even_on_metal():
+    """A missing profile is not the same as an override — building a load
+    with profile=None starts a lane with the wrong backend config (see
+    load_lane_manually's docstring), so Metal must not wave this through."""
+    reason = _planner(profiles={}, metal=True).manual_load_rejection_reason(1, "org/does-not-exist")
+    assert reason is not None
+    assert "never been calibrated" in reason
+
+
 def test_model_name_omitted_skips_the_calibration_check():
     """Provider-level readiness checks (no model chosen yet) are unaffected."""
     profiles = {"org/model-a": SimpleNamespace(residency_source=None)}

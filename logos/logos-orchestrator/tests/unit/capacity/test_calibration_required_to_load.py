@@ -69,9 +69,12 @@ class TestLoadRequiresCalibration:
     def test_no_profile_requires_it_on_cuda(self):
         assert _planner()._load_requires_calibration(None, 1) is True
 
-    def test_no_profile_is_exempt_on_metal(self):
+    def test_no_profile_requires_it_even_on_metal(self):
+        """The Metal exemption is for an override profile, not for having
+        nothing — a missing profile would build a load with no backend
+        config (see load_lane_manually's docstring)."""
         planner = _planner(metal=True)
-        assert planner._load_requires_calibration(None, 1) is False
+        assert planner._load_requires_calibration(None, 1) is True
 
 
 class TestFeasibilityGateRequiresCalibration:
