@@ -178,6 +178,13 @@ class CloudModelSyncService:
         self._enabled = enabled
         self._on_models_changed = on_models_changed
         self._task: Optional[asyncio.Task] = None
+        self._refresh_task: Optional[asyncio.Task] = None
+        self._refresh_pending = False
+        # One pass at a time. The interval loop and an out-of-band refresh can
+        # otherwise overlap, and a pass rewrites model_provider and
+        # cloud_model_context per provider with delete-then-insert — two doing
+        # that at once race for the same rows.
+        self._pass_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Schedule the sync; returns immediately.
@@ -194,14 +201,49 @@ class CloudModelSyncService:
             return
         self._task = asyncio.create_task(self._loop())
 
-    async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
+    def request_refresh(self) -> None:
+        """Sync now rather than at the next tick. Returns immediately.
+
+        Without this a provider added or edited through the UI stays invisible
+        until the interval comes round — up to 15 minutes of an operator
+        looking at an empty model list and concluding the sync is broken. The
+        webservice already announces every provider change, so the refresh hook
+        it calls is where a pass belongs.
+
+        Not awaited: the pass contacts every configured upstream in turn, and
+        the caller is an HTTP handler the webservice is blocked on, so a single
+        unreachable provider would hold it for a full request timeout. Requests
+        arriving while a pass runs collapse into one follow-up pass, so saving
+        a form five times costs one extra sync rather than five.
+        """
+        if not self._enabled:
+            return
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_pending = True
+            return
+        self._refresh_task = asyncio.create_task(self._refresh_loop())
+
+    async def _refresh_loop(self) -> None:
+        while True:
+            self._refresh_pending = False
             try:
-                await self._task
+                await self.run_once()
+            except Exception:  # noqa: BLE001
+                logger.exception("Cloud model sync: out-of-band refresh failed")
+            if not self._refresh_pending:
+                return
+
+    async def stop(self) -> None:
+        for attr in ("_task", "_refresh_task"):
+            task = getattr(self, attr)
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
             except asyncio.CancelledError:
                 pass
-            self._task = None
+            setattr(self, attr, None)
 
     async def _loop(self) -> None:
         while True:
@@ -213,6 +255,10 @@ class CloudModelSyncService:
 
     async def run_once(self) -> None:
         """Sync every eligible cloud provider once. Never raises."""
+        async with self._pass_lock:
+            await self._run_pass()
+
+    async def _run_pass(self) -> None:
         try:
             with DBManager() as db:
                 providers = db.get_cloud_sync_providers()

@@ -451,3 +451,21 @@ def test_the_terminal_event_carries_the_settled_usage():
     assert usage["cache_read_input_tokens"] == 500
     assert usage["cost"] == 0.0042
     assert usage["cost_currency"] == "EUR"
+
+
+def test_an_inlined_system_turn_becomes_instructions():
+    """The Responses API has its own home for it; the input list is not it."""
+    request = to_responses(
+        {
+            "model": "gpt-5.1",
+            "system": "base",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "system", "content": "a reminder"},
+                {"role": "assistant", "content": "ok"},
+            ],
+        }
+    )
+
+    assert request["instructions"] == "base\n\na reminder"
+    assert [item["role"] for item in request["input"] if item["type"] == "message"] == ["user", "assistant"]
