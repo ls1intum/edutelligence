@@ -146,6 +146,41 @@ export function formatTokenCount(count: number | null | undefined): string {
   return `${(tenths / 10).toFixed(1).replace(/\.0$/, '')} ${unit.label}`;
 }
 
+// ── Percentage scale ──────────────────────────────────────────────────────────
+
+/**
+ * The share of `part` in `total` as a percentage that never collapses a
+ * non-zero share to "0%": 694 of 317.265 local starts is 0.22%, not the "0%"
+ * an integer rounding shows. Shares of 10% and up stay plain, single-digit
+ * shares keep one decimal, and below 1% the decimals widen (two by default,
+ * up to six) until the value reads non-zero. A share too small even for six
+ * decimals reads "<0.000001%" rather than "0%" — the card must not report a
+ * cold start that happened as none at all. A zero share — or an input that is
+ * not a positive finite total — reads "0%".
+ */
+export function formatPercent(
+  part: number | null | undefined,
+  total: number | null | undefined,
+): string {
+  if (
+    typeof part !== 'number' ||
+    typeof total !== 'number' ||
+    !Number.isFinite(part) ||
+    !Number.isFinite(total) ||
+    total <= 0
+  ) {
+    return '0%';
+  }
+  const pct = (part / total) * 100;
+  if (pct >= 10) return `${Math.round(pct)}%`;
+  let decimals = pct >= 1 ? 1 : 2;
+  while (pct > 0 && decimals < 6 && Number(pct.toFixed(decimals)) === 0) decimals += 1;
+  // Below the six-decimal cap the widening loop runs out and toFixed still
+  // rounds to zero. Bound it instead of printing "0%" for a share that is not.
+  if (pct > 0 && Number(pct.toFixed(decimals)) === 0) return '<0.000001%';
+  return `${pct.toFixed(decimals).replace(/\.0+$/, '')}%`;
+}
+
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────
 
 export interface TimeAxisLabel {
