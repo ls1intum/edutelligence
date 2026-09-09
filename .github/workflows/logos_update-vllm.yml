@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DOCKERFILE: logos/logos-workernode/Dockerfile
+      EFFORT_MODULE: logos/logos-orchestrator/src/logos/pipeline/effort_normalization.py
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -87,6 +88,25 @@ jobs:
           }
           git diff -- "$DOCKERFILE"
 
+      - name: Update reasoning-effort snapshot label
+        if: steps.check.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # VLLM_REASONING_EFFORT_VALUES documents which vLLM release its
+          # Literal was copied from; without this the label drifts behind the
+          # pin. Only the label is bumped — whether the tuple itself gained a
+          # value is a review question, and runtime normalization is
+          # drift-proof either way (unknown values fall back to the family
+          # default). Non-fatal: a missing label must not block the pin bump.
+          sed -i -E "s|^(# Snapshot of vLLM )[^ ]+('s ChatCompletionRequest\.reasoning_effort Literal,)$|\1$VERSION\2|" "$EFFORT_MODULE"
+          if grep -Fq "# Snapshot of vLLM $VERSION's ChatCompletionRequest" "$EFFORT_MODULE"; then
+            git diff -- "$EFFORT_MODULE"
+          else
+            echo "::warning::Could not update the vLLM snapshot label in $EFFORT_MODULE — update it by hand."
+            git checkout -- "$EFFORT_MODULE"
+          fi
+
       - name: Create branch, commit and pull request
         id: pr
         if: steps.check.outputs.needed == 'true'
@@ -102,7 +122,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add "$DOCKERFILE"
+          git add "$DOCKERFILE" "$EFFORT_MODULE"
           git commit -m "\`Logos\`: Update vLLM to v$VERSION"
           git push -u origin "$BRANCH"
           PR_URL=$(gh pr create \
@@ -113,7 +133,9 @@ jobs:
 
           ## Description
 
-          Updates the \`VLLM_PIP_SPEC\` build arg default in \`$DOCKERFILE\` to \`vllm==v$VERSION\`. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
+          Updates the \`VLLM_PIP_SPEC\` build arg default in \`$DOCKERFILE\` to \`vllm==v$VERSION\`, and the \`VLLM_REASONING_EFFORT_VALUES\` snapshot label in \`$EFFORT_MODULE\` alongside it. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
+
+          Please check the release notes for new \`ChatCompletionRequest.reasoning_effort\` values: only the label is bumped automatically, the tuple is not. Runtime normalization is unaffected either way — unknown values fall back to the template family's default.
 
           ---
           *This PR was created automatically by the \`Logos - Update vLLM\` workflow.*")
