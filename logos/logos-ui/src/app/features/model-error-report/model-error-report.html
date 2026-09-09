@@ -87,188 +87,82 @@
 
           } @else if (hasCompleteLogs()) {
 
-            <app-data-table
-              [columns]="['', 'PROCESS']"
-              gridCols="40px 1fr"
-              [loading]="processesLoading()"
-              [empty]="processes().length === 0"
-              emptyMessage="No process information available."
-            >
+            @if (checklistItems().length === 0) {
 
-              @for (process of processes(); track process.id) {
+              <div class="empty-state">
+                <h2>No checklist information available</h2>
+                <p>No deployment checklist could be built for this model.</p>
+              </div>
 
-                <!-- Process Row -->
-                <div
-                  class="table-row"
-                  [class.table-row--expanded]="isExpanded(process.id)"
-                >
+            } @else {
 
-                  <div class="col-chevron">
+              <div class="checklist-box">
 
-                    <button
-                      type="button"
-                      class="btn-chevron"
-                      [class.btn-chevron--open]="isExpanded(process.id)"
-                      [attr.aria-label]="'Expand ' + process.process"
-                      (click)="toggleProcess(process.id)"
-                    >
-                      <i class="pi pi-chevron-right"></i>
-                    </button>
+                <header class="expanded-header">
+                  <span class="expanded-title">
+                    Deployment Checklist
+                  </span>
+                </header>
 
-                  </div>
+                <div class="checklist">
 
-                  <div class="col-process">
+                  @for (item of checklistItems(); track item.name) {
 
-                    <span class="process-name">
-                      {{ process.process }}
-                    </span>
+                    <div class="check-row">
 
-                  </div>
+                      <span
+                        class="check-icon"
+                        [class.check-icon--success]="item.status === 'success'"
+                        [class.check-icon--failed]="item.status === 'failure'"
+                      >
+                        @if (item.status === 'success') {
+                          ✓
+                        } @else {
+                          !
+                        }
+                      </span>
 
-                </div>
+                      <span class="check-name">
+                        {{ item.name }}
+                      </span>
 
-                <!-- Expanded Details -->
-                @if (isExpanded(process.id)) {
+                      @if (item.scope) {
+                        <span
+                          class="scope-badge"
+                          [ngClass]="getScopePercentageClass(item.scope, item.status)"
+                        >
+                          {{ getScopeLabel(item.scope, item.status) }}
+                        </span>
+                      }
 
-                  <div class="expanded-row">
+                    </div>
 
-                    <div class="expanded-content">
+                    @if (
+                      item.name === 'Server Start' &&
+                      item.status === 'success' &&
+                      item.scope?.nodes?.length
+                    ) {
 
-                      <div class="checklist-box">
+                      <div class="error-scope">
 
-                        <header class="expanded-header">
-                          <span class="expanded-title">
-                            Checklist
-                          </span>
-                        </header>
+                        <strong>
+                          Successful Nodes:
+                        </strong>
 
-                        <div class="checklist">
+                        <div class="scope-nodes">
 
-                          @for (item of process.items; track $index) {
+                          @for (
+                            node of item.scope?.nodes ?? [];
+                            track node
+                          ) {
 
-                            <div class="check-row">
-
-                              <span
-                                class="check-icon"
-                                [class.check-icon--success]="item.status === 'success'"
-                                [class.check-icon--failed]="item.status === 'failure'"
-                              >
-                                @if (item.status === 'success') {
-                                  ✓
-                                } @else {
-                                  !
-                                }
-                              </span>
-
-                              <span class="check-name">
-                                {{ item.name }}
-                              </span>
-
-                              @if (item.scope) {
-                                <span
-                                  class="scope-badge"
-                                  [ngClass]="getScopePercentageClass(item.scope, item.status)"
-                                >
-                                  {{ getScopeLabel(item.scope, item.status) }}
-                                </span>
-                              }
-
-                            </div>
-
-                            @if (
-                              item.name === 'Deployment Success' &&
-                              item.status === 'success' &&
-                              item.scope?.nodes?.length
-                            ) {
-
-                              <div class="error-scope">
-
-                                <strong>
-                                  Successful Nodes:
-                                </strong>
-
-                                <div class="scope-nodes">
-
-                                  @for (
-                                    node of item.scope?.nodes ?? [];
-                                    track node
-                                  ) {
-
-                                    <button
-                                      type="button"
-                                      class="scope-node-button scope-node-button--success"
-                                      (click)="openNodeLog(node)"
-                                    >
-                                      {{ node }}
-                                    </button>
-
-                                  }
-
-                                </div>
-
-                              </div>
-
-                            }
-
-                            @if (item.errorMessage) {
-
-                              <section class="error-box">
-
-                                <h3 class="error-box-title">
-                                  Error Details
-                                </h3>
-
-                                @if (item.scope) {
-                                  <div class="error-scope">
-                                    <strong>Scope:</strong>
-
-                                    @if (item.scope.type === 'global') {
-                                      <span>Global</span>
-                                    } @else {
-                                      <div class="scope-nodes">
-                                        @for (node of item.scope.nodes ?? []; track node) {
-                                          <button
-                                            type="button"
-                                            class="scope-node-button"
-                                            (click)="openNodeLog(node, item.errorMessage)"
-                                          >
-                                            {{ node }}
-                                          </button>
-                                        }
-                                      </div>
-                                    }
-                                  </div>
-                                }
-
-                                @if (item.errorDetail && item.errorDetail !== item.errorMessage) {
-
-                                  <button
-                                    type="button"
-                                    class="error-toggle"
-                                    (click)="toggleError(item.name)"
-                                  >
-                                    <i
-                                      class="pi pi-chevron-right"
-                                      [class.error-toggle__icon--open]="isErrorExpanded(item.name)"
-                                    ></i>
-                                    {{ isErrorExpanded(item.name) ? 'Hide full error' : 'Show full error' }}
-                                  </button>
-
-                                  @if (isErrorExpanded(item.name)) {
-                                    <pre>{{ item.errorDetail }}</pre>
-                                  } @else {
-                                    <pre>{{ item.errorMessage }}</pre>
-                                  }
-
-                                } @else {
-
-                                  <pre>{{ item.errorMessage }}</pre>
-
-                                }
-
-                              </section>
-
-                            }
+                            <button
+                              type="button"
+                              class="scope-node-button scope-node-button--success"
+                              (click)="openNodeLog(node)"
+                            >
+                              {{ node }}
+                            </button>
 
                           }
 
@@ -276,15 +170,106 @@
 
                       </div>
 
-                    </div>
+                    }
 
-                  </div>
+                    @if (item.errorMessage) {
 
-                }
+                      <section class="error-box">
 
-              }
+                        <div class="error-box-header">
 
-            </app-data-table>
+                          @if (item.reasonKind === 'unsupported') {
+                            <span
+                              class="reason-badge reason-badge--unsupported"
+                              title="This model cannot load on this node and will not be retried until an operator resolves the underlying issue."
+                            >
+                              Unsupported
+                            </span>
+                          } @else if (item.reasonKind === 'node_unhealthy') {
+                            <span
+                              class="reason-badge reason-badge--node"
+                              title="This node itself is degraded — it affects every model scheduled here, not just this one."
+                            >
+                              Node Unhealthy
+                            </span>
+                          } @else if (item.reasonKind === 'observed') {
+                            <span
+                              class="reason-badge reason-badge--observed"
+                              title="Last observed on a failing probe. Not a permanent classification — this node may succeed on the next calibration window."
+                            >
+                              Observed
+                            </span>
+                          } @else {
+                            <span class="reason-badge reason-badge--unknown">
+                              Error
+                            </span>
+                          }
+
+                          <span class="error-box-message">
+                            {{ item.errorMessage }}
+                          </span>
+
+                        </div>
+
+                        @if (item.reasonKind && item.errorDetail && item.errorDetail !== item.errorMessage) {
+
+                          <p class="error-box-detail">
+                            {{ item.errorDetail }}
+                          </p>
+
+                        }
+
+                        @if (item.scope) {
+                          <div class="error-scope">
+                            @if (item.scope.type === 'global') {
+                              <span class="error-scope-label">Global</span>
+                            } @else {
+                              <div class="scope-nodes">
+                                @for (node of item.scope.nodes ?? []; track node) {
+                                  <button
+                                    type="button"
+                                    class="scope-node-button"
+                                    (click)="openNodeLog(node, item.logAnchor ?? item.errorMessage)"
+                                  >
+                                    {{ node }}
+                                  </button>
+                                }
+                              </div>
+                            }
+                          </div>
+                        }
+
+                        @if (!item.reasonKind && item.errorDetail && item.errorDetail !== item.errorMessage) {
+
+                          <button
+                            type="button"
+                            class="error-toggle"
+                            (click)="toggleError(item.name)"
+                          >
+                            <i
+                              class="pi pi-chevron-right"
+                              [class.error-toggle__icon--open]="isErrorExpanded(item.name)"
+                            ></i>
+                            {{ isErrorExpanded(item.name) ? 'Hide raw log' : 'Show raw log' }}
+                          </button>
+
+                          @if (isErrorExpanded(item.name)) {
+                            <pre>{{ item.errorDetail }}</pre>
+                          }
+
+                        }
+
+                      </section>
+
+                    }
+
+                  }
+
+                </div>
+
+              </div>
+
+            }
 
           } @else {
 

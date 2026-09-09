@@ -263,6 +263,36 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Deployment failure domains.
+#
+# Every classified error belongs to exactly one domain — the phase of the
+# vLLM startup sequence it happens in. Domains are the single source of
+# truth for the "stage" checklist shown in the error-report UI: each
+# pattern below declares its own ``domain=`` field, so extending the
+# taxonomy is a one-place change (add a pattern with a domain= tag) rather
+# than a pattern PLUS a separate reason-code-to-stage mapping kept in sync
+# by hand elsewhere.
+#
+# A domain with no reason codes assigned (weight_loading, kv_cache_fit) is
+# not a dead entry — CUDA OOM and similar resource-exhaustion errors can
+# happen during EITHER of those phases (or during download), so they are
+# deliberately left unassigned to any single domain (`domain=None` on
+# their pattern) and instead resolved positionally: whichever domain's
+# completion signal is the first one NOT yet seen in the log is where the
+# checklist attaches the error. That's more accurate than a fixed guess
+# for anything that can occur at more than one point in the sequence.
+# ---------------------------------------------------------------------------
+
+_DOMAIN_NODE_PREFLIGHT = "node_preflight"
+_DOMAIN_MODEL_RESOLUTION = "model_resolution"
+_DOMAIN_ENGINE_INIT = "engine_init"
+_DOMAIN_WEIGHT_LOADING = "weight_loading"
+_DOMAIN_KV_CACHE_FIT = "kv_cache_fit"
+_DOMAIN_MULTI_GPU_COORDINATION = "multi_gpu_coordination"
+_DOMAIN_SERVER_START = "server_start"
+
+
 @dataclass(frozen=True)
 class FatalLoadErrorPattern:
     """A vLLM log signature that proves the model can never load on this worker.
@@ -275,6 +305,10 @@ class FatalLoadErrorPattern:
     needle: str
     reason_code: str  # short, kebab-case; surfaced in logs and the persisted file
     description: str  # human-readable, shown to ops in the file and in error responses
+    # Which failure domain (see above) this belongs to. None means "no
+    # single deterministic point — resolve positionally instead", not
+    # "uncategorized".
+    domain: str | None = None
 
 
 _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
@@ -287,6 +321,7 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
             "identifier is misspelled, the repository is private/withdrawn, "
             "or the local directory is missing config.json / params.json."
         ),
+        domain=_DOMAIN_MODEL_RESOLUTION,
     ),
     FatalLoadErrorPattern(
         needle="Cannot access gated repo",
@@ -297,6 +332,7 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
             "HUGGING_FACE_HUB_TOKEN with read access to the repo before "
             "removing this entry."
         ),
+        domain=_DOMAIN_MODEL_RESOLUTION,
     ),
     FatalLoadErrorPattern(
         needle="does not recognize this architecture",
@@ -306,6 +342,29 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
             "architecture. Upgrade vLLM (and remove this entry) if support "
             "has been added since this worker was deployed."
         ),
+        domain=_DOMAIN_ENGINE_INIT,
+    ),
+    FatalLoadErrorPattern(
+        needle="trust_remote_code=True",
+        reason_code="requires-trust-remote-code",
+        description=(
+            "This repository ships custom modeling code and requires "
+            "trust_remote_code=True to load. Deliberately not auto-enabled "
+            "(arbitrary code execution) — remove this entry only after "
+            "reviewing the repo's code and enabling it explicitly."
+        ),
+        domain=_DOMAIN_MODEL_RESOLUTION,
+    ),
+    FatalLoadErrorPattern(
+        needle="is not supported for quantization method",
+        reason_code="unsupported-quantization",
+        description=(
+            "The installed vLLM build does not support this model's "
+            "quantization method on this hardware/kernel combination. "
+            "Upgrade vLLM (and remove this entry) if support has been "
+            "added since this worker was deployed."
+        ),
+        domain=_DOMAIN_ENGINE_INIT,
     ),
 )
 
@@ -478,14 +537,20 @@ def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | N
 #   - write to the per-model unsupported list (calibration_unsupported_models.txt)
 #
 # It SHOULD:
-#   - log loudly (this will surface in worker logs and, via the bridge,
-#     server logs too — feature #3 wires this through the heartbeat to
-#     the master so the orchestrator stops scheduling calibrations on
-#     unhealthy nodes),
+#   - log loudly (this will surface in worker logs),
 #   - abort the kv-cache search immediately (every probe will fail
 #     identically until the underlying issue is fixed),
 #   - return a CalibrationResult with ``node_unhealthy_reason`` set so
-#     the bridge can update node health state in the runtime status.
+#     it's recorded on the calibration_probe_logs row and shown in the
+#     model-error-report UI.
+#
+# NOTE: this is display-only — it does NOT feed the scheduler. The thing
+# that actually makes the orchestrator stop sending work to a degraded
+# node is the separate, proactive node_health.py sensor module (GPU/
+# filesystem checks run on every heartbeat, independent of calibration).
+# calibration_orchestrator.py's provider-selection loop skips a provider
+# based on THAT signal (WorkerRuntimeStatus.node_health.healthy), never
+# based on this field. Don't conflate the two when editing this comment.
 #
 # Adding a pattern: append to ``_NODE_LEVEL_TRANSIENT_PATTERNS`` below.
 # Keep patterns NARROW — only signatures that are unambiguously
@@ -506,6 +571,9 @@ class NodeTransientErrorPattern:
     needle: str
     reason_code: str  # short kebab-case identifier surfaced in worker + master logs
     description: str  # human-readable, shown to ops
+    # See FatalLoadErrorPattern.domain — same convention, None means
+    # "resolve positionally" rather than "uncategorized".
+    domain: str | None = None
 
 
 _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
@@ -513,7 +581,8 @@ _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
         # Kernel reports EIO when the backing device returns hard read errors
         # (bad disk, network block device that lost its OSD, Ceph PG in
         # recovery, …). Files exist on the filesystem but reading them
-        # returns Errno 5.
+        # returns Errno 5. Can hit at ANY disk access (download, weight
+        # load, log write, …) — domain=None, resolved positionally.
         needle="Input/output error",
         reason_code="filesystem-eio",
         description=(
@@ -526,6 +595,7 @@ _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
     NodeTransientErrorPattern(
         # Less common — usually reads (EIO) appear before writes. Kept
         # because it's the unambiguous "kernel remounted r/o" signal.
+        # Same positional reasoning as filesystem-eio above.
         needle="Read-only file system",
         reason_code="filesystem-readonly",
         description=(
@@ -534,6 +604,43 @@ _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
             "store, or calibration logs. Investigate and remount (or "
             "reboot the node)."
         ),
+    ),
+    NodeTransientErrorPattern(
+        # Stable OS errno-28 string. Unambiguous cause, but can surface at
+        # any disk-writing point — domain=None, resolved positionally.
+        needle="No space left on device",
+        reason_code="disk-space-exhausted",
+        description=(
+            "The node's disk is full. Model weights, cache, or logs "
+            "cannot be written. Free up space (old model caches, logs) "
+            "or expand storage, then retry."
+        ),
+    ),
+    NodeTransientErrorPattern(
+        # Standard CUDA runtime string — hardware/driver missing or not
+        # visible to this process. Fires the moment vLLM touches CUDA,
+        # before any model-specific work — always node_preflight.
+        needle="no CUDA-capable device is detected",
+        reason_code="cuda-device-not-detected",
+        description=(
+            "No GPU is visible to vLLM on this node. Check that the "
+            "driver is loaded, the device isn't held by another process, "
+            "and container/VM GPU passthrough is configured correctly."
+        ),
+        domain=_DOMAIN_NODE_PREFLIGHT,
+    ),
+    NodeTransientErrorPattern(
+        # Standard CUDA runtime string when the installed driver is older
+        # than the CUDA toolkit vLLM was built against — same reasoning
+        # as cuda-device-not-detected: always node_preflight.
+        needle="CUDA driver version is insufficient for CUDA runtime version",
+        reason_code="cuda-driver-runtime-mismatch",
+        description=(
+            "The installed NVIDIA driver is older than the CUDA runtime "
+            "vLLM requires. Upgrade the node's driver (or pin an older "
+            "vLLM/CUDA build) to resolve."
+        ),
+        domain=_DOMAIN_NODE_PREFLIGHT,
     ),
 )
 
@@ -552,6 +659,386 @@ def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern |
         if pattern.needle in log_tail:
             return pattern
     return None
+
+
+# ---------------------------------------------------------------------------
+# Observed transient failures — informational only, no side effects.
+#
+# CUDA OOM, HF network blips, NCCL handshake failures etc. are deliberately
+# excluded from both patterns above: they're non-deterministic and the
+# kv-cache binary search / retry loop already handles them, so classifying
+# them as fatal or node-unhealthy would be wrong. But that also means ops
+# gets no structured signal for what is, in practice, the most common class
+# of failure — this table exists purely to surface *what was last observed*
+# for display, with no blacklist or node-health side effect whatsoever.
+#
+# Adding a pattern: append to ``_OBSERVED_TRANSIENT_PATTERNS`` below. Unlike
+# the two tables above, patterns here don't need to be narrow or exclusive —
+# worst case a mislabeled "observed" reason is just a cosmetic annoyance in
+# the error-report UI, not a wrongly parked model or node.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ObservedTransientErrorPattern:
+    """A vLLM log signature worth surfacing to ops, without any control-flow
+    side effect (no blacklisting, no node-health change).
+
+    Matched as a substring against the vLLM log tail captured after a probe
+    failure. Case-sensitive.
+    """
+
+    needle: str
+    reason_code: str  # short kebab-case identifier surfaced in the UI only
+    description: str  # human-readable, shown to ops
+    # See FatalLoadErrorPattern.domain — same convention.
+    domain: str | None = None
+
+
+_OBSERVED_TRANSIENT_PATTERNS: tuple[ObservedTransientErrorPattern, ...] = (
+    ObservedTransientErrorPattern(
+        # Can happen while loading weights onto the GPU OR while
+        # reserving KV cache — genuinely two different domains depending
+        # on how far the attempt got. domain=None, resolved positionally.
+        needle="CUDA out of memory",
+        reason_code="cuda-oom",
+        description=(
+            "The GPU ran out of memory while loading the model or "
+            "reserving KV cache. The calibration kv-cache search will "
+            "retry with a smaller budget automatically."
+        ),
+    ),
+    ObservedTransientErrorPattern(
+        # torch.AcceleratorError's "CUDA error: <reason>" prefix — covers
+        # runtime CUDA failures other than OOM (e.g. "unspecified launch
+        # failure", "an illegal memory access was encountered"). Seen in
+        # production (2026-09-07) during multi-GPU CUDA-graph warmup —
+        # one rank's dummy pooler run crashed with torch.AcceleratorError
+        # while another rank had already succeeded (gte-Qwen2-1.5B-
+        # instruct calibration on hochbruegge).
+        # Can happen at essentially any point CUDA kernels run — weight
+        # load, warmup, graph capture — so domain=None, resolved
+        # positionally like cuda-oom.
+        needle="CUDA error:",
+        reason_code="cuda-runtime-error",
+        description=(
+            "A CUDA runtime error occurred (not out-of-memory — see the "
+            "full log for the specific error, e.g. 'unspecified launch "
+            "failure' or 'an illegal memory access'). Often a driver, "
+            "kernel, or multi-GPU synchronization crash. The calibration "
+            "search will retry; if it recurs on every attempt, the node's "
+            "driver/hardware likely needs investigation."
+        ),
+    ),
+    ObservedTransientErrorPattern(
+        # HF Hub HTTP calls only happen while resolving/downloading the
+        # model — single deterministic domain.
+        needle="Read timed out",
+        reason_code="hf-network-timeout",
+        description=(
+            "A Hugging Face Hub request timed out while downloading " "model files. Usually transient — will retry."
+        ),
+        domain=_DOMAIN_MODEL_RESOLUTION,
+    ),
+    ObservedTransientErrorPattern(
+        # "Too Many Requests" alone, not the full "429 Client Error: ..."
+        # wrapper — huggingface_hub's HTTP client changed from `requests`
+        # (which raises "429 Client Error: Too Many Requests for url: ...")
+        # to httpx (which raises "Client error '429 Too Many Requests' for
+        # url ...") between versions. Matching just the reason phrase is
+        # correct under both.
+        needle="Too Many Requests",
+        reason_code="hf-rate-limited",
+        description=(
+            "Hugging Face Hub rate-limited the download request. Usually "
+            "transient — will retry, possibly after a backoff."
+        ),
+        domain=_DOMAIN_MODEL_RESOLUTION,
+    ),
+    ObservedTransientErrorPattern(
+        # Multi-rank process-group handshake — only meaningful (and only
+        # possible) once tensor-parallel workers are being coordinated.
+        needle="NCCL error",
+        reason_code="nccl-handshake-failure",
+        description=(
+            "NCCL failed to establish communication between vLLM ranks "
+            "(multi-GPU/tensor-parallel setups). Often transient — "
+            "network or process-startup timing."
+        ),
+        domain=_DOMAIN_MULTI_GPU_COORDINATION,
+    ),
+    ObservedTransientErrorPattern(
+        # The HTTP server bind is the only place vLLM opens a listening
+        # socket — single deterministic domain.
+        needle="Address already in use",
+        reason_code="port-in-use",
+        description=(
+            "The port vLLM tried to bind was still held by a prior "
+            "process (e.g. TIME_WAIT after a previous probe). Usually "
+            "resolves on the next retry."
+        ),
+        domain=_DOMAIN_SERVER_START,
+    ),
+)
+
+
+def _classify_observed_transient_error(
+    log_tail: str,
+) -> ObservedTransientErrorPattern | None:
+    """Return the first matching :class:`ObservedTransientErrorPattern`.
+
+    Purely informational — the result is surfaced for display only and
+    must never gate blacklisting or node-health decisions.
+    """
+    if not log_tail:
+        return None
+    for pattern in _OBSERVED_TRANSIENT_PATTERNS:
+        if pattern.needle in log_tail:
+            return pattern
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Deployment domain checklist.
+#
+# Replaces a flat, log-line-driven "stage" list with the 7 failure domains
+# declared above (_DOMAIN_*) — each is one row in the error-report UI's
+# checklist. A domain's completion is proven by a regex signature vLLM
+# reliably prints when that phase finishes; a domain with no such signal
+# of its own (node_preflight — CUDA/driver failures happen before any
+# meaningful log output at all) is inferred complete once any LATER
+# domain's signal is seen.
+#
+# Extending this taxonomy is a two-step, single-direction change:
+#   1. If the new error needs a new domain, add a _DOMAIN_* id (near
+#      FatalLoadErrorPattern above) and a CalibrationDomain entry below.
+#   2. Tag the new Fatal/NodeTransient/ObservedTransientErrorPattern with
+#      domain=that_id (or leave domain=None if it can occur at more than
+#      one point — see the None-domain patterns above for why that's a
+#      deliberate choice, not an omission).
+# No separate reason-code-to-stage mapping exists to fall out of sync.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CalibrationDomain:
+    """One failure-domain checklist row.
+
+    ``completion_patterns`` — ANY match proves the domain finished (empty
+    tuple = no direct signal, inferred from later domains instead).
+    ``requires`` — a tag deciding whether this domain applies to a given
+    attempt at all (e.g. "multi_gpu"). None = always applies. A single
+    string tag is deliberately simpler than a callback: there's exactly
+    one condition today; add a new tag + branch in _domain_applies if a
+    second one is ever needed.
+    """
+
+    id: str
+    label: str
+    completion_patterns: tuple["re.Pattern[str]", ...]
+    requires: str | None = None
+
+
+_CALIBRATION_DOMAINS: tuple[CalibrationDomain, ...] = (
+    CalibrationDomain(
+        id=_DOMAIN_NODE_PREFLIGHT,
+        label="Node Preflight",
+        completion_patterns=(),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_MODEL_RESOLUTION,
+        label="Model Resolution & Download",
+        completion_patterns=(re.compile(r"non-default args:"),),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_ENGINE_INIT,
+        label="Engine Initialization",
+        completion_patterns=(re.compile(r"Initializing a V1 LLM engine"),),
+    ),
+    CalibrationDomain(
+        # NCCL/process-group setup for multi-GPU runs happens as part of
+        # engine construction, before weight loading — placed right after
+        # engine_init. No completion pattern of its own: there's no log
+        # line in the verified set (see the 12-stage history this was
+        # ported from) that proves multi-GPU coordination specifically
+        # succeeded, as opposed to engine construction in general.
+        # Inferred complete once a LATER domain's signal fires, same rule
+        # as node_preflight. nccl-handshake-failure still gets a FIXED
+        # domain assignment on its pattern (below) despite that — the
+        # semantic link (an NCCL error IS a multi-GPU coordination
+        # problem) is certain even without positional proof.
+        id=_DOMAIN_MULTI_GPU_COORDINATION,
+        label="Multi-GPU Coordination",
+        completion_patterns=(),
+        requires="multi_gpu",
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_WEIGHT_LOADING,
+        label="Weight Loading",
+        completion_patterns=(re.compile(r"Model loading took"),),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_KV_CACHE_FIT,
+        label="KV-Cache Memory Fit",
+        completion_patterns=(re.compile(r"reserved .* memory for KV Cache"),),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_SERVER_START,
+        label="Server Start",
+        completion_patterns=(
+            re.compile(r"Starting vLLM server on"),
+            re.compile(r"Application startup complete\."),
+        ),
+    ),
+)
+
+
+def _domain_applies(domain: CalibrationDomain, tensor_parallel_size: int) -> bool:
+    """Whether *domain* is even reachable given this attempt's plan."""
+    if domain.requires == "multi_gpu":
+        return tensor_parallel_size > 1
+    return True
+
+
+_GENERIC_CALIBRATION_ERROR_RE = re.compile(
+    r"\b(?:ERROR|CRITICAL|FATAL|Exception|Traceback|ValueError|"
+    r"RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b"
+)
+_GENERIC_CALIBRATION_ERROR_FALLBACK_RE = re.compile(r"error\s*:", re.IGNORECASE)
+
+# Lines confirmed, against real production logs, to be benign vLLM
+# fallback/informational messages that happen to be tagged at ERROR log
+# level — NOT failures. Without this, the generic grep below (which takes
+# the FIRST line matching the patterns above) picks these over the actual
+# root cause further down the log. Add a needle here only after
+# confirming — via a real log where the attempt succeeded, or where a
+# later, genuine error is the true cause — that the line is truly benign.
+_GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES: tuple[str, ...] = (
+    # FA2 requires compute capability >= 8; vLLM logs this at ERROR level
+    # then gracefully falls back to TRITON_ATTN/FLEX_ATTENTION and
+    # continues — confirmed benign against two real logs, one of which
+    # completed successfully with this exact line present (2026-09-07).
+    "Cannot use FA version 2 is not supported",
+    # vLLM's optional-dependency soft-check (_has_module in
+    # vllm/utils/import_utils.py) logs a full WARNING-level traceback for
+    # ANY optional module that fails to import (numba confirmed benign
+    # in a real log where calibration succeeded, 2026-09-07) — by design
+    # it never fails calibration. vLLM tags every physical line of the
+    # dump with the same "[import_utils.py:<N>]" source location, so
+    # matching that prefix (not a version-specific line number) covers
+    # the WHOLE block, including lines deep in the trace (e.g. "raise
+    # ImportError") that a narrower, opening-line-only needle would miss.
+    "[import_utils.py:",
+)
+
+
+# Deliberately tight (not e.g. 5+): a wide window risks suppressing a
+# genuinely unrelated real error that happens to occur near a benign
+# marker. 1 is the minimum that covers both confirmed cases above — the
+# marker is either ON the matched line itself (FA2) or exactly one line
+# before it (numba's "Traceback (most recent call last):" immediately
+# follows its "failed to import" line).
+_GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW = 1
+
+
+def _get_generic_calibration_error(probe_log: str) -> tuple[str, str] | None:
+    """Last-resort (summary, detail) pair for an unclassified failure.
+
+    Ports getCalibrationError (model-error-report.ts) — a plain keyword
+    grep over the log, used only when none of the three reason
+    classifiers above matched.
+    """
+    lines = [line for line in probe_log.split("\n") if line.strip()]
+
+    def _is_ignored(index: int) -> bool:
+        # The trigger keyword (e.g. "Traceback") often lands on a
+        # different line than the marker that identifies a known-benign
+        # block (e.g. "Module numba was found but failed to import" one
+        # line above it) — check a small preceding window, not just the
+        # matched line itself.
+        window = lines[max(0, index - _GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW) : index + 1]
+        return any(
+            needle in window_line for window_line in window for needle in _GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES
+        )
+
+    index = next(
+        (i for i, line in enumerate(lines) if _GENERIC_CALIBRATION_ERROR_RE.search(line) and not _is_ignored(i)),
+        -1,
+    )
+    if index == -1:
+        index = next(
+            (
+                i
+                for i, line in enumerate(lines)
+                if _GENERIC_CALIBRATION_ERROR_FALLBACK_RE.search(line) and not _is_ignored(i)
+            ),
+            -1,
+        )
+    if index == -1:
+        return None
+    return lines[index], "\n".join(lines[index:])
+
+
+def _classify_calibration_stages(
+    probe_log: str,
+    reason_kind: str | None,
+    reason_code: str | None,
+    reason_domain: str | None,
+    reason_needle: str | None,
+    tensor_parallel_size: int,
+) -> list[dict[str, Any]]:
+    """Failure-domain checklist for ONE (failed) probe attempt.
+
+    Domains that don't apply to this attempt's plan (e.g. multi-GPU
+    coordination on a tensor_parallel_size=1 run) are omitted entirely,
+    not shown as "unknown" — there was never anything to reach.
+
+    Prefers ``reason_domain`` (declared directly on whichever pattern
+    matched) to pin the failing row. If the matched pattern has no fixed
+    domain (domain=None — see the module note above _CALIBRATION_DOMAINS,
+    e.g. CUDA OOM), falls back to "first domain whose completion signal
+    wasn't seen yet in the log" — positionally accurate for exactly the
+    errors that can occur at more than one point in the sequence.
+    """
+    domains = [domain for domain in _CALIBRATION_DOMAINS if _domain_applies(domain, tensor_parallel_size)]
+
+    completed = [any(pattern.search(probe_log) for pattern in domain.completion_patterns) for domain in domains]
+    # A domain with no completion signal of its own is inferred complete
+    # once any LATER domain's signal has fired.
+    for index, domain in enumerate(domains):
+        if not domain.completion_patterns:
+            completed[index] = any(completed[index + 1 :])
+
+    first_incomplete_index = next((i for i, done in enumerate(completed) if not done), -1)
+
+    domain_index_by_id = {domain.id: i for i, domain in enumerate(domains)}
+    mapped_index = domain_index_by_id.get(reason_domain, -1) if reason_domain else -1
+    effective_index = mapped_index if mapped_index != -1 else first_incomplete_index
+
+    stages: list[dict[str, Any]] = []
+    for index, domain in enumerate(domains):
+        if index != effective_index:
+            stages.append({"name": domain.label, "status": "success" if completed[index] else "unknown"})
+            continue
+        generic = None if reason_code else _get_generic_calibration_error(probe_log)
+        stages.append(
+            {
+                "name": domain.label,
+                "status": "failure",
+                "reason_kind": reason_kind,
+                "reason_code": reason_code,
+                "generic_error_message": generic[0] if generic else None,
+                "generic_error_detail": generic[1] if generic else None,
+                # Literal substring guaranteed to exist in the raw log —
+                # the matched pattern's needle for a classified reason,
+                # else the generic grep's own (already raw) summary line.
+                # Distinct from the human-facing message/label above:
+                # the UI uses THIS to scroll to and highlight the actual
+                # log line, which a polished label would never match.
+                "log_anchor": reason_needle if reason_code else (generic[0] if generic else None),
+            }
+        )
+    return stages
 
 
 # vLLM raises a specific ValueError when the configured KV cache budget is too
@@ -1336,13 +1823,30 @@ class CalibrationResult:
     # state (filesystem EIO, read-only mount, etc. — see
     # ``_NODE_LEVEL_TRANSIENT_PATTERNS``). Distinct from
     # ``unsupported_reason``: that one marks a single model permanently,
-    # this one marks the whole node as broken until ops intervenes.
-    # The bridge surfaces this into the runtime status so the master's
-    # orchestrator stops sending calibration commands until the node
-    # recovers. Critically: when this is set, NO blacklist entry of any
-    # kind was written — the failure isn't the calibration's fault and
-    # leaving artefacts behind just pollutes things (see deioma 2026-06-04).
+    # this one describes the whole node as broken for this one probe.
+    # Display-only: it's recorded on the calibration_probe_logs row for
+    # the model-error-report UI, nothing more — it does NOT reach the
+    # orchestrator's scheduler. Live avoidance of a degraded node is
+    # handled entirely by the separate node_health.py sensor module
+    # (proactive, runs every heartbeat) — see the design note above
+    # _NODE_LEVEL_TRANSIENT_PATTERNS. Critically: when this is set, NO
+    # blacklist entry of any kind was written — the failure isn't the
+    # calibration's fault and leaving artefacts behind just pollutes
+    # things (see deioma 2026-06-04).
     node_unhealthy_reason: str | None = None
+    # Set when the last failing probe matched an
+    # ``_OBSERVED_TRANSIENT_PATTERNS`` entry (CUDA OOM, HF network blip,
+    # NCCL handshake failure, port conflict, …). Purely informational —
+    # unlike ``unsupported_reason``/``node_unhealthy_reason`` this NEVER
+    # gates blacklisting or node-health state; it only gives the
+    # error-report UI something more specific to show than a generic
+    # regex-grepped error line.
+    observed_reason: str | None = None
+    # Stage-by-stage checklist (see _classify_calibration_stages) for the
+    # last-evaluated failing probe — None on success (the frontend still
+    # derives a stage view from log_text for successful nodes) and on any
+    # failure where no probe ever produced a classifiable log segment.
+    stages: list[dict[str, Any]] | None = None
     # ``max_model_len`` actually used during the successful probe(s). When
     # vLLM refuses to start because the configured KV budget can't hold one
     # request at the model's default max_seq_len, calibration parses vLLM's
@@ -1706,10 +2210,27 @@ def calibrate_model(
     # Sibling latch for node-level transient failures (filesystem EIO,
     # read-only mount, …). When set, the kv-cache search aborts without
     # writing ANY blacklist artefact — neither the per-command file nor
-    # the per-model unsupported list. The bridge reads the latch via
-    # ``partial.node_unhealthy_reason`` and surfaces it into the runtime
-    # status so the master skips this worker until ops intervenes.
+    # the per-model unsupported list. Copied into
+    # ``partial.node_unhealthy_reason`` — display-only for the
+    # model-error-report UI (see the CalibrationResult field docstring).
+    # Actually avoiding this node again is node_health.py's job, not this.
     _node_unhealthy_box: list[NodeTransientErrorPattern] = []
+
+    # Sibling latch for informational-only observed reasons (CUDA OOM, HF
+    # network blips, NCCL handshake failures, port conflicts, …). Updated
+    # on every probe failure regardless of whether the two latches above
+    # also fire — it never gates blacklisting or node-health decisions,
+    # it only gives the error-report UI a more specific "last observed"
+    # label than a generic regex-grepped error line.
+    _observed_reason_box: list[ObservedTransientErrorPattern] = []
+
+    # Sibling latch for the deployment-stage checklist (see
+    # _classify_calibration_stages) of the last-evaluated failing probe.
+    # Same "last observed wins" semantics as _observed_reason_box — the
+    # two terminal failure branches in _try_start below overwrite it every
+    # time, so it ends up holding the checklist for whichever attempt was
+    # the deciding one when the search finally gives up.
+    _stages_box: list[list[dict[str, Any]]] = []
 
     # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. We keep
     # this local to one probe so each KV step starts from the model default
@@ -1732,6 +2253,10 @@ def calibrate_model(
         failures (filesystem EIO, …) win over model-level fatalities
         because they invalidate every measurement on this run.
         """
+        if _observed_reason_box:
+            partial.observed_reason = _observed_reason_box[0].reason_code
+        if _stages_box:
+            partial.stages = _stages_box[0]
         if _node_unhealthy_box:
             pat = _node_unhealthy_box[0]
             partial.node_unhealthy_reason = pat.reason_code
@@ -1878,15 +2403,24 @@ def calibrate_model(
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
 
+            # Informational only, checked on every failure regardless of
+            # whether the node/fatal classifiers below also match — never
+            # gates blacklisting or node-health state. Reflects the MOST
+            # RECENT failing probe (overwritten, not first-match-wins like
+            # the two latches below), since it's just "what was last seen".
+            observed_pattern = _classify_observed_transient_error(probe_log)
+            if observed_pattern is not None:
+                _observed_reason_box[:] = [observed_pattern]
+
             # Check node-level transient failures FIRST — these (filesystem
             # EIO, read-only mount, …) are not the calibration's fault and
             # must NOT leave any artefact behind. If we recorded per-command
             # blacklist lines for them we'd accumulate dozens of garbage
             # entries during a single 10-minute Ceph outage (see deioma
-            # 2026-06-04). Latch the box, log loudly, and abort. The bridge
-            # reads the partial result, surfaces ``node_unhealthy_reason``
-            # into the runtime status, and the master orchestrator skips
-            # this worker until the node recovers.
+            # 2026-06-04). Latch the box, log loudly, and abort. This only
+            # records ``node_unhealthy_reason`` for the model-error-report
+            # UI — node_health.py's own sensors, not this, are what make
+            # the orchestrator actually stop scheduling on this node.
             node_pattern = _classify_node_transient_error(probe_log)
             if node_pattern is not None:
                 if not _node_unhealthy_box:
@@ -1901,6 +2435,16 @@ def calibrate_model(
                         node_pattern.description,
                         model,
                     )
+                _stages_box[:] = [
+                    _classify_calibration_stages(
+                        probe_log,
+                        "node_unhealthy",
+                        node_pattern.reason_code,
+                        node_pattern.domain,
+                        node_pattern.needle,
+                        tp,
+                    )
+                ]
                 return None
 
             # KV-too-small-for-default-max-seq-len recovery. vLLM refuses to
@@ -2024,6 +2568,26 @@ def calibrate_model(
                     model,
                 )
                 _unsupported_box.append(fatal_pattern)
+
+            if fatal_pattern is not None:
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = (
+                    "unsupported",
+                    fatal_pattern.reason_code,
+                    fatal_pattern.domain,
+                    fatal_pattern.needle,
+                )
+            elif observed_pattern is not None:
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = (
+                    "observed",
+                    observed_pattern.reason_code,
+                    observed_pattern.domain,
+                    observed_pattern.needle,
+                )
+            else:
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = None, None, None, None
+            _stages_box[:] = [
+                _classify_calibration_stages(probe_log, _reason_kind, _reason_code, _reason_domain, _reason_needle, tp)
+            ]
             return None
 
     proc: subprocess.Popen[str] | None = None
