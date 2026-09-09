@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
-from iris.domain.search.lecture_search_dto import (
+from iris.domain.search.global_search_dto import (
     LectureSearchRequestDTO,
     LectureSearchResultDTO,
 )
@@ -22,5 +22,9 @@ def lecture_search(dto: LectureSearchRequestDTO) -> list[LectureSearchResultDTO]
     """Search for lectures based on a query."""
     client = VectorDatabase().get_client()
     return LectureGlobalSearchRetrieval(client).search(
-        dto.query, dto.limit, alpha=0.5, course_ids=dto.course_ids
+        dto.query,
+        dto.limit,
+        alpha=0.5,
+        course_ids=dto.course_ids,
+        access_context=dto.access_context,
     )

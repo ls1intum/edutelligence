@@ -259,30 +259,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             JOIN token_types tt ON tt.id = ut.type_id
             WHERE ut.log_entry_id = le.id
         ) tk ON true
-        LEFT JOIN LATERAL (
-            -- No COALESCE to 0: a request whose model has no token_prices row
-            -- must come back as NULL so the UI can omit the cost line instead
-            -- of asserting a confident "€0.00".
-            SELECT SUM(
-                CASE WHEN tp.price_per_k_token IS NOT NULL
-                     THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
-                END
-            ) AS cost_micro_cents
-            FROM usage_tokens ut
-            LEFT JOIN LATERAL (
-                SELECT price_per_k_token
-                FROM token_prices
-                WHERE type_id = ut.type_id
-                  AND (model_id = le.model_id OR model_id IS NULL)
-                  AND (provider_id = le.provider_id OR provider_id IS NULL)
-                  AND valid_from <= le.timestamp_request
-                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
-                         (provider_id = le.provider_id) DESC NULLS LAST,
-                         valid_from DESC
-                LIMIT 1
-            ) tp ON true
-            WHERE ut.log_entry_id = le.id
-        ) c ON true
+        -- Cost via the shared log_entry_cost view (logos_price_usage): NULL when
+        -- Logos has no pricing knowledge, so the UI still omits the cost line.
+        LEFT JOIN log_entry_cost c ON c.log_entry_id = le.id
         WHERE le.request_id IS NOT NULL
           -- Ranged on timestamp_request, not on the COALESCE the aggregate
           -- queries use: it is NOT NULL, so the COALESCE could only ever pick
@@ -550,27 +529,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             JOIN token_types tt ON tt.id = ut.type_id
             WHERE ut.log_entry_id = le.id
         ) tk ON true
-        LEFT JOIN LATERAL (
-            SELECT SUM(
-                CASE WHEN tp.price_per_k_token IS NOT NULL
-                     THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
-                END
-            ) AS cost_micro_cents
-            FROM usage_tokens ut
-            LEFT JOIN LATERAL (
-                SELECT price_per_k_token
-                FROM token_prices
-                WHERE type_id = ut.type_id
-                  AND (model_id = le.model_id OR model_id IS NULL)
-                  AND (provider_id = le.provider_id OR provider_id IS NULL)
-                  AND valid_from <= le.timestamp_request
-                ORDER BY (model_id = le.model_id) DESC NULLS LAST,
-                         (provider_id = le.provider_id) DESC NULLS LAST,
-                         valid_from DESC
-                LIMIT 1
-            ) tp ON true
-            WHERE ut.log_entry_id = le.id
-        ) c ON true
+        LEFT JOIN log_entry_cost c ON c.log_entry_id = le.id
         WHERE le.team_id = :teamId
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
@@ -760,27 +719,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                -- KPI card ("… across N cloud requests"), so a second predicate
                -- (e.g. on provider_type) would let the card pair a non-zero cost
                -- with a zero count.
-               (SELECT COALESCE(SUM(
-                   CASE WHEN tp.price_per_k_token IS NOT NULL
-                        THEN (ut.token_count::BIGINT * tp.price_per_k_token / 1000)::BIGINT
-                        ELSE 0
-                   END
-               ), 0)
+               (SELECT COALESCE(SUM(lec.cost_micro_cents), 0)
                   FROM log_entry re3
                   JOIN providers p3 ON p3.id = re3.provider_id
-                  JOIN usage_tokens ut ON ut.log_entry_id = re3.id
-                  LEFT JOIN LATERAL (
-                      SELECT price_per_k_token
-                      FROM token_prices
-                      WHERE type_id = ut.type_id
-                        AND (model_id = re3.model_id OR model_id IS NULL)
-                        AND (provider_id = re3.provider_id OR provider_id IS NULL)
-                        AND valid_from <= re3.timestamp_request
-                      ORDER BY (model_id = re3.model_id) DESC NULLS LAST,
-                               (provider_id = re3.provider_id) DESC NULLS LAST,
-                               valid_from DESC
-                      LIMIT 1
-                  ) tp ON true
+                  JOIN log_entry_cost lec ON lec.log_entry_id = re3.id
                  WHERE p3.privacy_level != 'LOCAL' AND p3.privacy_level IS NOT NULL
                    AND COALESCE(re3.timestamp_forwarding, re3.timestamp_request, re3.timestamp_response) BETWEEN :start AND :end
                    AND (CAST(:userId AS INTEGER) IS NULL OR re3.user_id = CAST(:userId AS INTEGER))

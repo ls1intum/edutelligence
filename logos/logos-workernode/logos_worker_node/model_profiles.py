@@ -1,15 +1,19 @@
-"""Model VRAM profiles — observation-only, no estimation.
+"""Model VRAM profiles.
 
 Sources of truth, in priority order:
   1. "calibrated"  — pre-measured by tools/calibrate_vram_profiles.py
   2. "measured"    — derived from live observations (loaded_vram - kv_cache_sent)
   3. "override"    — operator-provided values in config.yml
-  4. "cached"      — any of the above, reloaded from model_profiles.yml on restart
+  4. "hf"          — best-effort estimate from the model's Hugging Face
+                     config.json + safetensors sizes, applied by the
+                     calibration compatibility pre-check (hf_model_info.py)
+                     before a probe has ever run. Below "measured"/"calibrated"
+                     in authority — a real measurement always overwrites it.
+  5. "cached"      — any of the above, reloaded from model_profiles.yml on restart
 
-There is no HF API fetch and no name-based heuristic. If base_residency_mb is
-unknown, placement returns 0 (no estimate) and the lane manager skips auto-
-placement rather than guessing. The calibration script must be run once before
-the worker is expected to make placement decisions for uncalibrated models.
+If base_residency_mb is unknown (no override, no HF estimate, never
+calibrated), placement returns 0 (no estimate) and the lane manager skips
+auto-placement rather than guessing.
 
 Persists in the state directory as model_profiles.yml.
 """
@@ -110,8 +114,14 @@ class ModelProfileRecord:
     observed_gpu_memory_utilization: float | None = None
     min_gpu_memory_utilization_to_load: float | None = None
     tensor_parallel_size: int | None = None
-    kv_per_token_bytes: int | None = None  # manual override only
-    max_context_length: int | None = None  # manual override only
+    kv_per_token_bytes: int | None = None  # manual override or HF precheck
+    # KV heads in the whole model (config's own dtype geometry) — kv_per_token_bytes
+    # above is the WHOLE-MODEL footprint (every head), but vLLM's TP shards KV heads
+    # across ranks (max(1, heads // tp)), so a per-rank budget needs this to scale
+    # kv_per_token_bytes down for the selected tp. None on legacy profiles that
+    # predate this field, or when HF config.json didn't expose enough to derive it.
+    num_key_value_heads: int | None = None
+    max_context_length: int | None = None  # manual override or HF precheck
     # Smallest share of this model's own context length a lane here may serve,
     # as a fraction in [0, 1]. Operator-set per model under
     # logos.capabilities_models; the master's capacity planner refuses to place
@@ -133,6 +143,10 @@ class ModelProfileRecord:
     #   "measured"   — derived from live observation: loaded_vram − kv_cache_sent.
     #                  Value is weights-only; callers DO add KV separately.
     #   "override"   — operator-provided value in config.yml.
+    #   "hf"         — best-effort estimate from HF config.json +
+    #                  safetensors sizes (pre-calibration precheck).
+    #                  Weights-only, same semantics as "measured";
+    #                  a real calibration always replaces it.
     #   "cached"     — any of the above, loaded from persisted yml on restart.
     residency_source: str | None = None
     # Provenance: what enforce_eager mode the calibration ran under.
@@ -253,6 +267,7 @@ class ModelProfileRecord:
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
             "tensor_parallel_size": self.tensor_parallel_size,
             "kv_per_token_bytes": self.kv_per_token_bytes,
+            "num_key_value_heads": self.num_key_value_heads,
             "max_context_length": self.max_context_length,
             "min_context_fraction": self.min_context_fraction,
             "measurement_count": self.measurement_count,
@@ -618,7 +633,10 @@ class ModelProfileRegistry:
                     # multiple models share GPU memory.
                     if profile.residency_source == "calibrated":
                         pass  # keep calibrated value
-                    elif tp_changed or profile.base_residency_mb is None:
+                    elif tp_changed or profile.base_residency_mb is None or profile.residency_source == "hf":
+                        # "hf" is a best-effort guess, not a prior real
+                        # measurement — the first live one replaces it
+                        # exactly instead of blending through it via EMA.
                         profile.base_residency_mb = measured_base
                         profile.residency_source = "measured"
                     else:
@@ -806,6 +824,78 @@ class ModelProfileRegistry:
         self._persist()
         return True
 
+    def apply_hf_precheck(
+        self,
+        model_name: str,
+        *,
+        disk_size_bytes: int | None = None,
+        base_residency_mb: float | None = None,
+        kv_per_token_bytes: int | None = None,
+        num_key_value_heads: int | None = None,
+        max_context_length: int | None = None,
+    ) -> bool:
+        """Persist HF-derived compatibility-precheck estimates.
+
+        Returns True when the stored value changed. Never overwrites an
+        operator-provided config.yml override for the same field. Only sets
+        base_residency_mb + residency_source="hf" when the profile has no
+        higher-priority source yet (None, "hf", or "cached") — a real
+        "measured"/"calibrated"/"override" value always wins.
+        kv_per_token_bytes/max_context_length/disk_size_bytes have no
+        higher-priority writer to conflict with, so they're set unconditionally
+        (subject only to the manual-override check).
+
+        ``num_key_value_heads`` has no manual-override key of its own — it is
+        pure geometry, not a tunable — so it is set unconditionally whenever
+        HF provides it. The master's capacity planner needs it alongside
+        kv_per_token_bytes to derive a per-rank KV budget for the selected
+        tp; kv_per_token_bytes alone is the whole-model (every-head) figure.
+        """
+        with self._lock:
+            # Read under the lock too — add_overrides also runs under it, and
+            # reading this beforehand risks a stale empty dict racing a
+            # just-added override, letting the HF value overwrite it below.
+            overrides = self._manual_overrides.get(model_name) or {}
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            changed = False
+
+            if "disk_size_bytes" not in overrides and disk_size_bytes and profile.disk_size_bytes != disk_size_bytes:
+                profile.disk_size_bytes = disk_size_bytes
+                changed = True
+            if (
+                "kv_per_token_bytes" not in overrides
+                and kv_per_token_bytes
+                and profile.kv_per_token_bytes != kv_per_token_bytes
+            ):
+                profile.kv_per_token_bytes = kv_per_token_bytes
+                changed = True
+            if num_key_value_heads and profile.num_key_value_heads != num_key_value_heads:
+                profile.num_key_value_heads = num_key_value_heads
+                changed = True
+            if (
+                "max_context_length" not in overrides
+                and max_context_length
+                and profile.max_context_length != max_context_length
+            ):
+                profile.max_context_length = max_context_length
+                changed = True
+            if (
+                "base_residency_mb" not in overrides
+                and base_residency_mb
+                and base_residency_mb > 0
+                and profile.residency_source in (None, "hf", "cached")
+            ):
+                if profile.base_residency_mb != base_residency_mb:
+                    profile.base_residency_mb = base_residency_mb
+                    changed = True
+                if profile.residency_source != "hf":
+                    profile.residency_source = "hf"
+                    changed = True
+
+        if changed:
+            self._persist()
+        return changed
+
     def get_profile(self, model_name: str) -> ModelProfileRecord | None:
         with self._lock:
             return self._profiles.get(model_name)
@@ -889,6 +979,7 @@ class ModelProfileRegistry:
                     min_gpu_memory_utilization_to_load=profile_data.get("min_gpu_memory_utilization_to_load"),
                     tensor_parallel_size=profile_data.get("tensor_parallel_size"),
                     kv_per_token_bytes=profile_data.get("kv_per_token_bytes"),
+                    num_key_value_heads=profile_data.get("num_key_value_heads"),
                     max_context_length=profile_data.get("max_context_length"),
                     min_context_fraction=profile_data.get("min_context_fraction"),
                     measurement_count=int(profile_data.get("measurement_count", 0) or 0),

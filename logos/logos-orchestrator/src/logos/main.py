@@ -27,6 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
+from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
@@ -44,6 +45,7 @@ from logos.benchmarks.guidellm_runner import (
     resolve_benchmark_target,
     run_benchmark_job,
 )
+from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
@@ -71,6 +73,7 @@ from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
+from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
@@ -86,10 +89,11 @@ from logos.request_content import (
     sanitized_payload_for_logging,
     set_payload_field,
 )
-from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
+from logos.responses import extract_model, extract_service_tier, get_client_ip, request_setup
 from logos.role_auth import require_logos_admin_key
 from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.cloud_model_sync import CloudModelSyncService
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.terminal_logging import (
@@ -201,13 +205,16 @@ def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str])
     task.add_done_callback(_background_tasks.discard)
 
 
+_latency_store = LatencyStore(db_factory=DBManager)
 _logosnode_registry = LogosNodeRuntimeRegistry(
     on_capabilities_changed=_sync_logosnode_capabilities_to_db,
+    latency_store=_latency_store,
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
+_cloud_model_sync: Optional[CloudModelSyncService] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -566,6 +573,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
+        "telemetry_available": bool(devices.get("telemetry_available", devices.get("nvidia_smi_available", False))),
         "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
@@ -807,7 +815,13 @@ def _build_live_local_provider_sample(
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
-    if devices.get("nvidia_smi_available"):
+    # telemetry_available is the backend-neutral successor to
+    # nvidia_smi_available: it means "the worker measured this on real
+    # hardware", whether that hardware reports through nvidia-smi or through
+    # Metal's device_info. Metal workers set it and leave nvidia_smi_available
+    # False, so gating on the old field alone would discard their free-memory
+    # reading and fall back to the coarser total-minus-used estimate.
+    if devices.get("telemetry_available") or devices.get("nvidia_smi_available"):
         remaining_vram_mb = float(devices.get("free_memory_mb") or 0.0)
     elif total_vram_mb > 0:
         remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)
@@ -1392,6 +1406,11 @@ class _StreamingLogAccumulator:
     # event. Treat that as a completed response, even if the worker transport's
     # following stream_end frame has not been consumed yet.
     terminal_event_received: bool = False
+    # An upstream ``data: {"error": {...}}`` frame delivered mid-stream with an
+    # HTTP 200 (a content filter, context-length, or rate limit that fired after
+    # generation began). The bytes are forwarded to the client, but the request
+    # is not a success.
+    upstream_error: Optional[Dict[str, Any]] = None
     # Text deltas seen so far. The exact completion count only arrives with the
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
@@ -1522,6 +1541,14 @@ class _StreamingLogAccumulator:
         if not isinstance(blob, dict):
             return
 
+        blob_error = blob.get("error")
+        if isinstance(blob_error, dict) and blob_error:
+            self.upstream_error = blob_error
+            return
+        if isinstance(blob_error, str) and blob_error:
+            self.upstream_error = {"message": blob_error}
+            return
+
         event_type = blob.get("type")
         if isinstance(event_type, str) and event_type.startswith("response."):
             if event_type in {"response.completed", "response.incomplete", "response.failed"}:
@@ -1559,6 +1586,20 @@ class _StreamingLogAccumulator:
             response = blob.get("response")
             if isinstance(response, dict):
                 self.responses_final = response
+            # A terminal ``response.failed`` is the Responses-API equivalent of a
+            # mid-stream ``data: {"error": {...}}`` frame: generation began, the
+            # bytes reached the client, but the request is not a success and must
+            # not be billed. ``response.incomplete`` is deliberately excluded: it
+            # means the generation stopped at max_output_tokens or a content
+            # filter, and the partial output it carries is real, billed usage.
+            if event_type == "response.failed":
+                err = response.get("error") if isinstance(response, dict) else None
+                if isinstance(err, dict) and err:
+                    self.upstream_error = err
+                elif isinstance(err, str) and err:
+                    self.upstream_error = {"message": err}
+                else:
+                    self.upstream_error = {"message": "Responses API stream reported response.failed"}
 
     def _consume_messages_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Anthropic Messages SSE event.
@@ -1611,24 +1652,19 @@ class _StreamingLogAccumulator:
         self.messages_usage = merged
 
 
-def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
-    if not isinstance(response_payload, dict):
-        return {}
-    usage = response_payload.get("usage")
-    if isinstance(usage, dict):
-        extracted = extract_token_usage(usage)
-        if extracted:
-            return extracted
-    duration = response_payload.get("duration")
-    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-        return extract_token_usage({"seconds": duration})
-    if isinstance(duration, str):
-        try:
-            parsed_duration = float(duration)
-        except ValueError:
-            return {}
-        return extract_token_usage({"seconds": parsed_duration})
-    return {}
+def _usage_tokens_from_payload(
+    response_payload: Any,
+    request_payload: Any = None,
+    path: str = "",
+    billable_request: bool = True,
+) -> Dict[str, int]:
+    """Canonical token usage for a response, merged with the derived non-token
+    billable quantities (``billed_requests``, characters, images, ...) so the
+    stored ``usage_tokens`` rows carry everything ``logos_price_usage`` prices."""
+    usage, _ = finalize_billing_inputs(request_payload, response_payload, path)
+    if not billable_request:
+        usage.pop("billed_requests", None)
+    return usage
 
 
 # One currency unit = 100 cents = 1e8 micro-cents. The unit is USD, not EUR:
@@ -1644,8 +1680,11 @@ def _response_with_cost(
     provider_id: Optional[int],
     model_id: Optional[int],
     response_at: datetime.datetime,
+    request_payload: Any = None,
+    path: str = "",
+    allow_derived_only: bool = False,
 ) -> tuple[Any, bool]:
-    """Add the configured EUR cost to a cloud response's usage object.
+    """Add the configured USD cost to a cloud response's usage object.
 
     Cost enrichment is deliberately best-effort: a billing lookup must never
     turn a successful inference into an error. The DB method returns ``None``
@@ -1655,9 +1694,25 @@ def _response_with_cost(
     if not isinstance(response_payload, dict) or provider_id is None or model_id is None:
         return response_payload, False
     usage = response_payload.get("usage")
-    if not isinstance(usage, dict):
+    # Only settle a live cost onto a frame that carries a provider usage signal.
+    # ``finalize_billing_inputs`` always returns at least ``billed_requests``, so
+    # without this gate every ordinary SSE delta frame (which has no usage) would
+    # get a cost injected — clients would see repeated interim costs instead of
+    # one settled terminal cost. A root ``duration`` counts as a signal so
+    # verbose audio transcriptions still price live (see finalize.py).
+    has_provider_usage = isinstance(usage, dict) or isinstance(response_payload.get("usageMetadata"), dict)
+    if not has_provider_usage:
+        duration = response_payload.get("duration")
+        has_provider_usage = isinstance(duration, (int, float, str)) and not isinstance(duration, bool)
+        usage = {}
+    if not has_provider_usage and not allow_derived_only:
         return response_payload, False
-    usage_tokens = extract_token_usage(usage)
+    # Native Gemini has usageMetadata but no OpenAI-style usage object. Cost is
+    # still exposed under the compatibility `usage` field; start it empty
+    # instead of attempting dict(None) after successful detection.
+    if not isinstance(usage, dict):
+        usage = {}
+    usage_tokens, service_tier = finalize_billing_inputs(request_payload, response_payload, path)
     if not usage_tokens:
         return response_payload, False
 
@@ -1668,6 +1723,7 @@ def _response_with_cost(
                 provider_id,
                 usage_tokens,
                 response_at,
+                service_tier=service_tier,
             )
     except Exception:
         logger.exception(
@@ -1693,6 +1749,8 @@ class _StreamingCostEnricher:
 
     provider_id: Optional[int]
     model_id: Optional[int]
+    request_payload: Any = None
+    path: str = ""
     buffer: bytes = b""
 
     def feed(self, chunk: bytes | str) -> list[bytes]:
@@ -1715,6 +1773,30 @@ class _StreamingCostEnricher:
         self.buffer = b""
         return [remainder]
 
+    @staticmethod
+    def _frame_usage_is_settled(target: dict) -> bool:
+        """True when this frame carries a *complete* usage picture, not a running
+        partial. An Anthropic ``message_delta`` reports only ``output_tokens``
+        mid-stream (input arrived once in ``message_start``); pricing that frame
+        alone yields an output-only, undercharged cost. Enrich only frames whose
+        usage settles the input side too — the Chat Completions terminal chunk,
+        the Responses ``response.completed`` object, or a duration/usageMetadata
+        payload. Native Gemini usage is cumulative, so require a candidate's
+        terminal finishReason as well. Leave native Anthropic streams without a
+        live cost rather than a wrong one (the persisted ledger still prices
+        them correctly)."""
+        usage = target.get("usage")
+        if isinstance(usage, dict):
+            return any(
+                k in usage for k in ("prompt_tokens", "input_tokens", "inputTokens", "promptTokens", "total_tokens")
+            )
+        if isinstance(target.get("usageMetadata"), dict):
+            candidates = target.get("candidates")
+            return isinstance(candidates, list) and any(
+                isinstance(candidate, dict) and candidate.get("finishReason") is not None for candidate in candidates
+            )
+        return target.get("duration") is not None
+
     def _enrich_frame(self, frame: bytes, payload_end: int, delimiter: bytes) -> bytes:
         event = frame[:payload_end]
         newline = b"\r\n" if b"\r\n" in event else b"\n"
@@ -1733,11 +1815,15 @@ class _StreamingCostEnricher:
                 continue
 
             target = blob.get("response") if isinstance(blob.get("response"), dict) else blob
+            if not self._frame_usage_is_settled(target):
+                continue
             enriched_target, changed = _response_with_cost(
                 target,
                 self.provider_id,
                 self.model_id,
                 datetime.datetime.now(datetime.timezone.utc),
+                request_payload=self.request_payload,
+                path=self.path,
             )
             if not changed:
                 continue
@@ -1840,6 +1926,8 @@ async def lifespan(app: FastAPI):
         await _calibration_orchestrator.stop()
     if _azure_deployment_sync:
         await _azure_deployment_sync.stop()
+    if _cloud_model_sync:
+        await _cloud_model_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -2380,6 +2468,82 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     with DBManager() as db:
         rows = db.get_calibration_probe_logs_by_model(model_name)
     return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
+
+
+@app.get("/internal/calibration_probe_logs/fetch", tags=["admin"])
+async def internal_fetch_calibration_log(provider_id: int, model_name: str, request: Request):
+    """On-demand fetch of a model's full calibration log from the worker.
+
+    Backs the Download-full-logs button: successful runs skip storing
+    log_text, so this re-reads the on-disk log live. Pure file read, no
+    GPU impact; needs the worker online and not yet recalibrated since.
+    """
+    _require_internal_secret(request)
+
+    try:
+        result = await _logosnode_registry.send_command(
+            provider_id,
+            "get_calibration_log",
+            params={"model_name": model_name},
+            timeout_seconds=20,
+        )
+    except LogosNodeOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc) or "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+
+    return JSONResponse(status_code=200, content=jsonable_encoder({"log_text": result.get("log_text", "")}))
+
+
+@app.get("/internal/compatibility_precheck", tags=["admin"])
+async def internal_compatibility_precheck(model_name: str, request: Request, provider_id: int | None = None):
+    """On-demand HF compatibility check for one model, across one or all
+    connected logosnode workers.
+
+    Unlike calibration itself, this is safe to call any time — including
+    during the day, with live traffic on the nodes — because the worker-side
+    check (run_compatibility_precheck) never touches vLLM or lanes: it's
+    only an HF metadata fetch plus a read-only nvidia-smi query. Omitting
+    provider_id fans out across every connected worker, answering "would
+    this model run on ANY node" rather than requiring the caller to already
+    know which one to ask.
+    """
+    _require_internal_secret(request)
+
+    provider_ids = [provider_id] if provider_id is not None else _logosnode_registry.active_provider_ids()
+    if not provider_ids:
+        return JSONResponse(status_code=200, content={"model": model_name, "results": []})
+
+    async def _check_one(pid: int) -> dict[str, Any]:
+        pname = _resolve_provider_name(pid)
+        try:
+            result = await _logosnode_registry.send_command(
+                pid, "run_compatibility_precheck", params={"model": model_name}, timeout_seconds=30
+            )
+            # A worker reply with "result": null bypasses send_command's
+            # dict type hint (a present null isn't its .get() default) and
+            # would otherwise raise **result below, outside this try —
+            # taking every other provider's result down with it.
+            if not isinstance(result, dict):
+                return {
+                    "provider_id": pid,
+                    "provider_name": pname,
+                    "ok": False,
+                    "error": f"Worker returned an unexpected response type: {type(result).__name__}",
+                }
+            return {"provider_id": pid, "provider_name": pname, **result}
+        except LogosNodeOfflineError:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": "Worker not connected"}
+        except LogosNodeCommandError as exc:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            # An unexpected failure for one provider must not lose the
+            # results already gathered for every other one — see below.
+            logger.exception("[Precheck] unexpected failure checking provider %s for %s", pid, model_name)
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": f"Unexpected error: {exc}"}
+
+    results = await asyncio.gather(*(_check_one(pid) for pid in provider_ids))
+    return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
 
 
 class _InternalCalibrateRequest(BaseModel):
@@ -3089,6 +3253,7 @@ async def start_pipeline():
         azure_facade=_azure_facade,
         model_registry=model_registry,
         ettft_enabled=ettft_enabled,
+        latency_store=_latency_store,
     )
     logger.info("Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled)
 
@@ -3175,6 +3340,17 @@ async def start_pipeline():
         ),
     )
     await _azure_deployment_sync.start()
+
+    # Every other cloud provider discovers its models over GET /v1/models, and
+    # the same pass records the context windows the upstream reports so
+    # /v1/models can republish them.
+    global _cloud_model_sync
+    _cloud_model_sync = CloudModelSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _cloud_model_sync.start()
 
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
@@ -3582,7 +3758,11 @@ async def _streaming_response(
             is_streaming=True,
         )
         return JSONResponse(
-            content=error_body,
+            content=(
+                translate_error(error_body)
+                if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+                else error_body
+            ),
             status_code=corrected_sc,
             headers=_decision_response_headers(request_id, scheduling_stats),
         )
@@ -3685,8 +3865,19 @@ async def _streaming_response(
                     )
                 _live_streams.finish(request_id)
                 stream_log.finish()
+                # A terminal ``response.failed`` frame ends the stream cleanly,
+                # but the request still failed and must not be billed or logged
+                # as a success.
+                if error_message is None and stream_log.upstream_error:
+                    error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
+                billable = stream_completed and stream_log.upstream_error is None
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
+                usage_tokens = _usage_tokens_from_payload(
+                    response_payload,
+                    prepared_payload,
+                    request_path or "",
+                    billable_request=billable,
+                )
                 if log_id:
                     with DBManager() as db:
                         db.set_response_payload(
@@ -3697,6 +3888,7 @@ async def _streaming_response(
                             usage_tokens,
                             policy_id,
                             classification_stats,
+                            service_tier=extract_service_tier(response_payload),
                             request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                             queue_depth_at_arrival=(
                                 scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -3774,13 +3966,27 @@ async def _streaming_response(
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-    response_headers["content-type"] = upstream_content_type or "text/event-stream"
+    # A translated response is an Anthropic event stream regardless of how the
+    # upstream labelled its own, so the client is told what it is actually
+    # about to parse rather than what the upstream sent.
+    translating_messages = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+    response_headers["content-type"] = (
+        "text/event-stream" if translating_messages else (upstream_content_type or "text/event-stream")
+    )
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
         cost_enricher = (
-            _StreamingCostEnricher(provider_id, model_id)
+            _StreamingCostEnricher(provider_id, model_id, request_payload=prepared_payload, path=request_path or "")
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
+            else None
+        )
+        # A Messages request forwarded to an upstream without a Messages route
+        # comes back as a chat/completions or Responses event stream; the
+        # client's SSE parser only understands the Anthropic one.
+        anthropic_stream = (
+            stream_translator(context.anthropic_dialect, model_name=context.model_name)
+            if context.anthropic_dialect is not None
             else None
         )
         error_message = None
@@ -3789,6 +3995,16 @@ async def _streaming_response(
         def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
             return cost_enricher.feed(chunk) if cost_enricher else [chunk]
 
+        def client_chunks(chunk: bytes | str) -> list[bytes | str]:
+            """Record one upstream chunk and return what the client receives.
+
+            Logging, billing and the live view all read the upstream's own
+            frames, so the accumulator is fed before any translation — only
+            the bytes on the wire change shape.
+            """
+            stream_log.feed(chunk)
+            return anthropic_stream.feed(chunk) if anthropic_stream else [chunk]
+
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
         _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
@@ -3796,8 +4012,8 @@ async def _streaming_response(
             # Yield the already-peeked first chunk
             if first_chunk:
                 for outgoing_chunk in enriched_chunks(first_chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
                 if not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
@@ -3806,8 +4022,8 @@ async def _streaming_response(
 
             async for chunk in chunk_iter:
                 for outgoing_chunk in enriched_chunks(chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
                 _live_streams.update(request_id, stream_log.streamed_tokens())
                 if chunk and not ttft_recorded:
                     if log_id:
@@ -3816,17 +4032,28 @@ async def _streaming_response(
                     ttft_recorded = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
+            if anthropic_stream:
+                # Idempotent: a stream that already ended on [DONE] (or on the
+                # Responses API's terminal event) has emitted its message_stop,
+                # and this closes one that simply ran out of bytes.
+                for client_chunk in anthropic_stream.finish():
+                    yield client_chunk
         except Exception as exc:
             error_message = str(exc)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
-            # synthetic OpenAI error frame without corrupting its protocol.
-            if upstream_media_type == "text/event-stream":
+            # synthetic error frame without corrupting its protocol — in the
+            # dialect the client is reading, which is Anthropic's whenever the
+            # response was being translated.
+            if anthropic_stream:
+                for client_chunk in anthropic_stream.error(str(exc)):
+                    yield client_chunk
+            elif upstream_media_type == "text/event-stream":
                 import json as _json
 
                 _, error_body = coerce_upstream_error(500, {"error": str(exc)})
@@ -3840,10 +4067,17 @@ async def _streaming_response(
             _live_streams.finish(request_id)
             if error_message is None:
                 error_message = stream_status.error
+            if error_message is None and stream_log.upstream_error:
+                error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             stream_log.finish()
             response_payload = stream_log.response_payload()
-            usage_tokens = _usage_tokens_from_payload(response_payload)
+            usage_tokens = _usage_tokens_from_payload(
+                response_payload,
+                prepared_payload,
+                request_path or "",
+                billable_request=not failed,
+            )
             if log_id:
                 with DBManager() as db:
                     db.set_response_payload(
@@ -3854,6 +4088,7 @@ async def _streaming_response(
                         usage_tokens,
                         policy_id,
                         classification_stats,
+                        service_tier=extract_service_tier(response_payload),
                         request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                         queue_depth_at_arrival=(
                             scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -4055,9 +4290,22 @@ async def _sync_response(
             )
 
         if exec_result.success and context.provider_type == "cloud":
-            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
+            response_payload, _ = _response_with_cost(
+                response_payload,
+                provider_id,
+                model_id,
+                response_at,
+                request_payload=prepared_payload,
+                path=request_path or "",
+                allow_derived_only=True,
+            )
 
-        usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(
+            response_payload,
+            prepared_payload,
+            request_path or "",
+            billable_request=exec_result.success,
+        )
 
         if log_id:
             with DBManager() as db:
@@ -4071,6 +4319,7 @@ async def _sync_response(
                     usage_tokens,
                     policy_id,
                     classification_stats,
+                    service_tier=extract_service_tier(response_payload),
                     request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                     queue_depth_at_arrival=(
                         scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -4139,6 +4388,18 @@ async def _sync_response(
         if not exec_result.success:
             status_code, response_payload = coerce_upstream_error(
                 status_code, response_payload or {"error": exec_result.error}
+            )
+
+        # A Messages request whose upstream has no Messages route was forwarded
+        # as chat/completions or a Responses call; the client still expects an
+        # Anthropic message back. Translated here, last, so that the logging,
+        # billing and rate-limit bookkeeping above all ran against the
+        # upstream's own OpenAI-shaped body.
+        if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE):
+            response_payload = (
+                translate_response(response_payload, context.anthropic_dialect, model_name=context.model_name)
+                if exec_result.success
+                else translate_error(response_payload)
             )
 
         # Return dict for async jobs, JSONResponse for sync endpoints
@@ -4217,9 +4478,11 @@ def _proxy_streaming_response(
 
     from fastapi.responses import StreamingResponse
 
+    _proxy_path = forward_url.rsplit("/v1/", 1)[-1] if "/v1/" in forward_url else forward_url
+
     async def streamer():
         stream_log = _StreamingLogAccumulator()
-        cost_enricher = _StreamingCostEnricher(provider_id, model_id)
+        cost_enricher = _StreamingCostEnricher(provider_id, model_id, request_payload=payload, path=_proxy_path)
         stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
@@ -4253,12 +4516,19 @@ def _proxy_streaming_response(
         finally:
             if error_message is None:
                 error_message = stream_status.error
+            if error_message is None and stream_log.upstream_error:
+                error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             # Log completion
             if log_id:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
+                usage_tokens = _usage_tokens_from_payload(
+                    response_payload,
+                    payload,
+                    _proxy_path,
+                    billable_request=not failed,
+                )
 
                 with DBManager() as db:
                     if ttft is None and stream_log.first_chunk is not None and not error_message:
@@ -4271,6 +4541,7 @@ def _proxy_streaming_response(
                         usage_tokens,
                         policy_id,
                         classified,
+                        service_tier=extract_service_tier(response_payload),
                     )
                     db.update_log_entry_metrics(
                         log_id=log_id,
@@ -4307,11 +4578,25 @@ async def _proxy_sync_response(
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
         response_payload = {"error": exec_result.error}
+    _proxy_path = forward_url.rsplit("/v1/", 1)[-1] if "/v1/" in forward_url else forward_url
     if exec_result.success:
-        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
+        response_payload, _ = _response_with_cost(
+            response_payload,
+            provider_id,
+            model_id,
+            response_at,
+            request_payload=payload,
+            path=_proxy_path,
+            allow_derived_only=True,
+        )
 
     if log_id:
-        usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(
+            response_payload,
+            payload,
+            _proxy_path,
+            billable_request=exec_result.success,
+        )
 
         with DBManager() as db:
             if exec_result.success:
@@ -4324,6 +4609,7 @@ async def _proxy_sync_response(
                 usage_tokens,
                 policy_id,
                 classified,
+                service_tier=extract_service_tier(response_payload),
             )
             db.update_log_entry_metrics(
                 log_id=log_id,
@@ -6044,11 +6330,41 @@ def _profile_native_context_length(profile: dict) -> int:
 _HISTORIC_MAX_CONTEXT_TTL_SECONDS = 10.0
 _historic_max_context_cache: tuple[float, dict[str, int]] | None = None
 
+# The cloud view is refreshed by the model sync (every 15 minutes by default),
+# so it is cached on the same terms as the historic maxima above.
+_cloud_context_cache: tuple[float, dict[str, dict[str, int]]] | None = None
+
 
 def _clear_historic_max_context_cache() -> None:
-    """Drop the cached historic maxima (used by the tests; production never needs it)."""
-    global _historic_max_context_cache
+    """Drop the cached context lookups (used by the tests; production never needs it)."""
+    global _historic_max_context_cache, _cloud_context_cache
     _historic_max_context_cache = None
+    _cloud_context_cache = None
+
+
+def _cloud_context_by_model() -> dict[str, dict[str, int]]:
+    """Model name -> the context windows cloud upstreams report for it.
+
+    The cloud counterpart of the logosnode runtime snapshots: a cloud provider
+    has no lane to inspect, so what it publishes on its own ``/v1/models`` is
+    the only measurement there is. ``CloudModelSyncService`` records it per
+    provider; this reduces it across providers. Returns an empty mapping when
+    the database cannot be reached, so a broken lookup reads as "no cloud
+    provider reports a window" for one TTL rather than failing the endpoint.
+    """
+    global _cloud_context_cache
+    now = time.monotonic()
+    cached = _cloud_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            contexts = db.get_cloud_context_by_model()
+    except Exception:
+        logger.warning("Failed to load the cloud context windows by model", exc_info=True)
+        return {}
+    _cloud_context_cache = (now, contexts)
+    return contexts
 
 
 def _historic_max_context_by_model() -> dict[str, int]:
@@ -6143,6 +6459,27 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
             model = lane["model"]
             _record(model, "current_min", window, keep_smallest=True)
             _record(model, "current_max", window)
+
+    # Cloud upstreams have no lane to read, so their windows come from what
+    # they publish themselves. Folded in on the same terms as a workernode's:
+    # current_min keeps the smallest, because a request may be routed to any
+    # deployment of the model — cloud or local — and only the smallest holds
+    # unconditionally. Without this a model served only through a cloud
+    # provider had no window at all, which is what made a downstream Logos
+    # instance hide the context its upstream had measured.
+    for model, entry in _cloud_context_by_model().items():
+        # One window an upstream serves is its own minimum, maximum and
+        # ceiling alike, so a partially-reported entry widens the same way a
+        # lane's single number does rather than leaving the other two blank.
+        current_min = entry.get("current_min")
+        current_max = entry.get("current_max") or current_min
+        overall = entry.get("overall") or current_max
+        if current_min:
+            _record(model, "current_min", current_min, keep_smallest=True)
+        if current_max:
+            _record(model, "current_max", current_max)
+        if overall:
+            _record(model, "overall", overall)
 
     # The live snapshots above only exist while workernodes are connected.
     # Top the "overall" figure up with the historic maximum the database keeps

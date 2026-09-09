@@ -54,6 +54,7 @@ export class Providers implements OnInit {
     'bedrock',
     'deepseek',
     'groq',
+    'logos',
     'none',
   ];
   readonly privacyLevels: PrivacyLevel[] = [
@@ -61,6 +62,10 @@ export class Providers implements OnInit {
     'CLOUD_IN_EU_BY_US_PROVIDER',
     'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
     'CLOUD_IN_EU_BY_EU_PROVIDER',
+    // Hardware outside operator control — use it for a personal Mac MLX
+    // worker so that LOCAL-threshold requests never route onto a machine
+    // whose owner can inspect the running processes.
+    'THIRD_PARTY_HARDWARE',
   ];
 
   readonly String = String;
@@ -79,10 +84,14 @@ export class Providers implements OnInit {
   }
 
   private privacyLevelOptionsFor(type: ProviderType): AppSelectOption[] {
+    // A logosnode is self-hosted hardware: either the operator's own box
+    // (LOCAL) or hardware outside operator control, e.g. a personal Mac MLX
+    // worker (THIRD_PARTY_HARDWARE). The CLOUD_* tiers describe jurisdiction
+    // of a cloud provider and never apply to a logosnode.
     const levels =
       type === 'logosnode'
-        ? this.privacyLevels.filter((l) => l === 'LOCAL')
-        : this.privacyLevels.filter((l) => l !== 'LOCAL');
+        ? this.privacyLevels.filter((l) => l === 'LOCAL' || l === 'THIRD_PARTY_HARDWARE')
+        : this.privacyLevels.filter((l) => l !== 'LOCAL' && l !== 'THIRD_PARTY_HARDWARE');
     return levels.map((l) => ({ value: l, label: l }));
   }
 
@@ -104,10 +113,15 @@ export class Providers implements OnInit {
     cloud: CloudProviderType,
     privacy: PrivacyLevel,
   ): { cloud: CloudProviderType; privacy: PrivacyLevel } {
-    if (type === 'logosnode') return { cloud: 'none', privacy: 'LOCAL' };
+    if (type === 'logosnode') {
+      // Preserve a valid logosnode selection instead of forcing LOCAL: a Mac
+      // saved as third-party hardware must keep that tier when the edit
+      // dialog reopens or the type toggle is cycled.
+      return { cloud: 'none', privacy: privacy === 'THIRD_PARTY_HARDWARE' ? privacy : 'LOCAL' };
+    }
     return {
       cloud: cloud === 'none' ? this.defaultCloudProviderType : cloud,
-      privacy: privacy === 'LOCAL' ? this.defaultCloudPrivacyLevel : privacy,
+      privacy: privacy === 'LOCAL' || privacy === 'THIRD_PARTY_HARDWARE' ? this.defaultCloudPrivacyLevel : privacy,
     };
   }
 
@@ -168,6 +182,15 @@ export class Providers implements OnInit {
   addPrivacyLevel = signal<PrivacyLevel>('CLOUD_IN_EU_BY_US_PROVIDER');
   addLoading = signal(false);
   addError = signal('');
+
+  // ── Created-provider key modal ───────────────────────────────────────────
+  // Logosnode providers are given a generated shared key on creation; the
+  // operator must be able to copy it to configure the worker node, so we
+  // surface it in a follow-up modal once the add flow succeeds.
+  createdKeyOpen = signal(false);
+  createdKeyName = signal('');
+  createdKey = signal('');
+  createdKeyCopied = signal(false);
 
   // ── Edit modal ────────────────────────────────────────────────────────────
   editTarget = signal<Provider | null>(null);
@@ -253,6 +276,7 @@ export class Providers implements OnInit {
       CLOUD_IN_EU_BY_US_PROVIDER: 'EU (US)',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'Non-EU (US)',
       CLOUD_IN_EU_BY_EU_PROVIDER: 'EU (EU)',
+      THIRD_PARTY_HARDWARE: 'Third-party HW',
     };
     return map[level] ?? level;
   }
@@ -345,14 +369,41 @@ export class Providers implements OnInit {
       privacy_level: this.addPrivacyLevel(),
     };
     try {
-      await this.providerService.addProvider(payload);
+      const res = await this.providerService.addProvider(payload);
       await this.fetchProviders();
       this.addOpen.set(false);
+      const generatedKey: string = (res && (res as { api_key?: string }).api_key) || '';
+      // Only surface the key when we actually generated one, i.e. the operator
+      // left the key field empty. An operator-supplied key is echoed back by the
+      // backend too, and there is nothing new to show for that case.
+      if (generatedKey && payload.api_key === undefined) {
+        this.createdKeyName.set(payload.name);
+        this.createdKey.set(generatedKey);
+        this.createdKeyCopied.set(false);
+        this.createdKeyOpen.set(true);
+      }
     } catch {
       this.addError.set('Failed to add provider, please try again.');
     } finally {
       this.addLoading.set(false);
     }
+  }
+
+  async copyCreatedKey(): Promise<void> {
+    const key = this.createdKey();
+    if (!key) return;
+    try {
+      await navigator.clipboard.writeText(key);
+      this.createdKeyCopied.set(true);
+      setTimeout(() => this.createdKeyCopied.set(false), 2000);
+    } catch {
+      // Clipboard unavailable (e.g. non-secure context) — the key is still
+      // visible in the field above for manual copying.
+    }
+  }
+
+  closeCreatedKeyDialog(): void {
+    this.createdKeyOpen.set(false);
   }
 
   // ── Edit flow ─────────────────────────────────────────────────────────────
