@@ -10,7 +10,7 @@
          display in the Model Error Report UI. Unlike unsupported_reason /
          node_unhealthy_reason this never gates blacklisting or node
          health — it's purely a "what was last observed" label. -->
-    <changeSet id="024-calibration-probe-logs-observed-reason" author="logos">
+    <changeSet id="029-calibration-probe-logs-observed-reason" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="calibration_probe_logs" columnName="observed_reason"/></not>
         </preConditions>
