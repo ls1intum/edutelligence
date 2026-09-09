@@ -2490,6 +2490,62 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_metal_allocation_failure_skips_restart(monkeypatch) -> None:
+    """When has_metal_allocation_failure is True, _recover_dead_lanes must skip the restart.
+
+    The model does not fit the machine's Metal budget; restarting it
+    unchanged fails identically, so the flag must feed the same fatal path
+    as has_fatal_cuda_errors — otherwise a lane that died on an allocation
+    failure burns its whole crash-restart budget on guaranteed failures.
+    """
+    lane_id = "test-lane"
+    lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    restart_calls: list[str] = []
+
+    class MetalAllocFailureHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+            self.has_stuck_vram = False
+            self.has_fatal_cuda_errors = False
+            self.has_metal_allocation_failure = True
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=1, return_code=1)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> Any:
+        restart_calls.append("spawn")
+        raise AssertionError("should not be called")
+
+    manager._handles[lane_id] = MetalAllocFailureHandle()  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    status = LaneStatus(
+        lane_id=lane_id,
+        lane_uid=f"vllm:{lane_id}",
+        model=lane_config.model,
+        port=15000,
+        vllm=True,
+        process=ProcessStatus(state=ProcessState.STOPPED, pid=1, return_code=1),
+        runtime_state="stopped",
+        lane_config=lane_config,
+    )
+    manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
+    await manager._recover_dead_lanes([status])  # noqa: SLF001
+
+    assert not restart_calls, "Restart must be suppressed when the crash was a Metal allocation failure"
+
+
+@pytest.mark.asyncio
 async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     """Crash-restart counter resets to 0 after a successful restart."""
     lane_id = "test-lane"
@@ -2850,3 +2906,44 @@ async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
     await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
     assert "org_left-model" in manager._handles  # noqa: SLF001
     manager.end_calibration_session()
+
+
+class TestValidateCapabilities:
+    """Startup validation must check the cache the lanes actually read from.
+
+    The caller passes the resolved layout; re-deriving it here from the
+    ollama models path would check a directory that does not exist on a Mac
+    and where neither the prefetch nor the lanes ever download.
+    """
+
+    @staticmethod
+    def _manager(models_path: str) -> LaneManager:
+        return LaneManager(OllamaConfig(models_path=models_path), lane_port_start=15200, lane_port_end=15210)
+
+    def test_finds_weights_in_the_resolved_hf_cache(self, tmp_path) -> None:
+        hf_home = tmp_path / "cache" / ".hf_cache"
+        (hf_home / "hub" / "models--org--model").mkdir(parents=True)
+        missing = self._manager(str(tmp_path / "ollama")).validate_capabilities(
+            ["org/model"], str(hf_home), str(tmp_path / "cache")
+        )
+        assert missing == []
+
+    def test_reports_a_model_that_is_not_downloaded(self, tmp_path) -> None:
+        hf_home = tmp_path / "cache" / ".hf_cache"
+        hf_home.mkdir(parents=True)
+        missing = self._manager(str(tmp_path / "ollama")).validate_capabilities(["org/model"], str(hf_home))
+        assert missing == ["org/model"]
+
+    def test_counts_a_model_dir_placed_under_the_cache_root(self, tmp_path) -> None:
+        (tmp_path / "cache" / "local-model").mkdir(parents=True)
+        missing = self._manager(str(tmp_path / "ollama")).validate_capabilities(
+            ["local-model"], str(tmp_path / "elsewhere"), str(tmp_path / "cache")
+        )
+        assert missing == []
+
+    def test_still_finds_a_model_in_the_ollama_models_path(self, tmp_path) -> None:
+        """The CUDA/ollama layout must keep working unchanged."""
+        models_path = tmp_path / "ollama"
+        (models_path / "org-model").mkdir(parents=True)
+        missing = self._manager(str(models_path)).validate_capabilities(["org-model"], str(tmp_path / "elsewhere-hf"))
+        assert missing == []

@@ -536,6 +536,82 @@ class TestListingPagination:
 
         assert len(requested) == github._MAX_PAGES
 
+    async def test_a_review_request_is_found_on_the_last_page(self, monkeypatch):
+        # The same trap the review list has: the timeline answers
+        # oldest-first, so on a busy pull request the request that was just
+        # made sits on the last page, not the first.
+        noise = [{"event": "commented", "actor": {"login": "a"}} for _ in range(100)]
+        request = {
+            "id": 412345678,
+            "event": "review_requested",
+            "requested_reviewer": {"login": "LogosOSSAgent"},
+            "actor": {"login": "wasnertobias"},
+        }
+        self._paged_client(monkeypatch, [noise, [request]])
+
+        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("wasnertobias", 412345678)
+
+    async def test_a_review_request_lost_to_the_page_ceiling_is_not_answered(self, monkeypatch):
+        # The timeline is oldest-first, so a truncated read holds the
+        # *oldest* events. A matching actor in that remainder is an old
+        # gesture, not the request that is on the table now — acting on it
+        # would be a guess, so the question is refused instead.
+        oldest = {
+            "event": "review_requested",
+            "requested_reviewer": {"login": "LogosOSSAgent"},
+            "actor": {"login": "old-maintainer"},
+        }
+        full_page = [oldest] + [{"event": "commented", "actor": {"login": "a"}} for _ in range(99)]
+        self._paged_client(monkeypatch, [full_page] * (github._MAX_PAGES + 5))
+
+        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") is None
+
+    async def test_a_complete_timeline_without_a_request_names_nobody(self, monkeypatch):
+        # A read that completed and names no requester is not the same
+        # answer as a read that was cut off: the first is "nobody asked
+        # that I can see", the second is "I cannot say", and the poller
+        # logs the two differently.
+        self._paged_client(
+            monkeypatch,
+            [
+                [
+                    {
+                        "event": "review_requested",
+                        "requested_reviewer": {"login": "someone-else"},
+                        "actor": {"login": "a"},
+                    }
+                ]
+            ],
+        )
+
+        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("", None)
+
+    async def test_a_remade_review_request_answers_with_the_newest_event(self, monkeypatch):
+        # Asking again — remove the reviewer, add them back — writes a new
+        # event. "Who asked" is answered by the newest of them, and the
+        # caller needs its identity to tell the two requests apart.
+        self._paged_client(
+            monkeypatch,
+            [
+                [
+                    {
+                        "id": 111,
+                        "event": "review_requested",
+                        "requested_reviewer": {"login": "LogosOSSAgent"},
+                        "actor": {"login": "old-maintainer"},
+                    },
+                    {
+                        "id": 222,
+                        "event": "review_requested",
+                        "requested_reviewer": {"login": "LogosOSSAgent"},
+                        "actor": {"login": "wasnertobias"},
+                    },
+                ]
+            ],
+        )
+
+        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("wasnertobias", 222)
+
 
 class TestReactionsAndReplies:
     """Saying "seen" and saying the answer.

@@ -22,8 +22,15 @@
     <include file="liquibase/changelog/016_model_profiles_max_reported_context_length.xml"/>
     <include file="liquibase/changelog/017_provider_performance.xml"/>
     <include file="liquibase/changelog/018_model_aliases.xml"/>
+    <include file="liquibase/changelog/019_latency_observations.xml"/>
     <include file="liquibase/changelog/020_agent_sessions.xml"/>
     <include file="liquibase/changelog/021_agent_controls.xml"/>
     <include file="liquibase/changelog/022_agent_instructions.xml"/>
+    <include file="liquibase/changelog/023_token_cost_decomposition.xml"/>
+    <include file="liquibase/changelog/024_privacy_third_party_hardware.xml"/>
+    <include file="liquibase/changelog/025_cloud_model_sync.xml"/>
+    <include file="liquibase/changelog/026_agent_session_no_push.xml"/>
+    <include file="liquibase/changelog/027_log_entry_rate_limit_admitted.xml"/>
+    <include file="liquibase/changelog/028_log_entry_api_key_response_index.xml"/>
 
 </databaseChangeLog>

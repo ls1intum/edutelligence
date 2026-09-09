@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     Numeric,
@@ -23,10 +24,27 @@ Base = declarative_base()
 
 # Enum definition
 class ThresholdLevel(enum.Enum):
+    """Privacy levels — the single ordered definition, most trusted first.
+
+    The declaration order IS the trust ordering (index 0 = strictest);
+    pipeline.py derives PRIVACY_ORDER from it and dbmanager.py derives the
+    validation set, so a new level added here is known to router and
+    registration at once. Mirrors the Postgres enum threshold_enum
+    (liquibase 000 + 024) and the webservice Java enum of the same name —
+    keep those in sync.
+
+    The axis is "how much do we trust this deployment with our data".
+    THIRD_PARTY_HARDWARE covers hardware outside operator control (e.g. a
+    personal Mac running the MLX worker, see logos-workernode/MACOS.md):
+    its owner can inspect the running processes, so it orders below every
+    cloud tier and LOCAL keeps meaning "our datacentre".
+    """
+
     LOCAL = "LOCAL"
+    CLOUD_IN_EU_BY_EU_PROVIDER = "CLOUD_IN_EU_BY_EU_PROVIDER"
     CLOUD_IN_EU_BY_US_PROVIDER = "CLOUD_IN_EU_BY_US_PROVIDER"
     CLOUD_NOT_IN_EU_BY_US_PROVIDER = "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
-    CLOUD_IN_EU_BY_EU_PROVIDER = "CLOUD_IN_EU_BY_EU_PROVIDER"
+    THIRD_PARTY_HARDWARE = "THIRD_PARTY_HARDWARE"
 
 
 class LoggingLevel(enum.Enum):
@@ -59,6 +77,10 @@ class CloudProviderType(enum.Enum):
     BEDROCK = "bedrock"
     DEEPSEEK = "deepseek"
     GROQ = "groq"
+    # Another Logos instance used as an upstream. It serves every surface this
+    # one does, including the Anthropic Messages API, so requests reach it
+    # unchanged instead of being translated into an OpenAI dialect.
+    LOGOS = "logos"
 
 
 class User(Base):
@@ -208,6 +230,11 @@ class LogEntry(Base):
     queue_depth_at_arrival = Column(Integer)
     utilization_at_arrival = Column(Numeric)
     queue_wait_ms = Column(Numeric)
+    # Whether the key's rate limiter admitted the request. NULL when no limit
+    # is configured (the request was never checked) or for pre-migration
+    # rows; FALSE for a request the limiter rejected after scheduling. The
+    # usage window counts everything except explicit FALSE.
+    rate_limit_admitted = Column(Boolean, nullable=True)
     was_cold_start = Column(Boolean, default=False)
     load_duration_ms = Column(Numeric)
     available_vram_mb = Column(Integer)
@@ -215,6 +242,8 @@ class LogEntry(Base):
     azure_rate_remaining_tokens = Column(Integer)
     result_status = Column(Enum(ResultStatus, name="result_status_enum"))
     error_message = Column(Text)
+    settled_cost_micro_cents = Column(BigInteger)
+    cost_finalized = Column(Boolean, nullable=False, default=False)
 
     usage_tokens = relationship("UsageTokens")
     api_key = relationship("ApiKey")
@@ -245,7 +274,10 @@ class TokenPrice(Base):
     valid_from = Column(TIMESTAMP(timezone=True), nullable=False)
     model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=True)
     provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=True)
-    price_per_k_token = Column(BigInteger, nullable=False)
+    price_per_k_unit = Column(BigInteger, nullable=False)
+    unit = Column(Text, nullable=False, server_default="token")
+    min_context_tokens = Column(BigInteger, nullable=False, server_default="0")
+    service_tier = Column(Text, nullable=False, server_default="default")
 
     token_type = relationship("TokenTypes")
 
@@ -306,3 +338,29 @@ class Job(Base):
     )
 
     api_key = relationship("ApiKey")
+
+
+class LatencyObservation(Base):
+    """Persistent EWMA state for the dynamic scheduler's LatencyStore.
+
+    Each row stores one EWMA keyed by (model_name, provider_id, tier).
+    ``tier`` is one of the ReadinessTier string values for load/wake overhead,
+    or the literal strings ``"ttft"``, ``"e2e"``, ``"prefill_per_token"``
+    for the per-model latency metrics.  The real provider_id is always stored.
+    """
+
+    __tablename__ = "latency_observations"
+    __table_args__ = (UniqueConstraint("model_name", "provider_id", "tier"),)
+
+    id = Column(Integer, primary_key=True)
+    model_name = Column(String, nullable=False)
+    provider_id = Column(Integer, nullable=False)
+    tier = Column(String, nullable=False)
+    ewma_value = Column(Float, nullable=False)
+    n = Column(Integer, nullable=False, default=1)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )

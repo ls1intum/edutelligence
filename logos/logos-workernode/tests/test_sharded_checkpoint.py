@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from logos_worker_node import sharded_checkpoint as sc
-from logos_worker_node.models import LaneConfig, OllamaConfig, VllmConfig, VllmEngineConfig
+from logos_worker_node.models import (
+    LaneConfig,
+    OllamaConfig,
+    VllmConfig,
+    VllmEngineConfig,
+    model_uses_sharded_checkpoint,
+)
 from logos_worker_node.vllm_process import VllmProcessHandle
 
 
@@ -31,14 +37,116 @@ def test_resolve_cache_root_prefers_env(monkeypatch) -> None:
     assert sc.resolve_cache_root("/models") == "/models"
 
 
-def test_resolve_vllm_python_picks_sibling(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_vllm_python_prefers_the_script_shebang_over_a_different_sibling(monkeypatch, tmp_path: Path) -> None:
+    """The regression: when the vllm script's shebang names a *different*
+    interpreter than the ``python`` sitting next to it, the resolver must follow
+    the shebang. The serving lane execs the vllm script, so it runs under exactly
+    that shebang interpreter — the sibling python is not authoritative, and the
+    version probe / converter must not be pointed at it instead."""
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    script_py = bin_dir / "python3.11"
+    script_py.write_text("#!/bin/sh\nexit 0\n")
+    script_py.chmod(0o755)
+    sibling_py = bin_dir / "python"  # present, but not what the script runs under
+    sibling_py.write_text("#!/bin/sh\nexit 0\n")
+    sibling_py.chmod(0o755)
+    vllm = bin_dir / "vllm"
+    vllm.write_text(f"#!{script_py}\nimport sys\n")
+    vllm.chmod(0o755)
+    monkeypatch.setattr("logos_worker_node.sharded_checkpoint.shutil.which", lambda _c: None)
+    assert sc.resolve_vllm_python(str(vllm)) == str(script_py)
+
+
+def test_resolve_vllm_python_resolves_an_env_shebang_via_path(monkeypatch, tmp_path: Path) -> None:
+    """A venv-style ``#!/usr/bin/env python3`` shebang names the interpreter by
+    name, so it is looked up via PATH — not by falling back to a (different)
+    sibling that happens to be present."""
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    env_py = bin_dir / "python3"
+    env_py.write_text("#!/bin/sh\nexit 0\n")
+    env_py.chmod(0o755)
+    decoy = bin_dir / "python"  # a sibling guess would land here, not on python3
+    decoy.write_text("#!/bin/sh\nexit 0\n")
+    decoy.chmod(0o755)
+    vllm = bin_dir / "vllm"
+    vllm.write_text("#!/usr/bin/env python3\nimport sys\n")
+    vllm.chmod(0o755)
+    # No `which` stub: the lane spawns with the script's own bin dir at the front
+    # of PATH, so the real lookup has to land on this venv's python3.
+    assert sc.resolve_vllm_python(str(vllm)) == str(env_py.resolve())
+
+
+def test_resolve_vllm_python_reads_an_env_shebang_against_the_serving_path(monkeypatch, tmp_path: Path) -> None:
+    """An ``env`` shebang must be resolved against the PATH the *lane* spawns
+    with, not this worker's.
+
+    ``_build_process_env`` prepends the vllm script's own bin dir to PATH before
+    exec'ing it, so ``#!/usr/bin/env python3.12`` runs the serving venv's
+    interpreter. Resolving that name against the worker's plain PATH instead
+    finds the worker's own python3.12 — a *different* vLLM — and would scope the
+    rejection record to a version that is not the one loading the checkpoint,
+    so an upgrade of the serving venv would never re-arm the conversion.
+
+    The interpreter is deliberately named ``python3.12``: the sibling-guess
+    fallback only ever looks for ``python``/``python3``, so it cannot supply the
+    right answer here and the test isolates the PATH lookup.
+    """
+    worker_bin = tmp_path / "worker" / "bin"
+    worker_bin.mkdir(parents=True)
+    decoy = worker_bin / "python3.12"  # what the worker's own PATH would find
+    decoy.write_text("#!/bin/sh\nexit 0\n")
+    decoy.chmod(0o755)
+
+    venv_bin = tmp_path / "vllmvenv" / "bin"
+    venv_bin.mkdir(parents=True)
+    serving_py = venv_bin / "python3.12"
+    serving_py.write_text("#!/bin/sh\nexit 0\n")
+    serving_py.chmod(0o755)
+    vllm = venv_bin / "vllm"
+    vllm.write_text("#!/usr/bin/env python3.12\nimport sys\n")
+    vllm.chmod(0o755)
+
+    monkeypatch.setenv("PATH", str(worker_bin))
+    assert sc.resolve_vllm_python(str(vllm)) == str(serving_py.resolve())
+
+
+def test_resolve_vllm_python_skips_env_option_operands(monkeypatch, tmp_path: Path) -> None:
+    """``#!/usr/bin/env -S -u PYTHONPATH python3``: ``-u`` takes ``PYTHONPATH``
+    as its operand, so the command ``env`` runs is ``python3`` — the resolver
+    must not mistake the operand for the interpreter name and look it up."""
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    env_py = bin_dir / "python3"
+    env_py.write_text("#!/bin/sh\nexit 0\n")
+    env_py.chmod(0o755)
+    decoy = bin_dir / "python"  # a sibling guess would land here, not on python3
+    decoy.write_text("#!/bin/sh\nexit 0\n")
+    decoy.chmod(0o755)
+    vllm = bin_dir / "vllm"
+    vllm.write_text("#!/usr/bin/env -S -u PYTHONPATH python3\nimport sys\n")
+    vllm.chmod(0o755)
+    looked_up: list[str] = []
+    real_which = sc.shutil.which
+    monkeypatch.setattr(
+        "logos_worker_node.sharded_checkpoint.shutil.which",
+        lambda name, path=None: (looked_up.append(name), real_which(name, path=path))[1],
+    )
+    assert sc.resolve_vllm_python(str(vllm)) == str(env_py.resolve())
+    assert looked_up == ["python3"]
+
+
+def test_resolve_vllm_python_falls_back_to_sibling_when_the_shebang_is_unreadable(monkeypatch, tmp_path: Path) -> None:
+    """Only when the script has no usable shebang is the neighbouring python a
+    fallback at all — there is nothing better to read the interpreter from."""
     bin_dir = tmp_path / "venv" / "bin"
     bin_dir.mkdir(parents=True)
     py = bin_dir / "python"
     py.write_text("#!/bin/sh\nexit 0\n")
     py.chmod(0o755)
     vllm = bin_dir / "vllm"
-    vllm.write_text("#!/bin/sh\nexit 0\n")
+    vllm.write_text("import vllm\n")  # no shebang line for the resolver to read
     vllm.chmod(0o755)
     monkeypatch.setattr("logos_worker_node.sharded_checkpoint.shutil.which", lambda _c: None)
     assert sc.resolve_vllm_python(str(vllm)) == str(py)
@@ -104,6 +212,43 @@ def test_ensure_no_shard_files_is_failure(tmp_path: Path, monkeypatch) -> None:
     assert out is None
 
 
+def test_effective_switch_defaults_to_the_worker_value() -> None:
+    for worker in (True, False):
+        ec = VllmEngineConfig(sharded_checkpoint_enabled=worker)
+        assert model_uses_sharded_checkpoint(ec, "org/Model-A") is worker
+
+
+def test_effective_switch_reads_a_model_override_both_ways() -> None:
+    """The calibration trigger has no lane config yet, so it resolves the
+    per-model value out of ``model_overrides`` itself. It must see an opt-in on
+    a disabled worker as well as an opt-out on an enabled one — the spawn path
+    answers the same, so a conversion the lane would never read is never run."""
+    disabled = VllmEngineConfig(
+        sharded_checkpoint_enabled=False,
+        model_overrides={"org/Model-A": {"sharded_checkpoint_enabled": True}},
+    )
+    assert model_uses_sharded_checkpoint(disabled, "org/Model-A") is True
+    assert model_uses_sharded_checkpoint(disabled, "org/Other") is False
+
+    enabled = VllmEngineConfig(
+        sharded_checkpoint_enabled=True,
+        model_overrides={"org/Model-A": {"sharded_checkpoint_enabled": False}},
+    )
+    assert model_uses_sharded_checkpoint(enabled, "org/Model-A") is False
+    assert model_uses_sharded_checkpoint(enabled, "org/Other") is True
+
+
+def test_effective_switch_prefers_the_value_already_merged_onto_the_lane() -> None:
+    """``_apply_model_vllm_overrides`` merges the override onto the lane's
+    vllm_config before spawn, so that value is what the lane was actually built
+    with and wins over a fresh lookup."""
+    ec = VllmEngineConfig(
+        sharded_checkpoint_enabled=True,
+        model_overrides={"org/Model-A": {"sharded_checkpoint_enabled": True}},
+    )
+    assert model_uses_sharded_checkpoint(ec, "org/Model-A", False) is False
+
+
 def _lane(tp: int, tmp_path: Path) -> LaneConfig:
     return LaneConfig(
         model="org/Model-A",
@@ -160,6 +305,63 @@ def test_maybe_prepare_skips_when_disabled(tmp_path: Path) -> None:
 
     asyncio.run(handle._maybe_prepare_sharded_checkpoint(lane))
     assert handle._sharded_model_dir is None
+
+
+def _ready_checkpoint(tmp_path: Path) -> Path:
+    ready = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    ready.mkdir(parents=True)
+    (ready / sc._COMPLETION_MARKER).write_text("ok")
+    return ready
+
+
+def _lane_with_override(tp: int, enabled: bool | None) -> LaneConfig:
+    return LaneConfig(
+        model="org/Model-A",
+        vllm=True,
+        gpu_devices="0,1",
+        vllm_config=VllmConfig(
+            tensor_parallel_size=tp,
+            enable_sleep_mode=True,
+            sharded_checkpoint_enabled=enabled,
+        ),
+    )
+
+
+def test_maybe_prepare_skips_a_model_that_opts_out(tmp_path: Path) -> None:
+    """A per-model ``sharded_checkpoint_enabled: false`` keeps *this* model on
+    the full checkpoint even though the worker-wide switch is on — the point of
+    the override is to exclude one quantization whose layout does not survive
+    the round trip without costing every other model on the node its cache."""
+    gc = OllamaConfig(models_path=str(tmp_path))
+    handle = VllmProcessHandle("lane-ov1", 19016, gc, VllmEngineConfig(sharded_checkpoint_enabled=True))
+    _ready_checkpoint(tmp_path)
+
+    asyncio.run(handle._maybe_prepare_sharded_checkpoint(_lane_with_override(2, False)))
+    assert handle._sharded_model_dir is None
+
+
+def test_maybe_prepare_honours_an_opt_in_over_a_disabled_worker(tmp_path: Path) -> None:
+    """The override wins in *both* directions: with the worker-wide switch off,
+    a model explicitly set to true still gets its sharded checkpoint. A one-way
+    opt-out would leave no way to trial the optimization per model on a node
+    where the default is off."""
+    gc = OllamaConfig(models_path=str(tmp_path))
+    handle = VllmProcessHandle("lane-ov2", 19017, gc, VllmEngineConfig(sharded_checkpoint_enabled=False))
+    ready = _ready_checkpoint(tmp_path)
+
+    asyncio.run(handle._maybe_prepare_sharded_checkpoint(_lane_with_override(2, True)))
+    assert handle._sharded_model_dir == str(ready)
+
+
+def test_maybe_prepare_unset_override_follows_the_worker_switch(tmp_path: Path) -> None:
+    """``None`` is not ``False``: an unset per-model value must fall through to
+    the worker-wide flag rather than reading as an opt-out."""
+    gc = OllamaConfig(models_path=str(tmp_path))
+    handle = VllmProcessHandle("lane-ov3", 19018, gc, VllmEngineConfig(sharded_checkpoint_enabled=True))
+    ready = _ready_checkpoint(tmp_path)
+
+    asyncio.run(handle._maybe_prepare_sharded_checkpoint(_lane_with_override(2, None)))
+    assert handle._sharded_model_dir == str(ready)
 
 
 def test_maybe_prepare_tp1_noop(tmp_path: Path) -> None:

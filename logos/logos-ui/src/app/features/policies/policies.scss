@@ -67,7 +67,8 @@
   &--local,
   &--eu-eu,
   &--eu-us,
-  &--non-eu {
+  &--non-eu,
+  &--third-party {
     background: rgb(var(--color-outline-200)  / var(--opacity-soft));
     color: rgb(var(--color-typography-300));
     border: 1px solid rgb(var(--color-outline-200)  / var(--opacity-border));

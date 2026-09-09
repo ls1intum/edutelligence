@@ -8,6 +8,7 @@ distributions from both engines on a single chart with matching density scale.
 Usage:
     python3 tests/performance/plot_ollama_vs_vllm.py
 """
+
 from __future__ import annotations
 
 import csv
