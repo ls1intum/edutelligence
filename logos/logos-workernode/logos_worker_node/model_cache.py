@@ -434,15 +434,31 @@ class ModelRamCache:
                 # entry now resident (size 0, as in the already-cached branch)
                 # — serving the lane from an over-floor entry would protect it
                 # (the lane reads it) and leave the lane's first sleep short of
-                # planned host RAM, so serve from disk instead. The entry
-                # stays in the cache and is evictable: the lane did not launch
-                # from it.
+                # planned host RAM, so serve from disk instead.
                 starves, host_available = self._would_starve_host(0)
                 if starves:
+                    # The re-plan that raised the floor could not evict this
+                    # copy in flight — reclaim() skips _caching_now (the
+                    # worker owns the half-written tree) — and nothing
+                    # re-plans when the copy lands: clearing _caching_now only
+                    # fires the completion event, whose waiters then fall
+                    # back to disk while the tree sits in tmpfs and
+                    # _cached_models until the next 60 s tick, still eating
+                    # the sleep reserve a lane may sleep into. Only this
+                    # post-copy check can give the RAM back at once, so evict
+                    # the completed entry before returning (we hold the
+                    # per-model lock, the same protection reclaim evicts
+                    # under; a live calibration reservation spares it, as in
+                    # reclaim — the next re-plan pass drops it when the
+                    # session ends).
+                    with self._cache_use_guard:
+                        if self._cache_use_refs.get(model_name, 0) == 0:
+                            self.evict(model_name)
                     logger.warning(
-                        "Model %s: cached, but host RAM (%d MB) is below the "
-                        "%d MB sleep reserve — loading from disk so the lane's "
-                        "first sleep has planned host RAM",
+                        "Model %s: copy finished but host RAM (%d MB) is below "
+                        "the %d MB sleep reserve — evicting the just-cached "
+                        "copy and loading from disk so the lane's first sleep "
+                        "has planned host RAM",
                         model_name,
                         host_available // (1024 * 1024),
                         self._host_ram_floor_bytes // (1024 * 1024),
@@ -529,13 +545,20 @@ class ModelRamCache:
         if ok:
             self._cached_models.add(model_name)
             # Same post-copy re-check as the async path: the reserve may have
-            # risen while the copy ran (see ensure_cached).
+            # risen while the copy ran (see ensure_cached). The evict is
+            # unconditional here — the only reservation that can be live on a
+            # tree this very call just wrote is the caller's own (calibration
+            # reserves before calling in), it is provisional, and it is being
+            # handed the source path, so nothing is reading the tree we
+            # remove.
             starves, host_available = self._would_starve_host(0)
             if starves:
+                self.evict(model_name)
                 logger.warning(
-                    "Model %s: cached, but host RAM (%d MB) is below the "
-                    "%d MB sleep reserve — loading from disk so the lane's "
-                    "first sleep has planned host RAM",
+                    "Model %s: copy finished but host RAM (%d MB) is below "
+                    "the %d MB sleep reserve — evicting the just-cached copy "
+                    "and loading from disk so the sleep reserve is free at "
+                    "once",
                     model_name,
                     host_available // (1024 * 1024),
                     self._host_ram_floor_bytes // (1024 * 1024),

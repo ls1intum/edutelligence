@@ -920,8 +920,11 @@ async def test_floor_raised_during_the_copy_is_served_from_disk(ram_cache_env, m
     under the raised reserve (the host is below the floor with the entry in
     place), the lane loads from the source HF_HOME instead of the tmpfs entry
     — serving it from the entry would protect it and leave the lane's first
-    sleep short of planned host RAM. The entry stays in the cache, evictable
-    because the lane did not launch from it."""
+    sleep short of planned host RAM. The just-landed copy is evicted at once
+    as well: the re-plan that raised the floor skipped the in-flight copy
+    (_caching_now), and nothing re-plans when the copy lands, so leaving the
+    tree resident would keep it eating the sleep reserve until the next
+    60 s tick."""
     cache = ModelRamCache(
         tmpfs_path=ram_cache_env["tmpfs"],
         source_hf_hub_path=ram_cache_env["source_hf"],
@@ -933,7 +936,8 @@ async def test_floor_raised_during_the_copy_is_served_from_disk(ram_cache_env, m
     result = await cache.ensure_cached(model)
 
     assert result == str(Path(ram_cache_env["source_hf"]).parent)
-    assert model in cache.cached_models()
+    assert model not in cache.cached_models()
+    assert not (Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B").exists()
 
 
 @pytest.mark.asyncio
@@ -957,7 +961,11 @@ async def test_copy_completed_under_a_reserve_the_host_still_clears_serves_the_c
 
 def test_ensure_cached_sync_rechecks_the_floor_after_its_own_copy(ram_cache_env, monkeypatch):
     """The sync path (used by calibration) applies the same re-check when the
-    reserve rises while its copy runs."""
+    reserve rises while its copy runs, and evicts the just-landed tree at
+    once (see test_floor_raised_during_the_copy_is_served_from_disk). The
+    caller's own cache-use reservation does not pin the tree: it is
+    provisional, and calibration releases it the moment this call hands back
+    the source path."""
     cache = ModelRamCache(
         tmpfs_path=ram_cache_env["tmpfs"],
         source_hf_hub_path=ram_cache_env["source_hf"],
@@ -969,7 +977,57 @@ def test_ensure_cached_sync_rechecks_the_floor_after_its_own_copy(ram_cache_env,
     result = cache.ensure_cached_sync(model)
 
     assert result == str(Path(ram_cache_env["source_hf"]).parent)
-    assert model in cache.cached_models()
+    assert model not in cache.cached_models()
+    assert not (Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B").exists()
+
+
+@pytest.mark.asyncio
+async def test_floor_raised_mid_background_copy_evicts_before_completion_is_signaled(ram_cache_env, monkeypatch):
+    """Interleaving regression: a reactive re-plan raises the floor while the
+    background copy is in flight. reclaim() deliberately skips _caching_now
+    (the worker owns the half-written tree), so that re-plan cannot evict
+    mid-copy — and when the copy lands, clearing _caching_now fires no
+    re-plan of its own. Without the post-copy evict, the just-landed tree
+    would sit in tmpfs and _cached_models, eating the sleep reserve, until
+    the next 60 s tick, and a lane may sleep into exactly that window. The
+    post-copy check must evict the completed entry BEFORE the worker signals
+    completion: a waiter woken by the event has to find the tree already
+    gone, not merely evicted by a later tick. (On the code that only returned
+    the source path, the tree was still present at the moment of the signal.)
+    """
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    tree = Path(ram_cache_env["tmpfs"]) / "hub" / _hf_model_dir_name(model)
+    _copy_with_floor_raised_midway(cache, monkeypatch, available_after=50 * 1024 * 1024)
+
+    # Observe the tree at the exact moment the worker signals completion —
+    # the moment a waiter such as wait_for_cached is woken.
+    event = cache._ensure_completion_event(model)  # noqa: SLF001
+    original_set = event.set
+    at_signal: dict[str, bool] = {}
+
+    def _record_then_set() -> None:
+        at_signal["tree_present"] = tree.exists()
+        original_set()
+
+    monkeypatch.setattr(event, "set", _record_then_set)
+
+    cache.start_background_caching([model])
+    got = await cache.wait_for_cached(model)
+
+    assert at_signal["tree_present"] is False, (
+        "the over-floor copy must be evicted before completion is signaled — "
+        "until the next re-plan tick it would eat the sleep reserve a lane "
+        "may sleep into"
+    )
+    assert got is False  # the waiter falls back to disk
+    assert model not in cache.cached_models()
+    assert not tree.exists()
+    await cache.stop_background_caching()
 
 
 def test_cache_use_reservation_is_reference_counted(ram_cache_env):
