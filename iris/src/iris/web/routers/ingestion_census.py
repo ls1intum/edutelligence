@@ -8,6 +8,7 @@ and a unit that any collection still knows about is reported even when its
 unit row is missing. The endpoint reads identity properties only.
 """
 
+import json
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends
@@ -16,6 +17,8 @@ from weaviate.classes.aggregate import GroupByAggregate
 from weaviate.classes.query import Metrics
 from weaviate.collections.classes.filters import Filter
 
+from iris.common.ingestion_version import INGESTION_PIPELINE_VERSION
+from iris.common.logging_config import get_logger
 from iris.dependencies import TokenValidator
 from iris.domain.ingestion.ingestion_census_dto import (
     IngestionCensusDTO,
@@ -33,6 +36,8 @@ from ...vector_database.lecture_unit_schema import LectureUnitSchema
 from ...vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion_census"])
 
@@ -90,6 +95,9 @@ def get_course_ingestion_census(
             LectureUnitSchema.LECTURE_ID.value,
             LectureUnitSchema.LECTURE_UNIT_ID.value,
             LectureUnitSchema.CONTENT_FINGERPRINT.value,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value,
+            LectureUnitSchema.PIPELINE_VERSION.value,
+            LectureUnitSchema.QUALITY_SCORE.value,
         ],
     ).objects
     for row in unit_rows:
@@ -100,6 +108,29 @@ def get_course_ingestion_census(
         entry.lecture_id = int(lecture_id) if lecture_id is not None else None
         entry.content_fingerprint = row.properties.get(
             LectureUnitSchema.CONTENT_FINGERPRINT.value
+        )
+        expected_counts = row.properties.get(
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value
+        )
+        if expected_counts:
+            # The census exists so Artemis can reconcile a possibly-inconsistent
+            # index; one unit's corrupt manifest must not abort the whole course.
+            try:
+                entry.expected_chunk_count = sum(json.loads(expected_counts).values())
+            except (ValueError, TypeError, AttributeError):
+                logger.warning(
+                    "Unit %s has an unparseable expected-chunk-count manifest; "
+                    "reporting it as unknown",
+                    lecture_unit_id,
+                )
+                entry.expected_chunk_count = None
+        pipeline_version = row.properties.get(LectureUnitSchema.PIPELINE_VERSION.value)
+        entry.pipeline_version = (
+            int(pipeline_version) if pipeline_version is not None else None
+        )
+        quality_score = row.properties.get(LectureUnitSchema.QUALITY_SCORE.value)
+        entry.quality_score = (
+            float(quality_score) if quality_score is not None else None
         )
 
     chunk_groups = _aggregate_by_unit(
@@ -165,5 +196,6 @@ def get_course_ingestion_census(
 
     return IngestionCensusDTO(
         courseId=course_id,
+        currentPipelineVersion=INGESTION_PIPELINE_VERSION,
         units=[units[unit_id] for unit_id in sorted(units)],
     )

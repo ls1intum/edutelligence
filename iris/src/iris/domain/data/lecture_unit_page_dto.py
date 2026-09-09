@@ -34,6 +34,16 @@ class LectureUnitPageDTO(BaseModel):
         default=None, alias="displayPageNumbers"
     )
     content_fingerprint: Optional[str] = Field(default=None, alias="contentFingerprint")
+    # Artemis sets this for quality re-ingestions: the structural skip checks are
+    # bypassed so unchanged content is genuinely re-processed, and the write path
+    # keeps the stored generation when the re-run scores worse.
+    force_reingest: bool = Field(default=False, alias="forceReingest")
+
+    # Internal run state, never part of the wire format.
+    ingestion_run_id: Optional[str] = Field(default=None, exclude=True)
+    chunk_counts_by_page: Optional[dict[int, int]] = Field(default=None, exclude=True)
+    quality_score: Optional[float] = Field(default=None, exclude=True)
+    quality_flags: Optional[list[str]] = Field(default=None, exclude=True)
 
     @field_validator("video_source_type", mode="before")
     @classmethod

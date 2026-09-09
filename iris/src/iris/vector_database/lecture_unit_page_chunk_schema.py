@@ -28,6 +28,7 @@ class LectureUnitPageChunkSchema(Enum):
     BASE_URL = "base_url"
     PAGE_VERSION = "attachment_version"
     HIDDEN_UNTIL = "hidden_until"
+    INGESTION_RUN_ID = "ingestion_run_id"
 
 
 def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
@@ -74,6 +75,19 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
                 description="UTC timestamp until which this slide is hidden from student-level retrieval",
                 data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+        )
+
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+                description=(
+                    "Id of the ingestion run that wrote this row; rows of "
+                    "other runs are swept after a successful write"
+                ),
+                data_type=DataType.TEXT,
                 index_searchable=False,
             ),
         )
@@ -146,6 +160,15 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
                 description="UTC timestamp until which this slide is hidden from student-level retrieval",
                 data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+                description=(
+                    "Id of the ingestion run that wrote this row; rows of "
+                    "other runs are swept after a successful write"
+                ),
+                data_type=DataType.TEXT,
                 index_searchable=False,
             ),
         ],

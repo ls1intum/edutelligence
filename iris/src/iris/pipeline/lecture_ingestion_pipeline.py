@@ -38,8 +38,9 @@ from ..llm import (
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
 from ..vector_database.batch_verify import (
-    raise_on_failed_batch_objects,
-    raise_on_failed_delete,
+    fetch_with_retry,
+    sweep_other_generations,
+    write_batch_with_retry,
 )
 from ..vector_database.database import batch_update_lock
 from ..vector_database.lecture_unit_page_chunk_schema import (
@@ -50,12 +51,18 @@ from ..vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
 )
+from ..vector_database.write_retry import WeaviateWriteRetry
 from ..web.status import ingestion_status_callback
 from . import Pipeline
+from .ingestion_quality import assess_page_chunks
 
 logger = get_logger(__name__)
 
 VISION_MAX_ATTEMPTS = 3
+
+# Reads above this many rows are treated as possibly truncated: the skip-check
+# then re-ingests rather than trusting a partial sample to look complete.
+_SKIP_CHECK_FETCH_LIMIT = 10_000
 
 
 _UNICODE_BULLETS = (
@@ -157,6 +164,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
             LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
             LectureUnitPageChunkSchema.HIDDEN_UNTIL.value: hidden_until,
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: lecture_unit_dto.ingestion_run_id,
         }
         for page_split in page_splits
     ]
@@ -208,6 +216,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.tokens = []
         self.course_language = None
         self._hidden_until_by_page: dict[int, object] = {}
+        self.skipped = False
+        self.kept_previous_generation = False
 
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
@@ -215,11 +225,15 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
             try:
                 doc = fitz.open(pdf_path)
-                if not self.check_if_attachment_needs_update(doc.page_count):
+                force_reingest = self.dto.lecture_unit.force_reingest
+                if not force_reingest and not self.check_if_attachment_needs_update(
+                    doc.page_count
+                ):
                     self.course_language = self.get_course_language(
                         doc.load_page(min(5, doc.page_count - 1)).get_text()
                     )
                     self.restore_display_page_numbers_from_existing_chunks()
+                    self.skipped = True
                     self.callback.update()
                     self.callback.update()
                     self.callback.update()
@@ -240,6 +254,25 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 )
             finally:
                 cleanup_temporary_file(pdf_path)
+            self._record_chunk_manifest_and_quality(chunks)
+            if force_reingest and self._previous_generation_scores_better():
+                # A quality re-run must never replace good content with worse:
+                # keep the stored generation and let the unit row record that
+                # this pipeline version was attempted, so the reconciler does
+                # not requeue the unit again for the same version.
+                logger.warning(
+                    "[%s] Quality re-ingestion scored %.4f, not better than the "
+                    "stored generation; keeping the stored chunks",
+                    self.dto.lecture_unit.lecture_unit_name,
+                    self.dto.lecture_unit.quality_score,
+                )
+                self._restore_stored_quality_expectations()
+                self.restore_display_page_numbers_from_existing_chunks()
+                self.kept_previous_generation = True
+                self.callback.update()
+                self.callback.update()
+                self.callback.update()
+                return self.course_language, self.tokens
             self.callback.update()
             prepared_chunks = self.embed_chunks(chunks)
             self.callback.update()
@@ -268,41 +301,147 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 tokens=list(self.tokens),
             ) from e
 
+    def _record_chunk_manifest_and_quality(self, chunks) -> None:
+        """Record the prepared per-page chunk counts and the quality verdict.
+
+        Both travel on the DTO into the unit row, so completeness stays
+        verifiable below page granularity and the quality verdict feeds the
+        versioned re-ingestion loop.
+        """
+        counts: dict[int, int] = {}
+        for chunk in chunks:
+            page_number = int(chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value])
+            counts[page_number] = counts.get(page_number, 0) + 1
+        self.dto.lecture_unit.chunk_counts_by_page = counts
+        score, flags = assess_page_chunks(chunks)
+        self.dto.lecture_unit.quality_score = score
+        self.dto.lecture_unit.quality_flags = flags
+
+    def _fetch_stored_unit_row_properties(self) -> dict:
+        units = self.lecture_unit_collection.query.fetch_objects(
+            filters=Filter.all_of(
+                [
+                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                        self.dto.settings.artemis_base_url
+                    ),
+                    Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
+                        self.dto.lecture_unit.course_id
+                    ),
+                    Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(
+                        self.dto.lecture_unit.lecture_id
+                    ),
+                    Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
+                        self.dto.lecture_unit.lecture_unit_id
+                    ),
+                ]
+            ),
+            limit=1,
+        ).objects
+        return units[0].properties if units else {}
+
+    def _previous_generation_scores_better(self) -> bool:
+        """True when the stored generation's quality beats this run's result."""
+        stored = self._fetch_stored_unit_row_properties()
+        stored_score = stored.get(LectureUnitSchema.QUALITY_SCORE.value)
+        new_score = self.dto.lecture_unit.quality_score
+        if stored_score is None or new_score is None:
+            return False
+        self._stored_unit_row_properties = stored
+        return float(stored_score) > float(new_score)
+
+    def _restore_stored_quality_expectations(self) -> None:
+        """Carry the kept generation's manifest and verdict onto this run's DTO."""
+        stored = getattr(self, "_stored_unit_row_properties", None) or {}
+        stored_counts = stored.get(LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value)
+        if stored_counts:
+            self.dto.lecture_unit.chunk_counts_by_page = {
+                int(page): int(count)
+                for page, count in json.loads(stored_counts).items()
+            }
+        else:
+            self.dto.lecture_unit.chunk_counts_by_page = None
+        stored_score = stored.get(LectureUnitSchema.QUALITY_SCORE.value)
+        self.dto.lecture_unit.quality_score = (
+            float(stored_score) if stored_score is not None else None
+        )
+        stored_flags = stored.get(LectureUnitSchema.QUALITY_FLAGS.value)
+        self.dto.lecture_unit.quality_flags = (
+            json.loads(stored_flags) if stored_flags else None
+        )
+
     def check_if_attachment_needs_update(self, page_count: int) -> bool:
         """Decide structurally whether the stored chunks are current and complete.
 
         Skipping is only safe when every stored chunk carries the current
         attachment version (a None version is a legacy row, and inequality
-        instead of "less than" also re-ingests after a version rollback) AND
-        the chunks cover exactly pages 1..page_count. A partially ingested
-        unit therefore self-heals through re-ingestion on its next dispatch.
+        instead of "less than" also re-ingests after a version rollback), the
+        chunks cover exactly pages 1..page_count, all rows belong to a single
+        ingestion generation (mixed run ids mean a crashed write left old and
+        new rows side by side), and the stored per-page chunk counts match
+        exactly when the unit row recorded them (a crash inside a batch flush
+        can drop chunks below page granularity). A partially ingested unit
+        therefore self-heals through re-ingestion on its next dispatch.
         """
-        chunks = self.collection.query.fetch_objects(
-            filters=self._get_page_chunk_filter(),
-            limit=10_000,
-            return_properties=[
-                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
-                LectureUnitPageChunkSchema.PAGE_VERSION.value,
-            ],
+        chunks = fetch_with_retry(
+            lambda: self.collection.query.fetch_objects(
+                filters=self._get_page_chunk_filter(),
+                limit=_SKIP_CHECK_FETCH_LIMIT,
+                return_properties=[
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.PAGE_VERSION.value,
+                    LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+                ],
+            )
         ).objects
 
         if not chunks:
             return True
 
+        # A truncated read must never look "complete" and skip a genuinely
+        # incomplete unit. If we hit the cap, re-ingest rather than trust a
+        # possibly partial sample.
+        if len(chunks) >= _SKIP_CHECK_FETCH_LIMIT:
+            return True
+
         pages: set[int] = set()
+        counts_by_page: dict[int, int] = {}
+        run_ids: set = set()
         for chunk in chunks:
             version = chunk.properties.get(
                 LectureUnitPageChunkSchema.PAGE_VERSION.value
             )
             if version is None or version != self.dto.lecture_unit.attachment_version:
                 return True
+            run_ids.add(
+                chunk.properties.get(LectureUnitPageChunkSchema.INGESTION_RUN_ID.value)
+            )
             page_number = chunk.properties.get(
                 LectureUnitPageChunkSchema.PAGE_NUMBER.value
             )
             if page_number is not None:
                 pages.add(int(page_number))
+                counts_by_page[int(page_number)] = (
+                    counts_by_page.get(int(page_number), 0) + 1
+                )
 
-        return pages != set(range(1, page_count + 1))
+        if len(run_ids) > 1:
+            return True
+
+        if pages != set(range(1, page_count + 1)):
+            return True
+
+        expected_counts = self._stored_expected_chunk_counts()
+        if expected_counts is not None and expected_counts != counts_by_page:
+            return True
+        return False
+
+    def _stored_expected_chunk_counts(self) -> Optional[dict[int, int]]:
+        """Per-page chunk counts the last certified run recorded on the unit row."""
+        stored = self._fetch_stored_unit_row_properties()
+        serialized = stored.get(LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value)
+        if not serialized:
+            return None
+        return {int(page): int(count) for page, count in json.loads(serialized).items()}
 
     def _get_page_chunk_filter(self):
         page_chunk_filter = Filter.by_property(
@@ -392,9 +531,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     def embed_chunks(self, chunks):
         """Embed all chunks before any write, outside the shared write lock."""
         prepared_chunks = []
+        total = len(chunks)
         for i, chunk in enumerate(chunks):
             if i % 10 == 0:
-                self.callback.update()
+                self.callback.update(
+                    stage_name="embedding", stage_progress=i, stage_total=total
+                )
             embedding = self.llm_embedding.embed(
                 chunk[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]
             )
@@ -402,22 +544,31 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return prepared_chunks
 
     def replace_chunks(self, prepared_chunks):
-        """Atomically swap the unit's page chunks for the prepared ones.
+        """Swap in this run's generation of page chunks: write new, then sweep.
 
-        All fallible LLM work is done by now, so the delete-then-insert window
-        is a few seconds of Weaviate calls instead of the whole vision and
-        embedding phase. Both halves are verified: a failed delete or a dropped
-        batch object fails the run rather than leaving a partial unit.
+        All fallible LLM work is done by now. The new generation is inserted
+        and verified first, and only then is everything that does not belong
+        to this run removed (the previous generation, legacy rows, leftovers
+        of crashed runs). A crash mid-write therefore never destroys the old
+        content: at worst both generations coexist briefly, and the next
+        run's sweep or the structural skip check (which rejects mixed
+        generations) converges the unit.
         """
         with batch_update_lock:
-            delete_result = self.collection.data.delete_many(
-                where=self._get_page_chunk_filter()
+            # One retry budget for the whole swap: a transient store condition
+            # re-submits only the dropped chunks, never the vision/embedding work.
+            retry = WeaviateWriteRetry.for_request()
+            write_batch_with_retry(
+                self.collection, prepared_chunks, "lecture page chunks", retry=retry
             )
-            raise_on_failed_delete(delete_result, "outdated lecture page chunks")
-            with self.collection.batch.rate_limit(requests_per_minute=600) as batch:
-                for chunk, embedding in prepared_chunks:
-                    batch.add_object(properties=chunk, vector=embedding)
-            raise_on_failed_batch_objects(self.collection, "lecture page chunks")
+            sweep_other_generations(
+                self.collection,
+                self._get_page_chunk_filter(),
+                LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+                self.dto.lecture_unit.ingestion_run_id,
+                "outdated lecture page chunks",
+                retry=retry,
+            )
 
     def chunk_data(
         self,
@@ -441,7 +592,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         old_page_text = ""
         display_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
-            self.callback.update()
+            self.callback.update(
+                stage_name="vision",
+                stage_progress=page_num + 1,
+                stage_total=doc.page_count,
+            )
             page = doc.load_page(page_num)
             page_text = page.get_text()
 

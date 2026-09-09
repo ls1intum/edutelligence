@@ -1,4 +1,5 @@
-"""Regression tests for PR 660 review feedback."""
+"""Regression tests for ingestion robustness: deletion retries, the
+transcription write path, and webhook worker failure reporting."""
 
 # pylint: skip-file
 
@@ -69,11 +70,12 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
         def __exit__(self, *_args):
             lock.inside = False
 
-    def update():
+    def update(**_kwargs):
         assert lock.inside is False
 
-    def delete_inside_lock(_transcription):
+    def sweep_fetch_inside_lock(**_kwargs):
         assert lock.inside is True
+        return SimpleNamespace(objects=[])
 
     batch = MagicMock()
     dynamic_context = MagicMock()
@@ -83,13 +85,17 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
         batch=SimpleNamespace(
             dynamic=MagicMock(return_value=dynamic_context),
             failed_objects=[],
-        )
+        ),
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(side_effect=sweep_fetch_inside_lock)
+        ),
+        data=SimpleNamespace(delete_many=MagicMock()),
     )
     pipeline.callback = SimpleNamespace(update=MagicMock(side_effect=update))
     pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
-    pipeline.dto = SimpleNamespace(lecture_unit=_lecture_unit())
-    pipeline.delete_existing_transcription_data = MagicMock(
-        side_effect=delete_inside_lock
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=_lecture_unit(),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
     chunk = {LectureTranscriptionSchema.SEGMENT_TEXT.value: "transcript"}
 
@@ -100,7 +106,10 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
         pipeline.batch_insert([chunk])
 
     pipeline.callback.update.assert_called_once()
-    pipeline.delete_existing_transcription_data.assert_called_once()
+    # The generation sweep reads and (if needed) deletes inside the lock;
+    # without stale rows nothing is deleted.
+    pipeline.collection.query.fetch_objects.assert_called_once()
+    pipeline.collection.data.delete_many.assert_not_called()
     batch.add_object.assert_called_once_with(properties=chunk, vector=[0.1])
 
 

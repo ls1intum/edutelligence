@@ -5,6 +5,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
+from weaviate.exceptions import UnexpectedStatusCodeError
+from weaviate.util import generate_uuid5
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
@@ -20,7 +22,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
-from iris.vector_database.batch_verify import raise_on_failed_delete
+from iris.vector_database.batch_verify import delete_many_with_retry
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -33,6 +35,7 @@ from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,
 )
+from iris.vector_database.write_retry import WeaviateWriteRetry
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
@@ -88,12 +91,19 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
     @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
+        # One shared retry budget for every segment write and the stale prune.
+        self._retry = WeaviateWriteRetry.for_request()
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
+        total_slides = slide_number_end - slide_number_start + 1
         for slide_index in range(slide_number_start, slide_number_end + 1):
             if self.callback is not None:
-                self.callback.update()
+                self.callback.update(
+                    stage_name="segment-summaries",
+                    stage_progress=slide_index - slide_number_start + 1,
+                    stage_total=total_slides,
+                )
             transcriptions = self._get_transcriptions(slide_index)
             # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
             # stores one object per page chunk after splitting the page text. That is
@@ -147,10 +157,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 ),
             ]
         )
-        delete_result = self.lecture_unit_segment_collection.data.delete_many(
-            where=stale_filter
+        delete_result = delete_many_with_retry(
+            self.lecture_unit_segment_collection,
+            stale_filter,
+            "stale lecture unit segments",
+            retry=getattr(self, "_retry", None),
         )
-        raise_on_failed_delete(delete_result, "stale lecture unit segments")
         if delete_result.matches:
             logger.info(
                 "[%s / unit %d] Pruned %d stale segment(s) outside slides %d-%d",
@@ -288,6 +300,24 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         except Exception as e:
             raise e
 
+    def _segment_uuid(self, slide_number: int) -> str:
+        """Deterministic id for a unit's slide segment.
+
+        Deriving the id from the stable identity (base_url, course, lecture,
+        unit, slide) makes the write idempotent: a retry after an ambiguous
+        timeout — where the server actually committed the insert — replaces the
+        same object instead of creating a duplicate row for the slide.
+        """
+        return generate_uuid5(
+            {
+                "base_url": self.lecture_unit_dto.base_url,
+                "course_id": self.lecture_unit_dto.course_id,
+                "lecture_id": self.lecture_unit_dto.lecture_id,
+                "lecture_unit_id": self.lecture_unit_dto.lecture_unit_id,
+                "page_number": slide_number,
+            }
+        )
+
     def _upsert_lecture_object(
         self,
         slide_number: int,
@@ -295,91 +325,35 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         display_page_number: int,
         hidden_until=None,
     ):
-        lecture_filter = Filter.by_property(
-            LectureUnitSegmentSchema.COURSE_ID.value
-        ).equal(self.lecture_unit_dto.course_id)
-        lecture_filter &= Filter.by_property(
-            LectureUnitSegmentSchema.LECTURE_ID.value
-        ).equal(self.lecture_unit_dto.lecture_id)
-        lecture_filter &= Filter.by_property(
-            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
-        ).equal(self.lecture_unit_dto.lecture_unit_id)
-        lecture_filter &= Filter.by_property(
-            LectureUnitSegmentSchema.PAGE_NUMBER.value
-        ).equal(slide_number)
-        if self.lecture_unit_dto.base_url is not None:
-            lecture_filter &= Filter.by_property(
-                LectureUnitSegmentSchema.BASE_URL.value
-            ).equal(self.lecture_unit_dto.base_url)
+        retry = getattr(self, "_retry", None) or WeaviateWriteRetry.for_request()
+        segment_uuid = self._segment_uuid(slide_number)
+        properties = {
+            LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
+            LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
+            LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
+            LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
+            LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
+            LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
+            LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
+            LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value: self.lecture_unit_dto.content_fingerprint,
+        }
+        embedding = self.llm_embedding.embed(summary)
 
-        lectures = self.lecture_unit_segment_collection.query.fetch_objects(
-            filters=lecture_filter, limit=1
-        ).objects
+        def upsert():
+            # Insert under the deterministic id; if it already exists (a prior
+            # attempt landed, or a previous run wrote this slide) replace it in
+            # place. Both paths are idempotent, so retrying is duplicate-safe.
+            try:
+                self.lecture_unit_segment_collection.data.insert(
+                    uuid=segment_uuid, properties=properties, vector=embedding
+                )
+            except UnexpectedStatusCodeError as error:
+                if "already exists" in str(error).lower():
+                    self.lecture_unit_segment_collection.data.replace(
+                        uuid=segment_uuid, properties=properties, vector=embedding
+                    )
+                else:
+                    raise
 
-        # transcriptions = self._get_transcriptions(slide_number)
-        # slides = self._get_slides(slide_number)
-
-        if len(lectures) == 0:
-            # Insert new lecture
-            self.lecture_unit_segment_collection.data.insert(
-                properties={
-                    LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
-                    LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
-                    LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
-                    LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                    LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
-                    LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-                    LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
-                    LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
-                },
-                vector=self.llm_embedding.embed(summary),
-            )
-            # lecture = self.lecture_unit_segment_collection.query
-            # .fetch_objects(filters=lecture_filter, limit=1).objects[0]
-            # transcription_references = []
-            # for transcription in transcriptions.objects:
-            #     transcription_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.value,
-            #         to_uuid=transcription.uuid.int
-            #     )
-            #     transcription_references.append(transcription_reference)
-            # slide_references = []
-            # for slide in slides.objects:
-            #     slide_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.SLIDES.value,
-            #         to_uuid=slide.uuid.int
-            #     )
-            #     slide_references.append(slide_reference)
-            #
-            # self.lecture_unit_segment_collection.data.reference_add_many(transcription_references)
-            # self.lecture_unit_segment_collection.data.reference_add_many(slide_references)
-            return
-
-        # Update existing lecture
-        # transcription_uuids = [t.uuid for t in transcriptions]
-        # slide_uuids = [s.uuid for s in slides]
-        lecture_uuid = lectures[0].uuid
-
-        self.lecture_unit_segment_collection.data.update(
-            uuid=lecture_uuid,
-            properties={
-                LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-                LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
-            },
-            vector=self.llm_embedding.embed(summary),
-        )
-
-        # self.lecture_unit_segment_collection.data.reference_replace(
-        #     from_uuid=lecture_uuid,
-        #     from_property=LectureUnitSegmentSchema.TRANSCRIPTIONS.value,
-        #     to=transcription_uuids
-        # )
-        #
-        # self.lecture_unit_segment_collection.data.reference_replace(
-        #     from_uuid=lecture_uuid,
-        #     from_property=LectureUnitSegmentSchema.SLIDES.value,
-        #     to=slide_uuids
-        # )
+        retry.run(upsert, description=f"segment upsert slide {slide_number}")

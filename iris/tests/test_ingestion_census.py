@@ -99,7 +99,7 @@ def test_census_wire_format_uses_camel_case():
         census = get_course_ingestion_census(1, base_url="https://artemis.example")
 
     dumped = census.model_dump(by_alias=True)
-    assert dumped == {"courseId": 1, "units": []}
+    assert dumped == {"courseId": 1, "currentPipelineVersion": 1, "units": []}
 
 
 def test_unit_pipeline_stamps_the_fingerprint_verbatim():

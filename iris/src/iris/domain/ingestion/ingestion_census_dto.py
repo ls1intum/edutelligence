@@ -14,6 +14,11 @@ class IngestionCensusUnitDTO(BaseModel):
     lecture_unit_id: int = Field(alias="lectureUnitId")
     content_fingerprint: Optional[str] = Field(default=None, alias="contentFingerprint")
     unit_row_count: int = Field(default=0, alias="unitRowCount")
+    expected_chunk_count: Optional[int] = Field(
+        default=None, alias="expectedChunkCount"
+    )
+    pipeline_version: Optional[int] = Field(default=None, alias="pipelineVersion")
+    quality_score: Optional[float] = Field(default=None, alias="qualityScore")
     chunk_count: int = Field(default=0, alias="chunkCount")
     chunk_page_min: Optional[int] = Field(default=None, alias="chunkPageMin")
     chunk_page_max: Optional[int] = Field(default=None, alias="chunkPageMax")
@@ -35,4 +40,7 @@ class IngestionCensusDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     course_id: int = Field(alias="courseId")
+    current_pipeline_version: Optional[int] = Field(
+        default=None, alias="currentPipelineVersion"
+    )
     units: list[IngestionCensusUnitDTO] = Field(default_factory=list)

@@ -17,10 +17,16 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         lecture_id=12,
         lecture_unit_id=13,
         display_page_numbers=None,
+        force_reingest=False,
     )
     pipeline.dto = SimpleNamespace(
         lecture_unit=lecture_unit,
         settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        )
     )
     pipeline.callback = SimpleNamespace(
         update=MagicMock(),
