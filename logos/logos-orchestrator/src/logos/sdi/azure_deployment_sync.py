@@ -113,7 +113,24 @@ def _warn_if_not_an_azure_endpoint(provider: Dict[str, Any]) -> None:
     empty, with the Azure listing failure as the only hint. Say plainly which
     provider it is and what to change.
     """
-    host = urlsplit(provider.get("base_url") or "").hostname or ""
+    base_url = provider.get("base_url") or ""
+    try:
+        host = urlsplit(base_url).hostname or ""
+    except ValueError:
+        # A bracketed authority that is not a valid IPv6 literal — "https://[x"
+        # — raises rather than returning None. This runs before any provider is
+        # synced and outside the per-provider guard, so letting it escape would
+        # abort the whole pass, and the initial one is awaited inline by
+        # start(): a single malformed base_url would take orchestrator startup
+        # down with it. It is also its own kind of misconfiguration, so it is
+        # reported rather than swallowed.
+        logger.warning(
+            "Azure deployment sync: provider %s (%s) has an unparseable base_url %r; it cannot be queried",
+            provider.get("id"),
+            provider.get("name"),
+            base_url,
+        )
+        return
     if host.lower().rstrip(".").endswith("azure.com"):
         return
     logger.warning(
