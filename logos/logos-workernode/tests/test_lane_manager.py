@@ -3484,3 +3484,88 @@ async def test_restart_lane_releases_startup_reservation_on_spawn_failure(monkey
 
     assert lane_id not in manager._handles  # noqa: SLF001
     assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(monkeypatch) -> None:
+    """A successful Phase-2 restart re-plans for the replacement model. If a
+    LATER add in the same apply then aborts, _rollback_unlocked restores the
+    original handles — but the final re-plan was suppressed because rolled_back
+    was true, so the host-RAM floor stayed sized to the PARTIALLY applied
+    desired state. The re-plan must run after the completed rollback, against
+    the restored lane set: the restored model's sleeping footprint (here, a
+    LARGER one) is what must become the final floor, before its first sleep and
+    well before the 60 s tick.
+
+    The hook records, at each re-plan, which model the lane currently runs —
+    that is the footprint the floor is computed from. Pre-fix the sequence is
+    ["org/small"] only (the restart re-plan); post-fix it is
+    ["org/small", "org/big"] (the post-rollback re-plan sees the restored
+    model).
+    """
+    big = LaneConfig(model="org/big", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True))
+    small = LaneConfig(model="org/small", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True))
+    to_add = LaneConfig(model="org/add", vllm=True, lane_id="org_b", vllm_config=VllmConfig(enable_sleep_mode=True))
+
+    manager = LaneManager(OllamaConfig(), nvidia_smi_available=lambda: True)
+    # Existing lane A runs the BIG model (the one the rollback must restore).
+    manager._handles["org_a"] = SimpleNamespace(  # noqa: SLF001
+        lane_id="org_a",
+        lane_config=big,
+        status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+    )
+    manager._port_alloc._used["org_a"] = 15071  # noqa: SLF001
+
+    replan_models: list[str] = []
+
+    async def _hook() -> None:
+        h = manager._handles.get("org_a")  # noqa: SLF001
+        replan_models.append(h.lane_config.model if h is not None and h.lane_config else "")
+
+    manager._on_lane_added = _hook  # noqa: SLF001
+
+    async def _fake_restart(lid: str, new_lc: LaneConfig) -> None:
+        # A successful Phase-2 restart: swap in the replacement model and
+        # re-plan for it (as _restart_lane_unlocked does at its tail).
+        manager._handles[lid] = SimpleNamespace(  # noqa: SLF001
+            lane_id=lid,
+            lane_config=new_lc,
+            status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+        )
+        await manager._notify_lane_added()
+
+    async def _fake_add(_lid: str, _lc: LaneConfig) -> None:
+        # The later add fails, forcing the rollback.
+        raise RuntimeError("simulated add failure")
+
+    async def _fake_sleep(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    async def _fake_rollback(_removed, _added_ids, restarted_ids, snapshot) -> None:
+        # Restore restarted lanes from the original snapshot (the big model).
+        for lid in restarted_ids:
+            orig = snapshot.get(lid)
+            if orig is not None:
+                _, orig_lc, _port = orig
+                if orig_lc is not None:
+                    manager._handles[lid] = SimpleNamespace(  # noqa: SLF001
+                        lane_id=lid,
+                        lane_config=orig_lc,
+                        status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+                    )
+
+    monkeypatch.setattr(manager, "_restart_lane_unlocked", _fake_restart)
+    monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)
+    monkeypatch.setattr(manager, "_sleep_handle_and_replan", _fake_sleep)
+    monkeypatch.setattr(manager, "_rollback_unlocked", _fake_rollback)
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    result = await manager.apply_lanes([small, to_add])
+
+    assert result.success is False
+    assert result.rolled_back is True
+    # The rollback restored the original (big) model.
+    assert manager._handles["org_a"].lane_config.model == "org/big"  # noqa: SLF001
+    # The restart re-planned for the replacement model, and the post-rollback
+    # re-plan saw the RESTORED model — its footprint is the final floor.
+    assert replan_models == ["org/small", "org/big"]
