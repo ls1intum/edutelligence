@@ -803,6 +803,7 @@
 
 .log-selector {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 4px 4px 12px;
@@ -847,11 +848,17 @@
   }
 }
 
+.log-selector__actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 12px;
+  margin-left: auto;
+}
+
 .btn-copy-log {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-left: auto;
   padding: 5px 12px;
   border-radius: 8px;
   border: 1px solid rgb(var(--color-outline-200));
@@ -885,6 +892,13 @@
   }
 }
 
+.log-fetch-error {
+  margin: 0;
+  padding: 8px 4px 0;
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-sm);
+}
+
 .log-viewer {
   margin: 0;
   padding: 0;
@@ -905,6 +919,20 @@
   padding: 1rem 12px;
   color: rgb(var(--color-typography-700));
   font-style: italic;
+}
+
+.log-summary {
+  padding: 16px;
+  font-family: var(--font-family-base, sans-serif);
+  line-height: var(--line-height-normal);
+
+  .calibration-status {
+    margin: 0 0 16px;
+  }
+
+  .serving-command {
+    margin-top: 20px;
+  }
 }
 
 .log-line {
@@ -942,8 +970,10 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  margin: 12px;
   padding: 10px 14px;
+  font-family: var(--font-family-base, sans-serif);
+  font-size: var(--font-size-sm);
   border:
     1px solid
     rgb(

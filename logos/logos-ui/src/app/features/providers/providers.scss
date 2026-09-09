@@ -200,6 +200,24 @@
   &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 }
 
+.created-key-intro {
+  margin: 0 0 4px;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+
+  strong { color: rgb(var(--color-typography-0)); }
+}
+
+.created-key-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: stretch;
+
+  .field-input { font-family: var(--font-family-mono, monospace); font-size: var(--font-size-sm); }
+}
+
 @media (max-width: 768px) {
   .providers { padding: 24px 16px 32px; }
 

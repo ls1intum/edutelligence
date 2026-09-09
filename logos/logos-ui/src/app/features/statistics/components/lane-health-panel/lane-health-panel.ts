@@ -69,6 +69,74 @@ function runningLabel(
   return b > c ? `${a} / ${b} (min. ${c})` : `${a} / ${b}`;
 }
 
+/** Lane states that do not count towards a model's live replica count. */
+const NOT_LIVE_STATES = new Set(['stopped', 'error']);
+
+/**
+ * Live lanes per model (keyed by the lower-cased, trimmed model name).
+ *
+ * Stopped and error lanes are not counted — they serve no requests — so the
+ * picker's badge agrees with what the capacity planner schedules: a model
+ * whose one lane is in error reads as not running, and loading it again
+ * allocates it a fresh lane id rather than the broken lane's.
+ */
+export function countLiveLanesByModel(
+  lanes: Record<string, LaneSignalData>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const lane of Object.values(lanes)) {
+    if (NOT_LIVE_STATES.has(lane.runtime_state)) continue;
+    const key = (lane.model ?? '').trim().toLowerCase();
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Models the "Load lane" picker still offers.
+ *
+ * Every provider model is offered, loaded or not: a model that already runs
+ * lanes on the node may take one more (multiple deployments of one model per
+ * node are supported), and the worker's own VRAM is the final word on
+ * whether the copy fits. The only model withheld is one whose load was just
+ * accepted and whose lane has not shown up in the status stream yet (that
+ * takes minutes) — offering it again would invite a second click on the very
+ * lane the first request is still bringing up.
+ */
+export function filterLoadableModels(
+  models: ProviderModel[],
+  acceptedModel: string | null,
+): ProviderModel[] {
+  const key = (acceptedModel ?? '').trim().toLowerCase();
+  return models.filter((m) => m.model_name && m.model_name.trim().toLowerCase() !== key);
+}
+
+/**
+ * Whether the "load accepted" note can go.
+ *
+ * The note is keyed to the lane ids the provider reported when the load was
+ * accepted, not to the model name: a model that already ran lanes keeps them
+ * reporting while the accepted copy is still minutes away, and those siblings
+ * must not end the note — that would re-offer the model before the lane it
+ * just asked for has shown up. The note drops only when a lane of the model
+ * appears under an id that was not among them: that lane is the accepted
+ * replica itself, in whatever state it reports (one that arrived is served
+ * by its own row now, one that landed in error is gone and may be offered
+ * again).
+ */
+export function acceptedModelIsResolved(
+  acceptedModel: string,
+  acceptedLaneIds: Iterable<string>,
+  lanes: Record<string, LaneSignalData>,
+): boolean {
+  const wanted = acceptedModel.trim().toLowerCase();
+  const snapshot = new Set(acceptedLaneIds);
+  return Object.entries(lanes).some(
+    ([laneId, lane]) => !snapshot.has(laneId) && (lane.model ?? '').trim().toLowerCase() === wanted,
+  );
+}
+
 export interface LaneRow {
   laneId: string;
   lane: LaneSignalData;
@@ -151,6 +219,9 @@ export class LaneHealthPanel implements OnChanges {
   addError = signal<string | null>(null);
   /** Model whose background load was accepted and has not shown up as a lane yet. */
   acceptedModel = signal<string | null>(null);
+  /** Lane ids the provider reported when the load was accepted — the baseline
+   *  acceptedModelIsResolved() checks the stream against. */
+  private acceptedLaneIds: Set<string> | null = null;
   /** Fetched model lists, keyed by provider id — never shared across providers. */
   private readonly modelsByProvider = new Map<number, ProviderModel[]>();
   private readonly modelsInFlight = new Set<number>();
@@ -230,22 +301,28 @@ export class LaneHealthPanel implements OnChanges {
     return this.canUnload;
   }
 
-  /**
-   * Models that don't already have a lane (lanes are keyed by model name).
-   *
-   * A model whose load was accepted counts as taken until its lane shows up in
-   * the status stream, which takes minutes: leaving it selectable invites a
-   * second load of the very lane the first request is still bringing up.
-   */
-  get loadableModels(): ProviderModel[] {
+  /** Live lane count per model for the visible provider — see countLiveLanesByModel(). */
+  get liveLaneCounts(): Map<string, number> {
     const name = this.providerName;
     const lanes = name ? (this.lanesByProvider[name] ?? {}) : {};
-    const taken = new Set(Object.values(lanes).map((l) => (l.model ?? '').trim().toLowerCase()));
-    const accepted = this.acceptedModel();
-    if (accepted) taken.add(accepted.trim().toLowerCase());
-    return this.loadModels().filter(
-      (m) => m.model_name && !taken.has(m.model_name.trim().toLowerCase()),
-    );
+    return countLiveLanesByModel(lanes);
+  }
+
+  /**
+   * Models that may still be loaded on this provider.
+   *
+   * A model with live lanes stays offered — loading it adds another
+   * deployment on the node. An accepted load whose lane has not shown up in
+   * the status stream yet is withheld until it appears.
+   */
+  get loadableModels(): ProviderModel[] {
+    return filterLoadableModels(this.loadModels(), this.acceptedModel());
+  }
+
+  /** Live lanes the model already runs here — "(2 lanes)", null when none. */
+  laneCountLabel(modelName: string): string | null {
+    const count = this.liveLaneCounts.get(modelName.trim().toLowerCase()) ?? 0;
+    return count === 1 ? '(1 lane)' : count > 1 ? `(${count} lanes)` : null;
   }
 
   minKvPct(pct: number): number {
@@ -396,20 +473,24 @@ export class LaneHealthPanel implements OnChanges {
       this.loadModels.set([]);
       this.modelsLoading.set(false);
       this.acceptedModel.set(null);
+      this.acceptedLaneIds = null;
     }
     // The lane the operator asked for has arrived in the status stream — the
-    // row itself now reports its state, so the pending note has nothing to add.
+    // row itself now reports its state, so the pending note has nothing to
+    // add. Sibling lanes of the model do not count: the note is keyed to the
+    // lane ids present when the load was accepted, so it stays up until the
+    // accepted replica shows up under a fresh id of its own.
     const accepted = this.acceptedModel();
-    if (accepted !== null && changes['lanesByProvider'] && this.hasLaneFor(accepted)) {
-      this.acceptedModel.set(null);
+    const baseline = this.acceptedLaneIds;
+    if (accepted !== null && baseline !== null && changes['lanesByProvider']) {
+      const name = this.providerName;
+      if (
+        acceptedModelIsResolved(accepted, baseline, name ? (this.lanesByProvider[name] ?? {}) : {})
+      ) {
+        this.acceptedModel.set(null);
+        this.acceptedLaneIds = null;
+      }
     }
-  }
-
-  private hasLaneFor(model: string): boolean {
-    const name = this.providerName;
-    const lanes = name ? (this.lanesByProvider[name] ?? {}) : {};
-    const wanted = model.trim().toLowerCase();
-    return Object.values(lanes).some((l) => (l.model ?? '').trim().toLowerCase() === wanted);
   }
 
   selectModel(event: Event): void {
@@ -435,6 +516,15 @@ export class LaneHealthPanel implements OnChanges {
     }
     this.addingLane.set(true);
     this.addError.set(null);
+    // The orchestrator starts the background load before it answers 202, so a
+    // status update can report the new starting lane while this request is
+    // still in flight. The resolution baseline must be the lanes as they stood
+    // before the request went out: captured after the answer arrives, a fast
+    // stream would already contain the accepted lane, no update could ever
+    // see it as fresh, and the pending note (and the withheld model) would
+    // stay up indefinitely.
+    const name = this.providerName;
+    const preRequestLaneIds = new Set(Object.keys(name ? (this.lanesByProvider[name] ?? {}) : {}));
     try {
       await this.statisticsService.addLane(pid, model);
       this.addingLane.set(false);
@@ -443,6 +533,26 @@ export class LaneHealthPanel implements OnChanges {
       // background, which for a large model is minutes. Without a word here the
       // picker just closes and the operator cannot tell the request from a no-op.
       this.acceptedModel.set(model);
+      // Baseline for acceptedModelIsResolved(): the pre-request snapshot, so
+      // the accepted lane counts as fresh whatever the stream has shown since.
+      this.acceptedLaneIds = preRequestLaneIds;
+      // A fast stream may already have reported the accepted lane while this
+      // request was in flight: ngOnChanges ran with acceptedModel still null
+      // and could not resolve the note, and the next update might be minutes
+      // away (the lane only changes state when the load finishes). Re-check
+      // the resolution against the current stream right here, so a lane that
+      // is already visible clears the note (and re-offers the model)
+      // immediately instead of waiting for the next push.
+      if (
+        acceptedModelIsResolved(
+          model,
+          preRequestLaneIds,
+          name ? (this.lanesByProvider[name] ?? {}) : {},
+        )
+      ) {
+        this.acceptedModel.set(null);
+        this.acceptedLaneIds = null;
+      }
     } catch (err: unknown) {
       this.addingLane.set(false);
       const e = err as { status?: number };

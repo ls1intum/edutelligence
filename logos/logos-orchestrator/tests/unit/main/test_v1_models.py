@@ -27,10 +27,12 @@ def _make_request(headers: dict | None = None):
 class DummyDB:
     """Minimal DBManager stub used via monkeypatch."""
 
-    def __init__(self, models=None, historic=None):
+    def __init__(self, models=None, historic=None, cloud=None):
         self._models = models if models is not None else []
         # Model name -> widest context ever reported (model_profiles high-water mark).
         self._historic = historic if historic is not None else {}
+        # Model name -> the windows cloud upstreams report (cloud_model_context).
+        self._cloud = cloud if cloud is not None else {}
 
     def __enter__(self):
         return self
@@ -46,6 +48,9 @@ class DummyDB:
 
     def get_historic_max_context_by_model(self):
         return self._historic
+
+    def get_cloud_context_by_model(self):
+        return self._cloud
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +274,10 @@ def _vllm_lane(model, max_model_len=0, context_length=4096):
     }
 
 
-async def _list_ids_to_entries(monkeypatch, models, registry, historic=None):
+async def _list_ids_to_entries(monkeypatch, models, registry, historic=None, cloud=None):
     import json
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models, historic=historic))
+    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud))
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     with patch("logos.main.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
@@ -489,3 +494,49 @@ async def test_list_models_historic_max_never_shrinks_a_live_overall(monkeypatch
     entries = await _list_ids_to_entries(monkeypatch, models, registry, historic={"qwen-27b": 33000})
 
     assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_a_cloud_upstreams_context_window(monkeypatch):
+    """A model reachable only through a cloud provider used to be published with
+    no window at all, because the numbers came solely from the workernode
+    snapshots. A downstream Logos instance therefore hid the very window its
+    upstream had measured, and claude-logos fell back to a guess."""
+    models = [{"id": 1, "name": "Qwen/Qwen3.8-27B", "description": None}]
+    entries = await _list_ids_to_entries(
+        monkeypatch,
+        models,
+        DummyRegistry({}),
+        cloud={"Qwen/Qwen3.8-27B": {"current_min": 262144, "current_max": 262144, "overall": 262144}},
+    )
+
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_current_min"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_current_max"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_window_does_not_widen_the_guaranteed_minimum(monkeypatch):
+    """A model served both locally and through a cloud upstream keeps the
+    smallest window as its guaranteed one: the request may be routed to either,
+    so only the narrower number holds unconditionally."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)])})
+    entries = await _list_ids_to_entries(
+        monkeypatch, models, registry, cloud={"qwen-27b": {"current_min": 262144, "overall": 262144}}
+    )
+
+    assert entries["qwen-27b"]["max_model_len"] == 33000
+    assert entries["qwen-27b"]["max_model_len_current_max"] == 262144
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_model_without_a_reported_window_stays_bare(monkeypatch):
+    """Most OpenAI-shaped upstreams report no window; those models keep the
+    object they had before any of this existed."""
+    models = [{"id": 1, "name": "gpt-4.1-nano", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), cloud={})
+
+    assert "max_model_len" not in entries["gpt-4.1-nano"]

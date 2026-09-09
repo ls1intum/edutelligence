@@ -164,6 +164,7 @@ async def create_session_container(
     env: dict[str, str],
     workspace_volume: str,
     artifact_host_path: str,
+    state_host_path: str | None = None,
     session_id: int,
     labels: dict[str, str] | None = None,
     network: str | None = None,
@@ -183,14 +184,26 @@ async def create_session_container(
       volume and expose other sessions' output); everything else is
       read-only.
 
+    ``state_host_path``, when given, adds a third mount that is
+    deliberately *not* writable: the runner's own state for this session
+    (the pause mark) at ``/logos/state``, read-only. The enforcement is the
+    ``:ro`` flag itself — the container runs with every capability dropped
+    and no privilege escalation, so the agent cannot remount it — which is
+    what keeps the mark out of reach even though the artefact directory
+    next door is the agent's to write. The helper phases pass nothing, so a
+    container that never reads the mark also never mounts it.
+
     The default network is the internal session network (the agent phase);
     the trusted helper containers pass the egress network explicitly.
     """
+    binds = [
+        f"{workspace_volume}:/workspace",
+        f"{artifact_host_path}:/artifacts",
+    ]
+    if state_host_path:
+        binds.append(f"{state_host_path}:/logos/state:ro")
     host_config: dict[str, Any] = {
-        "Binds": [
-            f"{workspace_volume}:/workspace",
-            f"{artifact_host_path}:/artifacts",
-        ],
+        "Binds": binds,
         "NetworkMode": network or settings.session_network,
         "ReadonlyRootfs": True,
         # The agent needs scratch space; give it tmpfs rather than a writable

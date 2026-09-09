@@ -441,9 +441,15 @@ class LogosNodeDataProvider:
             snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
             runtime = (snap or {}).get("runtime") or {}
             devices = runtime.get("devices") or {}
-            if isinstance(devices, dict) and bool(devices.get("nvidia_smi_available")):
-                runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
-                runtime_total_mb = int(devices.get("total_memory_mb", 0) or 0)
+            if isinstance(devices, dict):
+                # Accept Metal telemetry too — see the note in main.py. Without
+                # this a Mac worker's real free/total figures are dropped and
+                # total_vram_mb silently falls back to the value recorded at
+                # registration time.
+                has_telemetry = bool(devices.get("telemetry_available")) or bool(devices.get("nvidia_smi_available"))
+                if has_telemetry:
+                    runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
+                    runtime_total_mb = int(devices.get("total_memory_mb", 0) or 0)
         with self._lock:
             total_used_bytes = sum(info["size_vram"] for info in self._loaded_models.values())
             used_vram_mb = total_used_bytes // (1024 * 1024)
@@ -645,6 +651,7 @@ class LogosNodeDataProvider:
                 tensor_parallel_size=data.get("tensor_parallel_size"),
                 enforce_eager_at_calibration=data.get("enforce_eager_at_calibration"),
                 kv_per_token_bytes=data.get("kv_per_token_bytes"),
+                num_key_value_heads=data.get("num_key_value_heads"),
                 max_context_length=data.get("max_context_length"),
                 min_context_fraction=data.get("min_context_fraction"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
