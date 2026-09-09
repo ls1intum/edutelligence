@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main_mod
+from logos.routers import internal as internal_mod
 
 
 def _make_request(authorization: str = "") -> MagicMock:
@@ -32,23 +33,23 @@ class DummyDB:
 
 @pytest.mark.asyncio
 async def test_returns_403_when_secret_not_configured(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", None)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", None)
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_model_context_windows(_make_request("Bearer secret"))
+        await internal_mod.internal_model_context_windows(_make_request("Bearer secret"))
     assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_returns_401_when_secret_is_wrong(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_model_context_windows(_make_request("Bearer wrong-secret"))
+        await internal_mod.internal_model_context_windows(_make_request("Bearer wrong-secret"))
     assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_returns_served_windows_per_model(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     registry = MagicMock()
     registry.active_provider_ids = lambda: [7]
@@ -69,7 +70,7 @@ async def test_returns_served_windows_per_model(monkeypatch):
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
     monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     # "windows" keeps its original shape for an older webservice.
     assert result["windows"] == {"qwen-14b": 40960, "mistral-7b": 32768}
@@ -89,7 +90,7 @@ async def test_stats_separate_smallest_largest_and_native(monkeypatch):
     ``current_max`` the wide one, and ``overall`` the widest it is ever served
     with — known from the profile even on the worker whose lane runs narrow.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     snapshots = {
         1: {
@@ -130,7 +131,7 @@ async def test_stats_separate_smallest_largest_and_native(monkeypatch):
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
     monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {"qwen-27b": 33000}
     assert result["stats"]["qwen-27b"] == {
@@ -148,7 +149,7 @@ async def test_native_is_known_without_a_live_lane(monkeypatch):
     context limit once at startup, so it needs a number even when nothing is
     loaded at that moment.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     registry = MagicMock()
     registry.active_provider_ids = lambda: [1]
@@ -161,7 +162,7 @@ async def test_native_is_known_without_a_live_lane(monkeypatch):
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
     monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {}
     assert result["stats"] == {"cold-model": {"overall": 131072}}
@@ -177,7 +178,7 @@ async def test_calibrated_cap_is_the_overall_when_nothing_wider_was_reported(mon
     the model at exactly that width, yet the old native reading (operator pin
     or KV sweep only) saw nothing and the client fell back to a guessed
     window. The calibrated cap has to count on its own."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     registry = MagicMock()
     registry.active_provider_ids = lambda: [1]
@@ -190,7 +191,7 @@ async def test_calibrated_cap_is_the_overall_when_nothing_wider_was_reported(mon
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
     monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {}
     assert result["stats"] == {"gemma-12b": {"overall": 24576}}
@@ -202,7 +203,7 @@ async def test_all_workernodes_offline_falls_back_to_the_historic_max(monkeypatc
     historic maximum the database keeps per model is what is still reported
     (#829) — ``overall`` only, since no lane is up that would make any
     current_* figure true."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     registry = MagicMock()
     registry.active_provider_ids = lambda: []
@@ -210,7 +211,7 @@ async def test_all_workernodes_offline_falls_back_to_the_historic_max(monkeypatc
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
     monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB(historic={"qwen-27b": 262144}))
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {}
     assert result["stats"] == {"qwen-27b": {"overall": 262144}}

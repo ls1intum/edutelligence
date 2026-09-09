@@ -64,3 +64,46 @@ class LogosNodeReconfigureLaneRequest(LogosKeyModel):
     provider_id: int
     lane_id: str
     updates: dict[str, Any]
+
+
+# Internal (secret-gated) endpoint request models, called by the Spring
+# webservice after its own JWT validation.
+
+
+class RefreshPipelineRequest(BaseModel):
+    rebuild_classifier: bool = False
+    # Set by the webservice when a provider itself changed, as opposed to a
+    # model link or a permission. A newly added cloud provider has no models
+    # until its /v1/models listing is read, and that otherwise waits for the
+    # next interval tick — a quarter of an hour of an empty model list.
+    sync_cloud_models: bool = False
+
+
+class InternalCalibrateRequest(BaseModel):
+    provider_id: int
+
+
+class InternalDeleteLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class InternalAddLaneRequest(BaseModel):
+    provider_id: int
+    lane: dict[str, Any]
+
+
+class InternalSleepLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class InternalWakeLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
+class InternalBenchmarkRequest(BaseModel):
+    model_provider_id: int = Field(gt=0)
+    samples: int = Field(default=5, gt=0, le=100)
+    max_output_tokens: int = Field(default=512, gt=0, le=4096)
