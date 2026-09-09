@@ -27,6 +27,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
+from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
@@ -92,6 +93,7 @@ from logos.responses import extract_model, extract_service_tier, get_client_ip, 
 from logos.role_auth import require_logos_admin_key
 from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.cloud_model_sync import CloudModelSyncService
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.terminal_logging import (
@@ -212,6 +214,7 @@ _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
+_cloud_model_sync: Optional[CloudModelSyncService] = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -352,7 +355,10 @@ def _resolve_requested_model_name(
        ``local-most-powerful`` that can be re-pointed at another model),
     3. the planner-safe alias form where ``/``, ``:``, and spaces are
        rewritten as underscores (lets users copy model ids from lane names
-       or worker logs without breaking access-controlled model lookup).
+       or worker logs without breaking access-controlled model lookup),
+    4. a replica lane id for a model's second and further lanes
+       (``planner-<alias>-2``) — a copied replica lane name is still an
+       address for the same model.
 
     All matching is case-insensitive. Every level must resolve to a single
     unambiguous model to be accepted: the schema does not enforce
@@ -361,15 +367,38 @@ def _resolve_requested_model_name(
     alias that matches several models does not fall through to the planner
     aliases (a stored name is an explicit assignment and wins over the
     derived form). Ambiguous requests resolve to ``None``.
+
+    The replica tier is suppressed whenever the requested name is another
+    model's own name, stored alias, or planner-safe alias — model families
+    carry numeric suffixes (``gemma-2``, ``llama-3``, ``phi-4``), so with
+    ``llama`` and ``llama-3`` both deployed, ``planner-llama-3`` is the
+    planner alias of ``llama-3``, not a third replica of ``llama``.
     """
     requested = str(requested_name or "").strip()
     if not requested:
         return None
     requested_lc = requested.lower()
 
+    # Every name that already addresses a deployed model in its own right:
+    # the canonical names and the stored aliases, raw and planner-sanitized
+    # alike. The replica-suffix tier below refuses to shadow any of these.
+    known_names: set[str] = set()
+    for entry in available_models:
+        canonical = str((entry or {}).get("name") or "").strip()
+        if not canonical:
+            continue
+        known_names.add(canonical.lower())
+        known_names.add(_planner_model_alias(canonical).lower())
+        for alias in entry.get("aliases") or []:
+            alias = str(alias).strip()
+            if alias:
+                known_names.add(alias.lower())
+                known_names.add(_planner_model_alias(alias).lower())
+
     canonical_matches: set[str] = set()
     stored_alias_matches: set[str] = set()
     planner_alias_matches: set[str] = set()
+    replica_matches: set[str] = set()
     for entry in available_models:
         canonical = str((entry or {}).get("name") or "").strip()
         if not canonical:
@@ -385,6 +414,28 @@ def _resolve_requested_model_name(
             if str(alias).strip().lower() == requested_lc:
                 stored_alias_matches.add(canonical)
 
+        # Lane ids carry a replica suffix for a model's second and further
+        # lanes (planner-<alias>-2): a copied replica lane name is still an
+        # address for this model.
+        replica_prefix = f"planner-{sanitized.lower()}-"
+        suffix = requested_lc[len(replica_prefix) :] if requested_lc.startswith(replica_prefix) else None
+        if suffix is not None and suffix.isascii() and suffix.isdigit():
+            # The planner derives suffixes from int, so a replica id is ASCII
+            # decimal only: a non-ASCII "digit" never names a lane, and a run
+            # longer than int() can parse (Python caps the length) must be
+            # refused rather than raised out of the resolver.
+            try:
+                index = int(suffix)
+            except ValueError:
+                continue
+            if index >= 2:
+                # Skip when <alias>-<n> is another deployed model's own name,
+                # stored alias, or planner alias: that request addresses that
+                # model, not this one's replica.
+                if f"{sanitized.lower()}-{suffix}" in known_names:
+                    continue
+                replica_matches.add(canonical)
+
     if len(canonical_matches) == 1:
         return next(iter(canonical_matches))
     if canonical_matches:
@@ -397,6 +448,12 @@ def _resolve_requested_model_name(
         return None
     if len(planner_alias_matches) == 1:
         return next(iter(planner_alias_matches))
+    if planner_alias_matches:
+        # Two distinct models sharing one planner-safe alias is a genuine
+        # ambiguity — refuse rather than guess.
+        return None
+    if len(replica_matches) == 1:
+        return next(iter(replica_matches))
     return None
 
 
@@ -516,6 +573,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "transport_connected": bool(transport.get("connected", True)),
         "device_mode": devices.get("mode"),
         "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
+        "telemetry_available": bool(devices.get("telemetry_available", devices.get("nvidia_smi_available", False))),
         "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
@@ -757,7 +815,13 @@ def _build_live_local_provider_sample(
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
-    if devices.get("nvidia_smi_available"):
+    # telemetry_available is the backend-neutral successor to
+    # nvidia_smi_available: it means "the worker measured this on real
+    # hardware", whether that hardware reports through nvidia-smi or through
+    # Metal's device_info. Metal workers set it and leave nvidia_smi_available
+    # False, so gating on the old field alone would discard their free-memory
+    # reading and fall back to the coarser total-minus-used estimate.
+    if devices.get("telemetry_available") or devices.get("nvidia_smi_available"):
         remaining_vram_mb = float(devices.get("free_memory_mb") or 0.0)
     elif total_vram_mb > 0:
         remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)
@@ -1119,6 +1183,23 @@ def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
         pipeline.discard_request(request_id, result_status)
     except Exception:  # noqa: BLE001 — monitoring must never break a request
         logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
+
+
+def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> None:
+    """Persist whether the key's rate limiter admitted the request.
+
+    Same monitoring semantics as `_discard_in_flight`: failures are logged
+    and never break the request path.
+    """
+    if not request_id:
+        return
+    pipeline = globals().get("_pipeline")
+    if pipeline is None:
+        return
+    try:
+        pipeline.record_rate_limit_admission(request_id, admitted)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.debug("Failed to record rate-limit admission for %s", request_id, exc_info=True)
 
 
 def _record_log_failure(
@@ -1862,6 +1943,8 @@ async def lifespan(app: FastAPI):
         await _calibration_orchestrator.stop()
     if _azure_deployment_sync:
         await _azure_deployment_sync.stop()
+    if _cloud_model_sync:
+        await _cloud_model_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
 
@@ -2181,16 +2264,7 @@ async def internal_model_health(request: Request):
     entries expose only model names and statuses, best across deployments
     (see :func:`_model_deployment_status`).
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal model health endpoint disabled")
 
     local_ok = False
     model_status: Dict[str, str] = {}
@@ -2253,24 +2327,31 @@ async def prometheus_metrics(request: Request):
 
 class _RefreshPipelineRequest(BaseModel):
     rebuild_classifier: bool = False
+    # Set by the webservice when a provider itself changed, as opposed to a
+    # model link or a permission. A newly added cloud provider has no models
+    # until its /v1/models listing is read, and that otherwise waits for the
+    # next interval tick — a quarter of an hour of an empty model list.
+    sync_cloud_models: bool = False
 
 
 @app.post("/internal/refresh_pipeline", tags=["admin"])
 async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Request):
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal refresh endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal refresh endpoint disabled")
     if not _pipeline or not _logosnode_facade or not _azure_facade:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
-    logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
+    logger.info(
+        "Pipeline refresh requested by Spring (rebuildClassifier=%s, syncCloudModels=%s)",
+        data.rebuild_classifier,
+        data.sync_cloud_models,
+    )
     await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
+    if data.sync_cloud_models and _cloud_model_sync is not None:
+        # Scheduled, not awaited: the pass contacts every cloud upstream in
+        # turn and the webservice is blocked on this response, so one
+        # unreachable provider would stall a provider edit for a full request
+        # timeout. The pass refreshes runtime state itself once it finds
+        # something, so nothing is lost by returning first.
+        _cloud_model_sync.request_refresh()
     return {"status": "ok"}
 
 
@@ -2282,16 +2363,7 @@ async def internal_provider_status(request: Request):
     only; live connection state (online/offline) exists solely in the
     orchestrator's worker registry, so it is exposed here for enrichment.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal provider status endpoint disabled")
 
     with DBManager() as db:
         inventory = db.list_local_providers()
@@ -2333,16 +2405,7 @@ async def internal_model_context_windows(request: Request):
     ``best`` and ``native`` numbers next to it; see
     :func:`_served_context_window_stats`.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     stats = _served_context_window_stats()
     return {
@@ -2351,10 +2414,15 @@ async def internal_model_context_windows(request: Request):
     }
 
 
-def _require_internal_secret(request: Request) -> None:
-    """Authenticate an /internal/* call: the shared secret, no user context."""
+def _require_internal_secret(request: Request, disabled_detail: str = "Internal endpoint disabled") -> None:
+    """Authenticate an /internal/* call: the shared secret, no user context.
+
+    Endpoints that historically reported their own name in the 403 (secret
+    not configured) pass it through ``disabled_detail`` so the client-visible
+    answer is unchanged.
+    """
     if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+        raise HTTPException(status_code=403, detail=disabled_detail)
     auth_header = request.headers.get("authorization", "")
     token = (
         auth_header.removeprefix("Bearer ").strip()
@@ -2428,20 +2496,87 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     it resolves a model id to a model name, then asks here for what every
     provider that has calibrated it reported.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     with DBManager() as db:
         rows = db.get_calibration_probe_logs_by_model(model_name)
     return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
+
+
+@app.get("/internal/calibration_probe_logs/fetch", tags=["admin"])
+async def internal_fetch_calibration_log(provider_id: int, model_name: str, request: Request):
+    """On-demand fetch of a model's full calibration log from the worker.
+
+    Backs the Download-full-logs button: successful runs skip storing
+    log_text, so this re-reads the on-disk log live. Pure file read, no
+    GPU impact; needs the worker online and not yet recalibrated since.
+    """
+    _require_internal_secret(request)
+
+    try:
+        result = await _logosnode_registry.send_command(
+            provider_id,
+            "get_calibration_log",
+            params={"model_name": model_name},
+            timeout_seconds=20,
+        )
+    except LogosNodeOfflineError as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc) or "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+
+    return JSONResponse(status_code=200, content=jsonable_encoder({"log_text": result.get("log_text", "")}))
+
+
+@app.get("/internal/compatibility_precheck", tags=["admin"])
+async def internal_compatibility_precheck(model_name: str, request: Request, provider_id: int | None = None):
+    """On-demand HF compatibility check for one model, across one or all
+    connected logosnode workers.
+
+    Unlike calibration itself, this is safe to call any time — including
+    during the day, with live traffic on the nodes — because the worker-side
+    check (run_compatibility_precheck) never touches vLLM or lanes: it's
+    only an HF metadata fetch plus a read-only nvidia-smi query. Omitting
+    provider_id fans out across every connected worker, answering "would
+    this model run on ANY node" rather than requiring the caller to already
+    know which one to ask.
+    """
+    _require_internal_secret(request)
+
+    provider_ids = [provider_id] if provider_id is not None else _logosnode_registry.active_provider_ids()
+    if not provider_ids:
+        return JSONResponse(status_code=200, content={"model": model_name, "results": []})
+
+    async def _check_one(pid: int) -> dict[str, Any]:
+        pname = _resolve_provider_name(pid)
+        try:
+            result = await _logosnode_registry.send_command(
+                pid, "run_compatibility_precheck", params={"model": model_name}, timeout_seconds=30
+            )
+            # A worker reply with "result": null bypasses send_command's
+            # dict type hint (a present null isn't its .get() default) and
+            # would otherwise raise **result below, outside this try —
+            # taking every other provider's result down with it.
+            if not isinstance(result, dict):
+                return {
+                    "provider_id": pid,
+                    "provider_name": pname,
+                    "ok": False,
+                    "error": f"Worker returned an unexpected response type: {type(result).__name__}",
+                }
+            return {"provider_id": pid, "provider_name": pname, **result}
+        except LogosNodeOfflineError:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": "Worker not connected"}
+        except LogosNodeCommandError as exc:
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            # An unexpected failure for one provider must not lose the
+            # results already gathered for every other one — see below.
+            logger.exception("[Precheck] unexpected failure checking provider %s for %s", pid, model_name)
+            return {"provider_id": pid, "provider_name": pname, "ok": False, "error": f"Unexpected error: {exc}"}
+
+    results = await asyncio.gather(*(_check_one(pid) for pid in provider_ids))
+    return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
 
 
 class _InternalCalibrateRequest(BaseModel):
@@ -2707,16 +2842,7 @@ class _InternalWakeLaneRequest(BaseModel):
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
@@ -2758,16 +2884,7 @@ async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequ
 @app.post("/internal/logosnode/lanes/delete", tags=["admin"])
 async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, request: Request):
     """Unload a lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",
@@ -2778,16 +2895,7 @@ async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, reque
 @app.post("/internal/logosnode/lanes/add", tags=["admin"])
 async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Request):
     """Manually load a single lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     model = str(data.lane.get("model") or "").strip()
     if not model:
@@ -2797,7 +2905,7 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
         raise HTTPException(status_code=503, detail="Capacity planner not ready")
 
     # Answer a refusal synchronously — a background task has nobody to report to.
-    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id)
+    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id, model)
     if rejection is not None:
         raise HTTPException(status_code=409, detail=rejection)
 
@@ -2832,16 +2940,7 @@ async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request
     must cover it, which is why sleep_lane gets the same 120 s as the
     planner's own sleep commands.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
@@ -2878,16 +2977,7 @@ async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request
 @app.post("/internal/logosnode/lanes/wake", tags=["admin"])
 async def internal_logosnode_wake_lane(data: _InternalWakeLaneRequest, request: Request):
     """Wake a sleeping lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="wake_lane",
@@ -3283,6 +3373,17 @@ async def start_pipeline():
         ),
     )
     await _azure_deployment_sync.start()
+
+    # Every other cloud provider discovers its models over GET /v1/models, and
+    # the same pass records the context windows the upstream reports so
+    # /v1/models can republish them.
+    global _cloud_model_sync
+    _cloud_model_sync = CloudModelSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _cloud_model_sync.start()
 
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
@@ -3690,7 +3791,11 @@ async def _streaming_response(
             is_streaming=True,
         )
         return JSONResponse(
-            content=error_body,
+            content=(
+                translate_error(error_body)
+                if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+                else error_body
+            ),
             status_code=corrected_sc,
             headers=_decision_response_headers(request_id, scheduling_stats),
         )
@@ -3894,7 +3999,13 @@ async def _streaming_response(
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-    response_headers["content-type"] = upstream_content_type or "text/event-stream"
+    # A translated response is an Anthropic event stream regardless of how the
+    # upstream labelled its own, so the client is told what it is actually
+    # about to parse rather than what the upstream sent.
+    translating_messages = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+    response_headers["content-type"] = (
+        "text/event-stream" if translating_messages else (upstream_content_type or "text/event-stream")
+    )
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
@@ -3903,11 +4014,29 @@ async def _streaming_response(
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
             else None
         )
+        # A Messages request forwarded to an upstream without a Messages route
+        # comes back as a chat/completions or Responses event stream; the
+        # client's SSE parser only understands the Anthropic one.
+        anthropic_stream = (
+            stream_translator(context.anthropic_dialect, model_name=context.model_name)
+            if context.anthropic_dialect is not None
+            else None
+        )
         error_message = None
         ttft_recorded = False
 
         def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
             return cost_enricher.feed(chunk) if cost_enricher else [chunk]
+
+        def client_chunks(chunk: bytes | str) -> list[bytes | str]:
+            """Record one upstream chunk and return what the client receives.
+
+            Logging, billing and the live view all read the upstream's own
+            frames, so the accumulator is fed before any translation — only
+            the bytes on the wire change shape.
+            """
+            stream_log.feed(chunk)
+            return anthropic_stream.feed(chunk) if anthropic_stream else [chunk]
 
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
@@ -3916,8 +4045,8 @@ async def _streaming_response(
             # Yield the already-peeked first chunk
             if first_chunk:
                 for outgoing_chunk in enriched_chunks(first_chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
                 if not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
@@ -3926,8 +4055,8 @@ async def _streaming_response(
 
             async for chunk in chunk_iter:
                 for outgoing_chunk in enriched_chunks(chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
                 _live_streams.update(request_id, stream_log.streamed_tokens())
                 if chunk and not ttft_recorded:
                     if log_id:
@@ -3936,17 +4065,28 @@ async def _streaming_response(
                     ttft_recorded = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
+            if anthropic_stream:
+                # Idempotent: a stream that already ended on [DONE] (or on the
+                # Responses API's terminal event) has emitted its message_stop,
+                # and this closes one that simply ran out of bytes.
+                for client_chunk in anthropic_stream.finish():
+                    yield client_chunk
         except Exception as exc:
             error_message = str(exc)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
-            # synthetic OpenAI error frame without corrupting its protocol.
-            if upstream_media_type == "text/event-stream":
+            # synthetic error frame without corrupting its protocol — in the
+            # dialect the client is reading, which is Anthropic's whenever the
+            # response was being translated.
+            if anthropic_stream:
+                for client_chunk in anthropic_stream.error(str(exc)):
+                    yield client_chunk
+            elif upstream_media_type == "text/event-stream":
                 import json as _json
 
                 _, error_body = coerce_upstream_error(500, {"error": str(exc)})
@@ -4281,6 +4421,18 @@ async def _sync_response(
         if not exec_result.success:
             status_code, response_payload = coerce_upstream_error(
                 status_code, response_payload or {"error": exec_result.error}
+            )
+
+        # A Messages request whose upstream has no Messages route was forwarded
+        # as chat/completions or a Responses call; the client still expects an
+        # Anthropic message back. Translated here, last, so that the logging,
+        # billing and rate-limit bookkeeping above all ran against the
+        # upstream's own OpenAI-shaped body.
+        if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE):
+            response_payload = (
+                translate_response(response_payload, context.anthropic_dialect, model_name=context.model_name)
+                if exec_result.success
+                else translate_error(response_payload)
             )
 
         # Return dict for async jobs, JSONResponse for sync endpoints
@@ -4710,6 +4862,12 @@ async def _execute_resource_mode(
         if rl_info:
             rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
             allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+            # Persist the admission decision before execution: the /me/keys
+            # usage window counts an admitted request while it is still
+            # running, and must skip the ones this check rejects — the log row
+            # already carries timestamp_forwarding from scheduling, so without
+            # the flag a rejected request would show up as usage.
+            _record_rate_limit_admission(result.scheduling_stats.get("request_id") or request_id, allowed)
             if not allowed:
                 try:
                     _pipeline.scheduler.release(
@@ -6211,11 +6369,41 @@ def _profile_native_context_length(profile: dict) -> int:
 _HISTORIC_MAX_CONTEXT_TTL_SECONDS = 10.0
 _historic_max_context_cache: tuple[float, dict[str, int]] | None = None
 
+# The cloud view is refreshed by the model sync (every 15 minutes by default),
+# so it is cached on the same terms as the historic maxima above.
+_cloud_context_cache: tuple[float, dict[str, dict[str, int]]] | None = None
+
 
 def _clear_historic_max_context_cache() -> None:
-    """Drop the cached historic maxima (used by the tests; production never needs it)."""
-    global _historic_max_context_cache
+    """Drop the cached context lookups (used by the tests; production never needs it)."""
+    global _historic_max_context_cache, _cloud_context_cache
     _historic_max_context_cache = None
+    _cloud_context_cache = None
+
+
+def _cloud_context_by_model() -> dict[str, dict[str, int]]:
+    """Model name -> the context windows cloud upstreams report for it.
+
+    The cloud counterpart of the logosnode runtime snapshots: a cloud provider
+    has no lane to inspect, so what it publishes on its own ``/v1/models`` is
+    the only measurement there is. ``CloudModelSyncService`` records it per
+    provider; this reduces it across providers. Returns an empty mapping when
+    the database cannot be reached, so a broken lookup reads as "no cloud
+    provider reports a window" for one TTL rather than failing the endpoint.
+    """
+    global _cloud_context_cache
+    now = time.monotonic()
+    cached = _cloud_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            contexts = db.get_cloud_context_by_model()
+    except Exception:
+        logger.warning("Failed to load the cloud context windows by model", exc_info=True)
+        return {}
+    _cloud_context_cache = (now, contexts)
+    return contexts
 
 
 def _historic_max_context_by_model() -> dict[str, int]:
@@ -6310,6 +6498,27 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
             model = lane["model"]
             _record(model, "current_min", window, keep_smallest=True)
             _record(model, "current_max", window)
+
+    # Cloud upstreams have no lane to read, so their windows come from what
+    # they publish themselves. Folded in on the same terms as a workernode's:
+    # current_min keeps the smallest, because a request may be routed to any
+    # deployment of the model — cloud or local — and only the smallest holds
+    # unconditionally. Without this a model served only through a cloud
+    # provider had no window at all, which is what made a downstream Logos
+    # instance hide the context its upstream had measured.
+    for model, entry in _cloud_context_by_model().items():
+        # One window an upstream serves is its own minimum, maximum and
+        # ceiling alike, so a partially-reported entry widens the same way a
+        # lane's single number does rather than leaving the other two blank.
+        current_min = entry.get("current_min")
+        current_max = entry.get("current_max") or current_min
+        overall = entry.get("overall") or current_max
+        if current_min:
+            _record(model, "current_min", current_min, keep_smallest=True)
+        if current_max:
+            _record(model, "current_max", current_max)
+        if overall:
+            _record(model, "overall", overall)
 
     # The live snapshots above only exist while workernodes are connected.
     # Top the "overall" figure up with the historic maximum the database keeps

@@ -2,6 +2,7 @@
 
 from logos.pipeline.ettft_estimator import ReadinessTier, estimate_ettft_azure
 from logos.sdi.azure_deployment_sync import (
+    _warn_if_not_an_azure_endpoint,
     azure_host_from_base_url,
     build_azure_endpoint,
     classify_azure_operation,
@@ -106,3 +107,42 @@ def test_synced_responses_model_is_schedulable():
     provider.register_model(model_id=42, model_name="gpt-5.1", deployment_name=deployment_name)
     capacity = provider.get_capacity_info(deployment_name)
     assert estimate_ettft_azure(capacity).tier == ReadinessTier.WARM
+
+
+# ── mislabelled provider diagnostics ────────────────────────────────────────
+#
+# A cloud provider typed 'azure' that is not one is discovered by nobody: this
+# sync queries a data-plane route it does not serve, and the generic
+# /v1/models sync skips everything typed 'azure' by design. The warning is the
+# only thing connecting the empty catalogue to its cause, so it must survive
+# every base_url an operator can type — it runs before any provider is synced
+# and outside the per-provider guard, and start() awaits the first pass inline.
+
+
+def test_an_azure_host_draws_no_warning(caplog):
+    _warn_if_not_an_azure_endpoint({"id": 1, "name": "prod", "base_url": HOST})
+    assert not caplog.records
+
+
+def test_a_subdomain_of_azure_is_still_azure(caplog):
+    # Azure OpenAI also answers on cognitiveservices.azure.com.
+    _warn_if_not_an_azure_endpoint(
+        {"id": 1, "name": "prod", "base_url": "https://x.cognitiveservices.azure.com/openai"}
+    )
+    assert not caplog.records
+
+
+def test_a_foreign_host_is_named(caplog):
+    _warn_if_not_an_azure_endpoint({"id": 25, "name": "Hetzner", "base_url": "https://inference.hetzner.com/api/v1"})
+    assert "25" in caplog.text and "Hetzner" in caplog.text
+
+
+def test_an_unparseable_base_url_warns_instead_of_raising(caplog):
+    """urlsplit().hostname raises on a bracketed authority that is not IPv6."""
+    _warn_if_not_an_azure_endpoint({"id": 3, "name": "typo", "base_url": "https://[not-an-ipv6"})
+    assert "unparseable" in caplog.text
+
+
+def test_a_missing_base_url_warns_instead_of_raising(caplog):
+    _warn_if_not_an_azure_endpoint({"id": 4, "name": "blank", "base_url": None})
+    assert caplog.records

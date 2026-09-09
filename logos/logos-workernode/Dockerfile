@@ -65,7 +65,7 @@
 
 ARG BASE_IMAGE=python:3.14-slim
 ARG INSTALL_VLLM=0
-ARG VLLM_PIP_SPEC="vllm==v0.28.0"
+ARG VLLM_PIP_SPEC="vllm==v0.29.0"
 # TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
 # installs, which already includes CUDA support matching its nvidia-* deps.
 # Only set this to override with a specific CUDA wheel index (e.g.
@@ -294,6 +294,15 @@ RUN if [ "$INSTALL_VLLM" = "1" ]; then \
           find /opt/venv/lib -path '*/torch/lib' -type d 2>/dev/null; \
         } > /etc/ld.so.conf.d/pip-cuda-libs.conf \
         && ldconfig; \
+    fi
+
+# ── Bake vLLM's quantization-method registry (GPU builds only) ──────────────
+# The only source query_vllm_quantization_methods reads — no live
+# fallback; the check is informational-only, not worth a runtime
+# torch+transformers import. Best-effort, never fails the build.
+RUN if [ "$INSTALL_VLLM" = "1" ]; then \
+        /opt/venv/bin/python -c "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS; import json; json.dump(QUANTIZATION_METHODS, open('/opt/venv/bin/vllm_quantization_methods.json', 'w'))" \
+        || echo "WARNING: could not bake vLLM quantization methods — the check will have nothing to compare against" >&2; \
     fi
 
 COPY --from=ollama-builder /ollama-root/ /

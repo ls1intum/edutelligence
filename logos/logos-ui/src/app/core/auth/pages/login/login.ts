@@ -29,7 +29,7 @@ export class Login implements OnInit {
     // push unauthenticated users TO /login, never the reverse.
     effect(() => {
       if (this.auth.status() === 'authenticated') {
-        const home = this.auth.role() === 'logos_admin' ? '/dashboard' : '/my-workspace';
+        const home = this.auth.role() === 'logos_admin' ? '/statistics' : '/my-workspace';
         void this.router.navigateByUrl(home);
       }
     });

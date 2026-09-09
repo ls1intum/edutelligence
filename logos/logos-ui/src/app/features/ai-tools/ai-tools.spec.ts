@@ -209,3 +209,34 @@ describe('AiTools model gating', () => {
     expect(component.isSkipped(3)).toBe(true);
   });
 });
+
+describe('the tool comparison', () => {
+  const build = async (): Promise<AiTools> => {
+    await TestBed.configureTestingModule({
+      imports: [AiTools],
+      providers: [{ provide: MyKeysService, useValue: new FakeMyKeysService() }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(AiTools);
+    return fixture.componentInstance;
+  };
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('lists the features both tools share first, in the same order, in both columns', async () => {
+    const component = await build();
+    const row = component.comparison.find((r) => r.dimension === 'Agent features');
+    expect(row).toBeDefined();
+
+    const features = (cell: string) => cell.split(',').map((f) => f.trim().toLowerCase());
+    const claudeCode = features(row!.claudecode);
+    const openCode = features(row!.opencode);
+
+    const shared = claudeCode.filter((f) => openCode.includes(f));
+    expect(shared).toContain('mcp');
+    // The shared features must stand first in each list, in the same order, so
+    // the row reads across like the rest of the table rather than as two
+    // separate feature lists that happen to sit next to each other.
+    expect(claudeCode.slice(0, shared.length)).toEqual(shared);
+    expect(openCode.slice(0, shared.length)).toEqual(shared);
+  });
+});
