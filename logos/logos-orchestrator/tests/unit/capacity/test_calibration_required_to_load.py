@@ -58,6 +58,16 @@ class TestLoadRequiresCalibration:
         planner = _planner(metal=True)
         assert planner._load_requires_calibration(_profile("override"), 1) is False
 
+    def test_only_override_is_exempt_on_metal(self):
+        """The Metal exemption is for an operator override specifically —
+        not a seeded stub (residency_source=None), an HF-precheck estimate,
+        or a cached/unproven source; those must still be refused.
+        """
+        planner = _planner(metal=True)
+        for residency_source in (None, "hf", "cached"):
+            assert planner._load_requires_calibration(_profile(residency_source), 1) is True
+        assert planner._load_requires_calibration(_profile("override"), 1) is False
+
     def test_hf_precheck_requires_it_on_cuda(self):
         """A compatibility-precheck estimate is not a calibration run."""
         assert _planner()._load_requires_calibration(_profile("hf"), 1) is True

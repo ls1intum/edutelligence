@@ -5500,7 +5500,7 @@ class CapacityPlanner:
             return True
         if profile.residency_source in ("calibrated", "measured"):
             return False
-        return not self._provider_is_metal(provider_id)
+        return not (profile.residency_source == "override" and self._provider_is_metal(provider_id))
 
     def _passes_minimum_load_feasibility(
         self,
