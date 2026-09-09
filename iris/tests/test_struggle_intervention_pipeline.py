@@ -320,6 +320,33 @@ def test_decide_prompt_dedup_rule_is_standing_and_covers_history_tags():
         assert "in this intervention episode" not in rendered
 
 
+def test_decide_prompt_splits_the_dedup_rule_by_episode_and_dismissal():
+    """
+    A hint from a bout of being stuck that has already ended must not silence a fresh one, which is
+    what an unqualified same-diagnosis rule did: the chat history is the whole session and its
+    proactive messages are never cleaned up, so a nudge from days ago read exactly like one from a
+    minute ago. Artemis now marks those, and the rule splits three ways. The dismissed case stays a
+    bar in every episode: an explicit rejection is not merely old advice.
+    """
+    pipeline = StruggleInterventionPipeline()
+    rendered = pipeline.system_prompt_template.render(
+        course_name="Algorithms",
+        signal_summary="primary boundary: FM; severity sBase=0.84; path=armed.",
+        episode=None,
+    )
+    # the marker is explained, including that its absence proves nothing
+    assert "(proactive hint from an earlier episode" in rendered
+    assert "treat an unmarked nudge as" in rendered
+    # all three cases are stated
+    assert "THIS EPISODE" in rendered
+    assert "AN EARLIER EPISODE, DISMISSED" in rendered
+    assert "AN EARLIER EPISODE, NOT DISMISSED" in rendered
+    # and the obvious way to abuse the split is closed off
+    assert "A change of episode by itself never makes a repeat new." in rendered
+    # relaxing the earlier-episode case is conditional on the current code, not free
+    assert "the CURRENT code confirms" in rendered
+
+
 def _tool_state(intent, submission):
     dto = SimpleNamespace(
         programming_exercise_submission=submission,

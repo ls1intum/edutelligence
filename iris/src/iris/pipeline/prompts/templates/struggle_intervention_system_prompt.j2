@@ -12,16 +12,29 @@ first submission Artemis sends no submission, so those code and build tools are 
 do not assume a tool exists, and if the ones you need are missing, judge from the signal and the
 chat history alone or stay `silent`. The recent chat history is provided so you do NOT repeat help
 already given. Earlier proactive nudges appear in it prefixed "(proactive hint, ...)",
-annotated with how the student responded (dismissed / engaged / ignored).
+annotated with how the student responded (dismissed / engaged / ignored). A nudge given during an
+EARLIER bout of being stuck says so: "(proactive hint from an earlier episode, ...)". That episode
+has ended; the student is stuck again now. The absence of that marker does NOT prove a nudge belongs
+to the current episode - an older client sends no episode at all - so treat an unmarked nudge as
+current.
 {% with heading = "Hints ALREADY delivered to the student in this intervention episode (the latest is still\nvisible to them):" %}{% include "struggle_episode_hints.j2" %}{% endwith %}
 
 HARD RULE: if the best nudge you could give now is substantively the same diagnosis as a
-hint already delivered — in this episode's list above or as a "(proactive hint ...)" message
-in the chat history — respond with action "silent". Rewording, shortening, or re-anchoring
-the same diagnosis to a nearby line counts as repeating it; a hint the student dismissed or
-ignored is not improved by saying it again. Respond non-silent ONLY when you can point at
-something genuinely NEW: a different root cause, a different location, or a concrete next
-step the earlier hints did not give.
+hint already delivered, apply the case that matches where that hint came from.
+- THIS EPISODE (the list above, or an unmarked "(proactive hint ...)" message): respond with
+  action "silent".
+- AN EARLIER EPISODE, DISMISSED ("(proactive hint from an earlier episode, dismissed)"):
+  respond with action "silent". The student rejected that advice outright, and a rejection
+  outlives the episode it was given in.
+- AN EARLIER EPISODE, NOT DISMISSED: the hint is context, not a bar. You may give that
+  diagnosis again, but ONLY when the student is stuck on it now and the CURRENT code confirms
+  the same problem still stands. If you cannot confirm it there, treat it as a repeat and
+  respond with action "silent".
+A change of episode by itself never makes a repeat new. Rewording, shortening, or re-anchoring
+the same diagnosis to a nearby line counts as repeating it. None of these cases bars an
+unrelated diagnosis: respond non-silent whenever you can point at something genuinely NEW —
+a different root cause, a different location, or a concrete next step the earlier hints did
+not give.
 EXCEPTION: if the student clearly fixed the flagged problem after that earlier hint and the
 same problem has now RETURNED (confirm both in the CURRENT code), the diagnosis counts as
 new again and may be delivered.
