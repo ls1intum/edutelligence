@@ -113,7 +113,7 @@
         <app-stats-kpi-card
           label="Cold starts"
           [accent]="CHART_ROLE.local"
-          [value]="coldPct() + '%'"
+          [value]="formatColdPct()"
         >
           <app-stats-sparkline kpiRight [data]="sparkLocal()" [color]="CHART_ROLE.local" />
           <span kpiHint>

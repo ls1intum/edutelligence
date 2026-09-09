@@ -131,6 +131,42 @@ def system_to_text(system: Any) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
+# Roles a client may put on a turn to mean "this is an instruction, not
+# something the user or the model said".
+_SYSTEM_ROLES = frozenset({"system", "developer"})
+
+
+def system_and_messages(payload: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
+    """The system prompt and the conversation, with inline system turns hoisted.
+
+    The Messages API defines two roles for ``messages`` — user and assistant —
+    and carries the system prompt in its own top-level field. Claude Code
+    nonetheless injects ``role: "system"`` turns mid-conversation, and
+    translating one literally puts a system message in the middle of a
+    chat/completions body. OpenAI tolerates that; a chat template does not, and
+    an upstream serving one answers "System message must be at the beginning."
+    with a 400 before the model sees the request.
+
+    Their text joins the system prompt in the order it appeared. That keeps the
+    instructions — dropping them would silently change what the model was told
+    — and leaves the remaining turns strictly alternating, which is what the
+    templates that reject a stray system message also tend to require. Turning
+    them into user turns would instead produce two user turns in a row.
+    """
+    system_parts = [system_to_text(payload.get("system"))]
+    conversation: List[Dict[str, Any]] = []
+    for message in payload.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").lower() in _SYSTEM_ROLES:
+            # Content here has the same string-or-text-blocks shape as the
+            # top-level system field, so it flattens the same way.
+            system_parts.append(system_to_text(message.get("content")))
+            continue
+        conversation.append(message)
+    return "\n\n".join(part for part in system_parts if part), conversation
+
+
 def image_data_url(block: Dict[str, Any]) -> Optional[str]:
     """Turn an Anthropic image block into a ``data:``/``https:`` URL.
 

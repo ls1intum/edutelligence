@@ -62,6 +62,18 @@ class VllmConfig(BaseModel):
     )
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
+    sharded_checkpoint_enabled: bool | None = Field(
+        default=None,
+        description="Per-model switch for the pre-sharded checkpoint used by "
+        "TP>1 lanes. None (default) follows the worker-wide "
+        "engines.vllm.sharded_checkpoint_enabled. Set false to keep one model "
+        "on the full checkpoint — e.g. a quantization whose weight layout does "
+        "not survive the sharded_state round trip — without giving up the "
+        "optimization for every other model on the node; set true to opt a "
+        "single model in on a node where the worker-wide default is off. "
+        "Settable per model under engines.vllm.model_overrides.<model>. See "
+        "model_uses_sharded_checkpoint for the resolution.",
+    )
     gpu_memory_utilization: float | None = Field(
         default=None,
         ge=0.1,
@@ -722,6 +734,43 @@ def model_can_sleep(cfg: AppConfig, model_name: str) -> bool:
     if "enable_sleep_mode" in ov_caps:
         return bool(ov_caps["enable_sleep_mode"])
     return True
+
+
+def model_uses_sharded_checkpoint(
+    engine_cfg: VllmEngineConfig | None,
+    model_name: str,
+    lane_value: bool | None = None,
+) -> bool:
+    """Effective sharded-checkpoint switch for one model on this worker.
+
+    A per-model ``sharded_checkpoint_enabled`` wins over the worker-wide
+    ``engines.vllm.sharded_checkpoint_enabled`` in *both* directions: a single
+    model whose quantized weight layout does not survive the sharded_state
+    round trip can be kept on the full checkpoint without costing every other
+    model on the node its cache, and a single model can equally be opted *in*
+    where the worker-wide default is off. ``None`` — the default — follows the
+    worker-wide flag.
+
+    ``lane_value`` is the value already merged onto a lane's ``vllm_config`` by
+    ``LaneManager._apply_model_vllm_overrides``, and wins over a fresh
+    ``model_overrides`` lookup so the spawn path honours what the lane was
+    actually built with. The calibration trigger has no lane yet and passes
+    nothing, so it reads ``model_overrides`` here instead.
+
+    Centralized so the lane-spawn path (vllm_process) and the
+    server-orchestrated calibration trigger (logos_bridge) cannot drift: a
+    conversion the spawner would never read is a conversion not worth running.
+    """
+    if engine_cfg is None:
+        return lane_value if lane_value is not None else True
+    per_model = lane_value
+    if per_model is None:
+        override = (engine_cfg.model_overrides.get(model_name) or {}).get("sharded_checkpoint_enabled")
+        if override is not None:
+            per_model = bool(override)
+    if per_model is not None:
+        return per_model
+    return bool(getattr(engine_cfg, "sharded_checkpoint_enabled", True))
 
 
 class ProcessState(str, enum.Enum):

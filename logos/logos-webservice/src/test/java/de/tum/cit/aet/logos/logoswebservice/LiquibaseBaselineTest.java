@@ -66,17 +66,41 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration027_providerSnapshotsTableRenamed() {
+    void migration027_rateLimitAdmittedColumnAndForwardingIndexExist() {
+        // The /me/keys usage window filters log_entry on both of these:
+        // rejected requests are excluded via the column, and the
+        // (api_key_id, timestamp_forwarding) range needs its index.
+        assertThat(columnExists("log_entry", "rate_limit_admitted")).isTrue();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_api_key_timestamp_forwarding");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void migration028_rateLimitCompletionResponseIndexExists() {
+        // The completion half of the /me/keys usage window filters log_entry
+        // on timestamp_response per key; it needs its own
+        // (api_key_id, timestamp_response) index, since the 027 forwarding
+        // index cannot satisfy the `timestamp_response >= :since` OR disjunct.
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_api_key_timestamp_response");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void migration029_providerSnapshotsTableRenamed() {
         // The physical table carries the engine-neutral name now...
         assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");
         // ...while the pre-rename name survives exactly one release as a
         // pass-through view, so an orchestrator rolled back to the previous
-        // release can still write it (see migration 027's compatibility view).
+        // release can still write it (see migration 029's compatibility view).
         assertThat(tableType("ollama_provider_snapshots")).isEqualTo("VIEW");
     }
 
     @Test
-    void migration027_compatibilityViewMirrorsTheRenamedTable() {
+    void migration029_compatibilityViewMirrorsTheRenamedTable() {
         // The view is a plain SELECT * over the renamed table, so it must
         // expose every column the previous release wrote: the identifier, the
         // base metrics, and the richer runtime/scheduler payloads added later.
@@ -86,8 +110,8 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration028_allowsStartWithoutOllamaTypedProviders() {
-        // The 028 gate must be a no-op on a clean schema (the provider_type
+    void migration030_allowsStartWithoutOllamaTypedProviders() {
+        // The 030 gate must be a no-op on a clean schema (the provider_type
         // enum makes 'ollama' rows impossible) — reaching this test already
         // proves the changelog ran to the end.
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();

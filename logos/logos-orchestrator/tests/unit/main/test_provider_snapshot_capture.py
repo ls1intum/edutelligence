@@ -12,7 +12,7 @@ retries.
 
 from __future__ import annotations
 
-import logos as main
+from logos.routers import logosnode as logosnode_mod
 
 
 class _SnapshotDB:
@@ -36,6 +36,13 @@ class _SnapshotDB:
         return self._snapshot_id
 
 
+class _FakeTask:
+    """Enough of ``asyncio.Task`` for the strong-reference bookkeeping."""
+
+    def add_done_callback(self, _callback):
+        return None
+
+
 def _sample() -> dict:
     return {
         "timestamp": "2026-09-03T12:00:00+00:00",
@@ -51,9 +58,22 @@ def _sample() -> dict:
 
 
 def _patched_capture(monkeypatch, db):
-    monkeypatch.setattr(main, "DBManager", lambda: db)
-    monkeypatch.setattr(main, "_build_live_local_provider_sample", lambda *a, **k: _sample())
-    monkeypatch.setattr(main, "_resolve_provider_name", lambda provider_id: "gpu-1")
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_build_live_local_provider_sample", lambda *a, **k: _sample())
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda provider_id: "gpu-1")
+
+
+def _capture_created_tasks(monkeypatch) -> list:
+    """Collect the coroutines handed to ``create_task`` instead of running them."""
+    created: list = []
+
+    def _create_task(coro, *a, **k):
+        created.append(coro)
+        coro.close()
+        return _FakeTask()
+
+    monkeypatch.setattr(logosnode_mod.asyncio, "create_task", _create_task)
+    return created
 
 
 def test_a_snapshot_insert_failure_keeps_the_worker_connected(monkeypatch, caplog):
@@ -63,7 +83,8 @@ def test_a_snapshot_insert_failure_keeps_the_worker_connected(monkeypatch, caplo
     _patched_capture(monkeypatch, _SnapshotDB(raises=RuntimeError('relation "provider_snapshots" does not exist')))
 
     with caplog.at_level("WARNING"):
-        main._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})  # must not raise
+        # must not raise
+        logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})
 
     assert "Failed to persist provider snapshot" in caplog.text
 
@@ -73,16 +94,10 @@ def test_an_insert_failure_is_not_silently_recorded_in_memory(monkeypatch):
     recording without a snapshot id) rather than half-committed."""
     db = _SnapshotDB(raises=RuntimeError("db down"))
     _patched_capture(monkeypatch, db)
-    created: list = []
+    created = _capture_created_tasks(monkeypatch)
 
-    def _create_task(coro, *a, **k):
-        created.append(coro)
-        coro.close()
-        return None
-
-    monkeypatch.setattr(main.asyncio, "create_task", _create_task)
-
-    main._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})  # must not raise
+    # must not raise
+    logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})
 
     assert db.inserted is None
     assert created == []
@@ -93,16 +108,9 @@ def test_a_successful_snapshot_still_persists_and_is_recorded(monkeypatch):
     successful insert or skip the in-memory recording."""
     db = _SnapshotDB(snapshot_id=42)
     _patched_capture(monkeypatch, db)
-    created: list = []
+    created = _capture_created_tasks(monkeypatch)
 
-    def _create_task(coro, *a, **k):
-        created.append(coro)
-        coro.close()
-        return None
-
-    monkeypatch.setattr(main.asyncio, "create_task", _create_task)
-
-    main._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})
+    logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})
 
     assert db.inserted is not None
     assert db.inserted["provider_id"] == 7

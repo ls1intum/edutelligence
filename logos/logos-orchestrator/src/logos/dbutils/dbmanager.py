@@ -391,6 +391,7 @@ class DBManager:
             "timeout_s",
             "scheduled_ts",
             "request_complete_ts",
+            "rate_limit_admitted",
             "available_vram_mb",
             "azure_rate_remaining_requests",
             "azure_rate_remaining_tokens",

@@ -86,7 +86,10 @@ public class ProviderService {
         p.setApiKey(apiKey);
 
         p = providerRepository.save(p);
-        orchestratorNotificationService.notifyRefresh(false);
+        // A cloud provider is created empty: its models come from the orchestrator's
+        // /v1/models scrape. Ask for that pass now instead of leaving the operator
+        // looking at an empty list until the next interval tick.
+        orchestratorNotificationService.notifyRefresh(false, providerType == ProviderType.cloud);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("result", "Created Provider.");
@@ -115,7 +118,9 @@ public class ProviderService {
             p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         }
         providerRepository.save(p);
-        orchestratorNotificationService.notifyRefresh(false);
+        // Base URL, key and cloud type all change what the upstream lists, so a
+        // cloud provider is re-scraped on every edit.
+        orchestratorNotificationService.notifyRefresh(false, p.getProviderType() == ProviderType.cloud);
         return Map.of("result", "Updated Provider.");
     }
 

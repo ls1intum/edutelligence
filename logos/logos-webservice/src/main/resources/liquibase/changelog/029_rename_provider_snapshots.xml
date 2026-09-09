@@ -12,7 +12,7 @@
          the data and all indexes are untouched. The old name is then kept as
          a one-release compatibility view so an orchestrator rolled back to the
          previous release can still write it (see the view's comment below). -->
-    <changeSet id="027-rename-provider-snapshots" author="wasnertobias">
+    <changeSet id="029-rename-provider-snapshots" author="wasnertobias">
         <!-- Apply only while the pre-rename name still resolves to a base
              table. Once this changeSet has run the name is a view, so a
              re-evaluated run is marked as already applied instead of trying
