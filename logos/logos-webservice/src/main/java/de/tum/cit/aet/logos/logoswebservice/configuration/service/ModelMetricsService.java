@@ -102,9 +102,10 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * re-opened.
  *
  * The weight phase of a run takes a separate, transaction-scoped advisory
- * lock on the model-weights namespace as its first statement, and the admin
- * endpoints that load and later save whole Model rows (add / update / delete
- * model, weight feedback) take the same lock before loading any model row.
+ * lock on the model-weights namespace as its first statement, and every
+ * full-row model writer takes the same lock before loading any model row:
+ * the admin endpoints (add / update / delete model, weight feedback) and the
+ * ModelWeightService rebalances they trigger.
  * Model has no @Version, so an admin save flushes the full row - weight
  * columns and override map included - as of its load; the serialization
  * makes a save that started before a derivation wait for it, and a

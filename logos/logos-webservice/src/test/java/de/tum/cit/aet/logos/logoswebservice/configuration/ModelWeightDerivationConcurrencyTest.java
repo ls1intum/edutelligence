@@ -36,13 +36,15 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelWeightService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 /**
  * Concurrency coverage for the model-weights lock that serializes the
- * auto-derivation's weight phase with the admin endpoints' unversioned
- * full-row model saves. Model has no @Version, so a save that loaded a model
+ * auto-derivation's weight phase with the unversioned full-row model saves
+ * of the admin endpoints and the weight rebalances they (or a future direct
+ * caller) trigger. Model has no @Version, so a save that loaded a model
  * before a derivation committed flushes the stale weight columns and
  * override map back on its Hibernate update unless the writer took the lock
  * before loading. These tests run against the real Postgres container, so
@@ -67,6 +69,8 @@ class ModelWeightDerivationConcurrencyTest {
     ModelService modelService;
     @Autowired
     ModelMetricsService modelMetricsService;
+    @Autowired
+    ModelWeightService modelWeightService;
     @Autowired
     ModelRepository modelRepository;
     @Autowired
@@ -260,6 +264,71 @@ class ModelWeightDerivationConcurrencyTest {
 
         assertThat(weightOf(5101, "cost")).isEqualTo(3);
         assertThat(overridesOf(5101)).contains("cost");
+    }
+
+    @Test
+    void rebalanceAfterFeedbackWaitsForInFlightDerivationWeightPhase() throws Exception {
+        // The rebalances flush every model row they load, so the guarantee
+        // must live on the rebalance methods themselves, not only on their
+        // current ModelService callers: a direct call has to park on a held
+        // model-weights lock instead of loading now and flushing the stale
+        // rows later.
+        TransactionTemplate holderTx = new TransactionTemplate(transactionManager);
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        try (ExecutorService holderPool = Executors.newSingleThreadExecutor();
+             ExecutorService servicePool = Executors.newSingleThreadExecutor()) {
+            Future<Integer> holder = holderPool.submit(() -> holderTx.execute(status -> {
+                modelRepository.lockModelWeights(ModelMetricsService.MODEL_WEIGHTS_LOCK_KEY);
+                held.countDown();
+                try {
+                    if (!release.await(30, TimeUnit.SECONDS)) {
+                        status.setRollbackOnly();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    status.setRollbackOnly();
+                }
+                return 1;
+            }));
+            assertThat(held.await(10, TimeUnit.SECONDS))
+                .as("the rival transaction holds the model-weights lock")
+                .isTrue();
+
+            Future<Integer> rebalance = servicePool.submit(
+                () -> {
+                    modelWeightService.rebalanceAfterFeedback(5101, "latency", 1);
+                    return 1;
+                });
+
+            // The rebalance must be parked on the lock: if it completed while
+            // the lock was held, it loaded the model rows unserialized, and
+            // its full-row flush can revert a concurrent derivation.
+            boolean parked = false;
+            long deadline = System.currentTimeMillis() + 15_000;
+            while (System.currentTimeMillis() < deadline) {
+                if (rebalance.isDone()) {
+                    fail("the rebalance completed while the model-weights lock was held");
+                }
+                if (lockWaiterVisible()) {
+                    parked = true;
+                    break;
+                }
+                Thread.sleep(50);
+            }
+            assertThat(parked)
+                .as("the rebalance waited on the model-weights lock")
+                .isTrue();
+
+            release.countDown();
+            rebalance.get(30, TimeUnit.SECONDS);
+            holder.get(30, TimeUnit.SECONDS);
+        }
+
+        // The feedback landed only after the wait: 5101 now ranks above 5102
+        // on latency, and the rebalance's full-row flush carried that through.
+        assertThat(weightOf(5101, "latency")).isGreaterThan(weightOf(5102, "latency"));
     }
 
     /**

@@ -32,9 +32,28 @@ public class ModelWeightService {
         this.modelRepository = modelRepository;
     }
 
+    /**
+     * Serializes this rebalance's model load and full-row flush with the
+     * auto-derivation's weight phase ({@code ModelMetricsService#applyDerivedWeights}).
+     * Model has no @Version, so the saveAll at the end of a rebalance writes
+     * the weight columns and the override map back as of the moment the rows
+     * were loaded; a derivation that committed in between would be silently
+     * reverted. The ModelService endpoints that trigger these rebalances
+     * already hold the lock, for which this is a no-op re-acquisition in the
+     * same transaction; taking it here as well keeps the guarantee on the
+     * writers themselves, so a new caller of a rebalance cannot silently
+     * reopen the window. Like the endpoints' lock it is released automatically
+     * with the surrounding transaction, and it must stay the first statement
+     * before any model row is loaded.
+     */
+    private void lockModelWeights() {
+        modelRepository.lockModelWeights(ModelMetricsService.MODEL_WEIGHTS_LOCK_KEY);
+    }
+
     @Transactional
     public void rebalanceAfterAdd(int newModelId, Integer worseLatencyId, Integer worseAccuracyId,
                                    Integer worseCostId, Integer worseQualityId) {
+        lockModelWeights();
         List<Model> allModels = modelRepository.findAll();
         List<ModelScore> latencyRankings  = sortedByDimension(allModels, "latency",  newModelId);
         List<ModelScore> accuracyRankings = sortedByDimension(allModels, "accuracy", newModelId);
@@ -52,6 +71,7 @@ public class ModelWeightService {
         if (!java.util.Set.of("latency", "accuracy", "cost", "quality").contains(category)) {
             throw new IllegalArgumentException("Invalid category: " + category);
         }
+        lockModelWeights();
         List<Model> allModels = modelRepository.findAll();
         List<ModelScore> rankings = sortedByDimension(allModels, category, -1);
 
@@ -106,6 +126,7 @@ public class ModelWeightService {
 
     @Transactional
     public void rebalanceAfterDelete(int deletedModelId) {
+        lockModelWeights();
         List<Model> allModels = modelRepository.findAll();
         List<ModelScore> latencyRankings  = sortedByDimension(allModels, "latency",  -1);
         List<ModelScore> accuracyRankings = sortedByDimension(allModels, "accuracy", -1);
