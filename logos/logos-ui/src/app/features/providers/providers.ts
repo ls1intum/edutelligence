@@ -54,6 +54,7 @@ export class Providers implements OnInit {
     'bedrock',
     'deepseek',
     'groq',
+    'logos',
     'none',
   ];
   readonly privacyLevels: PrivacyLevel[] = [
@@ -181,6 +182,15 @@ export class Providers implements OnInit {
   addPrivacyLevel = signal<PrivacyLevel>('CLOUD_IN_EU_BY_US_PROVIDER');
   addLoading = signal(false);
   addError = signal('');
+
+  // ── Created-provider key modal ───────────────────────────────────────────
+  // Logosnode providers are given a generated shared key on creation; the
+  // operator must be able to copy it to configure the worker node, so we
+  // surface it in a follow-up modal once the add flow succeeds.
+  createdKeyOpen = signal(false);
+  createdKeyName = signal('');
+  createdKey = signal('');
+  createdKeyCopied = signal(false);
 
   // ── Edit modal ────────────────────────────────────────────────────────────
   editTarget = signal<Provider | null>(null);
@@ -359,14 +369,41 @@ export class Providers implements OnInit {
       privacy_level: this.addPrivacyLevel(),
     };
     try {
-      await this.providerService.addProvider(payload);
+      const res = await this.providerService.addProvider(payload);
       await this.fetchProviders();
       this.addOpen.set(false);
+      const generatedKey: string = (res && (res as { api_key?: string }).api_key) || '';
+      // Only surface the key when we actually generated one, i.e. the operator
+      // left the key field empty. An operator-supplied key is echoed back by the
+      // backend too, and there is nothing new to show for that case.
+      if (generatedKey && payload.api_key === undefined) {
+        this.createdKeyName.set(payload.name);
+        this.createdKey.set(generatedKey);
+        this.createdKeyCopied.set(false);
+        this.createdKeyOpen.set(true);
+      }
     } catch {
       this.addError.set('Failed to add provider, please try again.');
     } finally {
       this.addLoading.set(false);
     }
+  }
+
+  async copyCreatedKey(): Promise<void> {
+    const key = this.createdKey();
+    if (!key) return;
+    try {
+      await navigator.clipboard.writeText(key);
+      this.createdKeyCopied.set(true);
+      setTimeout(() => this.createdKeyCopied.set(false), 2000);
+    } catch {
+      // Clipboard unavailable (e.g. non-secure context) — the key is still
+      // visible in the field above for manual copying.
+    }
+  }
+
+  closeCreatedKeyDialog(): void {
+    this.createdKeyOpen.set(false);
   }
 
   // ── Edit flow ─────────────────────────────────────────────────────────────

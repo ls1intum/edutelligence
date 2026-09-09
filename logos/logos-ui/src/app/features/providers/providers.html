@@ -276,23 +276,25 @@
         (valueChange)="onAddProviderTypeChange($any($event))"
       />
     </div>
+    @if (addProviderType() === 'cloud') {
     <div class="form-field">
       <label class="field-label" for="add-cloud-type">Cloud Provider</label>
       <app-select
         [id]="'add-cloud-type'"
         [options]="addCloudProviderTypeOptions()"
         [value]="addCloudProviderType()"
-        [disabled]="addLoading() || addProviderType() === 'logosnode'"
+        [disabled]="addLoading()"
         (valueChange)="addCloudProviderType.set($any($event))"
       />
     </div>
+    }
     <div class="form-field">
       <label class="field-label" for="add-privacy">Privacy Level</label>
       <app-select
         [id]="'add-privacy'"
         [options]="addPrivacyLevelOptions()"
         [value]="addPrivacyLevel()"
-        [disabled]="addLoading() || addProviderType() === 'logosnode'"
+        [disabled]="addLoading()"
         (valueChange)="addPrivacyLevel.set($any($event))"
       />
     </div>
@@ -319,6 +321,47 @@
         <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
       }
       Add Provider
+    </button>
+  </div>
+</app-modal-form>
+
+<!-- ── Created Provider API Key Dialog ─────────────────────────────────────── -->
+<app-modal-form
+  [visible]="createdKeyOpen()"
+  (visibleChange)="$event || closeCreatedKeyDialog()"
+  title="Provider created"
+>
+  <div class="form-body">
+    <p class="created-key-intro">
+      <strong>{{ createdKeyName() }}</strong> is a Logos worker node. Authenticate it
+      with the shared key below — it is shown only now, so copy it to your worker
+      configuration.
+    </p>
+    <div class="form-field">
+      <label class="field-label" for="created-key">Shared API Key</label>
+      <div class="created-key-row">
+        <input
+          id="created-key"
+          class="field-input"
+          type="text"
+          readonly
+          [value]="createdKey()"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button class="btn-secondary" type="button" (click)="copyCreatedKey()">
+          @if (createdKeyCopied()) {
+            <i class="pi pi-check" aria-hidden="true"></i> Copied!
+          } @else {
+            <i class="pi pi-copy" aria-hidden="true"></i> Copy
+          }
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-primary" type="button" (click)="closeCreatedKeyDialog()">
+      Done
     </button>
   </div>
 </app-modal-form>
@@ -408,23 +451,25 @@
         (valueChange)="onEditProviderTypeChange($any($event))"
       />
     </div>
+    @if (editProviderType() === 'cloud') {
     <div class="form-field">
       <label class="field-label" for="edit-cloud-type">Cloud Provider</label>
       <app-select
         [id]="'edit-cloud-type'"
         [options]="editCloudProviderTypeOptions()"
         [value]="editCloudProviderType()"
-        [disabled]="editLoading() || editProviderType() === 'logosnode'"
+        [disabled]="editLoading()"
         (valueChange)="editCloudProviderType.set($any($event))"
       />
     </div>
+    }
     <div class="form-field">
       <label class="field-label" for="edit-privacy">Privacy Level</label>
       <app-select
         [id]="'edit-privacy'"
         [options]="editPrivacyLevelOptions()"
         [value]="editPrivacyLevel()"
-        [disabled]="editLoading() || editProviderType() === 'logosnode'"
+        [disabled]="editLoading()"
         (valueChange)="editPrivacyLevel.set($any($event))"
       />
     </div>
