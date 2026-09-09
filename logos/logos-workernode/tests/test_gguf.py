@@ -706,6 +706,21 @@ def test_gguf_capability_target_plain_named_gguf_cache(tmp_path: Path) -> None:
     assert gguf.gguf_capability_target(str(tmp_path), "org/never-cached-plain") is None
 
 
+def test_gguf_capability_target_plain_named_gguf_lowercase_pin(tmp_path: Path) -> None:
+    # Lowercase pins are supported and canonicalized by resolve_gguf_spec (it
+    # uppercases gguf_quant before serving), so the capability target must
+    # validate them in that same canonical form and name the canonical
+    # target. Validating the raw pin would fall through to the directory
+    # check, which the cached repository directory satisfies — suppressing
+    # the prefetch for the quant the lane will actually serve.
+    _write_gguf(tmp_path, "Qwen/Qwen3-8B", ["Qwen3-8B-Q4_K_M.gguf"])
+    assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B", pinned_quant="q8_0") == "Qwen/Qwen3-8B:Q8_0"
+    # Mixed case canonicalizes the same way …
+    assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B", pinned_quant="q4_k_m") == "Qwen/Qwen3-8B:Q4_K_M"
+    # … and an invalid pin in any case still changes nothing the check can prove.
+    assert gguf.gguf_capability_target(str(tmp_path), "Qwen/Qwen3-8B", pinned_quant="q9_x") is None
+
+
 def test_gguf_capability_target_local_file_ref_is_itself() -> None:
     # A local GGUF file proves itself (its file existence) in absolute and
     # relative form — the directory fallback can never accept a file.

@@ -74,8 +74,23 @@ def _download_one_model(model_name: str, hf_home: str, gguf_quant: str = "") -> 
     token = os.environ.get("HF_TOKEN") or None
 
     if not gguf.is_gguf_model(model_name):
-        snapshot_download(repo_id=model_name, cache_dir=cache_dir, token=token)
-        return
+        # A plain-named repository is not a GGUF model by NAME — but its
+        # cached weights may be: the capability check classifies the
+        # snapshot the way resolve_gguf_spec does (GGUF backbone quants, no
+        # transformers backbone) and queues the model for repair when the
+        # selected quant's files are incomplete. The repair must fetch that
+        # same concrete quant, not every quantization the repository ships
+        # (the tens-of-gigabytes download this feature exists to avoid).
+        # With no cached GGUF evidence the target is None and the
+        # full-repository download stands.
+        target = gguf.gguf_capability_target(hf_home, model_name, gguf_quant)
+        if target is None or target == model_name:
+            snapshot_download(repo_id=model_name, cache_dir=cache_dir, token=token)
+            return
+        # The target is the repo:quant the capability check validates —
+        # re-enter the flow as that explicit reference so only its quant is
+        # downloaded.
+        model_name = target
 
     # Resolve the quant to filter on. An explicit repo:quant reference is
     # authoritative: resolve_gguf_spec serves the embedded quant and ignores

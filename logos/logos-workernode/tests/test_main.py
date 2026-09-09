@@ -208,6 +208,85 @@ def test_download_one_model_explicit_quant_beats_operator_pin(tmp_path, monkeypa
     assert all("q4_k_m" not in pattern.lower() for pattern in kwargs["allow_patterns"])
 
 
+def _write_gguf_snapshot(hf_home: Path, model: str, filenames: list[str]) -> None:
+    """Write *model*'s active snapshot into the HF hub cache layout."""
+    repo_dir = hf_home / "hub" / ("models--" + model.replace("/", "--"))
+    snapshot = repo_dir / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs" / "main").write_text("abc123")
+    for name in filenames:
+        (snapshot / name).write_bytes(b"\x00")
+
+
+def test_download_one_model_plain_named_gguf_cache_filters_to_the_quant(tmp_path, monkeypatch) -> None:
+    # Regression: a plain-named repository is not GGUF by name — but when
+    # its cached weights prove it is (the incomplete shard below is exactly
+    # what the capability check queues for repair), the prefetch must
+    # download only the quant the capability check validates, not every
+    # quantization the repository ships (the tens-of-gigabytes download this
+    # feature exists to avoid).
+    _write_gguf_snapshot(tmp_path, "Qwen/Qwen3-8B", ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf"])
+
+    calls: list[dict] = []
+
+    def fake(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    worker_main._download_one_model("Qwen/Qwen3-8B", str(tmp_path))
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["repo_id"] == "Qwen/Qwen3-8B"
+    assert kwargs.get("allow_patterns") is not None
+    # The quant the capability check validates (Q4_K_M), nothing else.
+    assert all("q4_k_m" in pattern.lower() for pattern in kwargs["allow_patterns"])
+
+
+def test_download_one_model_plain_named_gguf_cache_respects_lowercase_pin(tmp_path, monkeypatch) -> None:
+    # The operator pin is case-insensitive — resolve_gguf_spec uppercases it
+    # — so a lowercase pin on a plain-named cached GGUF repo must select the
+    # canonical quant the lane serves, not fall back to the full repository.
+    _write_gguf_snapshot(tmp_path, "Qwen/Qwen3-8B", ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf"])
+
+    calls: list[dict] = []
+
+    def fake(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    worker_main._download_one_model("Qwen/Qwen3-8B", str(tmp_path), "q8_0")
+
+    assert len(calls) == 1
+    kwargs = calls[0]
+    assert kwargs["repo_id"] == "Qwen/Qwen3-8B"
+    assert kwargs.get("allow_patterns") is not None
+    assert all("q8_0" in pattern.lower() for pattern in kwargs["allow_patterns"])
+    assert all("q4_k_m" not in pattern.lower() for pattern in kwargs["allow_patterns"])
+
+
+def test_download_one_model_plain_named_without_gguf_cache_downloads_full_repo(tmp_path, monkeypatch) -> None:
+    # No cached GGUF evidence → a plain-named repository keeps the
+    # full-repository download (no allow_patterns filtering).
+    calls: list[dict] = []
+
+    def fake(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    worker_main._download_one_model("Qwen/Qwen3-8B", str(tmp_path))
+
+    assert len(calls) == 1
+    assert "allow_patterns" not in calls[0]
+
+
 def test_download_one_model_skips_local_file_refs(tmp_path, monkeypatch) -> None:
     # Regression: local GGUF file references (absolute AND relative) point at
     # the host filesystem, not a Hub repository — the prefetch must not

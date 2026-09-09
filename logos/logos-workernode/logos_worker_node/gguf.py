@@ -743,10 +743,18 @@ def gguf_capability_target(
         if pinned:
             # A pin the plugin would reject cannot load either way — the
             # directory check stands and the lane fails at spawn with the
-            # plugin's own error.
-            if not (is_valid_gguf_quant_type(pinned) or is_nonstandard_gguf_quant_type(pinned)):
+            # plugin's own error. The pin is validated in its canonical
+            # uppercase form and the target returned canonicalized:
+            # resolve_gguf_spec uppercases gguf_quant before serving, so a
+            # lowercase pin (q8_0) must name the same Q8_0 target as its
+            # uppercase twin — validating the raw pin would fall through to
+            # the directory check, which the cached repository directory
+            # satisfies and suppress the prefetch for the quant the lane
+            # will actually serve.
+            quant = pinned.upper()
+            if not (is_valid_gguf_quant_type(quant) or is_nonstandard_gguf_quant_type(quant)):
                 return None
-            return f"{model}:{pinned}"
+            return f"{model}:{quant}"
         quant = select_quant(quants)
         return f"{model}:{quant}" if quant else model
     pinned = (pinned_quant or "").strip()
