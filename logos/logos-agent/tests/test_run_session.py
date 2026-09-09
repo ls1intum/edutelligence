@@ -17,6 +17,7 @@ credential helper would run with that token in its environment.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -1150,6 +1151,84 @@ class TestHowAPullRequestIsOpened:
 
         title = calls[0][calls[0].index("--title") + 1]
         assert title == "`Logos`: Fit the KPI card sparkline to its slot"
+
+    @staticmethod
+    def reuse_capture(monkeypatch, tmp_path, *, number, url, commit_subject):
+        """A `gh pr create` that fails because the pull request already exists.
+
+        The second (or later) iteration of a session hits this: the branch
+        already has a pull request, so the harness reuses it. That is the case
+        where the title used to go stale.
+        """
+        calls: list = []
+
+        class _Out:
+            def __init__(self, code: int, out: str):
+                self.returncode = code
+                self.stdout = out
+                self.stderr = ""
+
+        def fake_run(cmd, **_kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "pr", "create"]:
+                return _Out(1, "")  # a pull request for this branch already exists
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return _Out(0, json.dumps({"number": number, "url": url}))
+            if cmd[:3] == ["gh", "pr", "edit"]:
+                return _Out(0, "")
+            return _Out(0, "")
+
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "x/y")
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.delenv("LOGOS_SESSION_CLOSES", raising=False)
+        if commit_subject is not None:
+            (tmp_path / "commit.txt").write_text(commit_subject)
+        monkeypatch.setattr(run_session, "run", fake_run)
+        return calls
+
+    def test_a_reused_pull_request_gets_its_title_refreshed(self, monkeypatch, tmp_path):
+        # The first round refused the paths; the second serves them. The
+        # commit subject says so, and the pull request's title must follow —
+        # it is the thing a reviewer reads before opening the diff.
+        calls = self.reuse_capture(
+            monkeypatch,
+            tmp_path,
+            number=933,
+            url="https://github.com/x/y/pull/933",
+            commit_subject="Forward OpenAI Batch API calls to upstream providers",
+        )
+
+        url = run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert url == "https://github.com/x/y/pull/933"
+        edit = next(cmd for cmd in calls if cmd[:3] == ["gh", "pr", "edit"])
+        assert edit[edit.index("--title") + 1] == "`Logos`: Forward OpenAI Batch API calls to upstream providers"
+        assert str(933) in edit
+
+    def test_reusing_a_pull_request_still_closes_only_the_assigned_issue(self, monkeypatch, tmp_path):
+        calls = self.reuse_capture(
+            monkeypatch,
+            tmp_path,
+            number=493,
+            url="https://github.com/x/y/pull/493",
+            commit_subject="Fit the KPI card sparkline to its slot",
+        )
+        monkeypatch.setenv("LOGOS_SESSION_CLOSES", "493")
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        edit = next(cmd for cmd in calls if cmd[:3] == ["gh", "pr", "edit"])
+        assert edit[edit.index("--body") + 1] == "closes #493"
+
+    def test_no_pull_request_to_reuse_is_a_failure_not_a_reuse(self, monkeypatch, tmp_path):
+        # `gh pr create` failed and there is no existing pull request either:
+        # the branch never reached the remote. Say so, do not invent a reuse.
+        calls = self.reuse_capture(monkeypatch, tmp_path, number=None, url=None, commit_subject="Do the thing")
+
+        url = run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert url is None
+        assert not any(cmd[:3] == ["gh", "pr", "edit"] for cmd in calls)
 
 
 class TestWhatTheAgentIsTold:
