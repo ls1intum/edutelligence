@@ -23,7 +23,6 @@ import logging
 import os
 import shutil
 import subprocess
-import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -235,14 +234,6 @@ class ModelRamCache:
         # re-plan's live-lane protection set cannot see it; a reserved entry is
         # unioned into that set instead (see cache_use_reservations).
         self._cache_use_refs: dict[str, int] = {}
-        # Thread-safe guard for _cache_use_refs. A threading.Lock, not an
-        # asyncio one: reserve/release run in executor threads (calibration)
-        # while reclaim runs on the event loop. It serialises a reservation
-        # against reclaim's final per-model eviction decision — the `keep`
-        # set reclaim is handed is a snapshot taken BEFORE the reclaim
-        # started, so the live count re-checked under this guard in reclaim
-        # is what spares an entry reserved in the meantime (see reclaim).
-        self._cache_use_guard = threading.Lock()
 
         self._cache_hub.mkdir(parents=True, exist_ok=True)
         self._scan_existing()
@@ -296,11 +287,8 @@ class ModelRamCache:
         ``release_cache_use``. Reference-counted so overlapping uses (e.g. a
         calibration session that re-runs) cannot un-reserve each other, and a
         double release is a harmless no-op rather than corrupting the count.
-        Thread-safe: this runs in executor threads, and the guard also
-        serialises the count against reclaim's final eviction decision.
         """
-        with self._cache_use_guard:
-            self._cache_use_refs[model_name] = self._cache_use_refs.get(model_name, 0) + 1
+        self._cache_use_refs[model_name] = self._cache_use_refs.get(model_name, 0) + 1
 
     def release_cache_use(self, model_name: str) -> None:
         """Drop one reservation taken by ``reserve_cache_use``.
@@ -308,12 +296,11 @@ class ModelRamCache:
         A release with no matching reservation is ignored (the count is clamped
         at zero) so an over-release cannot drive the count negative.
         """
-        with self._cache_use_guard:
-            refs = self._cache_use_refs.get(model_name, 0)
-            if refs <= 1:
-                self._cache_use_refs.pop(model_name, None)
-            else:
-                self._cache_use_refs[model_name] = refs - 1
+        refs = self._cache_use_refs.get(model_name, 0)
+        if refs <= 1:
+            self._cache_use_refs.pop(model_name, None)
+        else:
+            self._cache_use_refs[model_name] = refs - 1
 
     def cache_use_reservations(self) -> set[str]:
         """Models with an outstanding ``reserve_cache_use``.
@@ -322,8 +309,7 @@ class ModelRamCache:
         model being calibrated — whose entry it reads with no lane to hide
         behind — is not reclaimed while the reservation is live.
         """
-        with self._cache_use_guard:
-            return set(self._cache_use_refs)
+        return set(self._cache_use_refs)
 
     def model_size_bytes(self, model_name: str) -> int:
         """Bytes this model will occupy in the cache.
@@ -866,18 +852,6 @@ class ModelRamCache:
           and falls back to disk immediately). Without this the worker would
           finish copying a model the plan just rejected, and the next pass
           would evict it again — evict/recopy thrash of tens of GB.
-        * ``keep`` is a SNAPSHOT the caller computed before this reclaim
-          started (main.py unions the live cache-use reservations into it
-          exactly once, up front), and the awaits in here let an
-          executor-thread calibration reserve this very entry AFTER that
-          snapshot and select the tmpfs path with ``ensure_cached_sync``.
-          The reference count is therefore re-checked live under
-          ``_cache_use_guard`` — held through the eviction, so a reservation
-          landing while the tree is being removed blocks until it is gone and
-          the probe's ``ensure_cached_sync`` re-copies (or falls back to
-          source) instead of reading a half-deleted entry — and a late
-          reservation spares the model instead of being torn out from under
-          the probe.
         """
         removed: list[str] = []
         for model_name in sorted(self._cached_models):
@@ -887,18 +861,9 @@ class ModelRamCache:
                 continue
             lock = await self._get_model_lock(model_name)
             async with lock:
-                # `keep` is the caller's pre-reclaim snapshot (see the
-                # docstring): a calibration may have reserved THIS entry
-                # since it was taken. Re-check the live count under the
-                # reservation guard, held through the eviction, so a
-                # reservation that landed after the snapshot blocks the
-                # rmtree instead of being torn out from under the probe.
-                with self._cache_use_guard:
-                    if self._cache_use_refs.get(model_name, 0) > 0:
-                        continue
-                    self._release_queue_entry(model_name)
-                    self.evict(model_name)
-                removed.append(model_name)
+                self._release_queue_entry(model_name)
+                self.evict(model_name)
+            removed.append(model_name)
         for model_name in [m for m in self._cache_queue if m not in keep]:
             self._release_queue_entry(model_name)
         return removed
