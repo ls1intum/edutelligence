@@ -416,6 +416,73 @@ async def test_add_lane_invokes_the_on_lane_added_hook(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_wake_lane_invokes_the_on_lane_woken_hook(monkeypatch) -> None:
+    """The moment a lane wakes — its NEXT sleep must hold host RAM again — the
+    wired hook (the RAM cache re-plan) must run before wake_lane returns,
+    restoring the lane's sleeping footprint to the floor instead of waiting
+    for the next 60 s tick. A failing hook must never fail the wake itself,
+    and a failed wake must not fire the hook."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        OllamaConfig(),
+        lane_port_start=15091,
+        lane_port_end=15100,
+        on_lane_woken=_hook,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15091
+            self.lane_config = lane
+            self.wake_called = 0
+
+        async def wake_up(self) -> dict[str, Any]:
+            self.wake_called += 1
+            return {"ok": True}
+
+    fake = FakeVllmHandle()
+    manager._handles[lane_id] = fake  # noqa: SLF001
+    sentinel = object()
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.wake_lane(lane_id)
+
+    assert out is sentinel
+    assert fake.wake_called == 1
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_woken = _boom  # noqa: SLF001
+    out2 = await manager.wake_lane(lane_id)
+
+    assert out2 is sentinel  # the wake still succeeds
+    assert fake.wake_called == 2
+
+    # A failed (non-CUDA-OOM) wake propagates and must not fire the hook.
+    async def _fail_wake() -> dict[str, Any]:
+        raise RuntimeError("simulated engine failure")
+
+    manager._on_lane_woken = _hook  # noqa: SLF001
+    fake.wake_up = _fail_wake  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="simulated engine failure"):
+        await manager.wake_lane(lane_id)
+    assert calls == [1]  # unchanged
+
+
+@pytest.mark.asyncio
 async def test_apply_lanes_replans_after_each_registration_before_staggered_sleep(monkeypatch) -> None:
     """A batch add of sleep-capable lanes must re-plan after each registration
     and BEFORE that lane's staggered sleep — otherwise the lane's sleeping

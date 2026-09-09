@@ -317,6 +317,7 @@ class LaneManager:
         metal_config: MetalConfig | None = None,
         on_lane_slept: Callable[[], Awaitable[None]] | None = None,
         on_lane_added: Callable[[], Awaitable[None]] | None = None,
+        on_lane_woken: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._global_config = global_config
         self._vllm_engine_config = vllm_engine_config or VllmEngineConfig()
@@ -348,6 +349,15 @@ class LaneManager:
         # wait out the periodic loop's initial delay before its footprint is
         # ever reserved. Idempotent, so it composes with the post-sleep hook.
         self._on_lane_added = on_lane_added
+        # Invoked after a lane has successfully woken. main.py points this at
+        # the same RAM-cache re-plan so the sleep reserve is restored on the
+        # wake itself: the last pass saw the lane asleep and dropped it from
+        # the reserve, so until the next 60 s tick the floor undersizes the
+        # RAM this lane's NEXT sleep must allocate — a cache admission
+        # landing in that window can consume it. Idempotent, so it composes
+        # with the post-sleep hook and the periodic backstop. Must never
+        # raise into the wake path (see wake_lane).
+        self._on_lane_woken = on_lane_woken
         self._handles: dict[str, ProcessHandle] = {}
         self._port_alloc = PortAllocator(
             start=lane_port_start,
@@ -1016,6 +1026,28 @@ class LaneManager:
         except Exception:  # noqa: BLE001
             logger.debug("on_lane_added hook failed", exc_info=True)
 
+    async def _notify_lane_woken(self) -> None:
+        """Invoke the on_lane_woken hook after a lane's wake has succeeded.
+
+        The last re-plan saw the lane asleep and dropped it from the sleep
+        reserve, so this runs the reactive re-plan that restores its next
+        sleeping footprint to the floor before the next 60 s tick —
+        otherwise a cache admission landing in that window can consume the
+        RAM this lane's next sleep must allocate. A failing hook must never
+        fail the wake that triggered it — the next tick still runs.
+
+        Safe to call while holding self._lock: the hook's lane inspection
+        (sleeping_models, lane_ids, get_handle) takes no lock of its own.
+        """
+        if self._on_lane_woken is None:
+            return
+        try:
+            await self._on_lane_woken()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.debug("on_lane_woken hook failed", exc_info=True)
+
     async def _sleep_handle_and_replan(self, handle: ProcessHandle, level: int, mode: str) -> None:
         """Sleep a lane handle and, on success, run the reactive RAM-cache
         re-plan before any other lane may sleep.
@@ -1097,6 +1129,7 @@ class LaneManager:
     async def wake_lane(self, lane_id: str) -> LaneStatus:
         """Wake a sleeping vLLM lane."""
         cleanup: tuple[ProcessHandle, int | None, str] | None = None
+        status: LaneStatus | None = None
         async with self._lock:
             handle = self._handles.get(lane_id)
             if handle is None:
@@ -1149,7 +1182,20 @@ class LaneManager:
                     model=lc.model,
                     port=handle.port,
                 )
-                return await self._get_status_unlocked(lane_id)
+                status = await self._get_status_unlocked(lane_id)
+
+        if cleanup is None:
+            # The lane is awake again and its NEXT sleep must hold host
+            # RAM — but the last re-plan saw it asleep and dropped it
+            # from the sleep reserve, so until the next 60 s tick the
+            # floor undersizes the RAM that next sleep needs, and a cache
+            # admission landing in that window can consume it. Re-plan
+            # immediately, outside self._lock so the (async) re-plan does
+            # not extend the wake's critical section; a failing hook must
+            # never fail the wake itself (see _notify_lane_woken).
+            await self._notify_lane_woken()
+            assert status is not None
+            return status
 
         assert cleanup is not None
         detached_handle, port, details = cleanup

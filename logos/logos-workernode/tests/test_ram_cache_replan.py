@@ -850,6 +850,98 @@ def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(mon
     assert cache.floor_mb == pytest.approx(10_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
+def test_replan_triggered_on_lane_wake_restores_reserve_before_next_admission(monkeypatch) -> None:
+    """The reserve must be restored the moment a lane wakes — its NEXT sleep
+    must hold host RAM again, but the last pass saw it asleep and dropped it
+    from the sleep reserve, so until the next 60 s tick the floor undersizes
+    the RAM that next sleep needs and a cache admission landing in that
+    window (e.g. a calibration copy) can consume it.
+
+    The on_lane_woken hook closes that gap. This drives the REAL LaneManager
+    wake path (wake_lane -> _notify_lane_woken -> _replan_ram_cache_once)
+    with the wake I/O stubbed, so no vLLM process is required. The floor
+    holds only the safety margin while the lane is asleep and is restored to
+    the lane's sleeping footprint by the wake itself — before the next
+    admission.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
+
+    model = "org/woken"
+    registry = _FakeRegistry({model: _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0)})
+    sizes = {model: _mb(8_000)}
+    cache = _FakeCache(cached=[model], sizes=sizes)
+    margin = worker_main._host_ram_safety_margin_mb(512_000.0)
+
+    class _AsleepHandle:
+        """A sleep-capable vLLM lane that starts asleep and wakes on wake_up()."""
+
+        def __init__(self) -> None:
+            self.lane_id = "org_woken"
+            self.lane_config = SimpleNamespace(
+                model=model,
+                vllm=True,
+                vllm_config=SimpleNamespace(enable_sleep_mode=True),
+            )
+            self.port = 15091
+            self.launched_from_ram_cache = True
+            self._asleep = True
+            self.wake_called = 0
+
+        def status(self):
+            return SimpleNamespace(state=ProcessState.RUNNING)
+
+        async def is_sleeping(self):
+            return self._asleep
+
+        async def wake_up(self):
+            self.wake_called += 1
+            self._asleep = False
+            return {"ok": True}
+
+    handle = _AsleepHandle()
+
+    manager = LaneManager(
+        OllamaConfig(),
+        nvidia_smi_available=lambda: True,
+        # The closure resolves `app` at call time (late binding), so `app` may
+        # be constructed after the manager.
+        on_lane_woken=lambda: worker_main._replan_ram_cache_once(app),
+    )
+    manager._handles[handle.lane_id] = handle  # noqa: SLF001
+    cfg = AppConfig(logos=LogosConfig(capabilities_models=[model]))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=cfg,
+            model_cache=cache,
+            model_profiles=registry,
+            lane_manager=manager,
+            ram_cache_replan_lock=asyncio.Lock(),
+            ram_cache_in_plan_since={},
+        )
+    )
+    sentinel = object()
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    async def _scenario() -> None:
+        # The lane is asleep: its post-sleep pass excluded it from the
+        # reserve, so the floor holds only the safety margin.
+        await worker_main._replan_ram_cache_once(app)
+        assert cache.floor_mb == pytest.approx(margin)
+        # The lane wakes; the wired hook re-plans on the spot.
+        out = await manager.wake_lane(handle.lane_id)
+        assert out is sentinel
+        # Another admission (e.g. a calibration copy) lands after the wake.
+        await cache.ensure_cached("org/other")
+
+    asyncio.run(_scenario())
+
+    assert handle.wake_called == 1
+    # The wake restored the lane's sleeping footprint to the floor — and the
+    # admission after the wake already saw the restored floor.
+    assert cache.floor_mb == pytest.approx(10_000.0 + margin)
+    assert cache.floor_at_ensure_cached == pytest.approx(10_000.0 + margin)
+
+
 def _restart_env(
     monkeypatch, model_old, model_new, sleeping_old, sleeping_new, *, sizes=None, cached=None, available_mb=100_000.0
 ):  # noqa: ANN001

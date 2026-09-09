@@ -729,18 +729,19 @@ def _init_ram_cache_replan_state(
 async def _replan_ram_cache_once(app: FastAPI) -> None:
     """Re-derive and apply the host-RAM-aware cache plan from live data.
 
-    This is the single entry point for both re-plan triggers:
+    This is the single entry point for every re-plan trigger:
 
     * the periodic tick — the backstop, which is what sees lanes STOPPED
       (RAM frees, the cache may grow back) and any drift that did not go
-      through a sleep;
-    * the post-sleep hook (``LaneManager(on_lane_slept=...)``) — the
-      reactive path, which runs the moment a lane's weights land in host RAM,
-      so several lanes sleeping in quick succession do not face a cache that
-      keeps its old size for up to a minute while the host OOM killer is the
+      through a lane transition;
+    * the reactive LaneManager hooks (``on_lane_slept``, ``on_lane_added``,
+      ``on_lane_woken``) — the moment a lane's weights land in host RAM, the
+      lane set gains a sleep-capable lane, or a lane wakes and its next sleep
+      re-enters the reserve, the cache re-plans against the new state
+      instead of waiting up to a minute while the host OOM killer is the
       only other "reactor" in the room (and it picks vLLM).
 
-    The lock serialises the two: a re-plan must not read ``held_bytes`` or
+    The lock serialises the passes: a re-plan must not read ``held_bytes`` or
     evict while another pass is mid-reclaim (a size walk racing an ``rmtree``
     would undercount the cache and the second plan could evict models the
     first still keeps).
@@ -1139,6 +1140,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # first sleep — on_lane_slept only fires after the sleep has already
         # happened. Idempotent, so it composes with the post-sleep hook.
         on_lane_added=lambda: _replan_ram_cache_once(app),
+        # Mirror of on_lane_slept for the wake direction: the last pass saw
+        # the lane asleep and dropped it from the sleep reserve, so without
+        # this the floor stays undersized until the next 60 s tick and a
+        # cache admission (e.g. a calibration copy) landing in that window
+        # can consume the RAM the lane's next sleep must allocate.
+        # Idempotent, so it composes with the post-sleep hook and the tick.
+        on_lane_woken=lambda: _replan_ram_cache_once(app),
     )
 
     # Initialise the re-plan's app.state dependencies NOW, before the startup
