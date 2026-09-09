@@ -802,7 +802,7 @@ async def test_http_ndjson_response_preserves_content_type_and_does_not_append_s
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="local", forward_url="http://worker:8000/api/chat"),
+        SimpleNamespace(provider_type="local", forward_url="http://worker:8000/api/chat", anthropic_dialect=None),
         {"model": "local"},
         60,
         12,

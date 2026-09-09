@@ -258,9 +258,7 @@ def test_apply_config_appends_logos_models_mount_for_legacy_only_env():
     still receive a LOGOS_MODELS_MOUNT line when a local cache path is given,
     or the override is silently ignored by the still-active old mount."""
     legacy_env = (
-        "OLLAMA_MODELS_MOUNT=/data/legacy-models\n"
-        "TMPFS_SIZE=400\n"
-        "LOGOS_TMPFS_CACHE_PATH=/dev/shm/logos\n"
+        "OLLAMA_MODELS_MOUNT=/data/legacy-models\n" "TMPFS_SIZE=400\n" "LOGOS_TMPFS_CACHE_PATH=/dev/shm/logos\n"
     )
     fake_run, tee_inputs = _config_env_fake(legacy_env)
     with patch.object(bm.subprocess, "run", side_effect=fake_run), patch.object(bm, "_YAML", None):
@@ -316,5 +314,5 @@ def test_wipe_weights_falls_back_to_ollama_models_mount():
     wipe = [c for c in calls if "rm -rf" in _flatten(c) and "MODELS_MOUNT" in _flatten(c)]
     assert wipe, "no weight-wipe command was issued"
     script = _flatten(wipe[-1])
-    assert '^LOGOS_MODELS_MOUNT=' in script
-    assert '^OLLAMA_MODELS_MOUNT=' in script
+    assert "^LOGOS_MODELS_MOUNT=" in script
+    assert "^OLLAMA_MODELS_MOUNT=" in script
