@@ -2905,7 +2905,7 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
         raise HTTPException(status_code=503, detail="Capacity planner not ready")
 
     # Answer a refusal synchronously — a background task has nobody to report to.
-    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id)
+    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id, model)
     if rejection is not None:
         raise HTTPException(status_code=409, detail=rejection)
 
