@@ -481,7 +481,16 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
         logos_key="root-key",
         provider_name="gpu-node-1",
     )
-    response = await logosnode_mod.logosnode_register(req)
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "method": "POST",
+            "path": "/logosdb/providers/logosnode/register",
+            "headers": [(b"host", b"logos.local:8080")],
+        }
+    )
+    response = await logosnode_mod.logosnode_register(req, request)
     assert response["provider_id"] == 41
     assert response["provider_type"] == "logosnode"
     assert response["shared_key"]

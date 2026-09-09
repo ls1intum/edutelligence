@@ -36,7 +36,7 @@ from logos.main import (
     _normalize_provider_type,
     _resolve_provider_name,
 )
-from logos.role_auth import require_logos_admin_key
+from logos.role_auth import require_logos_admin, require_logos_admin_key
 
 logger = logging.getLogger("LogosLogger")
 
@@ -143,9 +143,15 @@ def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> N
         db.upsert_calibration_probe_log(provider_id, model_name, recorded_at, payload, log_text)
 
 
-def _require_root_access(logos_key: str) -> None:
-    with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
+def _require_root_access(logos_key: str | None, request: Request) -> None:
+    # Body-supplied key wins (older/scripted callers); browser callers
+    # send no body key and authenticate via the Keycloak bearer header
+    # instead, so fall back to that.
+    if logos_key:
+        with DBManager() as db:
+            require_logos_admin_key(logos_key, db)
+        return
+    require_logos_admin(request)
 
 
 def _logosnode_insecure_dev_mode_enabled() -> bool:
@@ -191,11 +197,11 @@ def _is_tls_websocket(websocket: WebSocket) -> bool:
 
 
 @router.post("/logosdb/providers/logosnode/register", tags=["logosnode"])
-async def logosnode_register(data: LogosNodeRegisterRequest):
+async def logosnode_register(data: LogosNodeRegisterRequest, request: Request):
     """
     Root-only provider bootstrap endpoint for LogosWorkerNode providers.
     """
-    _require_root_access(data.logos_key)
+    _require_root_access(data.logos_key, request)
 
     provider_name = (data.provider_name or "").strip()
     if not provider_name:
@@ -382,8 +388,8 @@ async def logosnode_session(websocket: WebSocket, token: str):
 
 
 @router.post("/logosdb/providers/logosnode/status", tags=["logosnode"])
-async def logosnode_status(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_status(data: LogosNodeStatusRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     try:
         return await _main._logosnode_registry.get_runtime_snapshot(data.provider_id)
     except LogosNodeOfflineError as exc:
@@ -391,8 +397,8 @@ async def logosnode_status(data: LogosNodeStatusRequest):
 
 
 @router.post("/logosdb/providers/logosnode/devices", tags=["logosnode"])
-async def logosnode_devices(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_devices(data: LogosNodeStatusRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     try:
         return {"devices": await _main._logosnode_registry.get_devices(data.provider_id)}
     except LogosNodeOfflineError as exc:
@@ -400,8 +406,8 @@ async def logosnode_devices(data: LogosNodeStatusRequest):
 
 
 @router.post("/logosdb/providers/logosnode/lanes", tags=["logosnode"])
-async def logosnode_lanes(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_lanes(data: LogosNodeStatusRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     try:
         return {"lanes": await _main._logosnode_registry.get_lanes(data.provider_id)}
     except LogosNodeOfflineError as exc:
@@ -409,8 +415,8 @@ async def logosnode_lanes(data: LogosNodeStatusRequest):
 
 
 @router.post("/logosdb/providers/logosnode/lanes/apply", tags=["logosnode"])
-async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="apply_lanes",
@@ -419,8 +425,8 @@ async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
 
 
 @router.post("/logosdb/providers/logosnode/lanes/sleep", tags=["logosnode"])
-async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="sleep_lane",
@@ -429,8 +435,8 @@ async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
 
 
 @router.post("/logosdb/providers/logosnode/lanes/wake", tags=["logosnode"])
-async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="wake_lane",
@@ -439,8 +445,8 @@ async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
 
 
 @router.post("/logosdb/providers/logosnode/lanes/delete", tags=["logosnode"])
-async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",
@@ -449,8 +455,8 @@ async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
 
 
 @router.post("/logosdb/providers/logosnode/lanes/reconfigure", tags=["logosnode"])
-async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
-    _require_root_access(data.logos_key)
+async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest, request: Request):
+    _require_root_access(data.logos_key, request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="reconfigure_lane",
@@ -459,7 +465,7 @@ async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
 
 
 @router.post("/logosdb/providers/logosnode/calibrate_uncalibrated", tags=["logosnode"])
-async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
+async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest, request: Request):
     """Kick off a worker-driven calibration session immediately.
 
     The worker picks which uncalibrated models to run and walks them one at
@@ -468,7 +474,7 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
     the session was started and reports which models the worker will see
     as uncalibrated right now.
     """
-    _require_root_access(data.logos_key)
+    _require_root_access(data.logos_key, request)
     snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
