@@ -1136,3 +1136,190 @@ async def test_terminal_status_retry_bounds_clamp_to_the_post_backoff_deadline(r
     assert retry_req.payload["timeout_s"] == 6.0
     assert retry_req.context_resolve_timeout_s == 6.0
     assert retry_req.context_resolve_deadline == 10.0
+
+
+# ---------------------------------------------------------------------------
+# A retry admitted near expiry is bounded to the remaining deadline (#815)
+#
+# The queue wait, backoff and context-resolve bounds were already clamped to
+# the retry budget, but the execution itself was not: a cloud call ran with
+# no timeout and a local node kept its fixed infer window, so a retry admitted
+# with only the five-second minimum left could still run well past the overall
+# deadline. These drive the real _execute_resource_mode + _sync_response and
+# assert the transport bound each attempt actually gets.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingExecutor:
+    """Scripted executor that records the transport timeout of every call."""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.timeouts = []
+
+    async def execute_sync(self, url, headers, payload, timeout=None):  # noqa: ARG002
+        self.timeouts.append(timeout)
+        if not self.results:
+            raise AssertionError("execute_sync called more times than scripted")
+        return self.results.pop(0)
+
+
+def _ok_cloud_result(provider_id=1, request_id="req-1"):
+    return SimpleNamespace(
+        success=True,
+        error=None,
+        model_id=27,
+        provider_id=provider_id,
+        execution_context=SimpleNamespace(
+            model_name="stub-model",
+            provider_type="cloud",
+            forward_url="https://cloud.test/v1/chat/completions",
+            lane_id=None,
+            anthropic_dialect=None,
+        ),
+        classification_stats={},
+        scheduling_stats={
+            "request_id": request_id,
+            "model_id": 27,
+            "provider_id": provider_id,
+            "provider_type": "cloud",
+        },
+    )
+
+
+def _wire_real_sync_path(retry_env, pipeline):
+    """Point _sync_response's collaborators at fakes so the real function runs."""
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_execution_is_bounded_to_the_remaining_deadline(retry_env):
+    """A retry admitted near expiry must not run past the overall deadline: the
+    previously-unbounded cloud call is given the time left in the budget, while
+    the initial dispatch stays unbounded (cold starts / long generations)."""
+    from logos.pipeline.executor import ExecutionResult
+
+    _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff -> retry at 6s left
+    executor = _RecordingExecutor(
+        [
+            ExecutionResult(
+                success=False,
+                response={"error": "worker gone"},
+                error="worker gone",
+                usage={},
+                is_streaming=False,
+                status_code=503,
+            ),
+            # 400 is permanent, so the retry loop stops here instead of looping on.
+            ExecutionResult(
+                success=False,
+                response={"error": "bad payload"},
+                error="bad payload",
+                usage={},
+                is_streaming=False,
+                status_code=400,
+            ),
+        ]
+    )
+    pipeline = _FakePipeline([_ok_cloud_result(provider_id=1), _ok_cloud_result(provider_id=2)])
+    pipeline.executor = executor
+    _wire_real_sync_path(retry_env, pipeline)
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 400
+    # Initial dispatch: unbounded (None). Retry: clamped to the 6s left after
+    # the 4s backoff consumed from the 10s deadline.
+    assert executor.timeouts == [None, 6.0]
+
+
+@pytest.mark.asyncio
+async def test_logosnode_retry_execution_clamps_the_infer_window(retry_env):
+    """The local node's fixed infer window is clamped to the time left in the
+    retry deadline, so a near-expiry retry cannot run past the overall budget."""
+    from logos.logosnode_registry import LogosNodeCommandError
+
+    _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff -> retry at 6s left
+    windows = []
+
+    async def fake_send_command(**kwargs):  # noqa: ARG002
+        windows.append(kwargs.get("timeout_seconds"))
+        if len(windows) == 1:
+            # A worker-side fault: retryable, so the loop re-dispatches.
+            raise LogosNodeCommandError("worker refused the command")
+        return {"status_code": 200, "body": {"ok": True}}
+
+    pipeline = _FakePipeline(
+        [
+            SimpleNamespace(
+                success=True,
+                error=None,
+                model_id=27,
+                provider_id=1,
+                execution_context=SimpleNamespace(
+                    model_name="stub-model",
+                    provider_type="logosnode",
+                    lane_id="lane-1",
+                    anthropic_dialect=None,
+                ),
+                classification_stats={},
+                scheduling_stats={
+                    "request_id": "req-1",
+                    "model_id": 27,
+                    "provider_id": 1,
+                    "provider_type": "logosnode",
+                },
+            ),
+            SimpleNamespace(
+                success=True,
+                error=None,
+                model_id=27,
+                provider_id=2,
+                execution_context=SimpleNamespace(
+                    model_name="stub-model",
+                    provider_type="logosnode",
+                    lane_id="lane-2",
+                    anthropic_dialect=None,
+                ),
+                classification_stats={},
+                scheduling_stats={
+                    "request_id": "req-1",
+                    "model_id": 27,
+                    "provider_id": 2,
+                    "provider_type": "logosnode",
+                },
+            ),
+        ]
+    )
+    _wire_real_sync_path(retry_env, pipeline)
+    retry_env.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=fake_send_command), raising=False)
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # Initial dispatch keeps the full configured window; the retry is clamped
+    # to the 6s left in the deadline.
+    full_window = main._LOGOSNODE_INFER_TIMEOUT_SECONDS
+    assert windows == [full_window, min(full_window, 6.0)]

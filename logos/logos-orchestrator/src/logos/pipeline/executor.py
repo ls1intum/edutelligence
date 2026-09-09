@@ -62,6 +62,7 @@ class Executor:
         on_headers: Optional[Callable[[Dict[str, str]], None]] = None,
         on_response_start: Optional[Callable[[int, Dict[str, str]], None]] = None,
         status: Optional[StreamingExecutionStatus] = None,
+        timeout: Optional[float] = None,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming HTTP request and yield response chunks.
@@ -75,6 +76,11 @@ class Executor:
                 any chunks are yielded; allows callers to detect non-2xx early.
             status: Optional mutable terminal status populated when a transport
                 failure occurs after response bytes have already been yielded.
+            timeout: Optional transport bound in seconds (a read timeout: the
+                longest gap between chunks). ``None`` (the default, used by the
+                proxy path and the initial dispatch) is unbounded; a retry
+                passes the time left in its deadline so a stalled stream cannot
+                run past the overall budget.
 
         Yields:
             Upstream response bytes without reconstructing their framing.
@@ -97,7 +103,7 @@ class Executor:
         logger.info(f"Streaming request to {url}")
 
         request_kwargs = self._request_kwargs(payload)
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", url, headers=headers, **request_kwargs) as resp:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
@@ -152,6 +158,7 @@ class Executor:
         url: str,
         headers: Dict[str, str],
         payload: Dict[str, Any],
+        timeout: Optional[float] = None,
     ) -> ExecutionResult:
         """
         Execute synchronous (non-streaming) HTTP request.
@@ -160,6 +167,11 @@ class Executor:
             url: Full URL to make request to
             headers: HTTP headers (including auth, content-type, etc.)
             payload: Request body (existing stream fields are forced to False)
+            timeout: Optional transport bound in seconds. ``None`` (the
+                default, used by the proxy path and the initial dispatch)
+                leaves the call unbounded so a long generation or cold start
+                can run to completion; a retry passes the time left in its
+                deadline so it cannot outlive the overall budget.
 
         Returns:
             ExecutionResult containing response body, usage stats, and headers
@@ -177,7 +189,10 @@ class Executor:
                 response = await client.post(
                     url,
                     headers=headers,
-                    timeout=None,  # No timeout to handle long-running LLM requests and cold starts
+                    # None (proxy path / initial dispatch) keeps the call
+                    # unbounded for long-running LLM requests and cold starts;
+                    # a retry passes its remaining deadline.
+                    timeout=timeout,
                     **self._request_kwargs(payload),
                 )
 

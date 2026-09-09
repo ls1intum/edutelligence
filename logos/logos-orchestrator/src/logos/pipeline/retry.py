@@ -183,3 +183,23 @@ class RetryBudget:
             user = None
         base = user if user is not None and user > 0 else DEFAULT_QUEUE_TIMEOUT_S
         return max(1.0, min(base, self.remaining_s()))
+
+    def execution_timeout_s(self, base_timeout_s: Optional[float]) -> Optional[float]:
+        """The transport bound for the next attempt's execution.
+
+        The initial dispatch keeps the path's natural bound: a cloud call
+        runs with no timeout so a long generation or cold start can run to
+        completion, and a local node keeps its configured infer/stream window.
+        A retry — or a stream resume, which records a failure the same way —
+        must instead finish inside the overall deadline, so the natural bound
+        is clamped to whatever is left in it, and a previously-unbounded cloud
+        call is given the remaining time outright. A fully-consumed budget
+        clamps to zero, which makes the transport fail fast rather than run
+        past the deadline.
+        """
+        if self.attempts == 0:
+            return base_timeout_s
+        remaining = self.remaining_s()
+        if base_timeout_s is None:
+            return remaining
+        return min(float(base_timeout_s), remaining)

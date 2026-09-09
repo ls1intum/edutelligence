@@ -4273,6 +4273,14 @@ async def _streaming_response(
             }
 
         def _new_logosnode_chunk_iter(exec_ctx, exec_payload):
+            # Computed at open time so the bound tracks the budget: a retry
+            # or a mid-flight resume opens its stream after a failure has
+            # been recorded, so the node's fixed stream window is clamped to
+            # the time left in the retry deadline, while the initial dispatch
+            # keeps the full window.
+            stream_timeout_s = _LOGOSNODE_STREAM_TIMEOUT_SECONDS
+            if retry_budget is not None:
+                stream_timeout_s = retry_budget.execution_timeout_s(stream_timeout_s)
             return _logosnode_registry.send_stream_command(
                 provider_id=exec_ctx.provider_id,
                 action="infer_stream",
@@ -4281,7 +4289,7 @@ async def _streaming_response(
                     "payload": exec_payload,
                     "request_path": request_path,
                 },
-                timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+                timeout_seconds=stream_timeout_s,
             )
 
         async def _open_logosnode_stream(exec_ctx, exec_payload):
@@ -4656,12 +4664,18 @@ async def _streaming_response(
 
     # ── HTTP executor path ────────────────────────────────────────────────
     stream_status = StreamingExecutionStatus()
+    # A retry's stream must not outlive the retry deadline: the previously
+    # unbounded cloud stream is given the remaining time (a read bound, so a
+    # stalled stream fails fast) instead of running past the overall budget.
+    # The initial dispatch (no recorded failure) stays unbounded.
+    stream_timeout_s = retry_budget.execution_timeout_s(None) if retry_budget is not None else None
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
         headers,
         prepared_payload,
         on_headers=process_headers,
         status=stream_status,
+        timeout=stream_timeout_s,
     )
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
@@ -4876,6 +4890,7 @@ async def _sync_response(
     request_path=None,
     rl_key=None,
     api_key_id: Optional[int] = None,
+    retry_budget: Optional[RetryBudget] = None,
 ):
     """Execute sync request and return response."""
     from fastapi.responses import JSONResponse
@@ -4901,6 +4916,12 @@ async def _sync_response(
 
         if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = force_non_streaming_payload(prepared_payload)
+            # A retry (or a near-expiry resume) must finish inside the retry
+            # deadline, so the node's fixed infer window is clamped to the
+            # time left in it instead of running past the overall budget.
+            infer_timeout_s = _LOGOSNODE_INFER_TIMEOUT_SECONDS
+            if retry_budget is not None:
+                infer_timeout_s = retry_budget.execution_timeout_s(infer_timeout_s)
             try:
                 rpc_result = await _logosnode_registry.send_command(
                     provider_id=provider_id,
@@ -4910,7 +4931,7 @@ async def _sync_response(
                         "payload": sync_payload,
                         "request_path": request_path,
                     },
-                    timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
+                    timeout_seconds=infer_timeout_s,
                 )
                 status_override = int(rpc_result.get("status_code", 200))
                 response_payload = rpc_result.get("body")
@@ -4981,7 +5002,14 @@ async def _sync_response(
                     headers=None,
                 )
         else:
-            exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+            # A retry must not outlive the retry deadline: the previously
+            # unbounded cloud call is given the remaining time so a
+            # near-expiry attempt fails fast instead of running for minutes.
+            # The initial dispatch (no recorded failure) stays unbounded.
+            cloud_timeout_s = retry_budget.execution_timeout_s(None) if retry_budget is not None else None
+            exec_result = await _pipeline.executor.execute_sync(
+                context.forward_url, headers, prepared_payload, timeout=cloud_timeout_s
+            )
         response_at = datetime.datetime.now(datetime.timezone.utc)
 
         # Update rate limits from response headers
@@ -5744,6 +5772,7 @@ async def _execute_resource_mode(
                     request_path=request_path,
                     rl_key=rl_tpm_key,
                     api_key_id=auth.api_key_id,
+                    retry_budget=retry_budget,
                 )
             else:
                 # Sync endpoints support streaming
@@ -5783,6 +5812,7 @@ async def _execute_resource_mode(
                         request_path=request_path,
                         rl_key=rl_tpm_key,
                         api_key_id=auth.api_key_id,
+                        retry_budget=retry_budget,
                     )
         except Exception as e:
             logger.error(f"Error in _execute_resource_mode: {e}", exc_info=True)

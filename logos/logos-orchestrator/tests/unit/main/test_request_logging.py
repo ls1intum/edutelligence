@@ -139,7 +139,7 @@ def _make_pipeline(
     sync_payloads = sync_payloads if sync_payloads is not None else []
 
     class DummyExecutor:
-        async def execute_sync(self, url, headers, payload):  # noqa: ARG002
+        async def execute_sync(self, url, headers, payload, timeout=None):  # noqa: ARG002
             sync_payloads.append(payload)
             return sync_result
 
@@ -150,6 +150,7 @@ def _make_pipeline(
             payload,
             on_headers=None,
             status=None,
+            timeout=None,
         ):  # noqa: ARG002
             if on_headers:
                 on_headers(stream_headers or {})

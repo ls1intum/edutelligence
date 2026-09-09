@@ -214,3 +214,49 @@ def test_queue_wait_timeout_falls_back_to_default_for_invalid_user_values():
     assert budget.queue_wait_timeout_s(0) == pytest.approx(min(DEFAULT_QUEUE_TIMEOUT_S, budget.remaining_s()))
     assert budget.queue_wait_timeout_s(-5) == pytest.approx(min(DEFAULT_QUEUE_TIMEOUT_S, budget.remaining_s()))
     assert budget.queue_wait_timeout_s("garbage") == pytest.approx(min(DEFAULT_QUEUE_TIMEOUT_S, budget.remaining_s()))
+
+
+# ---------------------------------------------------------------------------
+# execution_timeout_s — a retry/resume's execution is bounded by the deadline
+# ---------------------------------------------------------------------------
+
+
+def test_execution_timeout_initial_dispatch_keeps_the_natural_bound():
+    """The first attempt is not a retry: a cloud call stays unbounded so a
+    long generation or cold start can run to completion, and a local node
+    keeps its full configured window."""
+    budget, _ = _budget(max_attempts=3, deadline_s=10.0)
+    assert budget.attempts == 0
+    assert budget.execution_timeout_s(None) is None  # cloud: unbounded
+    assert budget.execution_timeout_s(120.0) == pytest.approx(120.0)  # local: full window
+
+
+def test_execution_timeout_retry_clamps_to_the_remaining_deadline():
+    """A retry must finish inside the overall deadline: the unbounded cloud
+    call is given the remaining time outright, and the local window is clamped
+    below it — so a retry admitted near expiry cannot run past the budget."""
+    budget, clock = _budget(max_attempts=3, deadline_s=10.0)
+    budget.record_failure(1)  # attempts == 1 → this attempt is a retry
+    clock.advance(4.0)  # 6s left in the deadline
+    assert budget.execution_timeout_s(None) == pytest.approx(6.0)  # cloud → remaining
+    assert budget.execution_timeout_s(120.0) == pytest.approx(6.0)  # local → clamped
+
+
+def test_execution_timeout_retry_never_exceeds_remaining_with_a_small_window():
+    """A retry starting near expiry is bounded to whatever is left, even when
+    the local window is already smaller than the deadline."""
+    budget, clock = _budget(max_attempts=3, deadline_s=10.0)
+    budget.record_failure(1)
+    clock.advance(9.5)  # 0.5s left
+    assert budget.execution_timeout_s(120.0) == pytest.approx(0.5)
+
+
+def test_execution_timeout_exhausted_budget_clamps_to_zero():
+    """A fully-consumed budget clamps to zero so the transport fails fast
+    rather than running past the deadline. Zero is distinct from ``None``:
+    httpx reads a 0.0 timeout as an immediate timeout, not an unbounded one."""
+    budget, clock = _budget(max_attempts=3, deadline_s=10.0)
+    budget.record_failure(1)
+    clock.advance(10.0)  # nothing left
+    assert budget.execution_timeout_s(None) == pytest.approx(0.0)
+    assert budget.execution_timeout_s(120.0) == pytest.approx(0.0)
