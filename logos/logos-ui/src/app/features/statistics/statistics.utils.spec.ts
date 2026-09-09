@@ -169,4 +169,14 @@ describe('formatPercent', () => {
     expect(formatPercent(1, 300_000)).toBe('0.0003%');
     expect(formatPercent(1, 10_000_000)).toBe('0.00001%');
   });
+
+  it('bounds a share too small for six decimals instead of reading "0%"', () => {
+    // Past the widening loop's cap toFixed(6) still rounds to zero. A single
+    // cold start among billions of starts is vanishingly rare, not absent —
+    // reporting it as "0%" would contradict the point of the helper.
+    expect(formatPercent(1, 10_000_000_000)).toBe('<0.000001%');
+    expect(formatPercent(1, 1_000_000_000)).toBe('<0.000001%');
+    // The last share that still fits six decimals keeps its exact reading.
+    expect(formatPercent(1, 100_000_000)).toBe('0.000001%');
+  });
 });

@@ -153,8 +153,10 @@ export function formatTokenCount(count: number | null | undefined): string {
  * non-zero share to "0%": 694 of 317.265 local starts is 0.22%, not the "0%"
  * an integer rounding shows. Shares of 10% and up stay plain, single-digit
  * shares keep one decimal, and below 1% the decimals widen (two by default,
- * up to six) until the value reads non-zero. A zero share — or an input that
- * is not a positive finite total — reads "0%".
+ * up to six) until the value reads non-zero. A share too small even for six
+ * decimals reads "<0.000001%" rather than "0%" — the card must not report a
+ * cold start that happened as none at all. A zero share — or an input that is
+ * not a positive finite total — reads "0%".
  */
 export function formatPercent(
   part: number | null | undefined,
@@ -173,6 +175,9 @@ export function formatPercent(
   if (pct >= 10) return `${Math.round(pct)}%`;
   let decimals = pct >= 1 ? 1 : 2;
   while (pct > 0 && decimals < 6 && Number(pct.toFixed(decimals)) === 0) decimals += 1;
+  // Below the six-decimal cap the widening loop runs out and toFixed still
+  // rounds to zero. Bound it instead of printing "0%" for a share that is not.
+  if (pct > 0 && Number(pct.toFixed(decimals)) === 0) return '<0.000001%';
   return `${pct.toFixed(decimals).replace(/\.0+$/, '')}%`;
 }
 
