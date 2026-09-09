@@ -193,6 +193,26 @@ class TestNextLaneIdForModel:
 # ---------------------------------------------------------------------------
 
 
+# Stands in for a real calibrated ModelProfile — load_lane_manually's
+# calibration gate only ever reads .residency_source.
+_CALIBRATED_PROFILE = SimpleNamespace(residency_source="calibrated")
+
+
+class _AllCalibrated(dict):
+    """Profile lookup that answers "calibrated" for every model.
+
+    ``manual_load_rejection_reason`` refuses a load whose profile is missing
+    or uncalibrated. The tests below are about lane-id derivation and the
+    in-flight reservation, not that gate, and they load models under several
+    names — so answer for all of them rather than enumerating each and having
+    the next added model silently turn into a refusal (or, worse, a hang: a
+    scenario awaiting an event that only the dispatch sets never wakes).
+    """
+
+    def get(self, model_name, default=None):  # noqa: ARG002
+        return _CALIBRATED_PROFILE
+
+
 def _manual_load_planner(lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
     """Planner with a mock facade reporting exactly `lanes`."""
     planner = CapacityPlanner.__new__(CapacityPlanner)
@@ -206,7 +226,7 @@ def _manual_load_planner(lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
     facade.get_all_provider_lane_signals.return_value = lanes
     planner._facade = facade
     planner._lane_action_locks = {}
-    planner._safe_get_profiles = MagicMock(return_value={})
+    planner._safe_get_profiles = MagicMock(return_value=_AllCalibrated())
     planner._build_load_params = MagicMock(return_value={})
     return planner
 
