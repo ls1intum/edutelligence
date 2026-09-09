@@ -632,6 +632,66 @@ async def test_reclaim_coordinates_with_the_copy_worker(ram_cache_env) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reclaim_spare_a_reservation_taken_after_the_keep_snapshot(ram_cache_env, monkeypatch):
+    """Regression: the caller computes ``keep`` once, BEFORE the reclaim
+    starts (main.py unions the live cache-use reservations into it exactly
+    once, up front), and the await in ``_get_model_lock`` is a window an
+    executor-thread calibration can use to reserve this very entry afterwards
+    and select the tmpfs path with ``ensure_cached_sync`` — the stale ``keep``
+    still says "evict" for a tree a probe is about to read. The live
+    reference-count re-check under the reservation guard must see the late
+    reservation and spare the model. (The earlier reservation tests only
+    observe the count at selection; they never overlap an in-flight reclaim.)
+    """
+    import asyncio as _asyncio
+
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    await cache.ensure_cached(model)
+    assert model in cache.cached_models()
+
+    # Park reclaim exactly at the await the race goes through: the per-model
+    # lock acquisition — after ``keep`` was already consulted, before the
+    # eviction decision.
+    parked = _asyncio.Event()
+    released = _asyncio.Event()
+    original_get_model_lock = cache._get_model_lock
+
+    async def _parked_get_model_lock(model_name: str):
+        if not parked.is_set():
+            parked.set()
+            await released.wait()
+        return await original_get_model_lock(model_name)
+
+    monkeypatch.setattr(cache, "_get_model_lock", _parked_get_model_lock)
+
+    reclaim_task = _asyncio.create_task(cache.reclaim(keep=set()))
+    await parked.wait()
+    # The calibration side, in a worker thread like the real executor path:
+    # reserve (in _try_start that precedes its ensure_cached_sync selection).
+    await _asyncio.to_thread(cache.reserve_cache_use, model)
+    assert model in cache.cache_use_reservations()
+    released.set()
+    removed = await reclaim_task
+
+    # The late reservation won: the stale ``keep`` said evict, the live
+    # count said hold.
+    assert removed == []
+    assert model in cache.cached_models()
+    assert (Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B").exists()
+
+    # Session over: the next reclaim is free to give the RAM back again, so
+    # the re-check spares live reservations without over-protecting.
+    cache.release_cache_use(model)
+    assert await cache.reclaim(keep=set()) == [model]
+    assert cache.cached_models() == []
+
+
+@pytest.mark.asyncio
 async def test_the_cache_refuses_to_grow_into_the_sleep_reserve(ram_cache_env, monkeypatch):
     """The tmpfs mount is a fixed 400G of a 503G host, so tmpfs free space is
     no bound at all. What bounds the cache is live host RAM against the RAM
