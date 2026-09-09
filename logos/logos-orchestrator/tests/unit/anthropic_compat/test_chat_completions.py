@@ -666,3 +666,107 @@ def test_the_terminal_event_carries_the_settled_usage():
     # The native Messages path surfaces the cost; the translated one must too.
     assert usage["cost"] == 0.0042
     assert usage["cost_currency"] == "EUR"
+
+
+# ── inline system turns ─────────────────────────────────────────────────────
+#
+# Claude Code injects role:"system" turns among the messages, a role the
+# Messages API does not define for that field. Translating one literally put a
+# system message in the middle of the chat/completions body, and an upstream
+# rendering a chat template answered "System message must be at the beginning."
+# with a 400 — reproduced against Hetzner's inference API.
+
+
+def _roles(request):
+    return [message["role"] for message in request["messages"]]
+
+
+def test_an_inlined_system_turn_does_not_land_mid_conversation():
+    request = to_chat_completions(
+        {
+            "model": "Qwen3.8-27B",
+            "system": "You are Claude Code.",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "system", "content": "a reminder"},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "second"},
+            ],
+        }
+    )
+
+    assert _roles(request) == ["system", "user", "assistant", "user"]
+
+
+def test_an_inlined_system_turn_keeps_its_instructions():
+    request = to_chat_completions(
+        {
+            "model": "Qwen3.8-27B",
+            "system": "You are Claude Code.",
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "system", "content": "a reminder"},
+            ],
+        }
+    )
+
+    assert request["messages"][0]["content"] == "You are Claude Code.\n\na reminder"
+
+
+def test_inlined_system_turns_keep_the_order_they_appeared_in():
+    request = to_chat_completions(
+        {
+            "model": "Qwen3.8-27B",
+            "system": "base",
+            "messages": [
+                {"role": "system", "content": "first reminder"},
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": [{"type": "text", "text": "second reminder"}]},
+            ],
+        }
+    )
+
+    assert request["messages"][0]["content"] == "base\n\nfirst reminder\n\nsecond reminder"
+
+
+def test_an_inlined_system_turn_leads_even_without_a_top_level_system():
+    request = to_chat_completions(
+        {"model": "Qwen3.8-27B", "messages": [{"role": "user", "content": "hi"}, {"role": "system", "content": "r"}]}
+    )
+
+    assert _roles(request) == ["system", "user"]
+    assert request["messages"][0]["content"] == "r"
+
+
+def test_a_developer_turn_is_hoisted_too():
+    """Some clients spell the same thing 'developer'."""
+    request = to_chat_completions(
+        {"model": "Qwen3.8-27B", "messages": [{"role": "developer", "content": "r"}, {"role": "user", "content": "hi"}]}
+    )
+
+    assert _roles(request) == ["system", "user"]
+
+
+def test_a_reasoning_model_still_gets_the_developer_role():
+    request = to_chat_completions(
+        {"model": "gpt-5.1", "system": "base", "messages": [{"role": "system", "content": "r"}]}
+    )
+
+    assert request["messages"][0] == {"role": "developer", "content": "base\n\nr"}
+
+
+def test_the_conversation_alternates_the_way_a_chat_template_needs():
+    """The shape claude-logos actually sends: system turns every few turns."""
+    roles = ["user", "system", "assistant", "user", "assistant", "user", "system", "assistant", "user"]
+    request = to_chat_completions(
+        {
+            "model": "Qwen3.8-27B",
+            "system": "base",
+            "messages": [{"role": role, "content": role} for role in roles],
+        }
+    )
+
+    translated = _roles(request)
+    assert translated[0] == "system"
+    assert "system" not in translated[1:]
+    assert translated[1:] == ["user", "assistant", "user", "assistant", "user", "assistant", "user"]

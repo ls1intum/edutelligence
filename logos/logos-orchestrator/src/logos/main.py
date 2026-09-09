@@ -355,7 +355,10 @@ def _resolve_requested_model_name(
        ``local-most-powerful`` that can be re-pointed at another model),
     3. the planner-safe alias form where ``/``, ``:``, and spaces are
        rewritten as underscores (lets users copy model ids from lane names
-       or worker logs without breaking access-controlled model lookup).
+       or worker logs without breaking access-controlled model lookup),
+    4. a replica lane id for a model's second and further lanes
+       (``planner-<alias>-2``) — a copied replica lane name is still an
+       address for the same model.
 
     All matching is case-insensitive. Every level must resolve to a single
     unambiguous model to be accepted: the schema does not enforce
@@ -364,15 +367,38 @@ def _resolve_requested_model_name(
     alias that matches several models does not fall through to the planner
     aliases (a stored name is an explicit assignment and wins over the
     derived form). Ambiguous requests resolve to ``None``.
+
+    The replica tier is suppressed whenever the requested name is another
+    model's own name, stored alias, or planner-safe alias — model families
+    carry numeric suffixes (``gemma-2``, ``llama-3``, ``phi-4``), so with
+    ``llama`` and ``llama-3`` both deployed, ``planner-llama-3`` is the
+    planner alias of ``llama-3``, not a third replica of ``llama``.
     """
     requested = str(requested_name or "").strip()
     if not requested:
         return None
     requested_lc = requested.lower()
 
+    # Every name that already addresses a deployed model in its own right:
+    # the canonical names and the stored aliases, raw and planner-sanitized
+    # alike. The replica-suffix tier below refuses to shadow any of these.
+    known_names: set[str] = set()
+    for entry in available_models:
+        canonical = str((entry or {}).get("name") or "").strip()
+        if not canonical:
+            continue
+        known_names.add(canonical.lower())
+        known_names.add(_planner_model_alias(canonical).lower())
+        for alias in entry.get("aliases") or []:
+            alias = str(alias).strip()
+            if alias:
+                known_names.add(alias.lower())
+                known_names.add(_planner_model_alias(alias).lower())
+
     canonical_matches: set[str] = set()
     stored_alias_matches: set[str] = set()
     planner_alias_matches: set[str] = set()
+    replica_matches: set[str] = set()
     for entry in available_models:
         canonical = str((entry or {}).get("name") or "").strip()
         if not canonical:
@@ -388,6 +414,28 @@ def _resolve_requested_model_name(
             if str(alias).strip().lower() == requested_lc:
                 stored_alias_matches.add(canonical)
 
+        # Lane ids carry a replica suffix for a model's second and further
+        # lanes (planner-<alias>-2): a copied replica lane name is still an
+        # address for this model.
+        replica_prefix = f"planner-{sanitized.lower()}-"
+        suffix = requested_lc[len(replica_prefix) :] if requested_lc.startswith(replica_prefix) else None
+        if suffix is not None and suffix.isascii() and suffix.isdigit():
+            # The planner derives suffixes from int, so a replica id is ASCII
+            # decimal only: a non-ASCII "digit" never names a lane, and a run
+            # longer than int() can parse (Python caps the length) must be
+            # refused rather than raised out of the resolver.
+            try:
+                index = int(suffix)
+            except ValueError:
+                continue
+            if index >= 2:
+                # Skip when <alias>-<n> is another deployed model's own name,
+                # stored alias, or planner alias: that request addresses that
+                # model, not this one's replica.
+                if f"{sanitized.lower()}-{suffix}" in known_names:
+                    continue
+                replica_matches.add(canonical)
+
     if len(canonical_matches) == 1:
         return next(iter(canonical_matches))
     if canonical_matches:
@@ -400,6 +448,12 @@ def _resolve_requested_model_name(
         return None
     if len(planner_alias_matches) == 1:
         return next(iter(planner_alias_matches))
+    if planner_alias_matches:
+        # Two distinct models sharing one planner-safe alias is a genuine
+        # ambiguity — refuse rather than guess.
+        return None
+    if len(replica_matches) == 1:
+        return next(iter(replica_matches))
     return None
 
 
@@ -1129,6 +1183,23 @@ def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
         pipeline.discard_request(request_id, result_status)
     except Exception:  # noqa: BLE001 — monitoring must never break a request
         logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
+
+
+def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> None:
+    """Persist whether the key's rate limiter admitted the request.
+
+    Same monitoring semantics as `_discard_in_flight`: failures are logged
+    and never break the request path.
+    """
+    if not request_id:
+        return
+    pipeline = globals().get("_pipeline")
+    if pipeline is None:
+        return
+    try:
+        pipeline.record_rate_limit_admission(request_id, admitted)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.debug("Failed to record rate-limit admission for %s", request_id, exc_info=True)
 
 
 def _record_log_failure(
@@ -2193,16 +2264,7 @@ async def internal_model_health(request: Request):
     entries expose only model names and statuses, best across deployments
     (see :func:`_model_deployment_status`).
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal model health endpoint disabled")
 
     local_ok = False
     model_status: Dict[str, str] = {}
@@ -2265,24 +2327,31 @@ async def prometheus_metrics(request: Request):
 
 class _RefreshPipelineRequest(BaseModel):
     rebuild_classifier: bool = False
+    # Set by the webservice when a provider itself changed, as opposed to a
+    # model link or a permission. A newly added cloud provider has no models
+    # until its /v1/models listing is read, and that otherwise waits for the
+    # next interval tick — a quarter of an hour of an empty model list.
+    sync_cloud_models: bool = False
 
 
 @app.post("/internal/refresh_pipeline", tags=["admin"])
 async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Request):
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal refresh endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal refresh endpoint disabled")
     if not _pipeline or not _logosnode_facade or not _azure_facade:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
-    logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
+    logger.info(
+        "Pipeline refresh requested by Spring (rebuildClassifier=%s, syncCloudModels=%s)",
+        data.rebuild_classifier,
+        data.sync_cloud_models,
+    )
     await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
+    if data.sync_cloud_models and _cloud_model_sync is not None:
+        # Scheduled, not awaited: the pass contacts every cloud upstream in
+        # turn and the webservice is blocked on this response, so one
+        # unreachable provider would stall a provider edit for a full request
+        # timeout. The pass refreshes runtime state itself once it finds
+        # something, so nothing is lost by returning first.
+        _cloud_model_sync.request_refresh()
     return {"status": "ok"}
 
 
@@ -2294,16 +2363,7 @@ async def internal_provider_status(request: Request):
     only; live connection state (online/offline) exists solely in the
     orchestrator's worker registry, so it is exposed here for enrichment.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal provider status endpoint disabled")
 
     with DBManager() as db:
         inventory = db.list_local_providers()
@@ -2345,16 +2405,7 @@ async def internal_model_context_windows(request: Request):
     ``best`` and ``native`` numbers next to it; see
     :func:`_served_context_window_stats`.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     stats = _served_context_window_stats()
     return {
@@ -2363,10 +2414,15 @@ async def internal_model_context_windows(request: Request):
     }
 
 
-def _require_internal_secret(request: Request) -> None:
-    """Authenticate an /internal/* call: the shared secret, no user context."""
+def _require_internal_secret(request: Request, disabled_detail: str = "Internal endpoint disabled") -> None:
+    """Authenticate an /internal/* call: the shared secret, no user context.
+
+    Endpoints that historically reported their own name in the 403 (secret
+    not configured) pass it through ``disabled_detail`` so the client-visible
+    answer is unchanged.
+    """
     if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+        raise HTTPException(status_code=403, detail=disabled_detail)
     auth_header = request.headers.get("authorization", "")
     token = (
         auth_header.removeprefix("Bearer ").strip()
@@ -2440,16 +2496,7 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     it resolves a model id to a model name, then asks here for what every
     provider that has calibrated it reported.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     with DBManager() as db:
         rows = db.get_calibration_probe_logs_by_model(model_name)
@@ -2795,16 +2842,7 @@ class _InternalWakeLaneRequest(BaseModel):
 @app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
@@ -2846,16 +2884,7 @@ async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequ
 @app.post("/internal/logosnode/lanes/delete", tags=["admin"])
 async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, request: Request):
     """Unload a lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",
@@ -2866,16 +2895,7 @@ async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, reque
 @app.post("/internal/logosnode/lanes/add", tags=["admin"])
 async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Request):
     """Manually load a single lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     model = str(data.lane.get("model") or "").strip()
     if not model:
@@ -2885,7 +2905,7 @@ async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Re
         raise HTTPException(status_code=503, detail="Capacity planner not ready")
 
     # Answer a refusal synchronously — a background task has nobody to report to.
-    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id)
+    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id, model)
     if rejection is not None:
         raise HTTPException(status_code=409, detail=rejection)
 
@@ -2920,16 +2940,7 @@ async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request
     must cover it, which is why sleep_lane gets the same 120 s as the
     planner's own sleep commands.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
@@ -2966,16 +2977,7 @@ async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request
 @app.post("/internal/logosnode/lanes/wake", tags=["admin"])
 async def internal_logosnode_wake_lane(data: _InternalWakeLaneRequest, request: Request):
     """Wake a sleeping lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="wake_lane",
@@ -4860,6 +4862,12 @@ async def _execute_resource_mode(
         if rl_info:
             rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
             allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+            # Persist the admission decision before execution: the /me/keys
+            # usage window counts an admitted request while it is still
+            # running, and must skip the ones this check rejects — the log row
+            # already carries timestamp_forwarding from scheduling, so without
+            # the flag a rejected request would show up as usage.
+            _record_rate_limit_admission(result.scheduling_stats.get("request_id") or request_id, allowed)
             if not allowed:
                 try:
                     _pipeline.scheduler.release(

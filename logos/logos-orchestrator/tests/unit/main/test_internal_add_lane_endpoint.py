@@ -111,6 +111,9 @@ async def test_accepts_and_loads_through_the_planner(monkeypatch):
     assert response.status_code == 202
     assert json.loads(response.body) == {"status": "accepted", "model": "org/model-a", "provider_id": 7}
     planner.load_lane_manually.assert_called_once_with(7, "org/model-a")
+    # The model must reach the sync gate too, or an uncalibrated model would
+    # only be caught inside the background task, with nobody left to tell.
+    planner.manual_load_rejection_reason.assert_called_once_with(7, "org/model-a")
     # Let the scheduled task run so it does not outlive the test.
     await asyncio.sleep(0)
 

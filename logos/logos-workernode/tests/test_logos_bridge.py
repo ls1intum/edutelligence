@@ -1362,6 +1362,31 @@ async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monkeypatch):
+    """No nvidia-smi on Metal, so the VRAM-fit half could never run — skip
+    the whole precheck up front instead of fetching HF metadata for
+    nothing. Metal profiles come from model_profile_overrides, not this."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    fetch_spy = MagicMock(side_effect=AssertionError("should not fetch HF metadata on Metal"))
+    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", fetch_spy)
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["hf_source"] == "skipped:metal-backend"
+    assert response["fit_tp_idle"] is None
+    assert response["unsupported_reason"] is None
+    fetch_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monkeypatch):
     """The standalone RPC is callable outside any calibration session — no
     session needs to be started, no lanes are touched."""
