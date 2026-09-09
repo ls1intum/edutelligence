@@ -424,7 +424,12 @@ public class ModelService {
     private Map<String, Boolean> parseWeightOverrides(String json) {
         if (json == null || json.isBlank()) return Map.of();
         try {
-            return objectMapper.readValue(json, new TypeReference<LinkedHashMap<String, Boolean>>() {});
+            // A jsonb NOT NULL column stores the JSON literal "null" as a valid
+            // value; readValue turns that into Java null without throwing, and
+            // toModelMap would then emit "weight_overrides": null.
+            Map<String, Boolean> parsed =
+                objectMapper.readValue(json, new TypeReference<LinkedHashMap<String, Boolean>>() {});
+            return parsed != null ? parsed : Map.of();
         } catch (Exception e) {
             return Map.of();
         }
