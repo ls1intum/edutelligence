@@ -23,6 +23,7 @@ import {
   chooseDynamicBucketMs,
   chooseDynamicTargetBuckets,
   extractProviderVramMb,
+  formatPercent,
   formatRangeLabel,
   formatTokenCount as formatTokenCountValue,
   normalizeFeedStatus,
@@ -737,15 +738,15 @@ export class Statistics implements OnInit, OnDestroy {
 
   readonly coldStarts = computed(() => this.stats()?.totals.coldStarts ?? 0);
   readonly warmStarts = computed(() => this.stats()?.totals.warmStarts ?? 0);
-
-  readonly coldPct = computed(() => {
-    const cold = this.coldStarts();
-    const warm = this.warmStarts();
-    const denom = cold + warm;
-    return denom > 0 ? Math.round((cold / denom) * 100) : 0;
-  });
-
   readonly coldDenominator = computed(() => this.coldStarts() + this.warmStarts());
+
+  /**
+   * The cold-start share as the KPI card shows it: the exact percentage, so a
+   * rare share (694 of 317.265) reads 0.22% instead of a rounded "0%".
+   */
+  formatColdPct(): string {
+    return formatPercent(this.coldStarts(), this.coldDenominator());
+  }
 
   readonly sparkTotal = computed(() =>
     (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.total || 0),

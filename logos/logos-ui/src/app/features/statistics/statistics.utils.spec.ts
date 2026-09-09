@@ -1,4 +1,5 @@
 import {
+  formatPercent,
   formatTokenCount,
   normalizeFeedStatus,
   resolveFeedTotal,
@@ -118,5 +119,54 @@ describe('formatTokenCount', () => {
   it('stays on T once the scale is exhausted', () => {
     expect(formatTokenCount(2_000_000_000_000)).toBe('2 T');
     expect(formatTokenCount(15_000_000_000_000)).toBe('15 T');
+  });
+});
+
+/**
+ * The share of a part in a total, as the cold-start KPI card shows it.
+ *
+ * The point is the small end: a share that integer rounding collapses to
+ * "0%" — 694 of 317.265 local starts — must read as the percentage it is,
+ * while an everyday share like 34% stays plain and a genuinely zero share
+ * still reads "0%".
+ */
+describe('formatPercent', () => {
+  it('reads "0%" when the total is not a positive finite number', () => {
+    expect(formatPercent(5, 0)).toBe('0%');
+    expect(formatPercent(5, -100)).toBe('0%');
+    expect(formatPercent(5, Number.NaN)).toBe('0%');
+    expect(formatPercent(5, Number.POSITIVE_INFINITY)).toBe('0%');
+    expect(formatPercent(5, null)).toBe('0%');
+    expect(formatPercent(5, undefined)).toBe('0%');
+  });
+
+  it('reads "0%" when the share is zero or the part is not a number', () => {
+    expect(formatPercent(0, 317_265)).toBe('0%');
+    expect(formatPercent(null, 100)).toBe('0%');
+    expect(formatPercent(undefined, 100)).toBe('0%');
+    expect(formatPercent(Number.NaN, 100)).toBe('0%');
+  });
+
+  it('keeps everyday shares of 10% and up plain', () => {
+    expect(formatPercent(34, 100)).toBe('34%');
+    expect(formatPercent(1, 2)).toBe('50%');
+    expect(formatPercent(10, 10)).toBe('100%');
+  });
+
+  it('keeps one decimal for single-digit shares, dropped when it is zero', () => {
+    expect(formatPercent(35, 1000)).toBe('3.5%');
+    expect(formatPercent(1, 32)).toBe('3.1%'); // 3.125 keeps its first decimal
+    expect(formatPercent(3, 100)).toBe('3%');
+  });
+
+  it('shows two decimals below one percent', () => {
+    // The case the helper exists for: 694 of 317.265 is 0.22%, not "0%".
+    expect(formatPercent(694, 317_265)).toBe('0.22%');
+    expect(formatPercent(1, 10_000)).toBe('0.01%');
+  });
+
+  it('widens the decimals until the share reads non-zero', () => {
+    expect(formatPercent(1, 300_000)).toBe('0.0003%');
+    expect(formatPercent(1, 10_000_000)).toBe('0.00001%');
   });
 });
