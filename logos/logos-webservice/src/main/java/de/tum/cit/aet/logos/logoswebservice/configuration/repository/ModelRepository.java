@@ -109,4 +109,19 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
     @Query(value = "UPDATE models SET weight_cost = :weight "
         + "WHERE id = :id AND NOT weight_overrides @> '{\"cost\": true}'", nativeQuery = true)
     int updateWeightCostGuarded(@Param("id") int id, @Param("weight") int weight);
+
+    /**
+     * Acquires a transaction-scoped advisory lock on the model-weights
+     * namespace, blocking until any other holder's transaction commits or
+     * rolls back. Serializes the auto-derivation's weight phase (see
+     * {@code ModelMetricsService#applyDerivedWeights}) with the admin
+     * endpoints that load and later save whole Model rows: Model has no
+     * @Version, so such a save flushes the weight columns and the override
+     * map back as of its load, and a derivation committed in between would
+     * be silently reverted. Always taken after the model-alias namespace
+     * lock when both apply, so the two can never deadlock. Released
+     * automatically with the surrounding transaction.
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(:key)", nativeQuery = true)
+    void lockModelWeights(@Param("key") long key);
 }

@@ -100,6 +100,16 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * change's price close (it committed first) or discards its stale page (the
  * revalidation sees the new type), so the closed price generation cannot be
  * re-opened.
+ *
+ * The weight phase of a run takes a separate, transaction-scoped advisory
+ * lock on the model-weights namespace as its first statement, and the admin
+ * endpoints that load and later save whole Model rows (add / update / delete
+ * model, weight feedback) take the same lock before loading any model row.
+ * Model has no @Version, so an admin save flushes the full row - weight
+ * columns and override map included - as of its load; the serialization
+ * makes a save that started before a derivation wait for it, and a
+ * derivation that started before a save commit after it, so neither side can
+ * revert the other's committed weights.
  */
 @Service
 public class ModelMetricsService {
@@ -128,6 +138,19 @@ public class ModelMetricsService {
     static long providerDerivationLockKey(int providerId) {
         return PROVIDER_DERIVATION_LOCK_KEY_BASE + providerId;
     }
+
+    /**
+     * Advisory-lock key that serializes the derivation's weight phase with
+     * the admin endpoints' unversioned full-row model saves: Model has no
+     * @Version, so a save that loaded a row before a derivation committed
+     * would flush the stale weight columns and override map back over it.
+     * One key covers the whole models table, because both the derivation
+     * and the admin rebalances write fleet-wide. Distinct from the
+     * provider-derivation and model-alias key spaces; always taken after
+     * the alias-namespace lock when both apply, so the two cannot deadlock.
+     * The value itself is meaningless.
+     */
+    public static final long MODEL_WEIGHTS_LOCK_KEY = 0x4C4F474D4F44454CL; // "LOGMODEL"
 
     private final ModelProviderRepository modelProviderRepository;
     private final ProviderRepository providerRepository;
@@ -304,11 +327,15 @@ public class ModelMetricsService {
      * compare-and-update phase runs in a single rollback-capable transaction:
      * a mid-loop failure rolls back every write of this run, so the fleet is
      * never left half re-ranked, and the caller notifies the orchestrator
-     * only after this committed.
+     * only after this committed. Its first statement takes the model-weights
+     * advisory lock (see the class javadoc), so an admin save that loaded
+     * model rows before this transaction cannot flush them over these writes
+     * after it committed.
      * Returns true when any weight actually changed.
      */
     boolean applyDerivedWeights() {
         Boolean changed = transactionTemplate.execute(status -> {
+            modelRepository.lockModelWeights(MODEL_WEIGHTS_LOCK_KEY);
             // Build the per-dimension populations from the pairs table:
             // latency = all pairs, but cost ranking = only cloud pairs.
             Set<Integer> pairedModelIds = new HashSet<>();

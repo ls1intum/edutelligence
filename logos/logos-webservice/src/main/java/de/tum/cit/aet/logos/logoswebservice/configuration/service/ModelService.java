@@ -147,6 +147,7 @@ public class ModelService {
     @Transactional
     public Map<String, Object> addModel(AddModelRequestDTO req) {
         lockModelAliasNamespace();
+        lockModelWeights();
         Model model = new Model();
         model.setName(req.name());
         model.setTags(req.tags() != null ? req.tags() : "");
@@ -171,6 +172,7 @@ public class ModelService {
     @Transactional
     public Map<String, Object> updateModelInfo(UpdateModelRequestDTO req) {
         lockModelAliasNamespace();
+        lockModelWeights();
         Model model = modelRepository.findById(req.modelId())
             .orElseThrow(() -> new IllegalArgumentException("Model not found: " + req.modelId()));
         if (req.name() != null) model.setName(req.name());
@@ -212,6 +214,7 @@ public class ModelService {
 
     @Transactional
     public Map<String, Object> deleteModel(Integer id) {
+        lockModelWeights();
         if (!modelRepository.existsById(id)) {
             throw new IllegalArgumentException("Model not found: " + id);
         }
@@ -240,6 +243,7 @@ public class ModelService {
 
     @Transactional
     public Map<String, Object> updateModelWeight(int id, String category, int feedback) {
+        lockModelWeights();
         Model model = modelRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("Model not found: " + id));
         weightService.rebalanceAfterFeedback(id, category, feedback);
@@ -292,6 +296,23 @@ public class ModelService {
      */
     private void lockModelAliasNamespace() {
         modelAliasRepository.lockModelAliasNamespace(MODEL_ALIAS_NAMESPACE_LOCK_KEY);
+    }
+
+    /**
+     * Serializes this endpoint's full-row model save with the auto-
+     * derivation's weight phase ({@code ModelMetricsService#applyDerivedWeights}).
+     * Model has no @Version, so the save's Hibernate flush writes the weight
+     * columns and the override map back as of the moment the row was loaded;
+     * a derivation that committed in between would be silently reverted,
+     * leaving classification on an unpinned stale value until the next run.
+     * Taking the lock before loading any model row closes that window: a
+     * concurrent derivation waits, so the loaded snapshot can never go stale
+     * under a weight write. Like {@link #lockModelAliasNamespace} it is
+     * released automatically with the surrounding transaction and is ordered
+     * after the alias-namespace lock, so the two cannot deadlock.
+     */
+    private void lockModelWeights() {
+        modelRepository.lockModelWeights(ModelMetricsService.MODEL_WEIGHTS_LOCK_KEY);
     }
 
     private void ensureNameDoesNotCollideWithAlias(String name) {
