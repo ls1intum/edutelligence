@@ -49,7 +49,11 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryBillin
  * impossible interval that the historical billing lookup
  * ({@code valid_from <= t AND (valid_to IS NULL OR valid_to > t)}) can never
  * match, losing the billing of every request made while that price was
- * active. These tests run against the real Postgres container, so the
+ * active. The close must also stamp every row it closes with one single
+ * post-lock timestamp: a volatile per-row stamp could give the provider's
+ * prompt, completion, and reasoning rows different valid_to boundaries, and
+ * a request timestamp between two of them would bill only part of its
+ * usage. These tests run against the real Postgres container, so the
  * advisory-lock interleaving is exercised end to end.
  */
 @SpringBootTest
@@ -238,9 +242,25 @@ class TokenPriceCloseLockInterleavingTest {
             .as("the committed catalogue row was closed after its valid_from")
             .isOne();
 
+        // One close stamps every row it closes with one boundary: a
+        // per-row-volatile stamp could split the prompt, completion, and
+        // reasoning rows' valid_to values, and a request timestamp between
+        // two of them would bill only part of its usage.
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(DISTINCT valid_to) FROM token_prices "
+                + "WHERE provider_id = 6101 AND valid_to IS NOT NULL", Long.class))
+            .as("every row closed by the same provider change shares one valid_to")
+            .isOne();
+
         // Historical billing: a request made while the closed row was the
         // active price must still bill at that row's price - the lookup
         // admits a row only for request times inside [valid_from, valid_to).
+        // The two requests' billing windows are disjoint by construction:
+        // [requestTs, boundaryTs) for the mid-interval request, [boundaryTs,
+        // ...) for the boundary request.
+        Timestamp boundaryTs = jdbc.queryForObject(
+            "SELECT valid_to - INTERVAL '1 microsecond' FROM token_prices WHERE id = 92105",
+            Timestamp.class);
         Timestamp requestTs = jdbc.queryForObject(
             "SELECT valid_from + (valid_to - valid_from) / 2 FROM token_prices WHERE id = 92105",
             Timestamp.class);
@@ -253,13 +273,37 @@ class TokenPriceCloseLockInterleavingTest {
         long cost = logEntryBillingRepository
             .findKeyBudgetHistory(2003,
                 Timestamp.from(requestTs.toInstant().minusSeconds(60)),
-                Timestamp.from(requestTs.toInstant().plusSeconds(60)),
+                boundaryTs,
                 "hour")
             .stream().mapToLong(BudgetBucketProjection::getCostMicroCents).sum();
         assertThat(cost)
             .as("the request inside the closed row's interval bills at that row's price "
                 + "(1000 tokens x 2500 microcents per 1K)")
             .isEqualTo(1000L * 2500 / 1000);
+
+        // Full billing at the shared boundary: a request one microsecond
+        // before it, with usage of the provider's prompt, completion, and
+        // reasoning tokens, must bill every type against its closed row -
+        // the request sits inside every type's [valid_from, valid_to) only
+        // because they all end at the same boundary.
+        jdbc.update(
+            "INSERT INTO log_entry (id, timestamp_request, provider_id, model_id, api_key_id, team_id, result_status) "
+                + "VALUES (90102, ?, 6101, 5101, 5301, 2003, 'success')",
+            boundaryTs);
+        jdbc.update("INSERT INTO usage_tokens (type_id, log_entry_id, token_count) VALUES (9101, 90102, 1000)");
+        jdbc.update("INSERT INTO usage_tokens (type_id, log_entry_id, token_count) VALUES (9102, 90102, 500)");
+        jdbc.update("INSERT INTO usage_tokens (type_id, log_entry_id, token_count) VALUES (9103, 90102, 200)");
+
+        long fullCost = logEntryBillingRepository
+            .findKeyBudgetHistory(2003,
+                boundaryTs,
+                Timestamp.from(boundaryTs.toInstant().plusSeconds(60)),
+                "hour")
+            .stream().mapToLong(BudgetBucketProjection::getCostMicroCents).sum();
+        assertThat(fullCost)
+            .as("the request at the shared boundary bills every token type "
+                + "(1000 x 2500 + 500 x 2000 + 200 x 3000 over 1K)")
+            .isEqualTo(1000L * 2500 / 1000 + 500L * 2000 / 1000 + 200L * 3000 / 1000);
     }
 
     /**
