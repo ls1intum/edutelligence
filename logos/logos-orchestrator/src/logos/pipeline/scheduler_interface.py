@@ -79,6 +79,21 @@ class SchedulingRequest:
     # (api key + actual prompt prefix), deepest block first. Used for
     # prefix-cache-aware placement; empty/None means "route as before".
     affinity_keys: Optional[List[str]] = None
+    # True when the request carried the ``x-app: cli-bg`` header: background
+    # app traffic (e.g. an agent's auto-permission classifier call) that gets
+    # bounded precedence at the same priority level — the dispatch interleave
+    # keeps a fast lane for it without letting a steady flagged stream starve
+    # ordinary same-priority traffic.
+    background_app: bool = False
+    # time.monotonic() stamp of request ingress (sync path only; None for
+    # async jobs and tests). The scheduler recomputes the remaining queue-wait
+    # budget from this absolute stamp immediately before each queue wait (see
+    # ``remaining_queue_wait_s``) rather than trusting a value computed at
+    # request construction: the synchronous scheduling phase runs in between
+    # and can itself spend client window (per-candidate SDI refreshes block on
+    # HTTP with a 5s timeout each), so only a wait-time recompute keeps the
+    # queue-timeout 429 ahead of the client's watchdog.
+    ingress_at: Optional[float] = None
 
 
 class SchedulerInterface(ABC):

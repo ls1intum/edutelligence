@@ -22,7 +22,7 @@ from logos.context_budget import estimate_prompt_tokens
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
-from logos.timeouts import global_timeout_s
+from logos.timeouts import queue_wait_window_s, remaining_queue_wait_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
@@ -890,6 +890,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             provider_id,
             priority,
             is_cold_at_queue=is_cold_at_queue,
+            background_app=request.background_app,
             provider_affinity=request.required_provider_id,
         )
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
@@ -916,9 +917,23 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
 
         try:
-            timeout = (
-                request.timeout_s if request.timeout_s else global_timeout_s(1200)
-            )  # 20 min queue wait (or LOGOS_TIMEOUT_S)
+            # The configured window (or LOGOS_TIMEOUT_S) bounds even unstamped
+            # requests (async jobs): the request's own timeout may only
+            # shorten it, never extend it, so no request holds a queue slot
+            # past the window.
+            timeout = queue_wait_window_s(request.timeout_s)
+            # Recompute the client budget now, immediately before the wait,
+            # rather than trusting a value fixed at request construction: the
+            # synchronous scoring phase above (per-candidate SDI refreshes can
+            # each block on a 5s HTTP fetch) ran after construction and spent
+            # part of the window too. The window is the request's own
+            # timeout_s when it is smaller than the default, since that is
+            # what the client waits on. Only what is left at this instant may
+            # be spent waiting here, so the queue-timeout 429 still beats the
+            # client's watchdog.
+            remaining = remaining_queue_wait_s(request.ingress_at, request.timeout_s)
+            if remaining is not None:
+                timeout = min(timeout, remaining)
             result = await asyncio.wait_for(future, timeout=timeout)
 
             # Attach ETTFT info to the dequeued result (decision-time values:
