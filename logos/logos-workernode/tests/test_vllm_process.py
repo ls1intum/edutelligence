@@ -2725,3 +2725,126 @@ async def test_sharded_checkpoint_skipped_for_speculative_lane(monkeypatch, tmp_
     plain = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
     await handle._maybe_prepare_sharded_checkpoint(plain)
     assert handle._sharded_model_dir is not None
+
+
+@pytest.mark.asyncio
+async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeypatch, tmp_path) -> None:
+    """A rejection recorded for the current vLLM sends the lane straight to the
+    full checkpoint — no conversion attempt.
+
+    The record lives on disk (a sidecar the invalidation wrote earlier), not in
+    the handle: this is a freshly-constructed handle with no in-memory state,
+    modelling a worker that restarted after the original failure. Without the
+    persistent record the lane would spend minutes re-converting a checkpoint
+    the loader is about to refuse again.
+    """
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: "vllm")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")
+
+    lane = LaneConfig(
+        model="Qwen/Qwen3.8-27B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+
+    # A prior run rejected this conversion: the checkpoint dir is gone, the
+    # sidecar is what remains on disk.
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "Qwen/Qwen3.8-27B", 2)
+    sc.record_rejection(target, vllm_version="0.8.0")
+
+    def _boom(*_a, **_k):  # a rejected checkpoint must not be re-converted
+        raise AssertionError("a rejected checkpoint must not trigger a re-conversion")
+
+    monkeypatch.setattr(sc, "_run_conversion_subprocess", _boom)
+
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None, "the lane must serve the full checkpoint"
+    # The record is still on disk — it was not consumed into the handle.
+    assert sc.rejection_state(target, current_version="0.8.0") == "skip"
+
+
+async def test_maybe_prepare_runs_the_rejection_probe_off_the_event_loop(monkeypatch, tmp_path) -> None:
+    """The rejection probe can ask a separate-venv interpreter for its version;
+    it must run in a worker thread, not on the loop, so a slow probe cannot stall
+    every other coroutine on this lane's loop."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        OllamaConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "vllm")
+    lane = LaneConfig(model="org/Model-A", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    sc.record_rejection(target, vllm_version="0.8.0")
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")  # recorded == current → skip
+
+    routed: list = []
+    real_loop = asyncio.get_running_loop()
+    real_run_in_executor = real_loop.run_in_executor
+
+    def _spy_run_in_executor(executor, func, *args, **kwargs):
+        routed.append(func)
+        return real_run_in_executor(executor, func, *args, **kwargs)
+
+    monkeypatch.setattr(real_loop, "run_in_executor", _spy_run_in_executor)
+
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None, "a rejected checkpoint must serve the full checkpoint"
+    assert len(routed) == 1, "the rejection probe must be routed through run_in_executor"
+
+
+def test_sharded_rejection_reason_uses_the_loader_line() -> None:
+    """The recorded reason is the log line that identified the checkpoint as
+    the problem, so a later reader of the sidecar sees why it was rejected."""
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(
+        [
+            "Engine core initialization failed.",
+            'File ".../vllm/model_executor/model_loader/sharded_state_loader.py", line 154, in load_weights',
+        ]
+    )
+    assert "sharded_state_loader.py" in handle._sharded_rejection_reason()
+
+
+def test_sharded_rejection_reason_falls_back_when_nothing_matches() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    handle._recent_logs.extend(["torch.OutOfMemoryError: CUDA out of memory.", "some unrelated line"])
+    assert handle._sharded_rejection_reason() == "vLLM rejected the pre-sharded checkpoint"
+
+
+def test_invalidate_sharded_checkpoint_records_the_version(monkeypatch, tmp_path) -> None:
+    """The handle's invalidation records a *version-scoped* rejection, not just
+    a bare rmtree — this is what makes the record survive a worker restart and
+    get retired when the vLLM version changes."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle("lane-test", 19000, OllamaConfig())
+    lane = LaneConfig(model="org/Model-A", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    handle._sharded_model_dir = str(target)
+    handle._recent_logs.extend(['File ".../sharded_state_loader.py", line 154, in load_weights'])
+
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _b: "0.8.0")
+    assert handle._invalidate_sharded_checkpoint(lane) is True
+
+    rec = sc.read_rejection(target)
+    assert rec is not None
+    assert rec["vllm_version"] == "0.8.0"
+    assert "sharded_state_loader.py" in rec["reason"]
