@@ -105,7 +105,10 @@ def _resolve_requested_model_name(
        ``local-most-powerful`` that can be re-pointed at another model),
     3. the planner-safe alias form where ``/``, ``:``, and spaces are
        rewritten as underscores (lets users copy model ids from lane names
-       or worker logs without breaking access-controlled model lookup).
+       or worker logs without breaking access-controlled model lookup),
+    4. a replica lane id for a model's second and further lanes
+       (``planner-<alias>-2``) — a copied replica lane name is still an
+       address for the same model.
 
     All matching is case-insensitive. Every level must resolve to a single
     unambiguous model to be accepted: the schema does not enforce
@@ -114,15 +117,38 @@ def _resolve_requested_model_name(
     alias that matches several models does not fall through to the planner
     aliases (a stored name is an explicit assignment and wins over the
     derived form). Ambiguous requests resolve to ``None``.
+
+    The replica tier is suppressed whenever the requested name is another
+    model's own name, stored alias, or planner-safe alias — model families
+    carry numeric suffixes (``gemma-2``, ``llama-3``, ``phi-4``), so with
+    ``llama`` and ``llama-3`` both deployed, ``planner-llama-3`` is the
+    planner alias of ``llama-3``, not a third replica of ``llama``.
     """
     requested = str(requested_name or "").strip()
     if not requested:
         return None
     requested_lc = requested.lower()
 
+    # Every name that already addresses a deployed model in its own right:
+    # the canonical names and the stored aliases, raw and planner-sanitized
+    # alike. The replica-suffix tier below refuses to shadow any of these.
+    known_names: set[str] = set()
+    for entry in available_models:
+        canonical = str((entry or {}).get("name") or "").strip()
+        if not canonical:
+            continue
+        known_names.add(canonical.lower())
+        known_names.add(_planner_model_alias(canonical).lower())
+        for alias in entry.get("aliases") or []:
+            alias = str(alias).strip()
+            if alias:
+                known_names.add(alias.lower())
+                known_names.add(_planner_model_alias(alias).lower())
+
     canonical_matches: set[str] = set()
     stored_alias_matches: set[str] = set()
     planner_alias_matches: set[str] = set()
+    replica_matches: set[str] = set()
     for entry in available_models:
         canonical = str((entry or {}).get("name") or "").strip()
         if not canonical:
@@ -138,6 +164,28 @@ def _resolve_requested_model_name(
             if str(alias).strip().lower() == requested_lc:
                 stored_alias_matches.add(canonical)
 
+        # Lane ids carry a replica suffix for a model's second and further
+        # lanes (planner-<alias>-2): a copied replica lane name is still an
+        # address for this model.
+        replica_prefix = f"planner-{sanitized.lower()}-"
+        suffix = requested_lc[len(replica_prefix) :] if requested_lc.startswith(replica_prefix) else None
+        if suffix is not None and suffix.isascii() and suffix.isdigit():
+            # The planner derives suffixes from int, so a replica id is ASCII
+            # decimal only: a non-ASCII "digit" never names a lane, and a run
+            # longer than int() can parse (Python caps the length) must be
+            # refused rather than raised out of the resolver.
+            try:
+                index = int(suffix)
+            except ValueError:
+                continue
+            if index >= 2:
+                # Skip when <alias>-<n> is another deployed model's own name,
+                # stored alias, or planner alias: that request addresses that
+                # model, not this one's replica.
+                if f"{sanitized.lower()}-{suffix}" in known_names:
+                    continue
+                replica_matches.add(canonical)
+
     if len(canonical_matches) == 1:
         return next(iter(canonical_matches))
     if canonical_matches:
@@ -150,6 +198,12 @@ def _resolve_requested_model_name(
         return None
     if len(planner_alias_matches) == 1:
         return next(iter(planner_alias_matches))
+    if planner_alias_matches:
+        # Two distinct models sharing one planner-safe alias is a genuine
+        # ambiguity — refuse rather than guess.
+        return None
+    if len(replica_matches) == 1:
+        return next(iter(replica_matches))
     return None
 
 

@@ -89,3 +89,56 @@ async def test_calls_refresh_with_rebuild_true_when_requested(monkeypatch):
 
     assert result == {"status": "ok"}
     assert refresh_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_plain_refresh_does_not_rescrape_the_cloud_providers(monkeypatch):
+    """Model links and permissions change constantly; upstreams do not."""
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+
+    async def _fake_refresh(*, rebuild_model_classifier: bool = False):
+        pass
+
+    monkeypatch.setattr(internal_mod, "refresh_pipeline_runtime_state", _fake_refresh)
+    sync = MagicMock()
+    monkeypatch.setattr(main_mod, "_cloud_model_sync", sync, raising=False)
+
+    await internal_mod.internal_refresh_pipeline(_make_data(False), _make_request("Bearer correct-secret"))
+
+    sync.request_refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_provider_change_rescrapes_the_cloud_providers(monkeypatch):
+    """A cloud provider added in the UI has no models until its listing is read."""
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+
+    async def _fake_refresh(*, rebuild_model_classifier: bool = False):
+        pass
+
+    monkeypatch.setattr(internal_mod, "refresh_pipeline_runtime_state", _fake_refresh)
+    sync = MagicMock()
+    monkeypatch.setattr(main_mod, "_cloud_model_sync", sync, raising=False)
+
+    data = main_mod.RefreshPipelineRequest(sync_cloud_models=True)
+    result = await internal_mod.internal_refresh_pipeline(data, _make_request("Bearer correct-secret"))
+
+    assert result == {"status": "ok"}
+    sync.request_refresh.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_a_provider_change_before_startup_completes_is_not_an_error(monkeypatch):
+    """The sync service is created late in startup; the hook must tolerate that."""
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+
+    async def _fake_refresh(*, rebuild_model_classifier: bool = False):
+        pass
+
+    monkeypatch.setattr(internal_mod, "refresh_pipeline_runtime_state", _fake_refresh)
+    monkeypatch.setattr(main_mod, "_cloud_model_sync", None, raising=False)
+
+    data = main_mod.RefreshPipelineRequest(sync_cloud_models=True)
+    assert await internal_mod.internal_refresh_pipeline(data, _make_request("Bearer correct-secret")) == {
+        "status": "ok"
+    }

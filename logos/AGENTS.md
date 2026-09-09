@@ -136,7 +136,7 @@ Endpoint request models live in `dbutils/dbrequest.py`.
 
 **Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be registered before the catch-all, otherwise FastAPI will never match them: within `user_facing.py` they must be defined above it, and any new router must be `include_router`-ed in `main.py` before the `user_facing` router (which is included last).
 
-**Important**: Routers import shared state from `logos.main` — this works only because `main.py` imports the routers at its very bottom, after all module-level definitions. Globals that `start_pipeline`/`refresh_pipeline_runtime_state` rebind (`_pipeline`, `_queue_mgr`, `_logosnode_facade`, `_azure_facade`, `_context_resolver`, `_demand_tracker`, `_capacity_planner`, `_calibration_orchestrator`) must be read in router code through `import logos.main as _main` + `_main.<name>`; a plain `from logos.main import <name>` would freeze the pre-startup `None`.
+**Important**: Routers import shared state from `logos.main` — this works only because `main.py` imports the routers at its very bottom, after all module-level definitions. Globals that `start_pipeline`/`refresh_pipeline_runtime_state` rebind (`_pipeline`, `_queue_mgr`, `_logosnode_facade`, `_azure_facade`, `_context_resolver`, `_demand_tracker`, `_capacity_planner`, `_calibration_orchestrator`, `_cloud_model_sync`) must be read in router code through `import logos.main as _main` + `_main.<name>`; a plain `from logos.main import <name>` would freeze the pre-startup `None`.
 
 ### Database Pattern
 - `DBManager` is a context manager: `with DBManager() as db: ...`
@@ -404,7 +404,7 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 
 ## Important Notes for AI Agents
 
-1. **main.py is still large** (about 4400 lines after the route handlers moved to `routers/`) — it holds the shared runtime helpers (see "main.py and where new code goes": new code goes into router/domain modules, and existing clusters are still being extracted, so the file should keep shrinking). Until it is small enough to hold in one read, read specific sections rather than the whole file and use grep to find relevant functions.
+1. **main.py is still large** (about 4000 lines after the route handlers moved to `routers/`) — it holds the shared runtime helpers (see "main.py and where new code goes": new code goes into router/domain modules, and existing clusters are still being extracted, so the file should keep shrinking). Until it is small enough to hold in one read, read specific sections rather than the whole file and use grep to find relevant functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic/migration tooling on the orchestrator side** — it never had any; it just reads/writes tables. Schema and migrations are owned by `logos-webservice` via Liquibase (see Database Schema above).
 4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances), and self-hosted GPU workers via `logos-workernode` (vLLM/Ollama lanes, connected over the websocket bridge in `logosnode_registry.py`).

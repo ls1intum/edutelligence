@@ -72,6 +72,11 @@ class LogosNodeReconfigureLaneRequest(LogosKeyModel):
 
 class RefreshPipelineRequest(BaseModel):
     rebuild_classifier: bool = False
+    # Set by the webservice when a provider itself changed, as opposed to a
+    # model link or a permission. A newly added cloud provider has no models
+    # until its /v1/models listing is read, and that otherwise waits for the
+    # next interval tick — a quarter of an hour of an empty model list.
+    sync_cloud_models: bool = False
 
 
 class InternalCalibrateRequest(BaseModel):

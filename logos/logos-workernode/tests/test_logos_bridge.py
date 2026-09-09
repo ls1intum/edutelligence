@@ -1362,6 +1362,31 @@ async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monkeypatch):
+    """No nvidia-smi on Metal, so the VRAM-fit half could never run — skip
+    the whole precheck up front instead of fetching HF metadata for
+    nothing. Metal profiles come from model_profile_overrides, not this."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    fetch_spy = MagicMock(side_effect=AssertionError("should not fetch HF metadata on Metal"))
+    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", fetch_spy)
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["hf_source"] == "skipped:metal-backend"
+    assert response["fit_tp_idle"] is None
+    assert response["unsupported_reason"] is None
+    fetch_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monkeypatch):
     """The standalone RPC is callable outside any calibration session — no
     session needs to be started, no lanes are touched."""
@@ -2903,3 +2928,127 @@ async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
 
     assert state["closed"] is True, "the relay connection to the lane stayed open"
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+# ---------------------------------------------------------------------------
+# Post-calibration sharded-checkpoint conversion
+#
+# The calibration trigger pre-shards a model while the GPUs are still free. It
+# has to answer the same two gates as the spawn-time path, or it burns GPU time
+# building a cache the lane will never read: a per-model opt-out, and a loader
+# rejection already recorded for the installed vLLM.
+# ---------------------------------------------------------------------------
+
+
+def _sharded_bridge(monkeypatch, tmp_path) -> tuple[LogosBridgeClient, list[str]]:
+    """A bridge client whose recorded calibration events are captured."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client = LogosBridgeClient(
+        _DummyApp(),
+        LogosConfig(enabled=True, logos_url="http://logos.example:8080", shared_key="secret"),
+    )
+    events: list[str] = []
+    monkeypatch.setattr(
+        client,
+        "_record_calibration_event",
+        lambda event, model="", details="": events.append(event),
+    )
+    monkeypatch.setattr(sc, "resolve_cache_root", lambda _models_path: str(tmp_path))
+    return client, events
+
+
+def _sharded_cfg(vllm_engine: dict):
+    from logos_worker_node.models import AppConfig
+
+    return AppConfig(engines={"vllm": vllm_engine})
+
+
+async def _run_conversion(client, cfg, tmp_path) -> None:
+    await client._maybe_convert_sharded_checkpoint(  # noqa: SLF001
+        "org/Model-A",
+        SimpleNamespace(tensor_parallel_size=2, gpu_devices=""),
+        {"dtype": "auto"},
+        _CalibrationSession(sleep_level=1),
+        cfg,
+        tmp_path,
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_honors_a_per_model_opt_out(tmp_path, monkeypatch) -> None:
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+
+    def _boom(**_kw):
+        raise AssertionError("the lane spawner honors the same opt-out — there is no cache to build")
+
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _boom)
+    cfg = _sharded_cfg({"model_overrides": {"org/Model-A": {"sharded_checkpoint_enabled": False}}})
+
+    await _run_conversion(client, cfg, tmp_path)
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_honors_a_per_model_opt_in(tmp_path, monkeypatch) -> None:
+    """The worker-wide switch is off, but this one model is opted in — the
+    trigger must run rather than short-circuit on the global flag."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+    calls: list[dict] = []
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", lambda **kw: calls.append(kw) or "/converted")
+    cfg = _sharded_cfg(
+        {
+            "sharded_checkpoint_enabled": False,
+            "model_overrides": {"org/Model-A": {"sharded_checkpoint_enabled": True}},
+        }
+    )
+
+    await _run_conversion(client, cfg, tmp_path)
+    assert len(calls) == 1
+    assert calls[0]["model"] == "org/Model-A"
+    assert events == ["sharded_conversion_started", "sharded_conversion_completed"]
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_skips_a_rejected_build_without_a_failure_event(tmp_path, monkeypatch) -> None:
+    """A recorded rejection is a *skip*, not a failure.
+
+    ``ensure_sharded_checkpoint`` would refuse the rejected (model, tp) on its
+    own, but its ``None`` return is indistinguishable from a real conversion
+    failure and would surface a misleading ``sharded_conversion_failed`` event
+    to the server on every calibration run. The trigger asks first.
+    """
+    from logos_worker_node import sharded_checkpoint as sc
+
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    sc.invalidate_sharded_checkpoint(target, vllm_version="0.27.1")
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _binary: "0.27.1")
+
+    def _boom(**_kw):
+        raise AssertionError("a rejected conversion must not be re-run at calibration either")
+
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _boom)
+
+    await _run_conversion(client, _sharded_cfg({}), tmp_path)
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_runs_when_nothing_blocks_it(tmp_path, monkeypatch) -> None:
+    """Control: the ordinary path is unchanged — a real failure still reports."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _binary: "0.27.1")
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", lambda **_kw: None)
+
+    await _run_conversion(client, _sharded_cfg({}), tmp_path)
+    assert events == ["sharded_conversion_started", "sharded_conversion_failed"]

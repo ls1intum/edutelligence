@@ -116,16 +116,7 @@ async def internal_model_health(request: Request):
     entries expose only model names and statuses, best across deployments
     (see :func:`_model_deployment_status`).
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal model health endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal model health endpoint disabled")
 
     local_ok = False
     model_status: Dict[str, str] = {}
@@ -169,20 +160,22 @@ async def internal_model_health(request: Request):
 
 @router.post("/internal/refresh_pipeline", tags=["admin"])
 async def internal_refresh_pipeline(data: RefreshPipelineRequest, request: Request):
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal refresh endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal refresh endpoint disabled")
     if not _main._pipeline or not _main._logosnode_facade or not _main._azure_facade:
         raise HTTPException(status_code=503, detail="Pipeline not initialized")
-    logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
+    logger.info(
+        "Pipeline refresh requested by Spring (rebuildClassifier=%s, syncCloudModels=%s)",
+        data.rebuild_classifier,
+        data.sync_cloud_models,
+    )
     await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
+    if data.sync_cloud_models and _main._cloud_model_sync is not None:
+        # Scheduled, not awaited: the pass contacts every cloud upstream in
+        # turn and the webservice is blocked on this response, so one
+        # unreachable provider would stall a provider edit for a full request
+        # timeout. The pass refreshes runtime state itself once it finds
+        # something, so nothing is lost by returning first.
+        _main._cloud_model_sync.request_refresh()
     return {"status": "ok"}
 
 
@@ -194,16 +187,7 @@ async def internal_provider_status(request: Request):
     only; live connection state (online/offline) exists solely in the
     orchestrator's worker registry, so it is exposed here for enrichment.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request, disabled_detail="Internal provider status endpoint disabled")
 
     with DBManager() as db:
         inventory = db.list_local_providers()
@@ -245,16 +229,7 @@ async def internal_model_context_windows(request: Request):
     ``best`` and ``native`` numbers next to it; see
     :func:`_served_context_window_stats`.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     stats = _served_context_window_stats()
     return {
@@ -263,10 +238,15 @@ async def internal_model_context_windows(request: Request):
     }
 
 
-def _require_internal_secret(request: Request) -> None:
-    """Authenticate an /internal/* call: the shared secret, no user context."""
+def _require_internal_secret(request: Request, disabled_detail: str = "Internal endpoint disabled") -> None:
+    """Authenticate an /internal/* call: the shared secret, no user context.
+
+    Endpoints that historically reported their own name in the 403 (secret
+    not configured) pass it through ``disabled_detail`` so the client-visible
+    answer is unchanged.
+    """
     if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
+        raise HTTPException(status_code=403, detail=disabled_detail)
     auth_header = request.headers.get("authorization", "")
     token = (
         auth_header.removeprefix("Bearer ").strip()
@@ -340,16 +320,7 @@ def internal_calibration_probe_logs(model_name: str, request: Request):
     it resolves a model id to a model name, then asks here for what every
     provider that has calibrated it reported.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     with DBManager() as db:
         rows = db.get_calibration_probe_logs_by_model(model_name)
@@ -665,16 +636,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
 @router.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
 async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateRequest, request: Request):
     """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
         return JSONResponse(status_code=503, content={"error": "Worker not connected"})
@@ -718,16 +680,7 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])
 async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, request: Request):
     """Unload a lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="delete_lane",
@@ -738,16 +691,7 @@ async def internal_logosnode_delete_lane(data: InternalDeleteLaneRequest, reques
 @router.post("/internal/logosnode/lanes/add", tags=["admin"])
 async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Request):
     """Manually load a single lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     model = str(data.lane.get("model") or "").strip()
     if not model:
@@ -757,7 +701,7 @@ async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Req
         raise HTTPException(status_code=503, detail="Capacity planner not ready")
 
     # Answer a refusal synchronously — a background task has nobody to report to.
-    rejection = _main._capacity_planner.manual_load_rejection_reason(data.provider_id)
+    rejection = _main._capacity_planner.manual_load_rejection_reason(data.provider_id, model)
     if rejection is not None:
         raise HTTPException(status_code=409, detail=rejection)
 
@@ -792,16 +736,7 @@ async def internal_logosnode_sleep_lane(data: InternalSleepLaneRequest, request:
     must cover it, which is why sleep_lane gets the same 120 s as the
     planner's own sleep commands.
     """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
 
     snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
     if snap is None:
@@ -838,16 +773,7 @@ async def internal_logosnode_sleep_lane(data: InternalSleepLaneRequest, request:
 @router.post("/internal/logosnode/lanes/wake", tags=["admin"])
 async def internal_logosnode_wake_lane(data: InternalWakeLaneRequest, request: Request):
     """Wake a sleeping lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+    _require_internal_secret(request)
     return await _dispatch_logosnode_command(
         provider_id=data.provider_id,
         action="wake_lane",
