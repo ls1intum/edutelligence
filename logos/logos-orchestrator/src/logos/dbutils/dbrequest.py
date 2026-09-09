@@ -4,10 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class LogosKeyModel(BaseModel):
-    # Optional: browser callers authenticate via the Keycloak bearer
-    # header instead (see role_auth.require_logos_admin). Body-supplied
-    # keys still work for older/scripted callers.
-    logos_key: str | None = None
+    logos_key: str
 
 
 class UpdateProviderSdiConfigRequest(LogosKeyModel):
