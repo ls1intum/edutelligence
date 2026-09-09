@@ -7,6 +7,7 @@ design — they run on operator-provided override profiles instead.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Optional
 
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.sdi.models import ModelProfile
@@ -19,7 +20,7 @@ def _planner(*, metal: bool = False) -> CapacityPlanner:
     return planner
 
 
-def _profile(residency_source: str, base_residency_mb: float = 4000.0) -> ModelProfile:
+def _profile(residency_source: Optional[str], base_residency_mb: float = 4000.0) -> ModelProfile:
     return ModelProfile(
         model_name="org/model-a",
         engine="vllm",
@@ -86,6 +87,24 @@ class TestLoadRequiresCalibration:
         planner = _planner(metal=True)
         assert planner._load_requires_calibration(None, 1) is True
 
+    def test_hf_precheck_requires_it_on_metal(self):
+        """An HF-derived estimate carries no calibration proof, even where
+        calibration is impossible by design — only an operator override may
+        stand in for it on Metal."""
+        planner = _planner(metal=True)
+        assert planner._load_requires_calibration(_profile("hf"), 1) is True
+
+    def test_seeded_profile_requires_it_on_metal(self):
+        """seed_capabilities() keeps residency_source=None profiles in the
+        runtime map after a model drops out of advertised capabilities —
+        they must not ride the Metal exemption either."""
+        planner = _planner(metal=True)
+        assert planner._load_requires_calibration(_profile(None), 1) is True
+
+    def test_cached_requires_it_on_metal(self):
+        planner = _planner(metal=True)
+        assert planner._load_requires_calibration(_profile("cached"), 1) is True
+
 
 class TestFeasibilityGateRequiresCalibration:
     """``_passes_minimum_load_feasibility`` refuses a never-calibrated load."""
@@ -121,4 +140,19 @@ class TestFeasibilityGateRequiresCalibration:
         # "70B" would match the disk-size-from-name heuristic if it were
         # still consulted here — it must not be.
         ok = planner._passes_minimum_load_feasibility("org/model-70B", None, self._capacity(), provider_id=1)
+        assert ok is False
+
+    def test_rejects_hf_profile_even_on_metal(self):
+        """A present-but-unproven profile (e.g. the database-linked record
+        the manual-load picker can still select) must not pass the Metal
+        gate — only calibrated/measured sources and overrides may."""
+        planner = _planner(metal=True)
+        planner.get_pending_vram_mb = lambda pid: 0.0
+        ok = planner._passes_minimum_load_feasibility("org/model-a", _profile("hf"), self._capacity(), provider_id=1)
+        assert ok is False
+
+    def test_rejects_seeded_profile_even_on_metal(self):
+        planner = _planner(metal=True)
+        planner.get_pending_vram_mb = lambda pid: 0.0
+        ok = planner._passes_minimum_load_feasibility("org/model-a", _profile(None), self._capacity(), provider_id=1)
         assert ok is False

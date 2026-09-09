@@ -93,6 +93,25 @@ def test_override_profile_is_refused_on_cuda():
     assert "never been calibrated" in reason
 
 
+def test_hf_profile_is_refused_even_on_metal():
+    """The Metal exemption is for operator overrides, not for a database-
+    linked HF-derived record the picker can still select."""
+    profiles = {"org/model-a": SimpleNamespace(residency_source="hf")}
+    reason = _planner(profiles=profiles, metal=True).manual_load_rejection_reason(1, "org/model-a")
+    assert reason is not None
+    assert "never been calibrated" in reason
+
+
+def test_seeded_profile_is_refused_even_on_metal():
+    """seed_capabilities() leaves residency_source=None records in the
+    runtime map after a model drops out of advertised capabilities — the
+    manual-load picker must not treat them as an override."""
+    profiles = {"org/model-a": SimpleNamespace(residency_source=None)}
+    reason = _planner(profiles=profiles, metal=True).manual_load_rejection_reason(1, "org/model-a")
+    assert reason is not None
+    assert "never been calibrated" in reason
+
+
 def test_missing_profile_is_refused_even_on_metal():
     """A missing profile is not the same as an override — building a load
     with profile=None starts a lane with the wrong backend config (see

@@ -4289,7 +4289,7 @@ class CapacityPlanner:
             # calibration here instead, before the if/else split.
             if self._load_requires_calibration(profile, provider_id):
                 logger.info(
-                    "Skipping load of %s on worker=%s: never calibrated here " "and not a Metal/MLX provider",
+                    "Skipping load of %s on worker=%s: no calibration proof " "for this model on this provider",
                     model_name,
                     self._facade.get_provider_name(provider_id) or provider_id,
                 )
@@ -4878,7 +4878,8 @@ class CapacityPlanner:
 
         if self._load_requires_calibration(profile, provider_id):
             logger.info(
-                "ensure_capacity worker=%s model=%s: refusing — never calibrated " "on this (non-Metal) provider",
+                "ensure_capacity worker=%s model=%s: refusing — no calibration "
+                "proof for this model on this provider",
                 self._facade.get_provider_name(provider_id) or provider_id,
                 target.model_name,
             )
@@ -6035,8 +6036,10 @@ class CapacityPlanner:
     ) -> bool:
         """True when this profile must not be used to load a lane.
 
-        No profile at all always fails, even on Metal — only an override
-        profile is exempt there, not having nothing (see load_lane_manually).
+        No profile at all always fails, even on Metal. The Metal exemption
+        covers an operator override profile only — not having nothing, and
+        not seeded or HF-derived records, which carry no calibration proof
+        (see load_lane_manually).
         """
         if profile is None:
             return True
@@ -6077,8 +6080,8 @@ class CapacityPlanner:
 
         if self._load_requires_calibration(profile, provider_id):
             logger.info(
-                "Feasibility FAILED for %s: never calibrated on worker=%s and "
-                "not a Metal/MLX provider — calibrate it before loading",
+                "Feasibility FAILED for %s: no calibration proof for this "
+                "model on worker=%s — calibrate it before loading",
                 model_name,
                 provider_id,
             )
