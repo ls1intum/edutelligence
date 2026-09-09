@@ -28,7 +28,14 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.metal import is_metal_backend
-from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
+from logos_worker_node.models import (
+    LaneConfig,
+    LaneEvent,
+    LogosConfig,
+    WorkerTransportStatus,
+    model_can_sleep,
+    model_uses_sharded_checkpoint,
+)
 from logos_worker_node.request_content import MULTIPART_PAYLOAD_KEY, httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
 
@@ -1890,7 +1897,12 @@ class LogosBridgeClient:
             from logos_worker_node.calibration import _DEFAULT_VLLM  # noqa: PLC0415
 
             vc_engine = cfg.engines.vllm if cfg.engines else None
-            if vc_engine is None or not getattr(vc_engine, "sharded_checkpoint_enabled", True):
+            if vc_engine is None:
+                return
+            # Per-model override wins over the worker-wide switch in both
+            # directions; the lane spawner reads the same answer, so a
+            # conversion it would never serve is never started here.
+            if not model_uses_sharded_checkpoint(vc_engine, model_name):
                 return
             tp = int(getattr(result, "tensor_parallel_size", 1) or 1)
             min_tp = max(2, int(getattr(vc_engine, "sharded_checkpoint_min_tensor_parallel_size", 2)))
@@ -1905,6 +1917,23 @@ class LogosBridgeClient:
             if sc.is_sharded_checkpoint_ready(target):
                 return
 
+            loop = asyncio.get_running_loop()
+            # ensure_sharded_checkpoint would refuse a rejected (model, tp)
+            # itself, but returning None there is indistinguishable from a real
+            # conversion failure and would record a misleading
+            # sharded_conversion_failed event. Ask first so the skip stays a
+            # skip. Off the event loop: the check can probe a separate-venv
+            # interpreter for its version.
+            rejection = await loop.run_in_executor(None, lambda: sc.rejection_state(target, vllm_binary=_DEFAULT_VLLM))
+            if rejection == "skip":
+                logger.info(
+                    "[Calibration] sharded checkpoint for %s (tp=%d) was rejected by this vLLM — "
+                    "not converting; the lane serves the full checkpoint",
+                    model_name,
+                    tp,
+                )
+                return
+
             import os as _os  # noqa: PLC0415
 
             hf_home = _os.environ.get("HF_HOME", "").strip() or str(Path(cache_root) / ".hf_cache")
@@ -1916,7 +1945,6 @@ class LogosBridgeClient:
             self._record_calibration_event("sharded_conversion_started", model=model_name, details=f"tp={tp}")
             logger.info("[Calibration] Converting %s to sharded checkpoint (tp=%d)", model_name, tp)
 
-            loop = asyncio.get_running_loop()
             out = await loop.run_in_executor(
                 None,
                 lambda: sc.ensure_sharded_checkpoint(
