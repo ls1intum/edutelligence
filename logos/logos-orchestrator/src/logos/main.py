@@ -3727,36 +3727,39 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
     but this lets the API caller see the candidate list up front. Sourced
     from configured_models so models the worker stripped from
     capabilities_models (because they have no profile yet) are visible.
+
+    Reads the live session snapshot directly rather than through
+    _logosnode_facade: the facade's provider entry is populated from DB
+    model_provider links, which sync_logosnode_capabilities prunes to
+    match capabilities_models. A worker with every model uncalibrated
+    reports an empty capabilities_models, so that sync deletes all of its
+    links and the facade drops the provider entirely — leaving nothing
+    here to discover, even though the raw snapshot still has it all.
     """
-    if _logosnode_facade is None:
+    snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+    if snap is None:
         return []
-    candidates = _logosnode_facade.get_configured_models(provider_id)
-    if not candidates:
-        candidates = _logosnode_facade.get_worker_capabilities(provider_id)
-    try:
-        profiles = _logosnode_facade.get_model_profiles(provider_id)
-    except Exception:
-        profiles = {}
+    candidates = snap.get("configured_models") or snap.get("capabilities_models") or []
+    raw_profiles = (snap.get("runtime") or {}).get("model_profiles")
+    profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
     uncalibrated: list[str] = []
     for model_name in candidates:
         profile = profiles.get(model_name)
+        if not isinstance(profile, dict):
+            profile = None
         collapsed_envelope = (
             profile is not None
-            and profile.min_kv_cache_mb is not None
-            and profile.max_kv_cache_mb is not None
-            and profile.min_kv_cache_mb > 0
-            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+            and profile.get("min_kv_cache_mb") is not None
+            and profile.get("max_kv_cache_mb") is not None
+            and profile.get("min_kv_cache_mb") > 0
+            and profile.get("min_kv_cache_mb") == profile.get("max_kv_cache_mb")
         )
         if (
             profile is None
-            or profile.base_residency_mb is None
-            or profile.sleeping_residual_mb is None
-            or profile.sleep_l1_transient_host_ram_mb is None
-            or (
-                profile is not None
-                and profile.residency_source == "calibrated"
-                and not profile.kv_cache_to_max_model_len_pairs
-            )
+            or profile.get("base_residency_mb") is None
+            or profile.get("sleeping_residual_mb") is None
+            or profile.get("sleep_l1_transient_host_ram_mb") is None
+            or (profile.get("residency_source") == "calibrated" and not profile.get("kv_cache_to_max_model_len_pairs"))
             or collapsed_envelope
         ):
             uncalibrated.append(model_name)
