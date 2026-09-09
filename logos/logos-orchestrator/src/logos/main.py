@@ -27,7 +27,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
+from logos.anthropic_compat import (
+    UpstreamDialect,
+    is_responses_path,
+    stream_translator,
+    translate_error,
+    translate_response,
+)
 from logos.auth import AuthContext, authenticate_api_key
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
@@ -4079,8 +4085,9 @@ async def _streaming_response(
                         yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
             # synthetic error frame without corrupting its protocol — in the
-            # dialect the client is reading, which is Anthropic's whenever the
-            # response was being translated.
+            # dialect the client is reading: Anthropic's whenever the response
+            # was being translated, the Responses one for a /v1/responses
+            # request, chat/completions' for everything else.
             if anthropic_stream:
                 for client_chunk in anthropic_stream.error(str(exc)):
                     yield client_chunk
@@ -4092,7 +4099,31 @@ async def _streaming_response(
                 # Close it before emitting recovery frames so clients can parse
                 # the synthetic error independently.
                 yield b"\n\n"
-                yield f"data: {_json.dumps(error_body)}\n\n".encode()
+                if is_responses_path(request_path):
+                    # A Responses client ends a failed turn on response.failed —
+                    # the bare error object chat/completions terminates with is
+                    # not part of its protocol, so it would read the failure as
+                    # nothing at all. The context carries no dialect marker (the
+                    # resolver sets one only for Messages), so the inbound path
+                    # picks the shape here.
+                    failed_event = {
+                        "type": "response.failed",
+                        "response": {
+                            "id": f"resp_{secrets.token_hex(12)}",
+                            "object": "response",
+                            "created_at": int(time.time()),
+                            "model": str(context.model_name or ""),
+                            "output": [],
+                            "status": "failed",
+                            "error": {
+                                "code": "server_error",
+                                "message": str(error_body["error"].get("message") or exc),
+                            },
+                        },
+                    }
+                    yield f"event: response.failed\ndata: {_json.dumps(failed_event)}\n\n".encode()
+                else:
+                    yield f"data: {_json.dumps(error_body)}\n\n".encode()
                 yield b"data: [DONE]\n\n"
         finally:
             _live_streams.finish(request_id)

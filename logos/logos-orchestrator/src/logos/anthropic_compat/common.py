@@ -30,6 +30,11 @@ from typing import Any, Dict, List, Optional, Tuple
 # by the time a path reaches here.
 MESSAGES_PATH = "v1/messages"
 
+# The inbound path of the OpenAI Responses API. Logos serves it like-for-like,
+# so nothing in this package translates it — but the forwarding layer still has
+# to recognise the surface, and the path normalisation is the same as above.
+RESPONSES_PATH = "v1/responses"
+
 # OpenAI's reasoning families — the o-series and gpt-5 — under both their bare
 # names and any vendor prefix ("openai/gpt-5.1"). They take a different
 # parameter set on chat/completions than every older model.
@@ -56,6 +61,14 @@ def is_messages_path(request_path: Optional[str]) -> bool:
         return False
     path = request_path.split("?", 1)[0].strip("/")
     return path == MESSAGES_PATH
+
+
+def is_responses_path(request_path: Optional[str]) -> bool:
+    """Whether an inbound request path addresses the OpenAI Responses API."""
+    if not request_path:
+        return False
+    path = request_path.split("?", 1)[0].strip("/")
+    return path == RESPONSES_PATH
 
 
 def is_reasoning_model(model_name: Optional[str]) -> bool:
