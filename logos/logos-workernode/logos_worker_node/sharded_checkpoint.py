@@ -279,6 +279,22 @@ def _lock_for(directory: Path) -> threading.Lock:
         return lock
 
 
+def _launch_path_for_script(script: str) -> str:
+    """The ``PATH`` the serving process searches when it execs ``script``.
+
+    ``VllmProcessHandle._build_process_env`` prepends the resolved script's own
+    directory to ``PATH`` before spawning, so an ``#!/usr/bin/env python3``
+    shebang is resolved by ``env`` against *that* search path — the serving
+    venv's ``bin`` first. Reading such a shebang against this worker's plain
+    ``PATH`` would name a different interpreter in a separate-venv deployment
+    and scope the rejection record to a vLLM that is not the one loading the
+    checkpoint. Must stay in sync with that method.
+    """
+    bin_dir = str(Path(script).resolve().parent)
+    current = os.environ.get("PATH", "")
+    return f"{bin_dir}{os.pathsep}{current}" if current else bin_dir
+
+
 def _interpreter_from_shebang(script: str) -> str | None:
     """The interpreter a directly-executed script runs under, from its shebang.
 
@@ -286,9 +302,9 @@ def _interpreter_from_shebang(script: str) -> str | None:
     interpreter from the script's ``#!`` line — so that shebang interpreter, not
     any ``python`` that merely sits in the same directory, is what actually
     loads (or refuses) the checkpoint. Handles absolute shebangs and
-    ``#!/usr/bin/env <name>`` (resolved via PATH); returns ``None`` when the
-    script has no usable shebang, in which case the caller falls back to a
-    sibling guess.
+    ``#!/usr/bin/env <name>`` (resolved against the serving ``PATH``, see
+    :func:`_launch_path_for_script`); returns ``None`` when the script has no
+    usable shebang, in which case the caller falls back to a sibling guess.
     """
     try:
         with open(script, "rb") as fh:
@@ -313,7 +329,10 @@ def _interpreter_from_shebang(script: str) -> str | None:
         while i < len(parts):
             arg = parts[i]
             if not arg.startswith("-"):
-                return shutil.which(arg)
+                # Searched against the PATH the lane spawns with, not this
+                # worker's — the two differ exactly in the separate-venv case
+                # the record has to get right.
+                return shutil.which(arg, path=_launch_path_for_script(script))
             if arg in ("-C", "-L", "-u", "--chdir", "--default-signal-limit"):
                 i += 2
                 continue

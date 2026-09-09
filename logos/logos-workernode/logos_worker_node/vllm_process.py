@@ -43,6 +43,7 @@ from logos_worker_node.models import (
     ProcessStatus,
     VllmConfig,
     VllmEngineConfig,
+    model_uses_sharded_checkpoint,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -1734,7 +1735,8 @@ class VllmProcessHandle:
             )
             return
         ec = self._vllm_engine_config
-        if not getattr(ec, "sharded_checkpoint_enabled", True):
+        if not model_uses_sharded_checkpoint(ec, lane_config.model, vc.sharded_checkpoint_enabled):
+            # Worker-wide switch, or a per-model override that wins over it.
             return
         if _speculative_decoding_requested(vc):
             # vLLM loads the draft model with the same --load-format as the main
