@@ -893,6 +893,25 @@ class LogosBridgeClient:
 
         ``persist=False`` skips the model_profiles write. Never raises.
         """
+        if is_metal_backend():
+            # No nvidia-smi here, so the VRAM-fit half could never run
+            # anyway — skip up front rather than fall through that
+            # exception. Metal profiles come from model_profile_overrides,
+            # not this precheck.
+            return {
+                "model": model_name,
+                "hf_source": "skipped:metal-backend",
+                "weight_bytes": None,
+                "kv_per_token_bytes": None,
+                "max_context_length": None,
+                "quantization_method": None,
+                "per_gpu_total_mb": None,
+                "per_gpu_free_mb": None,
+                "hardware_max_tp": None,
+                "fit_tp_idle": None,
+                "fit_tp_current": None,
+                "unsupported_reason": None,
+            }
         from logos_worker_node.calibration import (  # noqa: PLC0415
             _max_tp_for_plan,
             calibration_gpu_slice,

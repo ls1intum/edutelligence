@@ -3781,6 +3781,17 @@ class CapacityPlanner:
             # load that needs eviction, deadlocking the planner cycle).
             has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
 
+            # The contention branch below skips _passes_minimum_load_
+            # feasibility entirely (see its own comment), so gate
+            # calibration here instead, before the if/else split.
+            if self._load_requires_calibration(profile, provider_id):
+                logger.info(
+                    "Skipping load of %s on worker=%s: never calibrated here " "and not a Metal/MLX provider",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                )
+                continue
+
             if not eviction_set:
                 # Resources freely available — act on floor score. An announced
                 # upcoming use counts alongside a queued request: nothing has to
@@ -4300,6 +4311,14 @@ class CapacityPlanner:
             capacity = await self._wait_for_provider(provider_id, deadline)
             if capacity is None:
                 return False
+
+        if self._load_requires_calibration(profile, provider_id):
+            logger.info(
+                "ensure_capacity worker=%s model=%s: refusing — never calibrated " "on this (non-Metal) provider",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                target.model_name,
+            )
+            return False
 
         target_action = CapacityPlanAction(
             action="wake" if target.runtime_state == "sleeping" else "load",
@@ -5446,6 +5465,36 @@ class CapacityPlanner:
     # VRAM budget validation
     # ------------------------------------------------------------------
 
+    def _provider_is_metal(self, provider_id: Optional[int]) -> bool:
+        """True when this provider's devices report the Metal backend.
+
+        Metal/MLX workers can't be calibrated (no nvidia-smi/proc-meminfo),
+        so they run on operator-provided overrides instead.
+        """
+        if provider_id is None or self._registry is None:
+            return False
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if not snap:
+            return False
+        runtime = snap.get("runtime")
+        devices = runtime.get("devices") if isinstance(runtime, dict) else None
+        return isinstance(devices, dict) and devices.get("mode") == "metal"
+
+    def _load_requires_calibration(
+        self,
+        profile: Optional[ModelProfile],
+        provider_id: Optional[int],
+    ) -> bool:
+        """True when this profile must not be used to load a lane.
+
+        Calibrated/measured profiles always pass; everything else needs
+        a Metal/MLX provider (see _provider_is_metal).
+        """
+        is_calibrated = profile is not None and profile.residency_source in ("calibrated", "measured")
+        if is_calibrated:
+            return False
+        return not self._provider_is_metal(provider_id)
+
     def _passes_minimum_load_feasibility(
         self,
         model_name: str,
@@ -5456,14 +5505,18 @@ class CapacityPlanner:
     ) -> bool:
         """Quick gate before emitting a planner-initiated load action.
 
-        Checks base_residency + KV cache ≤ available_vram (with safety margin).
-        Uses the profile's HF-derived data when available, falls back to a name
-        heuristic.  Returns True (allow) when no estimate is possible — unknown
-        models should not be silently blocked.
+        Refuses outright when the model has never been calibrated on this
+        node and the provider is not Metal/MLX — see
+        _load_requires_calibration. Past that gate, base_residency only
+        ever comes from a calibrated profile or a Metal override; a
+        Metal provider with no profile at all (a misconfigured override)
+        is refused too rather than guessed at from the model's name.
 
-        For TP > 1 models, also checks per-GPU feasibility from runtime snapshot
-        device info, since total free VRAM can be misleading on heterogeneous or
-        unevenly loaded multi-GPU nodes (e.g. 20 GB total free but split 18+2).
+        Checks base_residency + KV cache ≤ available_vram (with safety
+        margin). For TP > 1 models, also checks per-GPU feasibility from
+        runtime snapshot device info, since total free VRAM can be
+        misleading on heterogeneous or unevenly loaded multi-GPU nodes
+        (e.g. 20 GB total free but split 18+2).
         """
         if capacity is None:
             return False
@@ -5474,16 +5527,28 @@ class CapacityPlanner:
         if available_mb <= 0:
             return False
 
+        if self._load_requires_calibration(profile, provider_id):
+            logger.info(
+                "Feasibility FAILED for %s: never calibrated on worker=%s and "
+                "not a Metal/MLX provider — calibrate it before loading",
+                model_name,
+                provider_id,
+            )
+            return False
+
         base_mb: Optional[float] = None
         if profile is not None:
             base_mb = profile.estimate_base_residency_mb()
         if base_mb is None:
-            from logos.sdi.models import _base_residency_from_bytes, _estimated_disk_size_bytes_from_model_name
-
-            disk = _estimated_disk_size_bytes_from_model_name(model_name)
-            base_mb = _base_residency_from_bytes(disk)
-        if base_mb is None:
-            return True  # can't estimate, allow
+            # Only reachable on a Metal provider with no profile at all
+            # (see _load_requires_calibration) — a misconfigured override,
+            # not a case to guess a size for from the model's name.
+            logger.info(
+                "Feasibility FAILED for %s: no profile/override data on " "worker=%s to estimate a size from",
+                model_name,
+                provider_id,
+            )
+            return False
 
         is_calibrated = profile is not None and profile.residency_source in (
             "calibrated",
@@ -5816,13 +5881,20 @@ class CapacityPlanner:
         sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
         return f"planner-{sanitized}"
 
-    def manual_load_rejection_reason(self, provider_id: int) -> Optional[str]:
+    def manual_load_rejection_reason(
+        self,
+        provider_id: int,
+        model_name: Optional[str] = None,
+    ) -> Optional[str]:
         """Why a manual load must not be attempted now, or None if it may run.
 
         The message is meant for the operator who clicked "Load lane", so the
         API layer calls this before it accepts the request: the load itself runs
         as a background task, and a refusal raised in there has nobody left to
         report to.
+
+        Passing ``model_name`` also rejects a model never calibrated here
+        (see _load_requires_calibration); omit it to skip that check.
         """
         if not self._is_plannable(provider_id):
             if self._registry is not None and self._registry.is_calibrating(provider_id):
@@ -5833,6 +5905,12 @@ class CapacityPlanner:
             # reservation, i.e. it would place the lane without checking whether
             # it fits. Request-time cold loads bail out here for the same reason.
             return "No capacity information for this provider yet; its free VRAM is unknown."
+        if model_name is not None:
+            profile = self._safe_get_profiles(provider_id).get(model_name)
+            if self._load_requires_calibration(profile, provider_id):
+                return (
+                    f"Model {model_name!r} has never been calibrated on this " "provider; calibrate it before loading."
+                )
         return None
 
     async def load_lane_manually(self, provider_id: int, model_name: str) -> bool:
@@ -5869,7 +5947,7 @@ class CapacityPlanner:
         ``add_lane`` for it, and the check inside the lock is what turns the
         second into a no-op instead of a duplicate.
         """
-        rejection = self.manual_load_rejection_reason(provider_id)
+        rejection = self.manual_load_rejection_reason(provider_id, model_name)
         if rejection is not None:
             logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
             return False
@@ -5888,7 +5966,7 @@ class CapacityPlanner:
                 )
                 return False
 
-            rejection = self.manual_load_rejection_reason(provider_id)
+            rejection = self.manual_load_rejection_reason(provider_id, model_name)
             if rejection is not None:
                 logger.warning(
                     "Refusing manual load of %s on worker=%s after waiting for the lane lock: %s",
