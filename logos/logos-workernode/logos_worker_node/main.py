@@ -8,7 +8,6 @@ import os
 import sys
 import time
 from contextlib import asynccontextmanager, suppress
-from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -840,32 +839,12 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # while a probe is running — reclaiming mid-session would rmtree the tree
     # out from under the probe.
     protected = _lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations()
-
-    # plan_cache_order keeps every unsleepable candidate in the plan
-    # regardless of budget — the startup rule, where they benefit most from
-    # the cache and never enter the sleep reserve. This pass is the pressure
-    # corrector, not the pre-populator: once the live host-RAM budget no
-    # longer covers an unsleepable tree, keeping it is what feeds the OOM, so
-    # drop it from the plan. The budget is the unclamped
-    # sleepable_tmpfs_budget_mb — pool (available + held) minus the sleep
-    # reserve and the safety margin, i.e. exactly the headroom a resident
-    # tree may still consume. Protected models win, as they do in
-    # _apply_ram_cache_plan: a live lane or a running calibration still
-    # reading the entry keeps it. Dropped models also leave plan.order, so
-    # the re-cache logic below neither re-queues them (no pressure-fighting
-    # refill) nor carries their hold-down stamps forward.
-    over_budget = {
-        c.name for c in candidates if not c.can_sleep and c.size_bytes / (1024 * 1024) > plan.sleepable_tmpfs_budget_mb
-    } - protected
-    if over_budget:
-        plan = replace(plan, order=[m for m in plan.order if m not in over_budget])
-
     reclaimed = await _apply_ram_cache_plan(model_cache, plan, protected)
     if reclaimed:
         logger.info(
             "Re-planned RAM cache: host_ram_available=%.0fMB, reserved_for_sleep=%.0fMB "
             "(%d model(s) already asleep, not reserved again), "
-            "tmpfs_budget=%.0fMB — reclaimed %d model(s) for the host-RAM budget: %s",
+            "tmpfs_budget=%.0fMB — reclaimed %d model(s) for the sleep reserve: %s",
             plan.available_host_ram_mb,
             plan.reserved_for_sleep_mb,
             len(plan.asleep),
