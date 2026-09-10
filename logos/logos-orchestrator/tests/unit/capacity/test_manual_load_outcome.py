@@ -16,8 +16,6 @@ import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from logos.capacity.capacity_planner import CapacityPlanner
 
 # logos/__init__ aliases itself to logos.main, which breaks the plain
@@ -190,8 +188,7 @@ def test_denied_load_records_the_executors_reason():
     planner = _planner()
     planner._build_load_params = MagicMock(return_value={})
     reason = (
-        "not enough free VRAM for this model: it needs ~48.4 GB in total, but the "
-        "worker reports only 63.4 GB free"
+        "not enough free VRAM for this model: it needs ~48.4 GB in total, but the " "worker reports only 63.4 GB free"
     )
 
     async def deny(action, timeout_seconds=None):

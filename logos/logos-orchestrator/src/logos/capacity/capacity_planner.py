@@ -1822,7 +1822,9 @@ class CapacityPlanner:
         now = time.time()
         store = self._manual_load_outcome_store()
         expired = [
-            key for key, entry in store.items() if now - float(entry.get("updated_at") or 0.0) > self.MANUAL_LOAD_OUTCOME_TTL_SECONDS
+            key
+            for key, entry in store.items()
+            if now - float(entry.get("updated_at") or 0.0) > self.MANUAL_LOAD_OUTCOME_TTL_SECONDS
         ]
         for key in expired:
             store.pop(key, None)
@@ -6639,9 +6641,7 @@ class CapacityPlanner:
                             # owns the final state.
                             current = self.get_manual_load_outcome(provider_id, model_name)
                             if not (current and current.get("status") == "running"):
-                                self.record_manual_load_outcome(
-                                    provider_id, model_name, "succeeded", lane_id=lane_id
-                                )
+                                self.record_manual_load_outcome(provider_id, model_name, "succeeded", lane_id=lane_id)
                             return False
                         logger.info(
                             "Manual load of %s on worker=%s: lane %s is held by %s; taking the next suffix",
@@ -8324,13 +8324,12 @@ class CapacityPlanner:
                         # avail, yet the reservation was denied.
                         gpu_free_parts: list[str] = []
                         if _per_gpu_free:
-                            gpu_free_parts = [
-                                f"GPU {dev}: {free:.0f}MB"
-                                for dev, free in sorted(_per_gpu_free.items())
-                            ]
+                            gpu_free_parts = [f"GPU {dev}: {free:.0f}MB" for dev, free in sorted(_per_gpu_free.items())]
                         tp_size = len(self._parse_gpu_device_ids(_lane_gpus)) if _lane_gpus else 0
                         per_gpu_need = (
-                            _estimated_load_vram / tp_size * self.VRAM_SAFETY_MARGIN if tp_size else _estimated_load_vram * self.VRAM_SAFETY_MARGIN
+                            _estimated_load_vram / tp_size * self.VRAM_SAFETY_MARGIN
+                            if tp_size
+                            else _estimated_load_vram * self.VRAM_SAFETY_MARGIN
                         )
                         reason = (
                             f"not enough free VRAM for this model: it needs "
@@ -8343,6 +8342,12 @@ class CapacityPlanner:
                             reason += " (" + ", ".join(gpu_free_parts) + ")"
                         reason += "."
                         self.record_lane_action_failure(action.provider_id, action.lane_id, reason)
+                        _per_gpu_free_str = ", ".join(gpu_free_parts) or "unknown"
+                        _per_gpu_detail = (
+                            f" need-per-GPU={per_gpu_need:.0f}MB per-GPU-free=[{_per_gpu_free_str}]"
+                            if _per_gpu_free
+                            else ""
+                        )
                         logger.warning(
                             "VRAM reservation denied for load of %s: "
                             "need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s%s",
@@ -8351,9 +8356,7 @@ class CapacityPlanner:
                             raw_avail,
                             self.get_pending_vram_mb(action.provider_id),
                             _lane_gpus or "unknown",
-                            f" need-per-GPU={per_gpu_need:.0f}MB per-GPU-free=[{', '.join(gpu_free_parts) or 'unknown'}]"
-                            if _per_gpu_free
-                            else "",
+                            _per_gpu_detail,
                         )
                         return False
                 elif _reservation_id is None and _estimated_load_vram > 0:
@@ -8607,7 +8610,8 @@ class CapacityPlanner:
                 self.record_lane_action_failure(
                     action.provider_id,
                     action.lane_id,
-                    f"the worker accepted the load but the lane did not reach the loaded state within {int(timeout_seconds)} s",
+                    f"the worker accepted the load but the lane did not reach the loaded state "
+                    f"within {int(timeout_seconds)} s",
                 )
             # Sleep confirmation timeout: the command was sent, so the lane
             # is likely sleeping even though we couldn't verify.  Clear the

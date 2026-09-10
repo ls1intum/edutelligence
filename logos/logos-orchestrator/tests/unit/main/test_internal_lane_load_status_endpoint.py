@@ -16,8 +16,8 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main_mod
-from logos.routers import internal as internal_mod
 from logos.dbutils.dbrequest import InternalLaneLoadStatusRequest
+from logos.routers import internal as internal_mod
 
 
 def _make_request(authorization: str = "") -> MagicMock:
@@ -51,7 +51,9 @@ async def test_rejects_payload_without_model(monkeypatch):
     monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     monkeypatch.setattr(main_mod, "_capacity_planner", MagicMock())
     with pytest.raises(HTTPException) as exc_info:
-        await internal_mod.internal_logosnode_lane_load_status(_payload(model="  "), _make_request("Bearer correct-secret"))
+        await internal_mod.internal_logosnode_lane_load_status(
+            _payload(model="  "), _make_request("Bearer correct-secret")
+        )
     assert exc_info.value.status_code == 400
 
 
