@@ -54,12 +54,10 @@ DEFAULT_LOCAL_TPM_LIMIT = 10000
 DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
 
-VALID_PRIVACY_LEVELS = {
-    "LOCAL",
-    "CLOUD_IN_EU_BY_EU_PROVIDER",
-    "CLOUD_IN_EU_BY_US_PROVIDER",
-    "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-}
+# Derived from the ThresholdLevel declaration order (the single definition —
+# see that class for the trust ordering and the copies this mirrors): a new
+# level added to the enum is accepted by provider registration automatically.
+VALID_PRIVACY_LEVELS = frozenset(level.value for level in ThresholdLevel)
 
 
 def _choose_bucket_seconds(span_seconds: int) -> int:
@@ -188,6 +186,20 @@ def _json_for_jsonb(value: Any) -> str:
     server error on every retry, and nothing was logged either.
     """
     return json.dumps(_strip_nul(value))
+
+
+def _positive_or_none(value: Any) -> Optional[int]:
+    """An int when the value is a positive number, else ``None``.
+
+    Context windows are stored nullable so "not reported" stays distinguishable
+    from "reported as zero", and every upstream that answers with 0 or a
+    non-numeric placeholder means the former.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def derived_reported_context_length(profile: Any) -> int:
@@ -379,6 +391,7 @@ class DBManager:
             "timeout_s",
             "scheduled_ts",
             "request_complete_ts",
+            "rate_limit_admitted",
             "available_vram_mb",
             "azure_rate_remaining_requests",
             "azure_rate_remaining_tokens",
@@ -780,10 +793,21 @@ class DBManager:
 
         original_provider_type = provider_type or ""
 
-        provider_type = normalize_provider_type(original_provider_type)
+        # Ollama is no longer a provider type — every worker lane runs vLLM.
+        # Refuse it explicitly instead of letting it through as an unknown
+        # type the DB enum would reject with a raw constraint error.
+        if original_provider_type.strip().lower() == "ollama":
+            return (
+                {
+                    "error": (
+                        "provider_type 'ollama' is no longer supported: every worker lane runs vLLM. "
+                        "Use 'logosnode' for worker-backed providers."
+                    )
+                },
+                400,
+            )
 
-        if provider_type in {"node", "node_controller", "ollama", "logos_worker_node"}:
-            provider_type = "logosnode"
+        provider_type = normalize_provider_type(original_provider_type)
 
         if not provider_type:
             return {"error": "provider_type is required"}, 400
@@ -1109,6 +1133,246 @@ class DBManager:
         self.session.commit()
         return {"new_models": newly_inserted, "changed": changed or bool(newly_inserted)}
 
+    def get_cloud_sync_providers(self) -> list[Dict[str, Any]]:
+        """Cloud providers whose model catalogue is discovered over ``/v1/models``.
+
+        Every cloud provider except Azure, which has its own discovery path:
+        its deployments are listed by a control-plane call that also yields the
+        deployment id and api-version an endpoint URL needs, none of which
+        ``/v1/models`` reports (see :meth:`get_azure_providers`).
+
+        A provider with no ``base_url`` cannot be queried at all and is left
+        out; a provider with no key is returned, because an upstream that
+        serves its model list unauthenticated is legitimate.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT id, name, base_url, api_key, auth_name, auth_format,
+                       cloud_provider_type
+                FROM providers
+                WHERE provider_type = 'cloud'
+                  AND (cloud_provider_type IS NULL OR cloud_provider_type <> 'azure')
+                  AND COALESCE(base_url, '') <> ''
+                ORDER BY id
+                """
+            )
+        ).fetchall()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "base_url": r.base_url,
+                "api_key": r.api_key,
+                "auth_name": r.auth_name,
+                "auth_format": r.auth_format,
+                "cloud_provider_type": r.cloud_provider_type,
+            }
+            for r in rows
+        ]
+
+    def set_cloud_provider_type(self, provider_id: int, cloud_provider_type: str) -> None:
+        """Set a cloud provider's type, but only while it is still unset.
+
+        Guarded in SQL rather than by the caller so a concurrently-running
+        operator edit wins: discovery fills in a blank, it never overrules a
+        choice someone made.
+        """
+        self.session.execute(
+            text(
+                """
+                UPDATE providers
+                SET cloud_provider_type = CAST(:value AS cloud_provider_type_enum),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :pid AND cloud_provider_type IS NULL
+                """
+            ),
+            {"pid": int(provider_id), "value": str(cloud_provider_type)},
+        )
+        self.session.commit()
+
+    def sync_cloud_models(self, provider_id: int, model_names: list[str]) -> Dict[str, Any]:
+        """Mirror a cloud upstream's model list into ``models`` + ``model_provider``.
+
+        The generic counterpart to :meth:`sync_azure_deployments`. The
+        difference is the endpoint: an Azure deployment needs a fully-qualified
+        URL, while an OpenAI-shaped upstream is addressed by forwarding the
+        inbound path against the provider's ``base_url``, which is what a NULL
+        ``endpoint`` already means to ``ContextResolver``. Existing links keep
+        whatever endpoint an operator set by hand.
+
+        Links for models the upstream no longer lists are pruned, so the
+        catalogue mirrors the upstream. Team permissions are NOT granted
+        automatically — an admin assigns access per team via the models tab, so
+        a discovered model stays invisible to users until then.
+
+        Returns ``{"new_models": [...], "changed": bool}`` with the same
+        meaning as :meth:`sync_azure_deployments`.
+        """
+        pid = int(provider_id)
+        desired = {name for name in model_names if name}
+
+        existing_rows = self.session.execute(
+            text(
+                """
+                SELECT mp.model_id, m.name
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                WHERE mp.provider_id = :pid
+                """
+            ),
+            {"pid": pid},
+        ).fetchall()
+        existing_by_name = {row.name: row.model_id for row in existing_rows}
+
+        changed = False
+        for stale_name in set(existing_by_name) - desired:
+            self.session.execute(
+                text("DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"),
+                {"pid": pid, "mid": existing_by_name[stale_name]},
+            )
+            changed = True
+
+        newly_inserted: list[str] = []
+        for model_name in sorted(desired):
+            if model_name in existing_by_name:
+                continue
+            row = self.session.execute(
+                text("SELECT id FROM models WHERE name = :name"),
+                {"name": model_name},
+            ).fetchone()
+            if row is not None:
+                mid = row.id
+            else:
+                mid = (
+                    self.session.execute(
+                        text(
+                            """
+                            INSERT INTO models (name, weight_latency, weight_accuracy,
+                                                weight_cost, weight_quality, tags, description)
+                            VALUES (:name, 0, 0, 0, 0, '', '')
+                            RETURNING id
+                            """
+                        ),
+                        {"name": model_name},
+                    )
+                    .fetchone()
+                    .id
+                )
+                newly_inserted.append(model_name)
+
+            self.session.execute(
+                text(
+                    """
+                    INSERT INTO model_provider (provider_id, model_id)
+                    VALUES (:pid, :mid)
+                    ON CONFLICT (model_id, provider_id) DO NOTHING
+                    """
+                ),
+                {"pid": pid, "mid": mid},
+            )
+            changed = True
+
+        self.session.commit()
+        return {"new_models": newly_inserted, "changed": changed}
+
+    def replace_cloud_model_context(self, provider_id: int, contexts: Dict[str, Dict[str, int]]) -> bool:
+        """Store the context windows a cloud upstream reports for its models.
+
+        ``contexts`` maps a model name to any of ``current_min``,
+        ``current_max`` and ``overall`` (all optional, all in tokens). Rows for
+        models the upstream no longer lists are removed, so a shrinking
+        catalogue cannot leave a stale window behind — unlike the workernode
+        high-water mark in ``model_profiles``, this is a report of what an
+        upstream serves right now, not a measurement worth remembering.
+
+        Returns True when anything changed.
+        """
+        pid = int(provider_id)
+        previous = {
+            row.model_name: (row.context_current_min, row.context_current_max, row.context_overall)
+            for row in self.session.execute(
+                text(
+                    """
+                    SELECT model_name, context_current_min, context_current_max, context_overall
+                    FROM cloud_model_context WHERE provider_id = :pid
+                    """
+                ),
+                {"pid": pid},
+            ).fetchall()
+        }
+
+        self.session.execute(
+            text("DELETE FROM cloud_model_context WHERE provider_id = :pid"),
+            {"pid": pid},
+        )
+        current: Dict[str, tuple] = {}
+        for model_name, entry in contexts.items():
+            values = (
+                _positive_or_none(entry.get("current_min")),
+                _positive_or_none(entry.get("current_max")),
+                _positive_or_none(entry.get("overall")),
+            )
+            current[str(model_name)] = values
+            self.session.execute(
+                text(
+                    """
+                    INSERT INTO cloud_model_context (
+                        provider_id, model_name,
+                        context_current_min, context_current_max, context_overall, updated_at
+                    ) VALUES (:pid, :name, :cmin, :cmax, :overall, CURRENT_TIMESTAMP)
+                    """
+                ),
+                {
+                    "pid": pid,
+                    "name": str(model_name),
+                    "cmin": values[0],
+                    "cmax": values[1],
+                    "overall": values[2],
+                },
+            )
+        self.session.commit()
+        return previous != current
+
+    def get_cloud_context_by_model(self) -> Dict[str, Dict[str, int]]:
+        """Model name -> the context windows cloud upstreams report for it.
+
+        Reduced across providers the same way the workernode view is reduced
+        across lanes: ``current_min`` is the smallest window any provider
+        serving this model will accept — a request may be routed to any of
+        them — while ``current_max`` and ``overall`` are the largest.
+
+        Only positive values are returned, so a model whose upstream reports no
+        window is absent and callers treat it as unknown rather than zero.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT model_name, context_current_min, context_current_max, context_overall
+                FROM cloud_model_context
+                """
+            )
+        ).fetchall()
+
+        stats: Dict[str, Dict[str, int]] = {}
+        for row in rows:
+            entry = stats.setdefault(str(row.model_name), {})
+            for field, value, keep_smallest in (
+                ("current_min", row.context_current_min, True),
+                ("current_max", row.context_current_max, False),
+                ("overall", row.context_overall, False),
+            ):
+                value = _positive_or_none(value)
+                if value is None:
+                    continue
+                if field not in entry:
+                    entry[field] = value
+                elif keep_smallest:
+                    entry[field] = min(entry[field], value)
+                else:
+                    entry[field] = max(entry[field], value)
+        return {model: entry for model, entry in stats.items() if entry}
+
     def get_provider_config(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
         Retrieve SDI provider-level configuration from providers table.
@@ -1187,7 +1451,8 @@ class DBManager:
         Args:
             logos_key: Authorization key (root user only)
             provider_id: Provider ID to configure
-            ollama_admin_url: Internal admin endpoint for Ollama (e.g., http://gpu-vm-1:11434)
+            ollama_admin_url: Internal admin endpoint of the worker (e.g., http://gpu-vm-1:5000).
+                Legacy column name — the value is the worker's base URL.
             total_vram_mb: Total VRAM capacity in MB (e.g., 49152 for 48GB)
             parallel_capacity: Max concurrent requests per model
             keep_alive_seconds: How long models stay loaded when idle
@@ -1262,7 +1527,7 @@ class DBManager:
         error_message: Optional[str] = None,
     ) -> int:
         """
-        Insert Ollama provider snapshot into monitoring table.
+        Insert provider snapshot into the monitoring table.
 
         Args:
             provider_id: Provider ID (FK to providers.id)
@@ -1278,7 +1543,7 @@ class DBManager:
         """
         sql = text(
             """
-            INSERT INTO ollama_provider_snapshots (
+            INSERT INTO provider_snapshots (
                 provider_id,
                 snapshot_ts,
                 total_models_loaded,
@@ -1539,12 +1804,14 @@ class DBManager:
         """Every node's most recent calibration probe log for one model.
 
         Used by the webservice's model-error-report page to show real
-        per-node log text instead of mocked fixtures.
+        per-node log text instead of mocked fixtures. ``summary`` backs
+        the "Complete Logs" tab for successful calibrations, which no
+        longer carry a ``log_text`` (see upsert_calibration_probe_log).
         """
         sql = text(
             """
             SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
-                   cpl.probe_command, cpl.error, cpl.log_text,
+                   cpl.probe_command, cpl.error, cpl.summary, cpl.log_text,
                    cpl.recorded_at, cpl.updated_at
             FROM calibration_probe_logs cpl
             JOIN providers p ON p.id = cpl.provider_id
@@ -1553,9 +1820,15 @@ class DBManager:
         """
         )
         rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
-        return [dict(row._mapping) for row in rows]
+        results = []
+        for row in rows:
+            entry = dict(row._mapping)
+            summary = entry.get("summary")
+            entry["summary"] = json.loads(summary) if isinstance(summary, str) else summary
+            results.append(entry)
+        return results
 
-    def get_ollama_vram_stats(
+    def get_provider_vram_stats(
         self,
         logos_key: str,
         day: str,
@@ -1610,7 +1883,7 @@ class DBManager:
                 p.total_vram_mb,
                 MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                     OVER (PARTITION BY s.provider_id) AS capacity_bytes
-            FROM ollama_provider_snapshots s
+            FROM provider_snapshots s
             LEFT JOIN providers p
               ON p.id = s.provider_id
             WHERE s.poll_success = TRUE
@@ -1678,10 +1951,10 @@ class DBManager:
             return {"providers": providers_list}, 200
 
         except Exception as e:
-            logger.error(f"Failed to query ollama_vram_stats: {e}")
+            logger.error(f"Failed to query provider_vram_stats: {e}")
             return {"error": str(e)}, 500
 
-    def get_ollama_vram_deltas(
+    def get_provider_vram_deltas(
         self,
         logos_key: str,
         day: str,
@@ -1751,7 +2024,7 @@ class DBManager:
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                         OVER (PARTITION BY s.provider_id) AS capacity_bytes
-                FROM ollama_provider_snapshots s
+                FROM provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
@@ -1779,7 +2052,7 @@ class DBManager:
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                         OVER (PARTITION BY s.provider_id) AS capacity_bytes
-                FROM ollama_provider_snapshots s
+                FROM provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
@@ -1863,7 +2136,7 @@ class DBManager:
             }, 200
 
         except Exception as e:
-            logger.error(f"Failed to query ollama_vram_deltas: {e}")
+            logger.error(f"Failed to query provider_vram_deltas: {e}")
             return {"error": str(e)}, 500
 
     def get_auth_info_to_deployment(
@@ -1910,6 +2183,7 @@ class DBManager:
                    p.id          AS provider_id,
                    p.name        AS provider_name,
                    p.provider_type AS provider_type,
+                   p.cloud_provider_type AS cloud_provider_type,
                    p.base_url    AS base_url,
                    p.auth_name   AS auth_name,
                    p.auth_format AS auth_format,
@@ -2505,7 +2779,6 @@ class DBManager:
             FROM providers
             WHERE LOWER(provider_type::text) IN (
                 'logosnode',
-                'ollama',
                 'node',
                 'node_controller',
                 'logos_worker_node'
@@ -2527,6 +2800,24 @@ class DBManager:
             }
             for row in rows
         ]
+
+    def find_ollama_typed_providers(self) -> list[dict]:
+        """Provider rows still typed 'ollama' — the engine Logos dropped.
+
+        Used as a startup gate: such rows point at servers the deployment no
+        longer runs, so they must be fixed by hand rather than silently left
+        unservable.
+        """
+        sql = text(
+            """
+            SELECT id, name, provider_type
+            FROM providers
+            WHERE LOWER(provider_type::text) = 'ollama'
+            ORDER BY id
+        """
+        )
+        rows = self.session.execute(sql).fetchall()
+        return [{"id": row.id, "name": row.name, "provider_type": row.provider_type} for row in rows]
 
     def log(self, api_key_id: int):
         sql = text(

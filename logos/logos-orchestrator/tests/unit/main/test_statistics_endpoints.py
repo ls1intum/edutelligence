@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import logos as main
+from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+from logos.routers import admin as admin_mod
 
 
 def _make_request(body: dict | None = None, headers: dict | None = None):
@@ -29,6 +31,7 @@ class DummyInventoryDB:
         self.stats_status = stats_status
         self.delta_payload = delta_payload if delta_payload is not None else {"providers": [], "last_snapshot_id": 0}
         self.delta_status = delta_status
+        self.deltas_calls: list[tuple] = []
 
     def __enter__(self):
         return self
@@ -40,12 +43,13 @@ class DummyInventoryDB:
         assert logos_key == "test-key"
         return self.inventory, self.status
 
-    def get_ollama_vram_stats(self, logos_key, day, bucket_seconds=5):  # noqa: ARG002
+    def get_provider_vram_stats(self, logos_key, day, bucket_seconds=5):  # noqa: ARG002
         assert logos_key == "test-key"
         return self.stats_payload, self.stats_status
 
-    def get_ollama_vram_deltas(self, logos_key, day, after_snapshot_id=0):  # noqa: ARG002
+    def get_provider_vram_deltas(self, logos_key, day, after_snapshot_id=0, since=None):  # noqa: ARG002
         assert logos_key == "test-key"
+        self.deltas_calls.append((day, after_snapshot_id, since))
         return self.delta_payload, self.delta_status
 
 
@@ -72,7 +76,22 @@ def mock_auth(monkeypatch):
     def fake_authenticate(headers):
         return mock_auth_ctx
 
-    monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate)
+    monkeypatch.setattr(admin_mod, "authenticate_api_key", fake_authenticate)
+
+
+def test_initial_all_day_vram_load_is_bounded_by_recent_since_window(monkeypatch):
+    """day='all' with no cursor (initial WS load) must go through
+    get_provider_vram_deltas bounded by a recent `since` window."""
+    db = DummyInventoryDB([], delta_payload={"providers": [], "last_snapshot_id": 42})
+    monkeypatch.setattr(main, "DBManager", lambda: db)
+
+    payload = main._load_persisted_local_provider_vram_payload("test-key", day="all")
+
+    assert payload["last_snapshot_id"] == 42
+    day, after_snapshot_id, since = db.deltas_calls[0]
+    assert day == "all"
+    assert after_snapshot_id == 0
+    assert since is not None
 
 
 @pytest.mark.asyncio
@@ -172,7 +191,7 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -215,7 +234,7 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
             [
                 {
                     "provider_id": 12,
-                    "name": "local-ollama",
+                    "name": "local-node",
                     "provider_type": "logosnode",
                     "base_url": "",
                     "ollama_admin_url": "",
@@ -248,7 +267,7 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
                         "lanes": [
                             {
                                 "model": "gemma2:2b",
-                                "vllm": False,
+                                "vllm": True,
                                 "loaded_models": [],
                             }
                         ],
@@ -271,14 +290,14 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
     assert payload["providers"] == [
         {
             "provider_id": 12,
-            "name": "local-ollama",
+            "name": "local-node",
             "data": [],
             "provider_type": "logosnode",
             "base_url": "",
@@ -286,14 +305,14 @@ async def test_get_ollama_vram_stats_keeps_connected_provider_without_sample(
             "connected": True,
             "connection_state": "online",
             "last_heartbeat": "2026-03-16T18:00:00Z",
-            "runtime_modes": ["ollama"],
+            "runtime_modes": ["vllm"],
             "transport_connected": True,
         }
     ]
 
 
 @pytest.mark.asyncio
-async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
+async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_node(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -303,7 +322,7 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
             [
                 {
                     "provider_id": 12,
-                    "name": "local-ollama",
+                    "name": "local-node",
                     "provider_type": "logosnode",
                     "base_url": "",
                     "ollama_admin_url": "",
@@ -336,7 +355,7 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
                         "lanes": [
                             {
                                 "model": "gemma2:2b",
-                                "vllm": False,
+                                "vllm": True,
                                 "loaded_models": [
                                     {
                                         "name": "gemma2:2b",
@@ -365,13 +384,13 @@ async def test_get_ollama_vram_stats_uses_runtime_memory_for_connected_ollama(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
     sample = payload["providers"][0]["data"][0]
     assert sample["connection_state"] == "online"
-    assert sample["runtime_modes"] == ["ollama"]
+    assert sample["runtime_modes"] == ["vllm"]
     assert sample["used_vram_mb"] == 3072.0
     assert sample["remaining_vram_mb"] == 5120.0
     assert sample["total_vram_mb"] == 8192.0
@@ -469,7 +488,7 @@ async def test_get_ollama_vram_stats_merges_persisted_rows_and_recent_buffer(
         ),
     )
 
-    response = await main.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
+    response = await admin_mod.get_ollama_vram_stats(_make_request(body={"day": "2026-03-16"}))
 
     assert response.status_code == 200
     payload = json.loads(response.body)
@@ -511,7 +530,7 @@ def test_scheduler_signals_mtp_acceptance_is_token_weighted_across_lanes() -> No
         ],
     }
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
     model = signals["models"]["mtp-model"]
 
     # Token-weighted: 1 accepted / 10,001 draft. The unweighted lane-rate
@@ -543,7 +562,7 @@ def test_scheduler_signals_mtp_acceptance_none_without_spec_decode() -> None:
         ],
     }
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
     assert signals["models"]["plain-model"]["mtp_acceptance_rate_avg"] is None
     assert signals["models"]["plain-model"]["prefix_cache_hit_rate_avg"] == pytest.approx(0.3)
 
@@ -566,7 +585,7 @@ def _ctx_runtime(lane: dict, profiles: dict | None = None) -> dict:
 
 
 def test_lane_signal_reports_the_window_vllm_is_running_at() -> None:
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -606,7 +625,7 @@ def test_two_lanes_of_one_model_report_their_own_windows() -> None:
         },
     ]
 
-    signals = main._build_logosnode_scheduler_signals(runtime)
+    signals = _build_logosnode_scheduler_signals(runtime)
 
     assert signals["lanes"]["roomy"]["max_model_len"] == 262144
     assert signals["lanes"]["cramped"]["max_model_len"] == 32768
@@ -615,7 +634,7 @@ def test_two_lanes_of_one_model_report_their_own_windows() -> None:
 def test_lane_signal_falls_back_to_the_calibrated_profile() -> None:
     """A vLLM lane started without --max-model-len takes the calibrated value,
     so the number is not on the lane itself."""
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
@@ -632,16 +651,19 @@ def test_lane_signal_falls_back_to_the_calibrated_profile() -> None:
     assert signals["lanes"]["lane-a"]["max_model_len"] == 40960
 
 
-def test_lane_signal_reports_an_ollama_lanes_configured_window() -> None:
-    signals = main._build_logosnode_scheduler_signals(
+def test_lane_signal_reports_the_configured_window_when_the_engine_reports_none() -> None:
+    """A vLLM lane whose engine has not reported a window yet falls back to
+    the configured lane context_length (4096 is the shared "unset" sentinel
+    and is skipped)."""
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
-                "model": "ollama-model",
-                "vllm": False,
+                "model": "configured-model",
+                "vllm": True,
                 "runtime_state": "loaded",
                 "active_requests": 0,
-                "effective_vram_mb": 4000.0,
+                "effective_vram_mb": 8000.0,
                 "context_length": 8192,
             }
         )
@@ -652,7 +674,7 @@ def test_lane_signal_reports_an_ollama_lanes_configured_window() -> None:
 def test_lane_signal_omits_a_window_it_cannot_derive() -> None:
     """None rather than 0: the row leaves the badge off instead of claiming a
     size vLLM picked for itself and never reported."""
-    signals = main._build_logosnode_scheduler_signals(
+    signals = _build_logosnode_scheduler_signals(
         _ctx_runtime(
             {
                 "lane_id": "lane-a",
