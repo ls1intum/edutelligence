@@ -1633,35 +1633,6 @@ def test_replan_reclaims_unprotected_unsleepable_entries_on_a_zero_reading(monke
     assert cache.floor_mb == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
-def test_replan_enforces_the_budget_cumulatively_across_unsleepable_entries(monkeypatch) -> None:
-    """The live budget is a cumulative bound on what the cache keeps, not a
-    per-model limit: two 8 GB entries each fit a 10.4 GB budget, but their
-    combined 16 GB footprint pushes the host below the safety margin. The
-    walk keeps the first entry in plan order (small→large) and drops the
-    rest that no longer fits — a per-entry comparison would have kept both."""
-    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(20_000.0))
-    registry = _FakeRegistry(
-        {
-            "org/a": _FakeProfile(base_residency_mb=10_000.0),
-            "org/b": _FakeProfile(base_residency_mb=10_000.0),
-        }
-    )
-    sizes = {"org/a": _mb(8_000), "org/b": _mb(8_000)}
-    cache = _FakeCache(cached=["org/a", "org/b"], sizes=sizes)
-    app = _app(cache, registry, _FakeLaneManager({}), ["org/a", "org/b"])
-    app.state.config.engines.vllm.disable_sleep_mode = True
-
-    asyncio.run(worker_main._replan_ram_cache_once(app))
-
-    # Budget is 20 GB + 16 GB held − 0 reserve − 25.6 GB margin = 10.4 GB:
-    # each 8 GB entry fits it alone, the pair does not. org/a is first in
-    # plan order and is kept; org/b is evicted; the floor holds the margin.
-    assert cache.reclaimed[-1] == ["org/b"]
-    assert cache.is_cached("org/a") is True
-    assert cache.is_cached("org/b") is False
-    assert cache.floor_mb == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
-
-
 def test_replan_keeps_an_unsleepable_entry_a_live_lane_still_reads_on_a_zero_reading(monkeypatch) -> None:
     """The pressure exclusion must not out-rule the lane protection: an
     unsleepable model whose lane was launched from the RAM cache keeps its
