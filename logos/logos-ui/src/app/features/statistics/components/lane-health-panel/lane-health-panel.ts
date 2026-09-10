@@ -250,6 +250,14 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   private loadStatusPollProviderId: number | null = null;
   /** When the outcome poll must stop regardless of what it is told. */
   private loadStatusPollDeadline = 0;
+  /**
+   * Generation of the polling session: every start bumps it, and each request
+   * captures its own at dispatch time. A response that only resolves after a
+   * newer session started (a retry of the same model) belongs to the old
+   * attempt — the provider/model guards cannot tell the two apart, so it is
+   * dropped instead of being applied to the new attempt's note.
+   */
+  private loadStatusPollGeneration = 0;
 
   get providerName(): string | null {
     return this.selectedProvider ?? Object.keys(this.lanesByProvider)[0] ?? null;
@@ -556,8 +564,9 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     this.stopLoadStatusPoll();
     this.loadStatusPollProviderId = providerId;
     this.loadStatusPollDeadline = Date.now() + LaneHealthPanel.LOAD_STATUS_POLL_CAP_MS;
+    const generation = (this.loadStatusPollGeneration += 1);
     this.loadStatusPoll = setInterval(
-      () => this.pollLoadStatus(providerId, model),
+      () => this.pollLoadStatus(providerId, model, generation),
       LaneHealthPanel.LOAD_STATUS_POLL_INTERVAL_MS
     );
   }
@@ -571,7 +580,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     this.loadStatusPollDeadline = 0;
   }
 
-  private pollLoadStatus(providerId: number, model: string): void {
+  private pollLoadStatus(providerId: number, model: string, generation: number): void {
     // The note went away (lane appeared, operator acted) or the operator moved
     // to another provider — this poll is stale, whatever the next answer says.
     if (
@@ -590,8 +599,16 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     }
     this.statisticsService
       .getLaneLoadStatus(providerId, model)
-      .then((outcome) => this.applyLoadStatus(outcome, model))
+      .then((outcome) => {
+        // A newer session (a retry of the same model) started while this
+        // request was in flight: the answer describes the old attempt, not
+        // the one whose note is up now. Drop it — and keep this session's
+        // timer running, since it belongs to the newer session.
+        if (generation !== this.loadStatusPollGeneration) return;
+        this.applyLoadStatus(outcome, model);
+      })
       .catch((err: unknown) => {
+        if (generation !== this.loadStatusPollGeneration) return;
         // A blip is fine — the next tick retries. 404/501 means the backend
         // predates the load_status route, where the poll can never succeed:
         // stop and fall back to the lane-appearance check.

@@ -188,7 +188,8 @@ def test_denied_load_records_the_executors_reason():
     planner = _planner()
     planner._build_load_params = MagicMock(return_value={})
     reason = (
-        "not enough free VRAM for this model: it needs ~48.4 GB in total, but the " "worker reports only 63.4 GB free"
+        "not enough free VRAM for this model: it needs ~48.4 GB in total, "
+        "but only 0.8 GB are effectively free on the worker (GPU 0: 838MB, GPU 1: 838MB)."
     )
 
     async def deny(action, timeout_seconds=None):
@@ -216,6 +217,38 @@ def test_unconfirmed_load_without_a_recorded_reason_gets_the_fallback():
     outcome = planner.get_manual_load_outcome(1, "org/model-a")
     assert outcome["status"] == "failed"
     assert outcome["reason"] == "the load was not confirmed by the worker"
+
+
+def test_clear_lane_action_failure_drops_only_that_lane():
+    planner = _planner()
+    planner.record_lane_action_failure(1, "lane-a", "denied")
+    planner.record_lane_action_failure(1, "lane-b", "denied too")
+
+    planner.clear_lane_action_failure(1, "lane-a")
+
+    assert planner.get_lane_action_failure(1, "lane-a") is None
+    assert planner.get_lane_action_failure(1, "lane-b") == "denied too"
+
+
+def test_a_failed_attempt_cannot_inherit_the_previous_reason():
+    """A new attempt must not report a stale reason: the previous attempt
+    failed on this lane id, the new one enters "running" — which clears the
+    recorded failure — and it then fails without the executor recording a
+    fresh reason. The outcome must carry the fallback, not the old failure."""
+    planner = _planner()
+    planner._build_load_params = MagicMock(return_value={})
+    planner.record_lane_action_failure(1, "planner-org_model-a", "an older attempt's denial")
+
+    async def deny(action, timeout_seconds=None):
+        return False
+
+    planner._execute_action_with_confirmation = deny
+    assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == "the load was not confirmed by the worker"
+    assert planner.get_lane_action_failure(1, "planner-org_model-a") is None
 
 
 def test_lane_already_present_records_success_without_dispatch():

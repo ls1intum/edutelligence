@@ -627,6 +627,56 @@ describe('LaneHealthPanel load outcome poll', () => {
     await settle();
     expect(loadStatusCalls).toBe(calls);
   });
+
+  it('drops a delayed answer from a superseded session of the same model', async () => {
+    // The operator's retry starts a new polling session while the first
+    // session's request is still in flight: that delayed answer describes
+    // the old attempt and must not fail the new attempt's note. The
+    // provider/model guards cannot tell the two sessions apart — same
+    // provider, same model — only the session generation can.
+    await acceptLoad();
+    let firstCall = true;
+    let releaseFirst: (value: { status: string; reason?: string }) => void = () => {};
+    const delayed = new Promise<{ status: string; reason?: string }>((resolve) => {
+      releaseFirst = resolve;
+    });
+    loadStatusStub = () => {
+      if (firstCall) {
+        firstCall = false;
+        return delayed;
+      }
+      return Promise.resolve({ status: 'running' });
+    };
+
+    pollTick?.(); // session 1 asks; the answer is still on the wire
+    await settle();
+    expect(loadStatusCalls).toBe(1);
+
+    // The operator retries the same model — the 202 starts a new polling
+    // session. Reached directly, the way pickerProviderId is: what is under
+    // test is what a new session does to an in-flight answer, not the picker
+    // round-trip that leads here.
+    (panel as unknown as { startLoadStatusPoll(pid: number, model: string): void }).startLoadStatusPoll(
+      1,
+      'foo'
+    );
+
+    // Session 1's answer lands now — it belongs to the attempt the note
+    // replaced, not the one being polled.
+    releaseFirst({ status: 'failed', reason: 'old attempt denied' });
+    await settle();
+
+    expect(panel.addError()).toBeNull();
+    expect(panel.acceptedModel()).toBe('foo');
+    expect(panel.pickerOpen()).toBe(false);
+    // And the new session is untouched by it: it still polls and applies
+    // its own answers.
+    pollTick?.();
+    await settle();
+    expect(loadStatusCalls).toBe(2);
+    expect(panel.addError()).toBeNull();
+    expect(panel.acceptedModel()).toBe('foo');
+  });
 });
 
 /**

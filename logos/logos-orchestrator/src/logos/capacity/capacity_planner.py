@@ -169,9 +169,13 @@ class CapacityPlanner:
     LANE_LOAD_COMMAND_TIMEOUT_S = 1800
 
     # How long the outcome of a manual load stays queryable by the UI. Must
-    # outlive the whole attempt: the worker-command budget above plus the
-    # confirmation polling that follows it.
-    MANUAL_LOAD_OUTCOME_TTL_SECONDS = 3600.0
+    # outlive the whole attempt with margin: the _lane_lock wait, the
+    # LANE_LOAD_COMMAND_TIMEOUT_S command budget, the confirmation polling of
+    # the same length that follows it, plus polling/processing overhead. A
+    # TTL that only covered 1800 s + 1800 s could expire the "running" entry
+    # before the terminal outcome is written, and the UI would read an
+    # unknown (and keep polling) on a slow-but-healthy load.
+    MANUAL_LOAD_OUTCOME_TTL_SECONDS = 7200.0
 
     # Minimum tenure: after a model wakes/loads, give it at least this
     # long to serve its queue before it can be drained for another model.
@@ -1839,6 +1843,17 @@ class CapacityPlanner:
 
     def get_lane_action_failure(self, provider_id: int, lane_id: str) -> str | None:
         return self.__dict__.get("_lane_action_failure", {}).get(self._lane_key(provider_id, lane_id))
+
+    def clear_lane_action_failure(self, provider_id: int, lane_id: str) -> None:
+        """Drop a recorded reason before a new attempt starts.
+
+        The map is per lane id, and the planner reuses lane ids across
+        attempts of the same model — without this, a new attempt that fails
+        without recording a fresh reason would report the previous attempt's
+        failure to the operator. Every executor failure path records a new
+        reason, so clearing here cannot hide information.
+        """
+        self.__dict__.get("_lane_action_failure", {}).pop(self._lane_key(provider_id, lane_id), None)
 
     def _reconcile_load_failures(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Keep the load-failure state in step with the lanes a worker reports.
@@ -6689,6 +6704,7 @@ class CapacityPlanner:
                         params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                         reason="Manual load requested by an operator",
                     )
+                    self.clear_lane_action_failure(provider_id, lane_id)
                     self.record_manual_load_outcome(provider_id, model_name, "running", lane_id=lane_id)
                     confirmed = await self._execute_action_with_confirmation(
                         action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
@@ -8322,9 +8338,19 @@ class CapacityPlanner:
                         # did not (or no per-GPU data exists) — say which GPUs
                         # fell short, or this line reads as a bug: need <
                         # avail, yet the reservation was denied.
+                        # Report the gate's effective numbers (raw free minus
+                        # what in-flight operations already committed), not
+                        # the raw snapshot — raw free can look sufficient
+                        # while the reservation is correctly denied.
+                        _vram = self._vram_ledger
+                        effective_avail = _vram.get_effective_available_mb(action.provider_id, raw_avail)
                         gpu_free_parts: list[str] = []
                         if _per_gpu_free:
-                            gpu_free_parts = [f"GPU {dev}: {free:.0f}MB" for dev, free in sorted(_per_gpu_free.items())]
+                            gpu_free_parts = [
+                                f"GPU {dev}: "
+                                f"{_vram.get_gpu_effective_available_mb(action.provider_id, dev, free):.0f}MB"
+                                for dev, free in sorted(_per_gpu_free.items())
+                            ]
                         tp_size = len(self._parse_gpu_device_ids(_lane_gpus)) if _lane_gpus else 0
                         per_gpu_need = (
                             _estimated_load_vram / tp_size * self.VRAM_SAFETY_MARGIN
@@ -8337,22 +8363,24 @@ class CapacityPlanner:
                         )
                         if tp_size:
                             reason += f" (~{per_gpu_need / 1024.0:.1f} GB on each of {tp_size} GPUs)"
-                        reason += f", but the worker reports only {raw_avail / 1024.0:.1f} GB free"
+                        reason += f", but only {effective_avail / 1024.0:.1f} GB are effectively free on the worker"
                         if gpu_free_parts:
                             reason += " (" + ", ".join(gpu_free_parts) + ")"
                         reason += "."
                         self.record_lane_action_failure(action.provider_id, action.lane_id, reason)
                         _per_gpu_free_str = ", ".join(gpu_free_parts) or "unknown"
                         _per_gpu_detail = (
-                            f" need-per-GPU={per_gpu_need:.0f}MB per-GPU-free=[{_per_gpu_free_str}]"
+                            f" need-per-GPU={per_gpu_need:.0f}MB per-GPU-effective=[{_per_gpu_free_str}]"
                             if _per_gpu_free
                             else ""
                         )
                         logger.warning(
                             "VRAM reservation denied for load of %s: "
-                            "need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s%s",
+                            "need=%.0fMB effective_avail=%.0fMB "
+                            "(raw=%.0fMB committed=%.0fMB) gpus=%s%s",
                             action.model_name,
                             _estimated_load_vram,
+                            effective_avail,
                             raw_avail,
                             self.get_pending_vram_mb(action.provider_id),
                             _lane_gpus or "unknown",

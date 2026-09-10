@@ -161,7 +161,7 @@ public class ProviderController {
         } catch (RestClientResponseException e) {
             return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
         } catch (Exception e) {
-            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+            return ResponseEntity.status(503).body(errorBody(e));
         }
     }
 
