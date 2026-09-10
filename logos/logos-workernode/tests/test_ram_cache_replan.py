@@ -1585,9 +1585,13 @@ def test_replan_skips_when_meminfo_is_unavailable(monkeypatch) -> None:
     assert cache.is_cached("org/small") is True
 
 
-def test_replan_skips_when_available_mb_is_zero(monkeypatch) -> None:
-    """Even with a readable /proc/meminfo, a zero MemAvailable is not a
-    usable measurement — same skip, same reason."""
+def test_replan_reclaims_unprotected_entries_on_a_valid_zero_reading(monkeypatch) -> None:
+    """source="proc-meminfo" proves the read succeeded, so available_mb=0 is
+    a valid maximum-pressure measurement, not missing input. The re-plan must
+    run and give back every tmpfs entry no live lane or calibration pins —
+    skipping here is what left the host OOM the re-plan exists to relieve in
+    place. (The copy path fails closed on the same reading, so nothing
+    refills what the plan reclaims.)"""
     monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(0.0))
     registry = _FakeRegistry({"org/small": _FakeProfile(base_residency_mb=10_000.0)})
     sizes = {"org/small": _mb(8_000)}
@@ -1596,9 +1600,12 @@ def test_replan_skips_when_available_mb_is_zero(monkeypatch) -> None:
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
-    assert cache.floor_calls == 0
-    assert cache.reclaimed == []
-    assert cache.is_cached("org/small") is True
+    # Budget is 0 + 8 GB held − 10 GB reserve − margin: negative, clamped to
+    # zero, so the sleepable model does not fit and its unprotected entry is
+    # evicted while the floor holds the reserve.
+    assert cache.reclaimed[-1] == ["org/small"]
+    assert cache.is_cached("org/small") is False
+    assert cache.floor_mb == pytest.approx(10_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
 # ── no double-counting an already-asleep model ───────────────────────────────

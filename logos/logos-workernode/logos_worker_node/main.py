@@ -796,12 +796,16 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
         return
 
     host_memory = _build_host_memory_summary()
-    if host_memory.source != "proc-meminfo" or not host_memory.available_mb:
-        # A failed /proc/meminfo read is not a measurement. Feeding the zero
-        # into the plan would come out deeply negative and reclaim the whole
-        # cache — while the copy path, which fails OPEN on the same failure,
-        # keeps refilling it. A periodic corrector skips bad input instead of
-        # acting on it.
+    if host_memory.source == "unavailable":
+        # A failed /proc/meminfo read is not a measurement — its
+        # available_mb is a 0 placeholder, not a reading. Feeding that
+        # placeholder into the plan would come out deeply negative and
+        # reclaim the whole cache — while the copy path, which fails OPEN on
+        # the same failure, keeps refilling it. A periodic corrector skips
+        # bad input instead of acting on it. A *valid* zero MemAvailable is
+        # the opposite case: maximum pressure, exactly when reclamation has
+        # to run — and on a real zero the copy path fails closed, so nothing
+        # refills what the plan gives back.
         logger.debug(
             "RAM cache re-plan skipped: no usable host RAM reading (source=%s)",
             host_memory.source,
@@ -818,7 +822,9 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
 
     plan = plan_cache_order(
         candidates,
-        available_host_ram_mb=float(host_memory.available_mb or 0.0),
+        # A zero here is a real maximum-pressure reading (the unavailable
+        # placeholder already returned above), not missing input.
+        available_host_ram_mb=host_memory.available_mb,
         safety_margin_mb=_host_ram_safety_margin_mb(host_memory.total_mb),
         # The cache's own footprint is part of the pool it is budgeted
         # against — without it a full cache reports no room and stays full
