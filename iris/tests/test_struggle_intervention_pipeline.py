@@ -75,8 +75,7 @@ def test_parse_gate_result_non_silent_without_message_defaults_silent():
 
 
 def test_parse_gate_result_rejects_non_finite_confidence():
-    # json.loads accepts NaN/Infinity; the finite guard maps them to 0.0 so they
-    # never reach the wire (a NaN/Infinity would break the JSON callback POST).
+    # json.loads accepts NaN/Infinity; both would break the JSON callback POST.
     nan = parse_gate_result('{"action":"ambient","message":"x","confidence":NaN}')
     inf = parse_gate_result('{"action":"ambient","message":"x","confidence":Infinity}')
     assert nan.confidence == 0.0
@@ -207,17 +206,8 @@ def test_summarize_signal_leaves_edit_boundaries_unglossed():
 
 
 def test_confirm_close_template_does_not_html_escape_hint_text():
-    """
-    Regression for the autoescape=select_autoescape(["html","xml","j2"]) bug.
-
-    When "j2" was in the enabled_extensions list Jinja treated every .j2 file
-    as an HTML template and escaped {{ }} values, so a hint like
-    "is the bound i < n or List<String> & reset" would reach the LLM as
-    "is the bound i &lt; n or List&lt;String&gt; &amp; reset" -- corrupting the prompt.
-
-    This test renders the confirm_close system-prompt template with a hint
-    carrying angle brackets and a raw ampersand, then asserts the characters
-    survive unchanged in the rendered prompt.
+    """Prompt templates must not HTML-escape their values: autoescaping .j2 turns a hint like
+    `i < n or List<String> & reset` into the entities the LLM then reads as the hint.
     """
     pipeline = StruggleInterventionPipeline()
     episode = EpisodeDTO(
@@ -247,29 +237,24 @@ def test_confirm_close_template_does_not_html_escape_hint_text():
 
 
 def test_confirm_close_prompt_prioritizes_tests_and_explains_diff():
-    """Fix A + B5: objective test results are decisive and the live-vs-submitted diff tool is explained."""
+    """Objective test results are decisive, and the live-vs-submitted diff tool is explained."""
     pipeline = StruggleInterventionPipeline()
     rendered = pipeline.confirm_close_template.render(
         course_name="Algorithms",
         signal_summary="primary boundary: FM; severity sBase=0.82; path=armed.",
         episode=None,
     )
-    # Fix A: weigh objective evidence first, do not default to doubt; passing tests are decisive.
     assert "do not default to doubt" in rendered
     assert "PASS" in rendered
-    # B5: live-vs-submitted semantics + the diff tool, naming only callable tools.
-    # (substrings kept within single wrapped lines so the assertions survive prompt re-wrapping)
+    # Substrings stay within one wrapped line so the assertions survive prompt re-wrapping.
     assert "local_vs_submitted_diff" in rendered
     assert "SUBMITTED build" in rendered
     assert "get_feedbacks" in rendered
 
 
 def test_decide_prompt_renders_prior_episode_hints_with_silent_rule():
-    """
-    Episode dedup: the decide prompt must show the hints already delivered in this
-    episode and carry the hard rule that a same-diagnosis nudge (reworded or not)
-    means action "silent". Without this the model rewords the same hint every
-    re-alert (observed live: 4x the same stub diagnosis at 0.88-0.95 confidence).
+    """Episode dedup: the decide prompt shows the hints already delivered in this episode and
+    carries the hard rule that a same-diagnosis nudge, reworded or not, means action "silent".
     """
     pipeline = StruggleInterventionPipeline()
     episode = EpisodeDTO(
@@ -300,11 +285,9 @@ def test_decide_prompt_renders_prior_episode_hints_with_silent_rule():
 
 
 def test_decide_prompt_dedup_rule_is_standing_and_covers_history_tags():
-    """
-    Cross-episode dedup: the hard same-diagnosis->silent rule must be present even for
-    a fresh episode (no hints yet), because earlier episodes' hints reach the model only
-    as "(proactive hint, ...)"-tagged chat-history messages. The recovery EXCEPTION keeps
-    a genuinely returned problem hintable again.
+    """Cross-episode dedup: the same-diagnosis rule holds for a fresh episode too, because earlier
+    hints reach the model only as "(proactive hint, ...)"-tagged chat-history messages. The
+    recovery EXCEPTION keeps a genuinely returned problem hintable again.
     """
     pipeline = StruggleInterventionPipeline()
     for episode in (None, EpisodeDTO(episodeId="ep-1", isNew=True, hints=[])):
@@ -321,12 +304,9 @@ def test_decide_prompt_dedup_rule_is_standing_and_covers_history_tags():
 
 
 def test_decide_prompt_splits_the_dedup_rule_by_episode_and_dismissal():
-    """
-    A hint from a bout of being stuck that has already ended must not silence a fresh one, which is
-    what an unqualified same-diagnosis rule did: the chat history is the whole session and its
-    proactive messages are never cleaned up, so a nudge from days ago read exactly like one from a
-    minute ago. Artemis now marks those, and the rule splits three ways. The dismissed case stays a
-    bar in every episode: an explicit rejection is not merely old advice.
+    """The chat history is the whole session and its proactive messages are never cleaned up, so a
+    nudge from days ago reads like one from a minute ago. Artemis marks those and the rule splits
+    three ways; a dismissal bars the diagnosis in every episode, not only the one it was given in.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = pipeline.system_prompt_template.render(
@@ -357,10 +337,8 @@ def _tool_state(intent, submission):
 
 
 def test_local_vs_submitted_diff_tool_registered_for_decide_and_confirm_close():
-    """
-    The diff tool is dual use: on confirm_close it verifies a fix, on decide it reveals the code
-    region the student is actively editing (focus). It must be present for BOTH intents whenever a
-    submission exists (previously it was gated to confirm_close only).
+    """The diff tool is dual use: it verifies a fix on confirm_close and reveals the region the
+    student is actively editing on decide, so both intents get it whenever a submission exists.
     """
     pipeline = StruggleInterventionPipeline()
     submission = ProgrammingSubmissionDTO.model_validate(
@@ -384,12 +362,9 @@ def test_local_vs_submitted_diff_tool_absent_without_submission():
 
 
 def test_decide_prompt_renders_focus_and_redirect_rule():
-    """
-    The decide prompt must carry the focus/redirect bias: use local_vs_submitted_diff (when
-    available) to find the region the student is editing, prefer to help there when it is itself
-    failing, redirect to another method only when the focus region looks correct AND explicitly
-    frame the redirect, and fall back when there is no focus signal. The bias must be SOFT and
-    subordinate to the existing no-repeat and current-code-confirmation rules.
+    """The focus/redirect bias: help where the student is editing, redirect only off a region that
+    looks correct and say so, fall back when there is no focus signal. Soft, and subordinate to
+    the no-repeat and current-code-confirmation rules.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = pipeline.system_prompt_template.render(
@@ -397,16 +372,11 @@ def test_decide_prompt_renders_focus_and_redirect_rule():
         signal_summary="primary boundary: STATE; severity sBase=1.00; path=armed.",
         episode=None,
     )
-    # uses the diff tool for focus
     assert "local_vs_submitted_diff" in rendered
     assert "focus region" in rendered
-    # prefer help-where-they-are; do not redirect off a still-failing focus region
     assert "do NOT redirect to a different method" in rendered
-    # a legitimate redirect must be framed as such
     assert "MUST frame it as a redirect" in rendered
-    # explicit fallback when there is no focus signal
     assert "No focus signal" in rendered
-    # subordinate to the existing rules, and soft
     assert "same-diagnosis HARD RULE" in rendered
     assert "SOFT bias" in rendered
 
@@ -428,12 +398,10 @@ def test_decide_prompt_renders_presence_tone_by_mode():
         episode=None,
         proactivity_mode="push",
     )
-    # pull leans reticent, push is willing to reach out, and the two render different presence text
     assert "reticent" in pull
     assert 'reserve "active"' in pull
     assert "reach-out mode" in push
     assert pull != push
-    # tone-only: neither mode relaxes the hard rules
     assert "NEVER relaxes the same-diagnosis HARD RULE" in pull
     assert "NEVER relaxes the same-diagnosis HARD RULE" in push
 
@@ -487,11 +455,8 @@ def test_build_system_message_selects_help_request_template():
 # ---------------------------------------------------------------------------
 # Non-spoiler contract + hint ladder
 #
-# Regression for a live spoiler: after three escalating follow-ups the gate returned
-# the implementation in prose ("scan 0..i-1, keep lo/hi, record mid when it fits...").
-# An escalation rule without an absolute ceiling gets there, and so does pointing at
-# "the same no-solution rules as the normal exercise chat", which this pipeline never
-# loads. Every struggle prompt therefore has to define a spoiler itself.
+# An escalation rule without an absolute ceiling ends in the implementation written out as
+# prose, so every struggle prompt defines a spoiler itself and caps the ladder.
 # ---------------------------------------------------------------------------
 
 
@@ -517,11 +482,9 @@ def _render(template, episode=None):
 
 
 def test_hint_contract_reaches_the_two_hinting_prompts_only():
-    """
-    decide and help_request may emit a hint, so both carry the contract and the ladder.
-    confirm_close may not hint at all, so it carries the narrow no-new-help block
-    instead -- giving it the hint contract would license exactly the rung-3 output it
-    must never produce.
+    """decide and help_request may emit a hint, so both carry the contract and the ladder.
+    confirm_close may not hint at all, so it carries the narrow no-new-help block instead: the
+    contract would license exactly the rung-3 output it must never produce.
     """
     pipeline = StruggleInterventionPipeline()
 
@@ -538,11 +501,9 @@ def test_hint_contract_reaches_the_two_hinting_prompts_only():
 
 
 def test_contract_allows_the_references_it_also_requires():
-    """
-    The Forbidden list and the Allowed list have to be satisfiable at once. Banning everything
-    that came out of a tool would ban the file, the line, the method name, the symptom and the
-    failing test name that the Allowed list requires, and a model resolving that either way gets
-    it wrong: too strict it stops naming the test, too loose the ban stops meaning anything.
+    """The Forbidden and Allowed lists have to be satisfiable at once: banning everything that came
+    out of a tool would ban the file, the line, the method name and the failing test the Allowed
+    list requires, and a model resolving that either way gets it wrong.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = _render(pipeline.help_request_template, _episode_with(1))
@@ -559,11 +520,9 @@ def test_contract_allows_the_references_it_also_requires():
 
 
 def test_decide_prompt_keeps_a_silent_decision_free_of_an_anchor():
-    """
-    A repeated diagnosis has to go `silent`, and it can still have one concrete line. Requiring
-    an anchor whenever a line is the locus would attach one to that silent decision, which is
-    the same disclosure the silence was for. Artemis drops it, but the model should not be told
-    two incompatible things.
+    """A repeated diagnosis goes `silent` and can still have one concrete line, so requiring an
+    anchor whenever a line is the locus would make the silence disclose what it exists to
+    withhold. Artemis drops it, but the model must not be told two incompatible things.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = _render(pipeline.system_prompt_template, _episode_with(1))
@@ -579,17 +538,14 @@ def test_decide_prompt_keeps_a_silent_decision_free_of_an_anchor():
 
 
 def test_contract_names_the_prose_spoiler_classes():
-    """
-    The observed spoiler carried no code fence: it was an algorithm plus its bounds and
-    state variables, written as prose. A generic "never give the solution" does not catch
-    that, so the contract has to name those classes explicitly.
+    """A spoiler needs no code fence: an algorithm with its bounds and state variables in prose is
+    one, and a generic "never give the solution" does not catch it, so the classes are named.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = _render(pipeline.help_request_template, _episode_with(1))
 
     assert "operator or condition replacement" in rendered
-    # Reciting the required behaviour is rung 3, so the unconditional Allowed list must not
-    # hand it out at every rung - that collapses the gap between rung 2 and rung 3.
+    # Reciting the required behaviour is rung 3, so the Allowed list must not hand it out at rung 2.
     assert "Reciting what they say is rung 3" in rendered
     assert "The behaviour that spot must have, but only as far as" not in rendered
     assert "Index ranges or loop bounds" in rendered
@@ -597,8 +553,7 @@ def test_contract_names_the_prose_spoiler_classes():
     assert "State-variable names together with their update rule" in rendered
     assert "ordered sequence of steps whose endpoint is working code" in rendered
     assert "Writing code the student could take over as the fix" in rendered
-    # The blanket rule, kept verbatim so it does not depend on a reader stitching the
-    # individual classes above together.
+    # The blanket rule, kept verbatim so it does not depend on stitching the classes together.
     assert "NEVER give the full or near-full solution" in rendered
     assert "NEVER write the code for them" in rendered
     # The contract governs the inline gutter cue too, not just the chat message.
@@ -606,10 +561,8 @@ def test_contract_names_the_prose_spoiler_classes():
 
 
 def test_help_request_ladder_rises_to_three_and_then_stops():
-    """
-    The ceiling is the whole point: concreteness rises to rung 3 and never past it,
-    however often the student asks. The count is every delivered hint (an unsolicited
-    ambient->active escalation appends one too, slotManager.escalate), so prior>=2
+    """Concreteness rises to rung 3 and never past it, however often the student asks. The count
+    is every delivered hint, an unsolicited ambient->active escalation included, so prior>=2
     clamps rather than continuing to climb.
     """
     pipeline = StruggleInterventionPipeline()
@@ -623,10 +576,8 @@ def test_help_request_ladder_rises_to_three_and_then_stops():
 
 
 def test_help_request_keeps_never_silent_with_a_way_out_at_the_ceiling():
-    """
-    NEVER SILENT and the ceiling pull in opposite directions at rung 3. If the model has
-    to resolve that tension itself it resolves it by spoiling, so the prompt has to hand
-    it explicit non-spoiler exits.
+    """NEVER SILENT and the ceiling pull against each other at rung 3, and a model left to resolve
+    that itself resolves it by spoiling, so the prompt hands it explicit non-spoiler exits.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = _render(pipeline.help_request_template, _episode_with(2))
@@ -635,18 +586,16 @@ def test_help_request_keeps_never_silent_with_a_way_out_at_the_ceiling():
     assert "including at rung 3" in rendered
     assert "counter-example" in rendered
     assert "ask a human tutor" in rendered
-    # The tutor referral is the one exit that is not itself a hint, so the prompt has to say
-    # it counts as an answer -- otherwise NEVER SILENT pushes the model past the ceiling.
+    # The tutor referral is the one exit that is not itself a hint, so it has to count as an answer.
     assert "satisfies NEVER SILENT" in rendered
-    # The retired unbounded-escalation instruction must not come back.
+    # Unbounded escalation must not come back.
     assert "one notch MORE concrete than the last" not in rendered
 
 
 def test_decide_is_capped_at_rung_two_and_drops_the_dead_chat_reference():
-    """
-    An unsolicited nudge stops at rung 2; rung 3 is reserved for a hint the student asked
-    for. The old pointer at the exercise-chat rules was dead: the struggle pipeline builds
-    its own system message and never loads chat_system_prompt.j2.
+    """An unsolicited nudge stops at rung 2; rung 3 is reserved for a hint the student asked for.
+    Pointing at the exercise-chat rules is dead too: this pipeline builds its own system message
+    and never loads chat_system_prompt.j2.
     """
     pipeline = StruggleInterventionPipeline()
     for prior, expected in ((0, 1), (1, 2), (2, 2), (5, 2)):
@@ -656,8 +605,7 @@ def test_decide_is_capped_at_rung_two_and_drops_the_dead_chat_reference():
 
     rendered = _render(pipeline.system_prompt_template, _episode_with(0))
     assert "Same no-solution rules as the normal exercise chat" not in rendered
-    # decide may legitimately stay silent and help_request may never be silent, so the
-    # shared contract must bind only the content of a hint, never whether one is emitted.
+    # decide may stay silent and help_request may not, so the shared contract binds only content.
     assert "do emit a hint, you name WHERE the problem is" in rendered
     assert 'respond with action "silent"' in rendered
 
@@ -668,12 +616,9 @@ def test_decide_is_capped_at_rung_two_and_drops_the_dead_chat_reference():
 
 
 def test_confirm_close_constrains_both_student_visible_fields():
-    """
-    closingSentence is not the only text the student sees: episodeLabel is forwarded on a
-    resolved close and rendered as the fold label (serverFrameHandler -> foldEpisode), so
-    both need the same what-not-how limit. rationale, by contrast, never leaves Pyris --
-    Artemis' StruggleInterventionEventDTO has no such field -- so the prompt must not
-    describe it as student-facing.
+    """episodeLabel is student-visible too, forwarded on a resolved close and rendered as the fold
+    label, so it takes the same what-not-how limit as closingSentence. rationale never leaves
+    Pyris, so the prompt must not describe it as student-facing.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = _render(pipeline.confirm_close_template, _episode_with(1))
@@ -686,10 +631,8 @@ def test_confirm_close_constrains_both_student_visible_fields():
 
 
 def test_length_budget_is_tighter_for_the_unsolicited_nudge():
-    """
-    An unsolicited nudge interrupts, so it gets the smaller budget; a hint the student asked
-    for may take more room but still has a hard ceiling. Without a stated ceiling the model
-    keeps explaining, and a long enough explanation of a defect is the fix.
+    """An unsolicited nudge interrupts, so it gets the smaller budget. Both need a stated ceiling:
+    the model keeps explaining otherwise, and a long enough explanation of a defect is the fix.
     """
     pipeline = StruggleInterventionPipeline()
 
@@ -709,12 +652,9 @@ def test_length_budget_is_tighter_for_the_unsolicited_nudge():
 
 
 def test_contract_requires_backticks_and_does_not_ban_them():
-    """
-    Regression for a live miss: the first hint after the contract shipped contained no inline
-    code at all. "Code in any form ... method-call chains" reads as a ban on the markup, so the
-    model spelled `ProjectPlanner.findLatestCompatible` out as prose to comply. The ban is about
-    composing a fix; naming something already in the student's code has to stay marked up, or
-    the reference is unscannable and the chip styling never renders.
+    """The ban is about composing a fix, not about markup: phrasing it as "code in any form" reads
+    as a ban on the backticks and the model spells the name out as prose to comply. A name
+    already in the student's code stays marked up, or the chip styling never renders.
     """
     pipeline = StruggleInterventionPipeline()
 
@@ -724,19 +664,14 @@ def test_contract_requires_backticks_and_does_not_ban_them():
             "FORMAT of `message`, and this is required rather than optional" in rendered
         )
         assert "every name you point at goes in backticks" in rendered
-        # The ban has to name what it targets: composed code, not markup.
         assert "Writing code the student could take over as the fix" in rendered
-        # The over-broad phrasing that caused the miss must not come back.
         assert "Code in any form" not in rendered
 
 
 def test_inline_hint_is_specified_and_parsed_as_plain_text():
-    """
-    Regression: the gutter cue arrived as "Still returns `-1` unconditionally (stub)" and the
-    student saw the backticks as characters. inlineHint is drawn into the editor unfiltered, with
-    no markdown pass, so the FORMAT rule that makes `message` mark up every name is exactly wrong
-    here. The prompt now says so, and the parser strips regardless, because this field reaches the
-    editor without anything else in between.
+    """inlineHint is drawn into the editor unfiltered, with no markdown pass, so the FORMAT rule
+    that makes `message` mark up every name is exactly wrong here: backticks would reach the
+    student as characters. The prompt says so, and the parser strips regardless.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = _render(pipeline.system_prompt_template, _episode_with(0))
@@ -762,10 +697,8 @@ def test_inline_hint_is_specified_and_parsed_as_plain_text():
 
 
 def test_inline_hint_is_drawn_as_one_line():
-    """
-    The gutter draws a single line after the anchored statement. A cue that arrives with a newline
-    in it would lose everything after the break, or push it somewhere the student cannot read, so
-    the whole cue is collapsed onto one line before the budget is measured.
+    """The gutter draws a single line after the anchored statement, so a cue is collapsed onto one
+    line before the budget is measured; anything after a newline would otherwise be lost.
     """
     gate = _gate(
         '{"action": "ambient", "message": "m", "confidence": 0.5,'
@@ -776,10 +709,8 @@ def test_inline_hint_is_drawn_as_one_line():
 
 
 def test_inline_hint_is_clamped_to_the_gutter_budget():
-    """
-    The cue is drawn inline after the anchored line of the student's own code and nothing
-    downstream clamps it, so an overlong one pushes that line sideways. The prompt asks for 60
-    characters; this makes it true.
+    """Nothing downstream clamps the cue, so an overlong one pushes the student's own code
+    sideways. The prompt asks for 60 characters; this makes it true.
     """
     long_cue = "Still returns minus one unconditionally and blocks both of the DP methods below"
     anchored = (
@@ -806,10 +737,8 @@ def test_inline_hint_is_clamped_to_the_gutter_budget():
 
 
 def _hook_state(result, intent, tokens=None):
-    """A minimal AgentPipelineExecutionState stand-in for post_agent_hook.
-
-    The pipeline is built via __new__ so no LLM/config is touched (same approach as
-    test_chat_latency_ordering.py); post_agent_hook only reads dto/result/tokens/callback.
+    """A minimal AgentPipelineExecutionState stand-in: the pipeline is built via __new__ so no LLM
+    or config is touched, and post_agent_hook only reads dto/result/tokens/callback.
     """
     callback = MagicMock()
     callback.status = SimpleNamespace(
@@ -838,10 +767,8 @@ def _hook_state(result, intent, tokens=None):
 
 
 def test_post_agent_hook_decide_maps_fields_and_carries_tokens():
-    """
-    post_agent_hook is the only place that maps a GateResult onto the status DTO and calls
-    finish(). It was untested, which is exactly where the token bug of c26e4052 lived: a
-    relapse to self.tokens drops the usage without raising, so nothing would turn red.
+    """post_agent_hook is the only place that maps a GateResult onto the status DTO and calls
+    finish(). Reading self.tokens instead of the state's drops the usage without raising.
     """
     pipeline, state = _hook_state(
         '{"action":"active","message":"Look at line 50.","confidence":0.9,'
@@ -883,11 +810,9 @@ def test_post_agent_hook_confirm_close_maps_fields_and_carries_tokens():
 
 
 def test_post_agent_hook_help_request_fails_run_on_unusable_output():
-    """
-    A help_request was explicitly asked for and its template forbids "silent". Collapsing an
-    unparseable answer into the silent fail-safe reached Artemis as result==null and was
-    delivered as silentDecide: the ask vanished with no hint and no error, indistinguishable
-    from a silence the model chose. It must fail the run instead.
+    """The help_request template forbids "silent", so collapsing an unparseable answer into the
+    silent fail-safe reaches Artemis as result==null and is delivered as silentDecide: the ask
+    vanishes with no hint and no error. It must fail the run instead.
     """
     pipeline, state = _hook_state("the model rambled without json", "help_request")
     out = pipeline.post_agent_hook(state)
@@ -902,13 +827,10 @@ def test_post_agent_hook_help_request_fails_run_on_unusable_output():
 
 
 def test_post_agent_hook_help_request_rejects_a_contract_violating_silent():
-    """
-    Well-formed JSON does not make "silent" admissible here: the help_request template answers
-    only in ambient/active. Honouring it finished with result=None, which Artemis delivers as
-    silentDecide - the same empty completion the parse-failure guard above exists to prevent,
-    on the one path where the student explicitly asked. Artemis tolerating an incoming silent
-    (helpRequest_silentFromPyris_staysSilent builds that DTO by hand) is a defensive net on
-    that side, not a licence for this one to emit it.
+    """Well-formed JSON does not make "silent" admissible here: the help_request template answers
+    only in ambient/active, and honouring it delivers the same empty completion the parse-failure
+    guard above exists to prevent, on the one path where the student explicitly asked. Artemis
+    tolerating an incoming silent is a defensive net there, not a licence to emit one here.
     """
     pipeline, state = _hook_state(
         '{"action":"silent","message":null,"confidence":0.4,"rationale":"already said",'
@@ -967,10 +889,9 @@ def test_inline_hint_keeps_a_cue_whose_word_boundary_sits_at_the_limit():
 
 
 def test_struggle_pipeline_is_registered_for_health_checks():
-    """
-    The pipeline was in the variants endpoint but in neither Features nor PIPELINE_BY_FEATURE,
-    so check_pipelines_health() never evaluated it: health kept reporting all pipelines valid
-    while this one's LLM config could be missing or broken, surfacing only at request time.
+    """Without an entry in Features and PIPELINE_BY_FEATURE, check_pipelines_health() never
+    evaluates the pipeline: health reports every pipeline valid while a missing or broken LLM
+    config surfaces only at request time.
     """
     assert Features.STRUGGLE_INTERVENTION in PIPELINE_BY_FEATURE
     assert (
@@ -983,11 +904,9 @@ def test_struggle_pipeline_is_registered_for_health_checks():
 
 
 def test_prompts_do_not_promise_code_tools_without_a_submission():
-    """
-    get_tools registers the code/build/feedback tools only `if submission is not None`, and
-    Artemis sends none before the first submission. Both prompts claimed those tools
-    unconditionally and the decide prompt then made anchor+inlineHint REQUIRED, which is
-    impossible without them.
+    """get_tools registers the code/build/feedback tools only `if submission is not None`, and
+    Artemis sends no submission before the first one, so a prompt that promises them regardless
+    makes the REQUIRED anchor+inlineHint impossible.
     """
     pipeline = StruggleInterventionPipeline()
     for template in (pipeline.system_prompt_template, pipeline.help_request_template):
@@ -1007,15 +926,11 @@ def test_prompts_do_not_promise_code_tools_without_a_submission():
 
 
 def test_confirm_close_supplies_its_own_fallback_and_marks_the_close_degraded():
-    """
-    A resolved close owes the student a sentence and a fold label. Artemis substitutes its
-    own text when they are missing, but that is a separate repo on its own deployment
-    schedule and no part of this response contract, so Pyris must not depend on it.
-
-    The close itself still stands: refusing it (returning resolved=false) would turn a
-    formatting failure into a substantively unresolved episode. What must not happen is the
-    silent version, where malformed output enters the evaluation data as an ordinary
-    RECOVERED - hence the degraded flag and the marker on the rationale.
+    """A resolved close owes the student a sentence and a fold label. Artemis substitutes its own
+    text when they are missing, but that is a separate repo on its own deployment schedule and no
+    part of this contract. Refusing the close would turn a formatting failure into a
+    substantively unresolved episode, so it stands and is marked degraded instead of entering the
+    evaluation data as an ordinary RECOVERED.
     """
     for raw in (
         '{"resolved":true}',
@@ -1047,9 +962,8 @@ def test_confirm_close_complete_response_is_not_degraded():
 
 
 def test_help_request_prompt_offers_no_silent_escape_without_tools():
-    """
-    The no-submission fallback added for the tool-availability finding must not hand back
-    the escape the NEVER SILENT contract closes 27 lines further down in the same template.
+    """The no-submission fallback must not hand back the escape the NEVER SILENT contract closes
+    further down in the same template.
     """
     pipeline = StruggleInterventionPipeline()
     rendered = pipeline.help_request_template.render(
@@ -1064,10 +978,8 @@ def test_help_request_prompt_offers_no_silent_escape_without_tools():
 
 
 def test_parse_gate_result_rejects_boolean_confidence():
-    """
-    bool is a subclass of int, so float(True) is 1.0. A malformed `"confidence": true` would
-    reach Artemis as maximum certainty and clear its threshold for an UNSOLICITED
-    intervention. The anchor line already guards against exactly this; confidence must too.
+    """bool is a subclass of int, so float(True) is 1.0 and `"confidence": true` would reach
+    Artemis as maximum certainty, clearing its threshold for an unsolicited intervention.
     """
     for raw in (
         '{"action":"active","message":"m","confidence":true}',
@@ -1084,11 +996,9 @@ def test_parse_gate_result_rejects_boolean_confidence():
 
 
 def test_a_crashing_run_still_reports_the_usage_it_accrued():
-    """
-    The outer catch in __call__ is the one failure path that runs outside the agent's execution
-    state, so it can only reach self.tokens. The base pipeline binds that name to the run's token
-    list; without it a crashed run reports an empty list, Artemis books nothing, and the spend of
-    every LLM call the run made before the crash disappears from the accounting.
+    """The outer catch in __call__ is the one failure path that runs outside the agent's execution
+    state, so it can only reach self.tokens. Without that binding a crashed run reports an empty
+    list and the spend of every LLM call it made disappears from the accounting.
     """
     pipeline = StruggleInterventionPipeline.__new__(StruggleInterventionPipeline)
     pipeline.tokens = []
@@ -1098,8 +1008,7 @@ def test_a_crashing_run_still_reports_the_usage_it_accrued():
         state.tokens.append(spent)
         raise RuntimeError("model call blew up mid-run")
 
-    # Everything before the agent loop is stubbed out; the same approach as
-    # test_chat_latency_ordering.py, which runs the shared __call__ without an LLM or a database.
+    # Everything before the agent loop is stubbed out, as in test_chat_latency_ordering.py.
     pipeline.prepare_state = lambda state: None
     pipeline.build_system_message = lambda state: "system prompt"
     pipeline.get_tools = lambda state: []
@@ -1125,10 +1034,9 @@ def test_a_crashing_run_still_reports_the_usage_it_accrued():
 
 
 def test_a_silent_decision_carries_no_gutter_payload():
-    """
-    The anchor and the inline hint reach the student without a chat message: the client draws
-    them in the gutter of the file they are editing. A model that answers `silent` and fills
-    them anyway contradicts itself, and the decision has to win, or `silent` surfaces something.
+    """The anchor and the inline hint reach the student without a chat message, drawn in the gutter
+    of the file they are editing, so a model that answers `silent` and fills them anyway
+    contradicts itself and the decision has to win.
     """
     g = parse_gate_result(
         '{"action":"silent","confidence":0.4,"rationale":"too early",'
@@ -1158,10 +1066,9 @@ def test_a_silent_decision_maps_no_gutter_payload_onto_the_status():
 
 
 def test_a_close_that_names_a_gate_action_is_refused():
-    """
-    An answer that claims a surface level and a finished episode at once answered the wrong
-    contract, and says nothing trustworthy about either. Refusing costs one more round with the
-    episode open; honouring it would show a closing sentence and file the episode as recovered.
+    """An answer claiming a surface level and a finished episode at once answered the wrong
+    contract and says nothing trustworthy about either. Refusing costs one more round with the
+    episode open; honouring it would file the episode as recovered.
     """
     cc = parse_confirm_close_result(
         '{"resolved":true,"action":"silent","closingSentence":"Nice work.",'
@@ -1196,10 +1103,9 @@ def _anchored(file: str, line, hint: str = "off-by-one?") -> str:
 
 
 def test_an_anchor_that_points_nowhere_is_dropped_with_its_cue():
-    """
-    The client draws the cue at the anchor, so a location it cannot resolve turns the pair into
-    payload nothing renders. Worse, a line the model never saw is one it cannot have verified.
-    Each of these is checked against the snapshot the run was given.
+    """The client draws the cue at the anchor, so a location it cannot resolve turns the pair into
+    payload nothing renders, and a line the model never saw is one it cannot have verified. Each
+    of these is checked against the snapshot the run was given.
     """
     for path, line, why in [
         ("", 5, "empty path"),
@@ -1243,9 +1149,8 @@ def test_outer_whitespace_around_the_path_is_forgiven():
 
 
 def test_without_a_repository_no_anchor_is_forwarded():
-    """
-    No submission means the run had no code tools either, so a location it names is one it could
-    not have confirmed. The prompt asks for both fields to be null in exactly that case.
+    """No submission means the run had no code tools either, so a location it names is one it could
+    not have confirmed; the prompt asks for both fields to be null in exactly that case.
     """
     gate = parse_gate_result(_anchored("Sort.java", 42))
     assert gate.anchor is None
@@ -1273,9 +1178,8 @@ def test_an_anchor_without_a_cue_is_dropped():
 
 
 def test_the_hook_checks_the_anchor_against_the_runs_own_snapshot():
-    """
-    The hook is what hands the snapshot to the parser. Without that argument every anchor would
-    pass unchecked, and nothing else on this path would notice.
+    """The hook is what hands the snapshot to the parser; without that argument every anchor passes
+    unchecked and nothing else on this path notices.
     """
     pipeline, state = _hook_state(
         '{"action":"ambient","message":"m","confidence":0.5,'
