@@ -609,9 +609,10 @@ describe('LaneHealthPanel load outcome poll', () => {
   });
 
   it('gives up at the cap and leaves the note to the stream check', async () => {
-    // Past the orchestrator's load command timeout the live outcome is gone;
-    // re-asking for the same "running" is noise. The note stays — a lane that
-    // still arrives resolves it via the stream.
+    // Past the full two-phase attempt (command + confirmation, ~60 min plus
+    // lock wait) the live outcome is gone; re-asking for the same "running"
+    // is noise. The note stays — a lane that still arrives resolves it via
+    // the stream.
     await acceptLoad();
     pollTick?.();
     await settle();
@@ -626,6 +627,26 @@ describe('LaneHealthPanel load outcome poll', () => {
     pollTick?.();
     await settle();
     expect(loadStatusCalls).toBe(calls);
+  });
+
+  it('keeps the outcome poll running when the operator merely closes the picker', async () => {
+    // The picker's Close button is not the end of an accepted load: the
+    // pending note stays up, and the poll must keep running — it is what
+    // will surface a background refusal minutes later. Stopping the poll on
+    // a plain close would leave such a refusal's "Loading …" note hanging
+    // indefinitely.
+    await acceptLoad();
+    panel.closePicker();
+
+    expect(panel.acceptedModel()).toBe('foo');
+    expect(pollTick).not.toBeNull(); // the close did not kill the poll
+
+    loadStatusStub = () => Promise.resolve({ status: 'failed', reason: 'denied late' });
+    pollTick?.();
+    await settle();
+
+    expect(panel.addError()).toBe('Loading foo failed: denied late');
+    expect(panel.acceptedModel()).toBeNull();
   });
 
   it('drops a delayed answer from a superseded session of the same model', async () => {

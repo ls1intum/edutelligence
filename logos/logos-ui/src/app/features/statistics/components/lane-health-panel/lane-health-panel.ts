@@ -236,14 +236,17 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
    */
   private static readonly LOAD_STATUS_POLL_INTERVAL_MS = 2500;
   /**
-   * Hard stop for the outcome poll. The orchestrator resolves every manual
-   * load within its load command timeout (30 min) — refusal, confirmed lane,
-   * or a recorded timeout — so well past that the live outcome is gone
-   * (planner restart, entry aged out) and the poll can only re-ask for the
-   * same "unknown". The lane-appearance check in ngOnChanges keeps owning the
-   * note from there on.
+   * Hard stop for the outcome poll. A manual load gets the load command
+   * timeout (30 min) plus the confirmation polling of the same length that
+   * follows it, so the terminal outcome — a refusal, a confirmed lane, or a
+   * recorded timeout — is recorded no later than ~60 min plus lock wait
+   * after dispatch. The cap must outlive that, or it stops asking while a
+   * late failure is still in flight and the note hangs; well past it the
+   * live outcome is gone (planner restart, entry aged out) and the poll can
+   * only re-ask for the same "unknown". The lane-appearance check in
+   * ngOnChanges keeps owning the note from there on.
    */
-  private static readonly LOAD_STATUS_POLL_CAP_MS = 31 * 60 * 1000;
+  private static readonly LOAD_STATUS_POLL_CAP_MS = 65 * 60 * 1000;
   /** Timer handle of the outcome poll; null while not polling. */
   private loadStatusPoll: ReturnType<typeof setInterval> | null = null;
   /** Provider the outcome poll belongs to — anything else is a stale poll. */
@@ -502,7 +505,12 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     this.selectedModel.set(null);
     this.addError.set(null);
     this.pickerProviderId = null;
-    this.stopLoadStatusPoll();
+    // The outcome poll deliberately keeps running: the picker's Close button
+    // is not the end of an accepted load. The pending note stays up, and the
+    // poll is what will surface a background refusal minutes later — stopping
+    // it here would let such a refusal leave the note hanging indefinitely.
+    // It stops on its own when the attempt resolves, is superseded by a new
+    // one, the provider changes, it outlives the cap, or the panel is gone.
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -511,6 +519,10 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     // and submitting it would load a model onto a provider that never served it.
     if (changes['selectedProvider'] && this.pickerProviderId !== this.providerId) {
       this.closePicker();
+      // closePicker() no longer stops the outcome poll on its own (a plain
+      // Close must not kill it) — a provider change abandons the attempt, so
+      // stop it explicitly here.
+      this.stopLoadStatusPoll();
       this.loadModels.set([]);
       this.modelsLoading.set(false);
       this.acceptedModel.set(null);
