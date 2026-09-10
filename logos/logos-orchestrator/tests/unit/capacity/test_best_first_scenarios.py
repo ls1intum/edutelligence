@@ -134,7 +134,6 @@ def _lane(
     sleep_state: str = "awake",
     effective_vram_mb: float = 20_000.0,
     gpu_devices: str = "0",
-    is_vllm: bool = True,
     active_requests: int = 0,
     queue_waiting: float = 0.0,
 ) -> LaneSchedulerSignals:
@@ -143,7 +142,6 @@ def _lane(
         model_name=model_name,
         runtime_state=runtime_state,
         sleep_state=sleep_state,
-        is_vllm=is_vllm,
         active_requests=active_requests,
         queue_waiting=queue_waiting,
         requests_running=0.0,

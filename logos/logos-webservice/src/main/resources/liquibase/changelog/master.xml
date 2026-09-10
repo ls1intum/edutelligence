@@ -32,5 +32,7 @@
     <include file="liquibase/changelog/026_agent_session_no_push.xml"/>
     <include file="liquibase/changelog/027_log_entry_rate_limit_admitted.xml"/>
     <include file="liquibase/changelog/028_log_entry_api_key_response_index.xml"/>
+    <include file="liquibase/changelog/029_rename_provider_snapshots.xml"/>
+    <include file="liquibase/changelog/030_refuse_ollama_typed_providers.xml"/>
 
 </databaseChangeLog>

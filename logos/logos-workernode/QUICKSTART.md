@@ -1,6 +1,6 @@
 # Quickstart: Logos Worker Node
 
-The worker node connects to the Logos server via a persistent WebSocket connection. It receives inference requests and routes them to its locally managed lanes (Ollama or vLLM).
+The worker node connects to the Logos server via a persistent WebSocket connection. It receives inference requests and routes them to its locally managed vLLM lanes.
 
 ## 1. Prepare Logos
 
@@ -61,12 +61,15 @@ The server decides when to spin up or tear down lanes based on `capabilities_mod
 
 ## 4. Start the Worker
 
-### CPU-only mode (Ollama)
+### Development mode
+The dev compose file builds from source. vLLM is always included in the
+image — the worker only runs vLLM lanes:
+
 ```bash
 docker compose -f docker-compose.dev.yml up --build
 ```
 
-### GPU mode (vLLM)
+### GPU mode (production)
 ```bash
 docker compose up -d
 ```

@@ -196,7 +196,7 @@ class ModelRamCache:
             will be created underneath to mirror the HF cache layout.
         source_hf_hub_path:
             Original HF hub cache directory, e.g.
-            ``/usr/share/ollama/.ollama/models/.hf_cache/hub``.
+            ``/usr/share/logos/models/.hf_cache/hub``.
         max_size_bytes:
             Hard cap.  0 = auto-detect from tmpfs available space.
         """
@@ -1062,7 +1062,7 @@ def create_model_cache(
     tmpfs_path:
         Value of ``LOGOS_TMPFS_CACHE_PATH`` env var.  Empty or None = disabled.
     hf_home:
-        Value of ``HF_HOME`` env var (e.g. ``/usr/share/ollama/.ollama/models/.hf_cache``).
+        Value of ``HF_HOME`` env var (e.g. ``/usr/share/logos/models/.hf_cache``).
     """
     if not tmpfs_path:
         return _DisabledModelRamCache()

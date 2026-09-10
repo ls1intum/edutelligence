@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from logos_worker_node.metal_process import MetalVllmProcessHandle
-from logos_worker_node.models import LaneConfig, MetalConfig, OllamaConfig, VllmConfig, VllmEngineConfig
+from logos_worker_node.models import LaneConfig, MetalConfig, VllmConfig, VllmEngineConfig, WorkerConfig
 
 # Flags that exist only in the CUDA build, or that vllm-metal ignores. Emitting
 # any of these either aborts argparse or silently misconfigures the lane.
@@ -43,7 +43,7 @@ def make_handle(metal_config: MetalConfig | None = None) -> MetalVllmProcessHand
     return MetalVllmProcessHandle(
         "lane-metal-0",
         11436,
-        OllamaConfig(),
+        WorkerConfig(),
         VllmEngineConfig(),
         metal_config=metal_config or MetalConfig(),
     )
@@ -194,7 +194,7 @@ class TestBuildCmd:
             h = MetalVllmProcessHandle(
                 "lane-metal-0",
                 11436,
-                OllamaConfig(),
+                WorkerConfig(),
                 VllmEngineConfig(global_extra_args=list(extra)),
                 metal_config=MetalConfig(),
             )
@@ -376,18 +376,18 @@ class TestBinaryResolution:
 class TestCacheRoot:
     def test_env_override_wins(self, monkeypatch, tmp_path) -> None:
         monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path))
-        assert MetalVllmProcessHandle._resolve_persistent_cache_root(OllamaConfig()) == str(tmp_path)
+        assert MetalVllmProcessHandle._resolve_persistent_cache_root(WorkerConfig()) == str(tmp_path)
 
     def test_falls_back_to_a_macos_path_not_the_ollama_one(self, monkeypatch) -> None:
         """The inherited default points into /usr/share/ollama, absent on macOS."""
         monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
-        root = MetalVllmProcessHandle._resolve_persistent_cache_root(OllamaConfig())
+        root = MetalVllmProcessHandle._resolve_persistent_cache_root(WorkerConfig())
         assert "/usr/share/ollama" not in root
         assert root.startswith(str(Path.home()))
 
     def test_uses_models_path_when_it_actually_exists(self, monkeypatch, tmp_path) -> None:
         monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
-        cfg = OllamaConfig(models_path=str(tmp_path))
+        cfg = WorkerConfig(models_path=str(tmp_path))
         assert MetalVllmProcessHandle._resolve_persistent_cache_root(cfg) == str(tmp_path)
 
 

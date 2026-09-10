@@ -1,8 +1,7 @@
 """
 Benchmark configuration — edit this file to change models and settings.
 
-Used by both prepare_benchmark.py (to assign models to requests) and
-benchmark_logos.py (to translate Logos model names to Ollama tags).
+Used by prepare_benchmark.py to assign models to requests.
 """
 
 # ── LLM configurations ────────────────────────────────────────────────────
@@ -22,17 +21,6 @@ MODELS_5: list[str] = [
     "microsoft/Phi-4-reasoning",
     "google/gemma-3-4b-it",
 ]
-
-# ── Ollama model name mapping ─────────────────────────────────────────────
-# Maps Logos model identifiers → Ollama pull tags.
-# Verify exact tag names on the target machine with: ollama list
-OLLAMA_MODEL_MAP: dict[str, str] = {
-    "Qwen/Qwen3.6-35B-A3B": "qwen3.6:35b",
-    "meta-llama/Llama-3.1-8B-Instruct": "llama3.1:8b",
-    "google/gemma-3-12b-it": "gemma3:12b-it-qat",
-    "microsoft/Phi-4-reasoning": "phi4-reasoning:latest",  # verify tag
-    "google/gemma-3-4b-it": "gemma3:4b-it-qat",  # verify tag
-}
 
 # ── GSM8K prompt settings ─────────────────────────────────────────────────
 

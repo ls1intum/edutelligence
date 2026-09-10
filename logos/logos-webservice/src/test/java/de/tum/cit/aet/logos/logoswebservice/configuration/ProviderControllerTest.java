@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.verify;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
@@ -112,6 +113,18 @@ class ProviderControllerTest {
                     + "\"auth_name\":\"Authorization\",\"auth_format\":\"Bearer {}\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.api_key").doesNotExist());
+    }
+
+    @Test
+    void addProvider_rejectsDroppedOllamaType() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"ollama-provider\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"ollama\",\"privacy_level\":\"LOCAL\","
+                    + "\"auth_name\":\"Authorization\",\"auth_format\":\"Bearer {}\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value(containsString("no longer supported")));
     }
 
     @Test
