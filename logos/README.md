@@ -364,6 +364,44 @@ When the provider reports duration-based usage, Logos stores millisecond
 precision and applies the provider's per-second catalogue price. This avoids
 discarding fractional audio duration while retaining the integer usage schema.
 
+### Batch processing
+
+Logos serves the OpenAI Batch API (`/v1/files` for the input and result files,
+`/v1/batches` for the job lifecycle) for workloads with many requests and
+nobody waiting.
+
+A batch runs in one of two places, decided when its input file is uploaded:
+
+- **At the provider**, when one the key may use has a Batch API that serves
+  every model the file names. That is where the provider's batch rate applies
+  (about half the standard price), so it is preferred.
+- **In Logos**, otherwise — a model served by a worker node has no upstream
+  Batch API, and a cloud model can be missing from its provider's batch
+  offering. Logos then schedules the file's requests itself at the lowest queue
+  priority: they fill whatever capacity interactive traffic leaves and finish as
+  fast as that allows. No discount (the requests are ordinary requests), but the
+  same API.
+
+Both paths answer the same routes, so a script can upload, poll every few
+minutes, and chain the next batch onto the last without knowing which one it
+got; `logos_execution` on the batch object says which it was. Send
+`X-Logos-Batch-Execution: logos` or `provider` to force one.
+
+Whatever a batch names in its request lines is checked against the key's model
+permissions line by line, the ids it hands back are owned by the key's team (a
+lifecycle call for another team's id is a 404), and its usage is booked into the
+same budget and statistics as everything else — at the provider's batch rate
+where one is configured. See
+[docs/batch-processing.md](docs/batch-processing.md) for the full route list,
+Azure's batch availability, and the limits.
+
+The **Batches** page in the UI does the same thing without a script: upload a
+`.jsonl`, watch the progress, download the results.
+
+For a single latency-tolerant request the async job API remains simpler:
+`POST /jobs/v1/chat/completions` returns `202` with a `Location` header, and
+`GET /jobs/{job_id}` polls for the result.
+
 ## Accessing the Database
 
 The PostgreSQL database is not directly reachable from outside the server. You need to tunnel through SSH, which most database clients (e.g. DBeaver) support natively.

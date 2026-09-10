@@ -2262,6 +2262,761 @@ class DBManager:
         rows = self.session.execute(sql, {"api_key_id": api_key_id}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
+    def get_batch_provider_candidates(self, api_key_id: int) -> list[Dict[str, Any]]:
+        """Cloud providers the api key may use, as Batch API forward targets.
+
+        Provider-level rather than model-level: a batch-creation body carries
+        no ``model``, so model links are not part of its routing — the
+        effective-provider resolution (per-key permissions when the key opts
+        into custom permissions, the team's otherwise) is the whole of it.
+        ``logosnode`` providers are excluded: worker nodes serve no Batch API.
+
+        ``api_key`` mirrors the inference forward's credential resolution
+        (``get_auth_info_to_deployment``): a provider-level key, or the key of
+        one of its model links when only those are filled in. ``supports_batch``
+        is the cached probe result — NULL when the provider was never probed,
+        which the resolver treats as "ask the upstream now".
+        """
+        sql = text(
+            """
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                            WHERE ak.id = :api_key_id
+                                AND ak.is_active = true
+                        ),
+                        effective_providers AS (
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        )
+                   SELECT p.id,
+                          p.name,
+                          p.base_url,
+                          p.cloud_provider_type,
+                          p.auth_name,
+                          p.auth_format,
+                          COALESCE(
+                              NULLIF(p.api_key, ''),
+                              (SELECT NULLIF(mp.api_key, '')
+                               FROM model_provider mp
+                               WHERE mp.provider_id = p.id AND NULLIF(mp.api_key, '') IS NOT NULL
+                               ORDER BY mp.id
+                               LIMIT 1)
+                          ) AS api_key,
+                          pbc.supports_batch,
+                          pbc.checked_at AS capability_checked_at
+                   FROM providers p
+                        JOIN effective_providers ep ON p.id = ep.provider_id
+                        LEFT JOIN provider_batch_capability pbc ON pbc.provider_id = p.id
+                   WHERE p.provider_type = 'cloud'
+                     AND COALESCE(NULLIF(TRIM(p.base_url), ''), NULL) IS NOT NULL
+                   ORDER BY p.id
+                   """
+        )
+        rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
+        return [dict(row) for row in rows]
+
+    def get_batch_provider(self, provider_id: int) -> Optional[Dict[str, Any]]:
+        """One provider's Batch API forward inputs, outside any key's scope.
+
+        The settlement path runs long after the request that created the batch,
+        so it addresses the provider by id rather than through the caller's
+        permissions.
+        """
+        row = (
+            self.session.execute(
+                text(
+                    """
+                SELECT p.id,
+                       p.name,
+                       p.base_url,
+                       p.cloud_provider_type,
+                       p.auth_name,
+                       p.auth_format,
+                       COALESCE(
+                           NULLIF(p.api_key, ''),
+                           (SELECT NULLIF(mp.api_key, '')
+                            FROM model_provider mp
+                            WHERE mp.provider_id = p.id AND NULLIF(mp.api_key, '') IS NOT NULL
+                            ORDER BY mp.id
+                            LIMIT 1)
+                       ) AS api_key
+                FROM providers p
+                WHERE p.id = :provider_id
+                """
+                ),
+                {"provider_id": int(provider_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def record_provider_batch_capability(self, provider_id: int, supports_batch: bool, detail: str = "") -> None:
+        """Cache what a Batch API probe found for one provider."""
+        self.session.execute(
+            text(
+                """
+                INSERT INTO provider_batch_capability (provider_id, supports_batch, detail, checked_at)
+                VALUES (:pid, :supports, :detail, :now)
+                ON CONFLICT (provider_id)
+                DO UPDATE SET supports_batch = EXCLUDED.supports_batch,
+                              detail = EXCLUDED.detail,
+                              checked_at = EXCLUDED.checked_at
+                """
+            ),
+            {
+                "pid": int(provider_id),
+                "supports": bool(supports_batch),
+                "detail": (detail or "")[:500],
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def get_batch_model_deployments(self, api_key_id: int, provider_id: Optional[int] = None) -> list[Dict[str, Any]]:
+        """The models this key may run, with the provider that serves each.
+
+        A batch input file names a model per line, so the uploader needs both
+        halves of the answer: which models the key may run at all (to refuse
+        the rest) and where each of them can run (to decide whether the whole
+        file can go to one provider's Batch API, or has to be executed here).
+        On Azure the request body names the *deployment*, which the endpoint
+        carries.
+
+        Passing ``provider_id`` narrows the answer to one provider.
+        """
+        scope = "WHERE mp.provider_id = :provider_id" if provider_id is not None else ""
+        sql = text(
+            f"""
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                            WHERE ak.id = :api_key_id AND ak.is_active = true
+                        ),
+                        effective_models AS (
+                            SELECT akmp.model_id
+                            FROM api_key_model_permissions akmp, key_info ki
+                            WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tmp.model_id
+                            FROM team_model_permissions tmp, key_info ki
+                            WHERE tmp.team_id = ki.tid AND ki.custom = false
+                        ),
+                        effective_providers AS (
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        )
+                   SELECT m.id AS model_id,
+                          m.name AS model_name,
+                          mp.endpoint AS endpoint,
+                          p.id AS provider_id,
+                          p.provider_type AS provider_type,
+                          p.cloud_provider_type AS cloud_provider_type
+                   FROM models m
+                        JOIN model_provider mp ON mp.model_id = m.id
+                        JOIN providers p ON p.id = mp.provider_id
+                        JOIN effective_models em ON em.model_id = m.id
+                        JOIN effective_providers ep ON ep.provider_id = p.id
+                   {scope}
+                   ORDER BY m.name, p.id
+                   """
+        )
+        params: Dict[str, Any] = {"api_key_id": int(api_key_id)}
+        if provider_id is not None:
+            params["provider_id"] = int(provider_id)
+        return [dict(row) for row in self.session.execute(sql, params).mappings().all()]
+
+    def get_provider_model_deployments(self, provider_id: int) -> list[Dict[str, Any]]:
+        """Every model link of a provider, permissions aside.
+
+        The settlement path needs the reverse of the upload's translation: an
+        output row names the deployment the provider ran, which has to map back
+        to the Logos model whose prices apply. It runs after the fact, outside
+        any key's permission scope, so it reads the full link table.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT m.id AS model_id, m.name AS model_name, mp.endpoint AS endpoint
+                FROM model_provider mp
+                     JOIN models m ON m.id = mp.model_id
+                WHERE mp.provider_id = :provider_id
+                ORDER BY m.name
+                """
+            ),
+            {"provider_id": int(provider_id)},
+        ).mappings()
+        return [dict(row) for row in rows.all()]
+
+    def register_batch_object(
+        self,
+        *,
+        kind: str,
+        upstream_id: str,
+        provider_id: int,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+        input_file_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> None:
+        """Record who owns an object the provider just minted."""
+        self.session.execute(
+            text(
+                """
+                INSERT INTO batch_objects
+                    (kind, upstream_id, provider_id, api_key_id, team_id, user_id,
+                     input_file_id, status, created_at, updated_at)
+                VALUES (:kind, :upstream_id, :provider_id, :api_key_id, :team_id, :user_id,
+                        :input_file_id, :status, :now, :now)
+                ON CONFLICT (provider_id, kind, upstream_id)
+                DO UPDATE SET status = COALESCE(EXCLUDED.status, batch_objects.status),
+                              input_file_id = COALESCE(EXCLUDED.input_file_id, batch_objects.input_file_id),
+                              updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {
+                "kind": kind,
+                "upstream_id": upstream_id,
+                "provider_id": int(provider_id),
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "input_file_id": input_file_id,
+                "status": status,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def get_batch_object(self, kind: str, upstream_id: str) -> Optional[Dict[str, Any]]:
+        """The ownership row for one id, or None when Logos never minted it.
+
+        Keyed by the id alone: a caller supplies an id, not a provider, and
+        this row is what says where the object lives — or that Logos runs it
+        itself.
+        """
+        row = (
+            self.session.execute(
+                text("SELECT * FROM batch_objects WHERE kind = :kind AND upstream_id = :upstream_id"),
+                {"kind": kind, "upstream_id": upstream_id},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def list_batch_objects_for_team(self, team_id: Optional[int], kind: str, limit: int = 100) -> list[Dict[str, Any]]:
+        """The team's own batch objects of one kind, newest first.
+
+        Listings are answered from here rather than by forwarding to the
+        provider: the shared upstream credential sees every team's objects, and
+        Logos minted all of its own, so its own record is both the safe answer
+        and the complete one — it covers batches it ran itself, which no
+        provider knows about.
+        """
+        row_set = self.session.execute(
+            text(
+                """
+                SELECT * FROM batch_objects
+                WHERE kind = :kind AND team_id IS NOT DISTINCT FROM :team_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"kind": kind, "team_id": team_id, "limit": int(limit)},
+        ).mappings()
+        return [dict(row) for row in row_set.all()]
+
+    def update_batch_object_status(self, upstream_id: str, status: Optional[str]) -> None:
+        """Store the status a poll just reported for a batch."""
+        self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET status = COALESCE(:status, status), updated_at = :now
+                WHERE kind = 'batch' AND upstream_id = :upstream_id
+                """
+            ),
+            {
+                "upstream_id": upstream_id,
+                "status": status,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def claim_batch_for_settlement(self, batch_object_id: int) -> bool:
+        """Latch a batch for metering; False when someone else already did.
+
+        The client's own poll and the reconciler can reach a finished batch at
+        the same time. The conditional update makes the winner exclusive, so
+        the output file is billed exactly once.
+        """
+        result = self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET settled_at = :now, updated_at = :now
+                WHERE id = :id AND settled_at IS NULL
+                """
+            ),
+            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
+        )
+        self.session.commit()
+        return bool(result.rowcount)
+
+    def release_batch_settlement(self, batch_object_id: int) -> None:
+        """Undo a settlement latch whose metering failed, so it is retried."""
+        self.session.execute(
+            text("UPDATE batch_objects SET settled_at = NULL WHERE id = :id"),
+            {"id": int(batch_object_id)},
+        )
+        self.session.commit()
+
+    def get_unsettled_batches(self, limit: int = 50) -> list[Dict[str, Any]]:
+        """Batches whose usage has not been booked yet, oldest first."""
+        rows = self.session.execute(
+            text(
+                """
+                SELECT id, upstream_id, provider_id, api_key_id, team_id, user_id, status
+                FROM batch_objects
+                WHERE kind = 'batch' AND settled_at IS NULL
+                ORDER BY created_at
+                LIMIT :limit
+                """
+            ),
+            {"limit": int(limit)},
+        ).mappings()
+        return [dict(row) for row in rows.all()]
+
+    # ---- Batches Logos runs itself -------------------------------------
+
+    def store_local_batch_file(
+        self,
+        *,
+        upstream_id: str,
+        content: bytes,
+        filename: str,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+        purpose: str = "batch",
+    ) -> int:
+        """Keep a file Logos runs a batch from (or wrote results to).
+
+        A forwarded batch leaves its files at the provider; a Logos-run one has
+        nowhere else to put them, and the UI has to hand the results back to a
+        browser.
+        """
+        row = self.session.execute(
+            text(
+                """
+                INSERT INTO batch_objects
+                    (kind, upstream_id, execution, api_key_id, team_id, user_id,
+                     filename, size_bytes, status, created_at, updated_at)
+                VALUES ('file', :upstream_id, 'logos', :api_key_id, :team_id, :user_id,
+                        :filename, :size_bytes, :purpose, :now, :now)
+                RETURNING id
+                """
+            ),
+            {
+                "upstream_id": upstream_id,
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "filename": filename,
+                "size_bytes": len(content),
+                "purpose": purpose,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        ).fetchone()
+        object_id = int(row[0])
+        self.session.execute(
+            text("INSERT INTO batch_file_contents (batch_object_id, content) VALUES (:id, :content)"),
+            {"id": object_id, "content": content},
+        )
+        self.session.commit()
+        return object_id
+
+    def get_local_batch_file_content(self, batch_object_id: int) -> Optional[bytes]:
+        """The stored bytes of a Logos-held file."""
+        row = self.session.execute(
+            text("SELECT content FROM batch_file_contents WHERE batch_object_id = :id"),
+            {"id": int(batch_object_id)},
+        ).fetchone()
+        if row is None:
+            return None
+        content = row[0]
+        return bytes(content) if content is not None else None
+
+    def create_local_batch(
+        self,
+        *,
+        upstream_id: str,
+        input_file_id: str,
+        endpoint: str,
+        completion_window: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+        total_requests: int,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+    ) -> int:
+        """Record a batch Logos will execute itself, ready for the runner."""
+        row = self.session.execute(
+            text(
+                """
+                INSERT INTO batch_objects
+                    (kind, upstream_id, execution, api_key_id, team_id, user_id,
+                     input_file_id, endpoint, completion_window, request_metadata,
+                     total_requests, status, created_at, updated_at)
+                VALUES ('batch', :upstream_id, 'logos', :api_key_id, :team_id, :user_id,
+                        :input_file_id, :endpoint, :completion_window, CAST(:metadata AS JSONB),
+                        :total, 'validating', :now, :now)
+                RETURNING id
+                """
+            ),
+            {
+                "upstream_id": upstream_id,
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "input_file_id": input_file_id,
+                "endpoint": endpoint,
+                "completion_window": completion_window,
+                "metadata": _json_for_jsonb(metadata) if metadata else None,
+                "total": int(total_requests),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        ).fetchone()
+        self.session.commit()
+        return int(row[0])
+
+    def get_local_batch(self, upstream_id: str) -> Optional[Dict[str, Any]]:
+        """One Logos-run batch by the id its client holds."""
+        row = (
+            self.session.execute(
+                text(
+                    """
+                SELECT * FROM batch_objects
+                WHERE kind = 'batch' AND execution = 'logos' AND upstream_id = :upstream_id
+                """
+                ),
+                {"upstream_id": upstream_id},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def get_local_object_by_upstream_id(self, kind: str, upstream_id: str) -> Optional[Dict[str, Any]]:
+        """One Logos-held file or batch, whatever its state."""
+        row = (
+            self.session.execute(
+                text(
+                    """
+                SELECT * FROM batch_objects
+                WHERE kind = :kind AND execution = 'logos' AND upstream_id = :upstream_id
+                """
+                ),
+                {"kind": kind, "upstream_id": upstream_id},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def claim_local_batch(self, batch_object_id: int) -> bool:
+        """Move a queued batch to in_progress; False when another runner won it.
+
+        Conditional on the status, so two orchestrator processes cannot run the
+        same file twice.
+        """
+        result = self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET status = 'in_progress', started_at = COALESCE(started_at, :now), updated_at = :now
+                WHERE id = :id AND kind = 'batch' AND execution = 'logos' AND status = 'validating'
+                """
+            ),
+            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
+        )
+        self.session.commit()
+        return bool(result.rowcount)
+
+    def get_runnable_local_batches(self, limit: int = 20) -> list[Dict[str, Any]]:
+        """Queued Logos-run batches, oldest first.
+
+        ``in_progress`` rows are included so a batch whose runner died with the
+        process is picked up again after a restart instead of hanging forever.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT id, upstream_id, input_file_id, endpoint, api_key_id, team_id, user_id, status
+                FROM batch_objects
+                WHERE kind = 'batch' AND execution = 'logos' AND status IN ('validating', 'in_progress')
+                ORDER BY created_at
+                LIMIT :limit
+                """
+            ),
+            {"limit": int(limit)},
+        ).mappings()
+        return [dict(row) for row in rows.all()]
+
+    def update_local_batch_progress(self, batch_object_id: int, completed: int, failed: int) -> bool:
+        """Publish how far the runner has got, and report a pending cancel."""
+        row = self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET completed_requests = :completed, failed_requests = :failed, updated_at = :now
+                WHERE id = :id
+                RETURNING cancel_requested
+                """
+            ),
+            {
+                "id": int(batch_object_id),
+                "completed": int(completed),
+                "failed": int(failed),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        ).fetchone()
+        self.session.commit()
+        return bool(row[0]) if row else False
+
+    def finish_local_batch(
+        self,
+        batch_object_id: int,
+        *,
+        status: str,
+        output_file_id: Optional[str] = None,
+        error_file_id: Optional[str] = None,
+        completed: Optional[int] = None,
+        failed: Optional[int] = None,
+    ) -> None:
+        """Close out a Logos-run batch.
+
+        ``settled_at`` is stamped here: its requests went through the ordinary
+        pipeline and were metered one by one as they ran, so there is nothing
+        left for the settlement pass to book.
+        """
+        self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET status = :status,
+                    output_file_id = COALESCE(:output_file_id, output_file_id),
+                    error_file_id = COALESCE(:error_file_id, error_file_id),
+                    completed_requests = COALESCE(:completed, completed_requests),
+                    failed_requests = COALESCE(:failed, failed_requests),
+                    finished_at = :now,
+                    settled_at = :now,
+                    updated_at = :now
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": int(batch_object_id),
+                "status": status,
+                "output_file_id": output_file_id,
+                "error_file_id": error_file_id,
+                "completed": completed,
+                "failed": failed,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def delete_batch_object(self, batch_object_id: int) -> None:
+        """Drop a Logos-held object and its bytes."""
+        self.session.execute(text("DELETE FROM batch_objects WHERE id = :id"), {"id": int(batch_object_id)})
+        self.session.commit()
+
+    def request_local_batch_cancel(self, batch_object_id: int) -> None:
+        """Ask the runner to stop before its next request line."""
+        self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET cancel_requested = true,
+                    status = CASE WHEN status IN ('validating', 'in_progress') THEN 'cancelling' ELSE status END,
+                    updated_at = :now
+                WHERE id = :id
+                """
+            ),
+            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
+        )
+        self.session.commit()
+
+    def get_api_key_by_id(self, api_key_id: int) -> Optional[Dict[str, Any]]:
+        """One active api key by id, in the shape ``authenticate_api_key`` uses.
+
+        The local batch runner acts for the key that submitted the batch long
+        after its request is gone, so it rebuilds the auth context from here.
+        """
+        row = (
+            self.session.execute(
+                text(
+                    """
+                SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
+                       ak.environment, ak.log, ak.settings, ak.default_priority
+                FROM api_keys ak
+                WHERE ak.id = :api_key_id AND ak.is_active = true
+                """
+                ),
+                {"api_key_id": int(api_key_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def get_api_key_logging_context(self, api_key_id: int) -> Dict[str, Any]:
+        """The environment and privacy level a key's log rows are written with.
+
+        The batch settlement runs long after the request that created the
+        batch, so it cannot take these off an AuthContext and reads them back
+        from the key instead.
+        """
+        row = (
+            self.session.execute(
+                text("SELECT environment, log FROM api_keys WHERE id = :api_key_id"),
+                {"api_key_id": int(api_key_id)},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            return {"environment": None, "log_level": "BILLING"}
+        log_level = row["log"]
+        if hasattr(log_level, "value"):
+            log_level = log_level.value
+        return {"environment": row["environment"], "log_level": log_level or "BILLING"}
+
+    def record_batch_usage(self, rows: list[Dict[str, Any]], chunk_size: int = 500) -> int:
+        """Book one finished batch request per row into the usage ledger.
+
+        A batch result file holds what would otherwise have been thousands of
+        individual proxied requests, so each row becomes an ordinary
+        ``log_entry`` with its own usage — that is what makes batch spend show
+        up in the same budget, statistics and export surfaces as everything
+        else. Rows are written in chunks (one multi-row INSERT each) because a
+        single batch can carry tens of thousands of them.
+
+        ``service_tier='batch'`` is what makes the price lookup pick the
+        provider's discounted batch rate; it falls back to the standard price
+        when no batch rate is configured for the model, so an unpriced batch is
+        over- rather than under-charged.
+
+        Returns the number of rows written.
+        """
+        if not rows:
+            return 0
+
+        type_ids: Dict[str, int] = {}
+        written = 0
+        for start in range(0, len(rows), max(1, chunk_size)):
+            chunk = rows[start : start + max(1, chunk_size)]
+            values_sql = []
+            params: Dict[str, Any] = {}
+            for index, row in enumerate(chunk):
+                values_sql.append(
+                    f"(:ts_{index}, :ts_{index}, :aki_{index}, :tid_{index}, :uid_{index}, :env_{index}, "
+                    f"CAST(:privacy_{index} AS logging_enum), :pid_{index}, :mid_{index}, :rid_{index}, "
+                    f":tier_{index}, CAST(:status_{index} AS result_status_enum), :err_{index})"
+                )
+                params.update(
+                    {
+                        f"ts_{index}": row["timestamp"],
+                        f"aki_{index}": row.get("api_key_id"),
+                        f"tid_{index}": row.get("team_id"),
+                        f"uid_{index}": row.get("user_id"),
+                        f"env_{index}": row.get("environment"),
+                        f"privacy_{index}": row.get("privacy_level") or "BILLING",
+                        f"pid_{index}": row.get("provider_id"),
+                        f"mid_{index}": row.get("model_id"),
+                        f"rid_{index}": row.get("request_id"),
+                        f"tier_{index}": row.get("service_tier") or "batch",
+                        f"status_{index}": row.get("result_status") or "success",
+                        f"err_{index}": row.get("error_message"),
+                    }
+                )
+
+            inserted = self.session.execute(
+                text(
+                    """
+                    INSERT INTO log_entry
+                        (timestamp_request, timestamp_response, api_key_id, team_id, user_id,
+                         environment, privacy_level, provider_id, model_id, request_id,
+                         service_tier, result_status, error_message)
+                    VALUES """
+                    + ", ".join(values_sql)
+                    + " RETURNING id"
+                ),
+                params,
+            ).fetchall()
+            log_ids = [int(record[0]) for record in inserted]
+
+            usage_values = []
+            usage_params: Dict[str, Any] = {}
+            for index, (log_id, row) in enumerate(zip(log_ids, chunk)):
+                for token_type, token_count in (row.get("usage") or {}).items():
+                    if not isinstance(token_count, int) or isinstance(token_count, bool) or token_count <= 0:
+                        continue
+                    if token_type not in type_ids:
+                        result, _ = self.add_token_type(token_type, "")
+                        if "error" in result:
+                            continue
+                        type_ids[token_type] = result["token-type-id"]
+                    slot = len(usage_values)
+                    usage_values.append(f"(:log_{slot}, :type_{slot}, :count_{slot})")
+                    usage_params[f"log_{slot}"] = log_id
+                    usage_params[f"type_{slot}"] = type_ids[token_type]
+                    usage_params[f"count_{slot}"] = token_count
+
+            if usage_values:
+                self.session.execute(
+                    text(
+                        "INSERT INTO usage_tokens (log_entry_id, type_id, token_count) VALUES "
+                        + ", ".join(usage_values)
+                        + " ON CONFLICT (log_entry_id, type_id) DO UPDATE SET token_count = EXCLUDED.token_count"
+                    ),
+                    usage_params,
+                )
+            self.session.commit()
+
+            # Same pricing path as an ordinary finalisation, so a batch row is
+            # priced by the one function that prices everything else.
+            try:
+                self.session.execute(
+                    text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause="le.id = ANY(:log_ids)")),
+                    {"log_ids": log_ids},
+                )
+                self.session.commit()
+            except Exception as exc:  # noqa: BLE001 - snapshot must not lose the usage rows
+                self.session.rollback()
+                logger.warning("settled-cost snapshot failed for %d batch rows: %s", len(log_ids), exc)
+            written += len(log_ids)
+        return written
+
     # ADMIN ONLY
     def get_all_deployments(self) -> list[Deployment]:
         """

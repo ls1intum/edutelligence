@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Who owns a file or batch that lives at the provider.
+
+         The Batch API is the one proxied surface whose objects outlive the
+         request that created them: a file id and a batch id are handed back to
+         the client and used for hours afterwards. Logos forwards those
+         operations with the provider credential shared by every key allowed to
+         use that provider, so without this table any such key could poll,
+         cancel or delete another team's batch — and download its output file,
+         which holds that team's prompts and completions.
+
+         Every lifecycle call therefore resolves the inbound id here first and
+         is answered with a 404 when the row belongs to another team, so an id
+         guessed or leaked from elsewhere is indistinguishable from one that
+         never existed.
+
+         settled_at is the billing latch: a completed batch is metered exactly
+         once, when its output file is read (see the batch reconciler). -->
+    <changeSet id="031-batch-objects" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="batch_objects"/></not>
+        </preConditions>
+        <createTable tableName="batch_objects">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_batch_objects"/>
+            </column>
+            <!-- 'file' or 'batch' — the two object kinds the OpenAI Batch API
+                 hands out ids for. -->
+            <column name="kind" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <!-- The provider's own id (file-abc…, batch_abc…). Unique per
+                 provider: two upstreams may legitimately mint the same id. -->
+            <column name="upstream_id" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Where the object lives. NULL for a batch Logos runs itself:
+                 its lines are scheduled as ordinary low-priority requests and
+                 each one picks its own provider, so the batch as a whole
+                 belongs to none. -->
+            <column name="provider_id" type="INTEGER">
+                <constraints foreignKeyName="fk_batch_objects_provider"
+                             references="providers(id)"
+                             deleteCascade="true"/>
+            </column>
+            <!-- 'provider' (forwarded to an upstream Batch API) or 'logos'
+                 (executed here as low-priority requests). Local models have no
+                 upstream Batch API at all, and a cloud model can lack a batch
+                 deployment, so both need the same client-facing surface. -->
+            <column name="execution" type="TEXT" defaultValue="provider">
+                <constraints nullable="false"/>
+            </column>
+            <!-- The key that created the object. Kept for attribution; access
+                 is decided on team_id, matching how job results are scoped. -->
+            <column name="api_key_id" type="INTEGER">
+                <constraints foreignKeyName="fk_batch_objects_api_key"
+                             references="api_keys(id)"
+                             deleteCascade="false"/>
+            </column>
+            <column name="team_id" type="INTEGER">
+                <constraints foreignKeyName="fk_batch_objects_team"
+                             references="teams(id)"
+                             deleteCascade="false"/>
+            </column>
+            <column name="user_id" type="INTEGER">
+                <constraints foreignKeyName="fk_batch_objects_user"
+                             references="users(id)"
+                             deleteCascade="false"/>
+            </column>
+            <!-- For a batch: the input file it was created from, so the
+                 reconciler can attribute rows even when the client deleted
+                 its own bookkeeping. NULL for files. -->
+            <column name="input_file_id" type="TEXT"/>
+            <!-- Last status seen from the provider (validating, in_progress,
+                 completed, expired, cancelled, failed). NULL for files. -->
+            <column name="status" type="TEXT"/>
+            <!-- Set once the batch's usage has been booked into log_entry /
+                 usage_tokens. NULL means "not metered yet". A batch Logos ran
+                 itself is metered request by request as it runs, so it is
+                 stamped settled the moment it finishes. -->
+            <column name="settled_at" type="TIMESTAMP WITH TIME ZONE"/>
+            <!-- The rest describes a Logos-run batch. Filled in for a forwarded
+                 one only where the provider's own object carries it. -->
+            <column name="filename" type="TEXT"/>
+            <column name="size_bytes" type="BIGINT"/>
+            <!-- The single operation every request line addresses, as the
+                 OpenAI batch object reports it. -->
+            <column name="endpoint" type="TEXT"/>
+            <column name="completion_window" type="TEXT"/>
+            <column name="request_metadata" type="JSONB"/>
+            <column name="output_file_id" type="TEXT"/>
+            <column name="error_file_id" type="TEXT"/>
+            <column name="total_requests" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="completed_requests" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="failed_requests" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <!-- A cancel arrives while the runner is mid-file; it stops before
+                 the next line rather than killing the one in flight. -->
+            <column name="cancel_requested" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="started_at" type="TIMESTAMP WITH TIME ZONE"/>
+            <column name="finished_at" type="TIMESTAMP WITH TIME ZONE"/>
+            <column name="created_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="batch_objects"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="031-batch-objects-indexes" author="wasnertobias">
+        <sql><![CDATA[
+            -- The lookup every lifecycle call makes: id + provider → owner.
+            -- COALESCE, not the bare column: a Logos-run object has no
+            -- provider, and NULLs would compare as distinct and let the same
+            -- id be minted twice.
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_batch_objects_upstream
+                ON batch_objects(COALESCE(provider_id, 0), kind, upstream_id);
+
+            -- The reconciler's scan: forwarded batches that still owe a
+            -- settlement. A Logos-run batch meters itself request by request.
+            CREATE INDEX IF NOT EXISTS idx_batch_objects_unsettled
+                ON batch_objects(kind, settled_at)
+                WHERE kind = 'batch' AND settled_at IS NULL AND execution = 'provider';
+
+            -- The local runner's scan: batches waiting to be executed here.
+            CREATE INDEX IF NOT EXISTS idx_batch_objects_runnable
+                ON batch_objects(status, created_at)
+                WHERE kind = 'batch' AND execution = 'logos';
+
+            -- Listing a team's own objects (GET /v1/batches, GET /v1/files).
+            CREATE INDEX IF NOT EXISTS idx_batch_objects_team
+                ON batch_objects(team_id, kind, created_at DESC);
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP INDEX IF EXISTS uq_batch_objects_upstream;
+                DROP INDEX IF EXISTS idx_batch_objects_unsettled;
+                DROP INDEX IF EXISTS idx_batch_objects_runnable;
+                DROP INDEX IF EXISTS idx_batch_objects_team;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <!-- The bytes of a file Logos holds itself.
+
+         A forwarded batch keeps its files at the provider; a Logos-run one has
+         nowhere else to put them, and the UI has to serve the result back to a
+         browser. They live in the shared database rather than on a container
+         volume so the webservice can read them without a second transport, and
+         so they survive a redeploy of the orchestrator. Separate table because
+         a listing must not drag megabytes of JSONL with it. -->
+    <changeSet id="031-batch-file-contents" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="batch_file_contents"/></not>
+        </preConditions>
+        <createTable tableName="batch_file_contents">
+            <column name="batch_object_id" type="BIGINT">
+                <constraints nullable="false"
+                             primaryKey="true"
+                             primaryKeyName="pk_batch_file_contents"
+                             foreignKeyName="fk_batch_file_contents_object"
+                             references="batch_objects(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="content" type="BYTEA">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="batch_file_contents"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Whether a provider actually serves an OpenAI Batch API.
+
+         "Cloud provider" is not the same as "has a Batch API": an
+         OpenAI-shaped resource can be a self-hosted inference endpoint
+         (Hetzner, Morpheus) that serves /chat/completions and nothing else.
+         Treating those as batch targets would make the Batch API ambiguous for
+         every key that may also use them, and send jobs somewhere that 404s.
+
+         The answer is a fact about the upstream rather than an operator
+         preference, so it is probed (GET <base>/batches) and cached here
+         instead of being configured — a hand-set flag would go stale the day a
+         provider gains or loses the surface. checked_at drives the refresh;
+         detail keeps the reason a probe said no, for the admin who wonders. -->
+    <changeSet id="031-provider-batch-capability" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="provider_batch_capability"/></not>
+        </preConditions>
+        <createTable tableName="provider_batch_capability">
+            <column name="provider_id" type="INTEGER">
+                <constraints nullable="false"
+                             primaryKey="true"
+                             primaryKeyName="pk_provider_batch_capability"
+                             foreignKeyName="fk_provider_batch_capability_provider"
+                             references="providers(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="supports_batch" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="detail" type="TEXT"/>
+            <column name="checked_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="provider_batch_capability"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

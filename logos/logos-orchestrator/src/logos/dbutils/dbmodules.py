@@ -11,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -363,4 +364,94 @@ class LatencyObservation(Base):
         nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
         onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class BatchObject(Base):
+    """A file or batch that lives at the provider, and the team that owns it.
+
+    The Batch API hands the client an upstream id it uses for hours after the
+    request that created it. Logos forwards those calls with a provider
+    credential shared by every key allowed to use that provider, so ownership
+    has to be recorded here — otherwise any such key could poll, cancel or
+    delete another team's batch and download its output file.
+
+    ``settled_at`` is the billing latch: a terminal batch is metered exactly
+    once, when its output rows are read.
+    """
+
+    __tablename__ = "batch_objects"
+    __table_args__ = (UniqueConstraint("provider_id", "kind", "upstream_id", name="uq_batch_objects_upstream"),)
+
+    id = Column(BigInteger, primary_key=True)
+    kind = Column(Text, nullable=False)  # "file" | "batch"
+    upstream_id = Column(Text, nullable=False)
+    # NULL for a batch Logos runs itself: each of its lines picks its own
+    # provider, so the batch as a whole belongs to none.
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"))
+    execution = Column(Text, nullable=False, server_default="provider")  # "provider" | "logos"
+    api_key_id = Column(Integer, ForeignKey("api_keys.id"))
+    team_id = Column(Integer, ForeignKey("teams.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    input_file_id = Column(Text)
+    status = Column(Text)
+    settled_at = Column(TIMESTAMP(timezone=True))
+    filename = Column(Text)
+    size_bytes = Column(BigInteger)
+    endpoint = Column(Text)
+    completion_window = Column(Text)
+    request_metadata = Column(JSON)
+    output_file_id = Column(Text)
+    error_file_id = Column(Text)
+    total_requests = Column(Integer, nullable=False, default=0)
+    completed_requests = Column(Integer, nullable=False, default=0)
+    failed_requests = Column(Integer, nullable=False, default=0)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    started_at = Column(TIMESTAMP(timezone=True))
+    finished_at = Column(TIMESTAMP(timezone=True))
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class BatchFileContent(Base):
+    """The bytes of a file Logos holds itself.
+
+    A forwarded batch keeps its files at the provider; a Logos-run one has
+    nowhere else to put them. Separate from ``batch_objects`` so a listing does
+    not drag megabytes of JSONL with it.
+    """
+
+    __tablename__ = "batch_file_contents"
+
+    batch_object_id = Column(BigInteger, ForeignKey("batch_objects.id", ondelete="CASCADE"), primary_key=True)
+    content = Column(LargeBinary, nullable=False)
+
+
+class ProviderBatchCapability(Base):
+    """Whether a provider's Batch API answers, as last probed.
+
+    A cloud provider is not automatically a batch target: an OpenAI-shaped
+    resource can be a self-hosted inference endpoint that serves chat and
+    nothing else. The answer is a property of the upstream, so it is probed
+    and cached rather than configured — a hand-set flag would go stale.
+    """
+
+    __tablename__ = "provider_batch_capability"
+
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
+    supports_batch = Column(Boolean, nullable=False, default=False)
+    detail = Column(Text)
+    checked_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )
