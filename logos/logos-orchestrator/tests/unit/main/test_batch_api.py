@@ -1421,7 +1421,7 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
     executed = []
 
     async def fake_execute(path, headers, body, client_ip, auth, log_id):
-        executed.append((path, body["model"], auth.default_priority))
+        executed.append((path, body["model"], auth.default_priority, log_id))
         return {"status_code": 200, "data": {"model": body["model"], "usage": {"prompt_tokens": 5}}}
 
     stored = {}
@@ -1459,6 +1459,10 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
         def update_local_batch_progress(self, object_id, completed, failed):
             return False
 
+        def log_usage(self, **kwargs):
+            stored.setdefault("logged", []).append(kwargs)
+            return {"log-id": 500 + len(stored["logged"])}, 200
+
         def store_local_batch_file(self, **kwargs):
             stored.update(kwargs)
             return 1
@@ -1485,9 +1489,15 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
     )
 
     assert written and written.startswith("file-")
-    assert [name for _, name, _ in executed] == ["qwen3-32b", "qwen3-32b"]
+    assert [name for _, name, _, _ in executed] == ["qwen3-32b", "qwen3-32b"]
     # The key's own priority is 10 (HIGH); batch work runs at LOW regardless.
-    assert {priority for _, _, priority in executed} == {batch_local.LOCAL_BATCH_PRIORITY}
+    assert {priority for _, _, priority, _ in executed} == {batch_local.LOCAL_BATCH_PRIORITY}
+    # Each line opens its own usage-log row: that is what the pipeline writes
+    # the response's tokens onto, so without it the work would cost money and
+    # never reach the ledger.
+    assert len(stored["logged"]) == 2
+    assert {log_id for _, _, _, log_id in executed} == {501, 502}
+    assert stored["logged"][0]["api_key_id"] == 11
     assert stored["finish"]["status"] == "completed"
     assert stored["finish"]["completed"] == 2
     assert stored["finish"]["failed"] == 0

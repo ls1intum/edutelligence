@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from logos.auth import AuthContext
 from logos.dbutils.dbmanager import DBManager
+from logos.request_content import sanitized_payload_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,32 @@ def _result_row(line: Dict[str, Any], result: Dict[str, Any]) -> Tuple[Dict[str,
     return row, failed
 
 
+def _open_line_log(auth: AuthContext, body: Dict[str, Any]) -> Optional[int]:
+    """Open the usage-log row this request line will be metered into.
+
+    The pipeline writes a response's usage onto an existing ``log_entry``; the
+    sync and job paths create it before they call in, and a batch line is no
+    different. Without it the request would run and cost money without ever
+    reaching the ledger.
+    """
+    try:
+        with DBManager() as db:
+            row, code = db.log_usage(
+                api_key_id=auth.api_key_id,
+                team_id=auth.team_id,
+                user_id=auth.user_id,
+                environment=auth.environment,
+                log_level=auth.log_level,
+                client_ip=None,
+                input_payload=sanitized_payload_for_logging(body),
+                headers=None,
+            )
+        return int(row["log-id"]) if code == 200 else None
+    except Exception:  # noqa: BLE001 - a logging failure must not drop the line
+        logger.exception("Could not open a log entry for a batch line")
+        return None
+
+
 async def _run_line(
     line: Dict[str, Any],
     auth: AuthContext,
@@ -141,8 +168,9 @@ async def _run_line(
     body = line.get("body") if isinstance(line.get("body"), dict) else {}
 
     async with semaphore:
+        log_id = _open_line_log(auth, body)
         try:
-            result = await execute_proxy_job(endpoint, dict(headers), dict(body), None, auth, None)
+            result = await execute_proxy_job(endpoint, dict(headers), dict(body), None, auth, log_id)
         except Exception as exc:  # noqa: BLE001 - one bad line must not stop the batch
             logger.exception("Batch line %s failed", line.get("custom_id"))
             result = {"status_code": 500, "data": {"error": {"message": f"{type(exc).__name__}: {exc}"}}}
