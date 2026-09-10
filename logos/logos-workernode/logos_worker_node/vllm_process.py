@@ -5,11 +5,11 @@ vLLM uses continuous batching — no fixed ``num_parallel``.  It handles
 arbitrary concurrency dynamically and exposes an OpenAI-compatible API
 at ``/v1/completions``, ``/v1/chat/completions``, and ``/v1/models``.
 
-Key differences from Ollama:
+Key characteristics:
 - No model pull/push/delete — model is specified at launch time and must
   exist locally (HuggingFace cache or explicit path).
 - No ``num_parallel`` — continuous batching handles all concurrency.
-- ``num_ctx`` equivalent is ``--max-model-len``.
+- The context window is ``--max-model-len``.
 - GPU pinning via ``CUDA_VISIBLE_DEVICES`` or ``--tensor-parallel-size``.
 - Optional stability controls: ``disable_custom_all_reduce`` (per-lane)
   and ``nccl_p2p_available`` (global engine config, default False).
@@ -38,11 +38,12 @@ import httpx
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
     LaneConfig,
-    OllamaConfig,
     ProcessState,
     ProcessStatus,
     VllmConfig,
     VllmEngineConfig,
+    WorkerConfig,
+    model_uses_sharded_checkpoint,
 )
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
@@ -390,7 +391,7 @@ class VllmProcessHandle:
         self,
         lane_id: str,
         port: int,
-        global_config: OllamaConfig,
+        global_config: WorkerConfig,
         vllm_engine_config: VllmEngineConfig | None = None,
         model_profiles: Any | None = None,
         per_gpu_total_mb: Callable[[], float] | None = None,
@@ -503,6 +504,7 @@ class VllmProcessHandle:
         purged_once = False
         unsharded_once = False
         self._skip_sharded_checkpoint = False
+        spawn_loop = asyncio.get_running_loop()
         while True:
             try:
                 status = await self._spawn_once(lane_config)
@@ -515,7 +517,10 @@ class VllmProcessHandle:
                 # that leaves the actual cause in place for the retry.
                 if not unsharded_once and self.has_broken_sharded_checkpoint:
                     unsharded_once = True
-                    self._invalidate_sharded_checkpoint(lane_config)
+                    # Discarding records the rejection against the serving vLLM's
+                    # version, which can probe a separate-venv interpreter; run it
+                    # off the event loop so that probe never stalls this loop.
+                    await spawn_loop.run_in_executor(None, lambda: self._invalidate_sharded_checkpoint(lane_config))
                     # Hold off the conversion for this lane's retry as well:
                     # rebuilding it would only reproduce the same bad output.
                     self._skip_sharded_checkpoint = True
@@ -787,15 +792,41 @@ class VllmProcessHandle:
         log_blob = "\n".join(self._recent_logs).lower()
         return any(frag in log_blob for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS)
 
+    def _sharded_rejection_reason(self) -> str:
+        """A short, greppable reason line for the sharded-checkpoint rejection record.
+
+        The first recent log line that named the sharded loader (or one of the
+        known "shards are wrong" payload messages) is the line that told us the
+        checkpoint — not the model or the GPU — was the problem; record it so a
+        later reader of the sidecar sees *why* the conversion was rejected.
+        Truncated so the sidecar stays small.
+        """
+        for line in self._recent_logs or []:
+            low = line.lower()
+            if any(frag in low for frag in self._BROKEN_SHARDED_CHECKPOINT_LOG_FRAGMENTS):
+                return " ".join(line.split())[:300]
+        return "vLLM rejected the pre-sharded checkpoint"
+
     def _invalidate_sharded_checkpoint(self, lane_config: LaneConfig) -> bool:
-        """Remove the sharded checkpoint this lane just failed to load."""
+        """Remove the sharded checkpoint this lane just failed to load.
+
+        Also records the rejection (version-scoped) so later spawns — and later
+        worker processes — do not rebuild a conversion the loader is going to
+        refuse again; see ``sharded_checkpoint.rejection_state``.
+        """
         directory = self._sharded_model_dir
         if not directory:
             return False
         try:
             from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
 
-            removed = sc.invalidate_sharded_checkpoint(Path(directory))
+            vllm_config = lane_config.vllm_config
+            binary = vllm_config.vllm_binary if vllm_config is not None else "vllm"
+            removed = sc.invalidate_sharded_checkpoint(
+                Path(directory),
+                vllm_version=sc.resolve_vllm_version(binary),
+                reason=self._sharded_rejection_reason(),
+            )
         except Exception:  # noqa: BLE001
             logger.exception("[%s] Failed to discard sharded checkpoint %s", self.lane_id, directory)
             return False
@@ -1712,7 +1743,8 @@ class VllmProcessHandle:
             )
             return
         ec = self._vllm_engine_config
-        if not getattr(ec, "sharded_checkpoint_enabled", True):
+        if not model_uses_sharded_checkpoint(ec, lane_config.model, vc.sharded_checkpoint_enabled):
+            # Worker-wide switch, or a per-model override that wins over it.
             return
         if _speculative_decoding_requested(vc):
             # vLLM loads the draft model with the same --load-format as the main
@@ -1754,6 +1786,26 @@ class VllmProcessHandle:
             )
             return
 
+        loop = asyncio.get_running_loop()
+        # The rejection check can probe a separate-venv vLLM interpreter for its
+        # version; run it off the event loop so a slow probe (bounded by the
+        # probe timeout) never stalls every other coroutine on this loop.
+        rejection = await loop.run_in_executor(None, lambda: sc.rejection_state(target, vllm_binary=vc.vllm_binary))
+        if rejection == "skip":
+            # A conversion for this (model, tp) was already built and the loader
+            # rejected it for the vLLM that is installed now (recorded on the
+            # earlier failure). Rebuilding it here would burn minutes of GPU
+            # time to reproduce the same unusable shards and fail the same way,
+            # so go straight to the full checkpoint — no conversion attempt.
+            logger.info(
+                "[%s] serving %s (tp=%d) from the full checkpoint — its sharded "
+                "checkpoint was rejected by this vLLM",
+                self.lane_id,
+                lane_config.model,
+                tp,
+            )
+            return
+
         if not getattr(ec, "sharded_checkpoint_convert_on_spawn", True):
             return
 
@@ -1768,7 +1820,6 @@ class VllmProcessHandle:
             lane_config.model,
             tp,
         )
-        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: sc.ensure_sharded_checkpoint(
@@ -2190,10 +2241,10 @@ class VllmProcessHandle:
 
         # All four worker caches (HF_HOME, VLLM_CACHE_ROOT, TORCHINDUCTOR_CACHE_DIR,
         # FLASHINFER_WORKSPACE_BASE) hang off this single root.  Default is the
-        # ollama models_path because the standard docker-compose mounts that as
-        # a persistent named volume; deployments without ollama (or with a
-        # different storage layout) can override globally via
-        # LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
+        # worker's persistent model store (worker.models_path) because the
+        # standard docker-compose mounts that as a persistent named volume;
+        # deployments with a different storage layout can override globally
+        # via LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
         cache_root_dir = self._resolve_persistent_cache_root(gc)
 
         # HuggingFace cache — write into the persistent root.
@@ -2340,21 +2391,29 @@ class VllmProcessHandle:
         """Single root directory for all worker-side persistent caches.
 
         Resolution order:
-          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty.
-          2. ``gc.models_path`` (the ollama models_path) — used because the
-             standard docker-compose mounts that as a persistent named volume,
-             so it's the one path the worker can rely on surviving container
-             rebuilds in the default deployment.
+          1. ``LOGOS_WORKER_CACHE_ROOT`` env var if non-empty (config.yml's
+             ``worker.cache_path`` is lifted into this env var at load time,
+             but is also consulted directly below so the resolver stays
+             correct for configs built without that propagation).
+          2. ``gc.cache_path`` (``worker.cache_path``) if non-empty.
+          3. ``gc.models_path`` (the worker's persistent model store,
+             ``worker.models_path``) — used because the standard docker-compose
+             mounts that as a persistent named volume, so it's the one path
+             the worker can rely on surviving container rebuilds in the
+             default deployment.
 
         ``HF_HOME``, ``VLLM_CACHE_ROOT``, ``TORCHINDUCTOR_CACHE_DIR`` and
         ``FLASHINFER_WORKSPACE_BASE`` all derive from this root; deployments
-        without ollama (or with a different storage layout) only need to set
+        with a different storage layout only need to set
         ``LOGOS_WORKER_CACHE_ROOT`` to point at any persistent path they have
         — no need to override each cache env var individually.
         """
         override = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
         if override:
             return override
+        cache_path = (getattr(gc, "cache_path", "") or "").strip()
+        if cache_path:
+            return cache_path
         return getattr(gc, "models_path", "") or ""
 
     def _resolve_hf_home(self, cache_root_dir: str) -> str:
@@ -2680,7 +2739,7 @@ class VllmProcessHandle:
         """Wait for vLLM's health endpoint to respond."""
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
-        delay = 0.5  # vLLM is slower to start than Ollama
+        delay = 0.5
         while loop.time() < deadline:
             if self._process is not None and self._process.returncode is not None:
                 logger.error(

@@ -39,9 +39,9 @@ from logos_worker_node.models import (
     HostMemorySummary,
     LaneConfig,
     LogosConfig,
-    OllamaConfig,
     ProcessState,
     VllmConfig,
+    WorkerConfig,
 )
 
 
@@ -589,7 +589,7 @@ def test_startup_sleep_triggers_reclaim_with_production_state_order(monkeypatch)
 
     async def _startup_apply_lanes() -> None:
         lane_manager = LaneManager(
-            global_config=OllamaConfig(),
+            global_config=WorkerConfig(),
             on_lane_slept=lambda: worker_main._replan_ram_cache_once(app),
         )
         worker_main._init_ram_cache_replan_state(app, cfg, lane_manager, registry, cache)
@@ -806,7 +806,7 @@ def test_replan_triggered_on_lane_add_establishes_reserve_before_first_sleep(mon
     handle = _AwakeHandle()
 
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         nvidia_smi_available=lambda: True,
         # The closure resolves `app` at call time (late binding), so `app` may
         # be constructed after the manager.
@@ -901,7 +901,7 @@ def test_replan_triggered_on_lane_wake_restores_reserve_before_next_admission(mo
     handle = _AsleepHandle()
 
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         nvidia_smi_available=lambda: True,
         # The closure resolves `app` at call time (late binding), so `app` may
         # be constructed after the manager.
@@ -1015,7 +1015,7 @@ def _restart_env(
     # Late binding: `app` is constructed after the manager (it needs it), but
     # the hook resolves it at call time.
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         nvidia_smi_available=lambda: True,
         on_lane_added=lambda: worker_main._replan_ram_cache_once(app),
     )
@@ -1208,7 +1208,7 @@ def test_replan_reserves_pending_lane_before_its_cache_copy_is_admitted(monkeypa
         return _AddHandle(_lid, _port)
 
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         nvidia_smi_available=lambda: True,
         model_cache=cache,
         on_lane_added=lambda: worker_main._replan_ram_cache_once(app),

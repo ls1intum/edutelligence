@@ -335,8 +335,8 @@ def extract_token_usage(usage: dict) -> dict:
     """
     Extract detailed token usage from a provider response onto the canonical
     vocabulary, filtering out meta fields. Handles OpenAI Chat Completions, the
-    OpenAI Responses API, Anthropic Messages, Bedrock Converse, DeepSeek and
-    Ollama shapes. Values are never altered, only renamed.
+    OpenAI Responses API, Anthropic Messages, Bedrock Converse and DeepSeek
+    shapes. Values are never altered, only renamed.
     """
     usage_tokens: dict = {}
 

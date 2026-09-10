@@ -353,7 +353,7 @@ def _resolve_worker_cache_root(cfg) -> str:
     """The cache root exactly as the lane process handles that will spawn use it.
 
     The Metal backend overrides ``_resolve_persistent_cache_root`` with a
-    macOS-appropriate fallback (the ollama models path is not creatable
+    macOS-appropriate fallback (the worker models path is not creatable
     without root on a Mac), so pick the resolver of the handle that will
     actually spawn the lanes. Startup validation and the background prefetch
     must inspect and download the same directory the lanes read weights from.
@@ -362,7 +362,7 @@ def _resolve_worker_cache_root(cfg) -> str:
     from logos_worker_node.vllm_process import VllmProcessHandle
 
     handle_cls = MetalVllmProcessHandle if is_metal_backend() else VllmProcessHandle
-    return handle_cls._resolve_persistent_cache_root(cfg.engines.ollama)
+    return handle_cls._resolve_persistent_cache_root(cfg.worker)
 
 
 def _lane_sleep_mode(cfg: AppConfig, lane: LaneConfig) -> bool:
@@ -905,8 +905,9 @@ def _log_storage_layout(cfg) -> None:
     """Log the resolved storage paths for HF + the four compilation/JIT caches.
 
     Surfaces (a) where the cache root resolves from — env var vs. config field
-    vs. fallback — and (b) the absolute path each cache will use, so a single
-    grep at boot is enough to debug "is X being persisted?" questions.
+    vs. worker.models_path fallback — and (b) the absolute path each cache will
+    use, so a single grep at boot is enough to debug "is X being persisted?"
+    questions.
     """
     cache_root = _resolve_worker_cache_root(cfg)
     if os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip():
@@ -914,7 +915,7 @@ def _log_storage_layout(cfg) -> None:
     elif cfg.worker.cache_path:
         source = "config.yml worker.cache_path"
     else:
-        source = "fallback: engines.ollama.models_path or backend default"
+        source = "fallback: worker.models_path or backend default"
 
     hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     cache_dir = os.path.join(cache_root, ".cache")
@@ -979,13 +980,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # skip JIT, avoiding the multi-process compilation race that crashes GPUs.
     # workspace_base is the parent of .cache/flashinfer; flashinfer 0.6.x reads
     # FLASHINFER_WORKSPACE_BASE (not FLASHINFER_JIT_DIR) to relocate its cache.
-    # Honor LOGOS_WORKER_CACHE_ROOT first so deployments without ollama can
-    # point all worker caches at any persistent path; default to the ollama
-    # models_path which is the persistent volume in the standard compose.
+    # Resolved through the shared persistent cache root resolver
+    # (LOGOS_WORKER_CACHE_ROOT > worker.cache_path > worker.models_path) so
+    # the FlashInfer JIT cache always lands on the same persistent volume as
+    # every other worker cache.
     try:
         from logos_worker_node.flashinfer_warmup import warmup as flashinfer_warmup
+        from logos_worker_node.vllm_process import VllmProcessHandle
 
-        workspace_base = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip() or cfg.engines.ollama.models_path
+        workspace_base = VllmProcessHandle._resolve_persistent_cache_root(cfg.worker)
         capability_models = list(cfg.logos.capabilities_models) if cfg.logos else []
         warmup_ok = flashinfer_warmup(workspace_base, model_names=capability_models)
         if not warmup_ok:
@@ -1005,7 +1008,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # from RAM during VRAM measurement, then evicted to free space) ──────────
     # Same resolution the lanes receive: the model cache and the startup
     # prefetch must use the HF_HOME the lane processes download into — on a
-    # Mac without LOGOS_WORKER_CACHE_ROOT that is not the ollama models path.
+    # Mac without LOGOS_WORKER_CACHE_ROOT that is not the worker models path.
     cache_root = _resolve_worker_cache_root(cfg)
     hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
     model_cache = create_model_cache(
@@ -1110,7 +1113,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.info("No models eligible to pre-populate into RAM cache")
 
     lane_manager = LaneManager(
-        global_config=cfg.engines.ollama,
+        global_config=cfg.worker,
         vllm_engine_config=cfg.engines.vllm,
         lane_port_start=cfg.worker.lane_port_start,
         lane_port_end=cfg.worker.lane_port_end,

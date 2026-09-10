@@ -17,11 +17,11 @@ from logos_worker_node.models import (
     DeviceSummary,
     LaneConfig,
     LaneStatus,
-    OllamaConfig,
     ProcessState,
     ProcessStatus,
     VllmConfig,
     VllmEngineConfig,
+    WorkerConfig,
 )
 
 
@@ -95,7 +95,7 @@ def test_resolve_owner_pid_returns_none_when_unrelated(monkeypatch) -> None:
 async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
     lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15000,
     )
@@ -129,7 +129,7 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
     def _fake_create_handle(
         lid: str,
         port: int,
-        _global_config: OllamaConfig,
+        _global_config: WorkerConfig,
         _vllm_engine_config,
         _lane_config: LaneConfig,
         **_kwargs,
@@ -152,7 +152,7 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_apply_lanes_rejects_vllm_without_nvidia_smi() -> None:
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15010,
         nvidia_smi_available=lambda: False,
@@ -171,9 +171,9 @@ async def test_apply_lanes_rejects_vllm_without_nvidia_smi() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> None:
+async def test_reconfigure_lane_rejects_change_without_nvidia_smi() -> None:
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15010,
         lane_port_end=15020,
         nvidia_smi_available=lambda: False,
@@ -181,24 +181,21 @@ async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> N
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
 
-    class FakeOllamaHandle:
+    class FakeHandle:
         def __init__(self) -> None:
             self.lane_id = lane_id
             self.port = 15010
             self.lane_config = lane
 
-    manager._handles[lane_id] = FakeOllamaHandle()  # noqa: SLF001
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
 
     with pytest.raises(RuntimeError, match="nvidia-smi"):
-        await manager.reconfigure_lane(
-            lane_id,
-            {"vllm": True, "vllm_config": VllmConfig().model_dump()},
-        )
+        await manager.reconfigure_lane(lane_id, {"context_length": 8192})
 
 
 @pytest.mark.asyncio
 async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
-    manager = LaneManager(OllamaConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -248,12 +245,12 @@ async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
 
 @pytest.mark.asyncio
 async def test_build_lane_status_reports_stopped_runtime_state() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15011, lane_port_end=15020)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15011, lane_port_end=15020)
     lane = LaneConfig(
         model="qwen2.5-coder:32b",
     )
 
-    class FakeOllamaHandle:
+    class FakeHandle:
         def __init__(self) -> None:
             self.lane_id = "qwen2.5-coder_32b"
             self.port = 15011
@@ -262,14 +259,14 @@ async def test_build_lane_status_reports_stopped_runtime_state() -> None:
         def status(self) -> ProcessStatus:
             return ProcessStatus(state=ProcessState.STOPPED, pid=4321, return_code=1)
 
-    status = await manager._build_lane_status(FakeOllamaHandle(), pid_vram_map={})  # noqa: SLF001
+    status = await manager._build_lane_status(FakeHandle(), pid_vram_map={})  # noqa: SLF001
     assert status.runtime_state == "stopped"
     assert status.sleep_state == "unsupported"
 
 
 @pytest.mark.asyncio
 async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15020, lane_port_end=15030)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15020, lane_port_end=15030)
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -320,7 +317,7 @@ async def test_sleep_lane_invokes_the_on_lane_slept_hook(monkeypatch) -> None:
         calls.append(1)
 
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15071,
         lane_port_end=15080,
         on_lane_slept=_hook,
@@ -378,7 +375,7 @@ async def test_add_lane_invokes_the_on_lane_added_hook(monkeypatch) -> None:
         calls.append(1)
 
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15071,
         lane_port_end=15080,
         nvidia_smi_available=lambda: True,
@@ -428,7 +425,7 @@ async def test_wake_lane_invokes_the_on_lane_woken_hook(monkeypatch) -> None:
         calls.append(1)
 
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15091,
         lane_port_end=15100,
         on_lane_woken=_hook,
@@ -495,7 +492,7 @@ async def test_apply_lanes_replans_after_each_registration_before_staggered_slee
     async def _hook() -> None:
         events.append("replan")
 
-    manager = LaneManager(OllamaConfig(), nvidia_smi_available=lambda: True, on_lane_added=_hook)
+    manager = LaneManager(WorkerConfig(), nvidia_smi_available=lambda: True, on_lane_added=_hook)
     lanes = [
         LaneConfig(model="org/a", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True)),
         LaneConfig(model="org/b", vllm=True, lane_id="org_b", vllm_config=VllmConfig(enable_sleep_mode=True)),
@@ -534,7 +531,7 @@ async def test_apply_lanes_replans_after_each_registration_before_staggered_slee
 
 @pytest.mark.asyncio
 async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15031, lane_port_end=15040)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15031, lane_port_end=15040)
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -578,36 +575,18 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sleep_lane_rejects_non_vllm_lane() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15040, lane_port_end=15050)
-    lane = LaneConfig(model="qwen2.5-coder:32b")
-    lane_id = "qwen2.5-coder_32b"
-
-    class FakeOllamaHandle:
-        def __init__(self) -> None:
-            self.lane_id = lane_id
-            self.port = 15040
-            self.lane_config = lane
-
-    manager._handles[lane_id] = FakeOllamaHandle()  # noqa: SLF001
-
-    with pytest.raises(ValueError, match="not a vLLM lane"):
-        await manager.sleep_lane(lane_id)
-
-
-@pytest.mark.asyncio
 async def test_status_revision_advances_on_active_request_change() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15060, lane_port_end=15070)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15060, lane_port_end=15070)
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
 
-    class FakeOllamaHandle:
+    class FakeHandle:
         def __init__(self) -> None:
             self.lane_id = lane_id
             self.port = 15060
             self.lane_config = lane
 
-    manager._handles[lane_id] = FakeOllamaHandle()  # noqa: SLF001
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
 
     initial = manager.status_revision
     await manager.increment_active_requests(lane_id)
@@ -630,7 +609,7 @@ def test_auto_tp_keeps_tp1_when_model_fits() -> None:
         engine="vllm",
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -657,7 +636,7 @@ def test_auto_tp_escalates_when_model_does_not_fit() -> None:
         engine="vllm",
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -678,7 +657,7 @@ def test_auto_tp_escalates_when_model_does_not_fit() -> None:
 def test_auto_tp_respects_explicit_tp() -> None:
     """Explicit TP>1 should be respected."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -695,7 +674,7 @@ def test_auto_tp_respects_explicit_tp() -> None:
 def test_auto_tp_noop_for_single_gpu() -> None:
     """With 1 GPU, auto-TP should be a no-op regardless of config."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 1,
@@ -709,17 +688,18 @@ def test_auto_tp_noop_for_single_gpu() -> None:
     assert result.vllm_config.tensor_parallel_size == 1
 
 
-def test_auto_tp_noop_for_non_vllm() -> None:
-    """Ollama lanes should never have TP modified."""
+def test_auto_tp_noop_for_unmeasured_model() -> None:
+    """Without a measured profile there is no evidence the model exceeds one
+    GPU, so the default TP=1 config passes the auto-tuner unchanged."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
     )
     lane = LaneConfig(model="qwen2.5-coder:32b")
     result = manager._auto_tensor_parallel(lane)
-    assert result.vllm_config is None
+    assert result.vllm_config.tensor_parallel_size == 1
 
 
 def test_auto_tp_prefers_calibrated_tp() -> None:
@@ -738,7 +718,7 @@ def test_auto_tp_prefers_calibrated_tp() -> None:
         tensor_parallel_size=2,
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -765,7 +745,7 @@ def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
         tensor_parallel_size=8,
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -797,7 +777,7 @@ def test_auto_tp_non_calibrated_tp1_falls_through_to_heuristic() -> None:
         tensor_parallel_size=1,
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -832,7 +812,7 @@ def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> N
         residency_source="calibrated",
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 2,
@@ -865,7 +845,7 @@ def test_auto_tp_calibrated_tp1_overrides_incoming_tp() -> None:
         residency_source="calibrated",
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 2,
@@ -893,7 +873,7 @@ def test_auto_tp_calibrated_tp2_applies_over_incoming_tp1() -> None:
         residency_source="calibrated",
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -912,7 +892,7 @@ def test_auto_tp_calibrated_tp2_applies_over_incoming_tp1() -> None:
 def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
     """If per-GPU VRAM is unknown, keep TP=1 (safe default)."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -976,7 +956,7 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1045,7 +1025,7 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1118,7 +1098,7 @@ async def test_auto_place_accounts_for_explicit_gmu_reservation() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1194,7 +1174,7 @@ async def test_auto_place_rejects_when_no_gpu_meets_explicit_gmu() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1260,7 +1240,7 @@ async def test_auto_place_explicit_gmu_below_floor_uses_operator_value() -> None
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1321,7 +1301,7 @@ async def test_auto_place_gates_mixed_size_gpus_on_own_card_total() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1387,7 +1367,7 @@ async def test_auto_place_gpu_devices_avoids_collocating_with_tp2_lane() -> None
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1462,7 +1442,7 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1550,7 +1530,7 @@ async def test_auto_place_gpu_devices_picks_emptiest_feasible_tp_subset() -> Non
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1647,7 +1627,7 @@ async def test_auto_place_prefers_empty_gpu_over_sleeping_lane_residue() -> None
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1727,7 +1707,7 @@ async def test_auto_place_treats_sleeping_lane_gpu_as_empty() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1797,7 +1777,7 @@ async def test_auto_place_spreads_new_lane_away_from_awake_lane() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1868,7 +1848,7 @@ async def test_auto_place_breaks_awake_ties_by_least_awake_vram() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -1898,7 +1878,7 @@ async def test_auto_place_breaks_awake_ties_by_least_awake_vram() -> None:
 
 @pytest.mark.asyncio
 async def test_remove_lane_releases_bookkeeping_on_destroy_timeout() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15080, lane_port_end=15090)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15080, lane_port_end=15090)
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
 
@@ -1987,7 +1967,7 @@ async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     call_log: list[str] = []
 
     class FakeStuckHandle:
@@ -2084,7 +2064,7 @@ async def test_stuck_lane_no_restart_when_auto_restart_false(monkeypatch) -> Non
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     stopped = False
 
     class FakeStuckHandle:
@@ -2127,7 +2107,7 @@ async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeStuckHandle:
         def __init__(self) -> None:
@@ -2201,7 +2181,7 @@ async def test_recover_dead_lanes_restarts_stopped_lane(monkeypatch) -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     call_log: list[str] = []
 
     class DeadHandle:
@@ -2270,7 +2250,7 @@ async def test_stuck_detection_resets_after_token_progress() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeHandle:
         def __init__(self) -> None:
@@ -2327,7 +2307,7 @@ async def test_stuck_detection_skips_when_only_gen_tokens_frozen() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeHandle:
         def __init__(self) -> None:
@@ -2378,7 +2358,7 @@ async def test_stuck_detection_does_not_trip_during_request_burst() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeHandle:
         def __init__(self) -> None:
@@ -2442,7 +2422,7 @@ async def test_proxy_stuck_detection_kills_lane_when_engine_never_admits() -> No
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     stopped = False
 
     class FakeHandle:
@@ -2489,7 +2469,7 @@ async def test_proxy_stuck_does_not_fire_without_parked_requests() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     stopped = False
 
     class FakeHandle:
@@ -2539,12 +2519,12 @@ async def test_liveness_stuck_detection_kills_lane_when_engine_rpc_wedges() -> N
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     # Real VllmProcessHandle so isinstance() in production code matches.
     # We swap in a fake stop() to avoid touching subprocesses, and prime
     # consecutive_liveness_failures to the wedge signature.
-    handle = VllmProcessHandle(lane_id, 15000, OllamaConfig())
+    handle = VllmProcessHandle(lane_id, 15000, WorkerConfig())
     handle._lane_config = lane_config  # noqa: SLF001
     handle._consecutive_liveness_failures = 4  # noqa: SLF001 — 4 > _LIVENESS_FAILURE_THRESHOLD (3)
     stop_called = False
@@ -2583,7 +2563,7 @@ async def test_circuit_breaker_stops_restart_after_max_retries(monkeypatch) -> N
 
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     # No handle in _handles — simulates the state after a failed spawn removed the handle.
     # _recover_dead_lanes increments the counter each poll even without a handle in memory.
@@ -2621,7 +2601,7 @@ async def test_stuck_vram_skips_restart(monkeypatch) -> None:
     """When has_stuck_vram is True, _recover_dead_lanes must skip the restart attempt."""
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     restart_calls: list[str] = []
 
     class StuckVramHandle:
@@ -2670,7 +2650,7 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
     """When has_fatal_cuda_errors is True, _recover_dead_lanes must skip the restart."""
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     restart_calls: list[str] = []
 
     class FatalCudaHandle:
@@ -2725,7 +2705,7 @@ async def test_metal_allocation_failure_skips_restart(monkeypatch) -> None:
     """
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     restart_calls: list[str] = []
 
     class MetalAllocFailureHandle:
@@ -2775,7 +2755,7 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     """Crash-restart counter resets to 0 after a successful restart."""
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class DeadHandle:
         def __init__(self) -> None:
@@ -2839,7 +2819,7 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
 def test_model_overrides_can_set_chat_template() -> None:
     """config.yml model_overrides is the primary way an operator pins a template."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         VllmEngineConfig(model_overrides={"Qwen/Qwen3-8B": {"chat_template": "qwen3-tools.jinja"}}),
         lane_port_start=15000,
         lane_port_end=15010,
@@ -2864,7 +2844,7 @@ def test_model_overrides_profile_keys_are_routed_to_registry() -> None:
     registry = ModelProfileRegistry()
     registry.record_loaded_vram("org/model-27b", 50000.0, engine="vllm", kv_cache_sent_mb=8000.0)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         VllmEngineConfig(
             model_overrides={
                 "org/model-27b": {
@@ -2891,7 +2871,7 @@ def test_model_overrides_profile_keys_are_routed_to_registry() -> None:
 def test_model_overrides_invalid_engine_value_still_fails() -> None:
     """A genuinely type-invalid engine value must keep failing loudly."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         VllmEngineConfig(model_overrides={"org/model-27b": {"max_num_seqs": "abc"}}),
         lane_port_start=15000,
         lane_port_end=15010,
@@ -2905,7 +2885,7 @@ def test_model_overrides_invalid_engine_value_still_fails() -> None:
 def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
     """An unrecognized key must not abort lane creation either."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         VllmEngineConfig(model_overrides={"org/model-27b": {"totally_bogus_key": 1}}),
         lane_port_start=15000,
         lane_port_end=15010,
@@ -2923,7 +2903,7 @@ def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
 
 
 def test_begin_end_calibration_session_holds_power_of_two_slice() -> None:
-    manager = LaneManager(OllamaConfig(), gpu_device_count=lambda: 3)
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 3)
     assert manager.calibration_gpu_subset is None
 
     held = manager.begin_calibration_session()
@@ -2935,7 +2915,7 @@ def test_begin_end_calibration_session_holds_power_of_two_slice() -> None:
 
 
 def test_calibration_session_slice_on_power_of_two_node_holds_all_gpus() -> None:
-    manager = LaneManager(OllamaConfig(), gpu_device_count=lambda: 4)
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 4)
     assert manager.begin_calibration_session() == frozenset({0, 1, 2, 3})
 
 
@@ -2949,7 +2929,7 @@ def test_lane_gpu_set_parses_selectors() -> None:
 
 
 def test_lane_touches_gpus_intersection() -> None:
-    manager = LaneManager(OllamaConfig())
+    manager = LaneManager(WorkerConfig())
     # "all"/blank spans every GPU → intersects any non-empty slice.
     assert manager._lane_touches_gpus("all", {2}) is True
     assert manager._lane_touches_gpus("", {2}) is True
@@ -2972,7 +2952,7 @@ class _StubHandle:
 
 
 def _manager_with_handles(handles: dict) -> LaneManager:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15200, lane_port_end=15210)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15200, lane_port_end=15210)
     manager._handles.update(handles)  # noqa: SLF001
     return manager
 
@@ -2981,18 +2961,16 @@ def _manager_with_handles(handles: dict) -> LaneManager:
 async def test_destroy_lanes_on_gpus_stops_only_slice_vllm_lanes() -> None:
     slice_lane = _StubHandle(LaneConfig(model="m-slice", vllm=True, gpu_devices="0,1"))
     leftover_lane = _StubHandle(LaneConfig(model="m-left", vllm=True, gpu_devices="2"))
-    ollama_lane = _StubHandle(LaneConfig(model="m-ollama", vllm=False, gpu_devices="0"))
 
-    manager = _manager_with_handles({"a": slice_lane, "b": leftover_lane, "c": ollama_lane})
+    manager = _manager_with_handles({"a": slice_lane, "b": leftover_lane})
     stopped = await manager.destroy_lanes_on_gpus({0, 1})
 
     assert stopped == 1
     assert slice_lane.destroyed is True
     assert "a" not in manager._handles  # noqa: SLF001
-    # Leftover and non-vLLM lanes are untouched and keep serving.
+    # Leftover lanes are untouched and keep serving.
     assert leftover_lane.destroyed is False
     assert "b" in manager._handles  # noqa: SLF001
-    assert "c" in manager._handles  # noqa: SLF001
 
 
 def _snapshot_3gpu(free: dict) -> DeviceSummary:
@@ -3024,7 +3002,7 @@ def _placement_manager(snapshot, n_gpus: int) -> LaneManager:
         engine="vllm",
     )
     return LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15200,
         lane_port_end=15210,
         model_profiles=profiles,
@@ -3092,7 +3070,7 @@ async def test_auto_place_raises_when_calibration_holds_all_gpus() -> None:
 @pytest.mark.asyncio
 async def test_add_lane_refuses_explicit_slice_gpu(monkeypatch) -> None:
     """An operator-pinned gpu_devices that lands on the held slice is refused."""
-    manager = LaneManager(OllamaConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
     manager.begin_calibration_session()  # holds {0, 1}
     monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
     lane = LaneConfig(
@@ -3117,7 +3095,7 @@ async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
         async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
             return ProcessStatus(state=ProcessState.RUNNING)
 
-    manager = LaneManager(OllamaConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
     manager.begin_calibration_session()  # holds {0, 1}, leftover = {2}
     monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *a, **k: _RunningHandle(a[4]))
@@ -3143,7 +3121,7 @@ class TestValidateCapabilities:
 
     @staticmethod
     def _manager(models_path: str) -> LaneManager:
-        return LaneManager(OllamaConfig(models_path=models_path), lane_port_start=15200, lane_port_end=15210)
+        return LaneManager(WorkerConfig(models_path=models_path), lane_port_start=15200, lane_port_end=15210)
 
     def test_finds_weights_in_the_resolved_hf_cache(self, tmp_path) -> None:
         hf_home = tmp_path / "cache" / ".hf_cache"
@@ -3210,7 +3188,7 @@ async def test_apply_lanes_stagger_sleeps_run_the_hook_between_sleeps(monkeypatc
         vllm_config=VllmConfig(enable_sleep_mode=True),
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15400,
         lane_port_end=15410,
         on_lane_slept=_hook,
@@ -3299,7 +3277,7 @@ async def test_apply_lanes_stagger_sleep_failure_does_not_run_hook(monkeypatch) 
         vllm_config=VllmConfig(enable_sleep_mode=True),
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15420,
         lane_port_end=15430,
         on_lane_slept=_hook,
@@ -3380,7 +3358,7 @@ async def test_add_lane_reserves_model_for_the_startup_window(monkeypatch) -> No
             assert "org/new" not in manager.lane_ids  # noqa: F821
             return ProcessStatus(state=ProcessState.RUNNING)
 
-    manager = LaneManager(OllamaConfig(), lane_port_start=15440, lane_port_end=15450)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15440, lane_port_end=15450)
     monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
     monkeypatch.setattr(
         "logos_worker_node.lane_manager._create_handle",
@@ -3412,7 +3390,7 @@ async def test_add_lane_releases_startup_reservation_when_spawn_fails(monkeypatc
             seen["during_spawn"] = manager.starting_models()  # noqa: F821
             raise RuntimeError("spawn boom")
 
-    manager = LaneManager(OllamaConfig(), lane_port_start=15460, lane_port_end=15470)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15460, lane_port_end=15470)
     monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
     monkeypatch.setattr(
         "logos_worker_node.lane_manager._create_handle",
@@ -3437,7 +3415,7 @@ async def test_restart_lane_reserves_model_during_stop_spawn_window(monkeypatch)
     lane_id = "org_swap"
     model = "org/swap"
     lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15480, lane_port_end=15490)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15480, lane_port_end=15490)
 
     class DeadHandle:
         def __init__(self) -> None:
@@ -3500,7 +3478,7 @@ async def test_restart_lane_releases_startup_reservation_on_spawn_failure(monkey
     lane_id = "org_swap"
     model = "org/swap"
     lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15500, lane_port_end=15510)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15500, lane_port_end=15510)
 
     class DeadHandle:
         def __init__(self) -> None:
@@ -3574,7 +3552,7 @@ async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(mo
     small = LaneConfig(model="org/small", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True))
     to_add = LaneConfig(model="org/add", vllm=True, lane_id="org_b", vllm_config=VllmConfig(enable_sleep_mode=True))
 
-    manager = LaneManager(OllamaConfig(), nvidia_smi_available=lambda: True)
+    manager = LaneManager(WorkerConfig(), nvidia_smi_available=lambda: True)
     # Existing lane A runs the BIG model (the one the rollback must restore).
     manager._handles["org_a"] = SimpleNamespace(  # noqa: SLF001
         lane_id="org_a",
