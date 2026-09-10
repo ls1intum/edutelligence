@@ -1608,6 +1608,51 @@ def test_replan_reclaims_unprotected_entries_on_a_valid_zero_reading(monkeypatch
     assert cache.floor_mb == pytest.approx(10_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
+def test_replan_reclaims_unprotected_unsleepable_entries_on_a_zero_reading(monkeypatch) -> None:
+    """plan_cache_order keeps every unsleepable candidate in the plan
+    regardless of budget (the startup pre-population rule), so on a
+    sleep-disabled worker MemAvailable == 0 would leave the whole unused
+    cache resident. The pressure pass must overrule that: an unsleepable
+    entry the live budget no longer covers is reclaimed like any other."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(0.0))
+    registry = _FakeRegistry({"org/unsleep": _FakeProfile(base_residency_mb=10_000.0)})
+    sizes = {"org/unsleep": _mb(8_000)}
+    cache = _FakeCache(cached=["org/unsleep"], sizes=sizes)
+    app = _app(cache, registry, _FakeLaneManager({}), ["org/unsleep"])
+    # Worker-wide kill switch: the model cannot sleep, so it never enters the
+    # sleep reserve and the planner keeps it in the plan unconditionally.
+    app.state.config.engines.vllm.disable_sleep_mode = True
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # Budget is 0 + 8 GB held − 0 reserve − margin: negative, so the
+    # unsleepable tree does not fit the live budget and its unprotected
+    # entry is evicted while the floor holds the margin.
+    assert cache.reclaimed[-1] == ["org/unsleep"]
+    assert cache.is_cached("org/unsleep") is False
+    assert cache.floor_mb == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_keeps_an_unsleepable_entry_a_live_lane_still_reads_on_a_zero_reading(monkeypatch) -> None:
+    """The pressure exclusion must not out-rule the lane protection: an
+    unsleepable model whose lane was launched from the RAM cache keeps its
+    tmpfs entry even at MemAvailable == 0 — evicting it would pull the
+    directory out from under the process that reads it."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(0.0))
+    registry = _FakeRegistry({"org/unsleep": _FakeProfile(base_residency_mb=10_000.0)})
+    sizes = {"org/unsleep": _mb(8_000)}
+    cache = _FakeCache(cached=["org/unsleep"], sizes=sizes)
+    handle = _FakeHandle("lane-1", "org/unsleep", ProcessState.RUNNING)
+    lanes = _FakeLaneManager({"lane-1": handle})
+    app = _app(cache, registry, lanes, ["org/unsleep"])
+    app.state.config.engines.vllm.disable_sleep_mode = True
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    assert cache.reclaimed[-1] == []
+    assert cache.is_cached("org/unsleep") is True
+
+
 # ── no double-counting an already-asleep model ───────────────────────────────
 
 
