@@ -379,7 +379,11 @@ async def thread_task(
     others = ""
     if other_inline:
         listed = []
-        for comment in other_inline[:MAX_THREAD_COMMENTS]:
+        # _get_all answers oldest-first, so the tail is the recent review
+        # the comment you are answering actually points at. Keep the newest
+        # MAX_THREAD_COMMENTS (still oldest-to-newest within the tail) rather
+        # than the stale head, which would drop the note that matters.
+        for comment in other_inline[-MAX_THREAD_COMMENTS:]:
             author = str((comment.get("user") or {}).get("login") or "somebody")
             body = str(comment.get("body") or "").strip()
             if not body:

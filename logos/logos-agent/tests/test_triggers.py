@@ -1471,6 +1471,23 @@ class TestOtherReviewComments:
         )
         assert "were not included" in task
 
+    async def test_the_other_comments_keep_the_newest_not_the_stale_head(self):
+        # _get_all answers oldest-first, so on a long review the head is the
+        # oldest notes and the tail is what the comment you are answering
+        # actually points at. The task must carry the recent note that sits
+        # beyond the first MAX_THREAD_COMMENTS, not the stale head that a
+        # head-slice would have served.
+        many = [
+            {"body": f"stale note {i}", "user": {"login": "claudia"}} for i in range(triggers.MAX_THREAD_COMMENTS + 5)
+        ]
+        many[triggers.MAX_THREAD_COMMENTS + 4]["body"] = "the final note to address"
+        task = await triggers.thread_task(
+            4, "t", [{"body": "q", "user": {"login": "a"}}], branch=None, other_inline=many
+        )
+        assert "the final note to address" in task
+        assert "stale note 0" not in task
+        assert "were not included" in task
+
     async def test_other_inline_comments_excludes_the_thread_it_answers(self, monkeypatch):
         async def pull_inline_comments(_number):
             return [
