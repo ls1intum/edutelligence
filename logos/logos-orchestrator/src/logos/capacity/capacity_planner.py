@@ -168,6 +168,11 @@ class CapacityPlanner:
     # workers and spurious load-failure cooldowns.
     LANE_LOAD_COMMAND_TIMEOUT_S = 1800
 
+    # How long the outcome of a manual load stays queryable by the UI. Must
+    # outlive the whole attempt: the worker-command budget above plus the
+    # confirmation polling that follows it.
+    MANUAL_LOAD_OUTCOME_TTL_SECONDS = 3600.0
+
     # Minimum tenure: after a model wakes/loads, give it at least this
     # long to serve its queue before it can be drained for another model.
     # Without this, a freshly-woken model has 0 active requests, making
@@ -436,6 +441,14 @@ class CapacityPlanner:
         # must keep blocking allocation until the lane serves or leaves the
         # worker. Reconciled every cycle in _reconcile_load_failures.
         self._load_failed_lane_ids: set[tuple[int, str]] = set()
+
+        # Outcome of the most recent manual load per (provider_id, model_name),
+        # for the statistics UI: the "Load lane" endpoint answers 202 and the
+        # load runs in the background, so without this the UI could never tell
+        # a slow load from a denied one. Entries expire after
+        # MANUAL_LOAD_OUTCOME_TTL_SECONDS (a load gets LANE_LOAD_COMMAND_TIMEOUT_S
+        # plus confirmation polling, so the window covers the whole attempt).
+        self._manual_load_outcomes: dict[tuple[int, str], Dict[str, Any]] = {}
 
         # Workers the cycle is currently skipping, and when the skipping began.
         # Backs the stuck-worker warning in _note_unplannable: a worker no
@@ -1746,6 +1759,84 @@ class CapacityPlanner:
             self._lane_load_failure_until.pop(key, None)
             return False
         return True
+
+    # ------------------------------------------------------------------
+    # Manual-load outcomes — the "Load lane" button answers 202 and the
+    # load runs in the background, so the UI can only learn the outcome by
+    # asking. Without this, a denied load (no room on the worker) looks
+    # identical to a slow one: the lane simply never appears, and the
+    # operator's only trace is a W line in the orchestrator log.
+    # ------------------------------------------------------------------
+
+    def record_manual_load_outcome(
+        self,
+        provider_id: int,
+        model_name: str,
+        status: str,
+        *,
+        lane_id: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Record the state of the most recent manual load of *model_name*.
+
+        *status* is one of ``"running"``, ``"succeeded"``, ``"failed"``;
+        *reason* is a human-readable explanation, meant for the operator who
+        clicked "Load lane" (e.g. which GPUs lacked how much VRAM). The entry
+        replaces any previous one for the (provider, model) pair — a retry
+        supersedes the attempt it retries.
+        """
+        entry: Dict[str, Any] = {"status": status, "updated_at": time.time()}
+        if lane_id is not None:
+            entry["lane_id"] = lane_id
+        if reason is not None:
+            entry["reason"] = reason
+        self._manual_load_outcome_store()[(provider_id, model_name)] = entry
+        self._purge_manual_load_outcomes()
+
+    def get_manual_load_outcome(self, provider_id: int, model_name: str) -> Dict[str, Any] | None:
+        """The most recent manual-load outcome for (provider, model), or None.
+
+        None means "no manual load of this model is known" — the caller must
+        not render it as a failure. Expired entries are dropped on read so
+        the store cannot grow unbounded.
+        """
+        store = self._manual_load_outcome_store()
+        entry = store.get((provider_id, model_name))
+        if entry is None:
+            return None
+        if time.time() - float(entry.get("updated_at") or 0.0) > self.MANUAL_LOAD_OUTCOME_TTL_SECONDS:
+            store.pop((provider_id, model_name), None)
+            return None
+        return dict(entry)
+
+    def _manual_load_outcome_store(self) -> Dict[tuple[int, str], Dict[str, Any]]:
+        """The outcome map, created on demand so harness planners that skip
+        __init__ work unchanged."""
+        store = self.__dict__.get("_manual_load_outcomes")
+        if store is None:
+            store = self._manual_load_outcomes = {}
+        return store
+
+    def _purge_manual_load_outcomes(self) -> None:
+        """Drop expired entries; bounded work, called on every record."""
+        now = time.time()
+        store = self._manual_load_outcome_store()
+        expired = [
+            key for key, entry in store.items() if now - float(entry.get("updated_at") or 0.0) > self.MANUAL_LOAD_OUTCOME_TTL_SECONDS
+        ]
+        for key in expired:
+            store.pop(key, None)
+
+    # The executor (_execute_action_with_confirmation) fails for reasons the
+    # manual-load path cannot know on its own — a denied VRAM reservation, a
+    # worker rejection, a confirmation timeout. It records a per-lane
+    # human-readable reason here; load_lane_manually picks it up for the
+    # outcome it records.
+    def record_lane_action_failure(self, provider_id: int, lane_id: str, reason: str) -> None:
+        self.__dict__.setdefault("_lane_action_failure", {})[self._lane_key(provider_id, lane_id)] = reason
+
+    def get_lane_action_failure(self, provider_id: int, lane_id: str) -> str | None:
+        return self.__dict__.get("_lane_action_failure", {}).get(self._lane_key(provider_id, lane_id))
 
     def _reconcile_load_failures(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Keep the load-failure state in step with the lanes a worker reports.
@@ -6488,6 +6579,10 @@ class CapacityPlanner:
         rejection = self.manual_load_rejection_reason(provider_id, model_name)
         if rejection is not None:
             logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
+            # Normally the endpoint already answered 409 with this text before
+            # creating the task; record it anyway so a race between the two
+            # checks leaves the UI with a failure, not a hanging "Loading".
+            self.record_manual_load_outcome(provider_id, model_name, "failed", reason=rejection)
             return False
 
         # A load of this model already in flight on this worker: a second
@@ -6496,6 +6591,10 @@ class CapacityPlanner:
         # so the pick below would hand out the next free suffix and place a
         # second copy of the very model the operator is already waiting for.
         if any(model.lower() == model_name.lower() for model in self._inflight_load_models(provider_id).values()):
+            # Deliberately no outcome record: the in-flight load (this click's
+            # first copy, or a planner one) owns the entry and will write the
+            # final state. Overwriting "running" with a no-op here would make
+            # the UI drop its waiting note while the load is still going.
             logger.info(
                 "Manual load of %s on worker=%s is a no-op: a load of the model is already in flight",
                 model_name,
@@ -6533,6 +6632,16 @@ class CapacityPlanner:
                                 provider_id,
                                 lane_id,
                             )
+                            # The model is loaded — the operator's goal is met.
+                            # Report it as success so the UI note resolves; but
+                            # not over a "running" entry: a concurrent attempt
+                            # for this same lane may still be executing and
+                            # owns the final state.
+                            current = self.get_manual_load_outcome(provider_id, model_name)
+                            if not (current and current.get("status") == "running"):
+                                self.record_manual_load_outcome(
+                                    provider_id, model_name, "succeeded", lane_id=lane_id
+                                )
                             return False
                         logger.info(
                             "Manual load of %s on worker=%s: lane %s is held by %s; taking the next suffix",
@@ -6552,6 +6661,7 @@ class CapacityPlanner:
                             provider_id,
                             rejection,
                         )
+                        self.record_manual_load_outcome(provider_id, model_name, "failed", reason=rejection)
                         return False
 
                     capacity = self._safe_get_capacity(provider_id)
@@ -6560,6 +6670,13 @@ class CapacityPlanner:
                             "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
                             model_name,
                             provider_id,
+                        )
+                        self.record_manual_load_outcome(
+                            provider_id,
+                            model_name,
+                            "failed",
+                            lane_id=lane_id,
+                            reason="the worker stopped reporting its capacity before the load could start",
                         )
                         return False
 
@@ -6572,13 +6689,33 @@ class CapacityPlanner:
                         params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
                         reason="Manual load requested by an operator",
                     )
-                    return await self._execute_action_with_confirmation(
+                    self.record_manual_load_outcome(provider_id, model_name, "running", lane_id=lane_id)
+                    confirmed = await self._execute_action_with_confirmation(
                         action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
                     )
+                    if confirmed:
+                        self.record_manual_load_outcome(provider_id, model_name, "succeeded", lane_id=lane_id)
+                    else:
+                        # The executor recorded a human-readable reason for
+                        # every failure mode it knows; fall back to a generic
+                        # one if this one did not (a new branch that forgot it).
+                        reason = self.get_lane_action_failure(provider_id, lane_id)
+                        if reason is None:
+                            reason = "the load was not confirmed by the worker"
+                        self.record_manual_load_outcome(
+                            provider_id, model_name, "failed", lane_id=lane_id, reason=reason
+                        )
+                    return confirmed
             logger.warning(
                 "Manual load of %s on worker=%s: no free lane id after re-reading the runtime",
                 model_name,
                 provider_id,
+            )
+            self.record_manual_load_outcome(
+                provider_id,
+                model_name,
+                "failed",
+                reason="no free lane id was available on the worker",
             )
             return False
         finally:
@@ -8154,6 +8291,9 @@ class CapacityPlanner:
                         self._facade.get_provider_name(action.provider_id) or action.provider_id,
                         action.lane_id,
                     )
+                    self.record_lane_action_failure(
+                        action.provider_id, action.lane_id, "another load is already using this lane"
+                    )
                     return False
                 if self._lane_exists_in_runtime(action.provider_id, action.lane_id):
                     logger.warning(
@@ -8178,14 +8318,42 @@ class CapacityPlanner:
                         per_gpu_free=_per_gpu_free,
                     )
                     if _reservation_id is None:
+                        # The aggregate check above passed but the per-GPU one
+                        # did not (or no per-GPU data exists) — say which GPUs
+                        # fell short, or this line reads as a bug: need <
+                        # avail, yet the reservation was denied.
+                        gpu_free_parts: list[str] = []
+                        if _per_gpu_free:
+                            gpu_free_parts = [
+                                f"GPU {dev}: {free:.0f}MB"
+                                for dev, free in sorted(_per_gpu_free.items())
+                            ]
+                        tp_size = len(self._parse_gpu_device_ids(_lane_gpus)) if _lane_gpus else 0
+                        per_gpu_need = (
+                            _estimated_load_vram / tp_size * self.VRAM_SAFETY_MARGIN if tp_size else _estimated_load_vram * self.VRAM_SAFETY_MARGIN
+                        )
+                        reason = (
+                            f"not enough free VRAM for this model: it needs "
+                            f"~{_estimated_load_vram / 1024.0:.1f} GB in total"
+                        )
+                        if tp_size:
+                            reason += f" (~{per_gpu_need / 1024.0:.1f} GB on each of {tp_size} GPUs)"
+                        reason += f", but the worker reports only {raw_avail / 1024.0:.1f} GB free"
+                        if gpu_free_parts:
+                            reason += " (" + ", ".join(gpu_free_parts) + ")"
+                        reason += "."
+                        self.record_lane_action_failure(action.provider_id, action.lane_id, reason)
                         logger.warning(
                             "VRAM reservation denied for load of %s: "
-                            "need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s",
+                            "need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s%s",
                             action.model_name,
                             _estimated_load_vram,
                             raw_avail,
                             self.get_pending_vram_mb(action.provider_id),
                             _lane_gpus or "unknown",
+                            f" need-per-GPU={per_gpu_need:.0f}MB per-GPU-free=[{', '.join(gpu_free_parts) or 'unknown'}]"
+                            if _per_gpu_free
+                            else "",
                         )
                         return False
                 elif _reservation_id is None and _estimated_load_vram > 0:
@@ -8228,6 +8396,9 @@ class CapacityPlanner:
                             action.lane_id,
                             details=str(exc),
                         )
+                        self.record_lane_action_failure(
+                            action.provider_id, action.lane_id, f"the worker rejected the load: {exc}"
+                        )
                         return False
                     except Exception as exc:
                         logger.error(
@@ -8236,6 +8407,9 @@ class CapacityPlanner:
                             action.model_name,
                             action.lane_id,
                             exc,
+                        )
+                        self.record_lane_action_failure(
+                            action.provider_id, action.lane_id, f"the load command could not be sent: {exc}"
                         )
                         return False
                 else:
@@ -8266,6 +8440,11 @@ class CapacityPlanner:
                                 self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             )
                             self._clear_inflight_add(action.provider_id, action.lane_id)
+                            self.record_lane_action_failure(
+                                action.provider_id,
+                                action.lane_id,
+                                "the worker accepted the load but rolled the lane change back",
+                            )
                             return False
                         self._registry.update_desired_lanes(action.provider_id, desired)
                         # Inflight entry now committed to registry — clear it
@@ -8279,6 +8458,9 @@ class CapacityPlanner:
                             exc,
                         )
                         self._clear_inflight_add(action.provider_id, action.lane_id)
+                        self.record_lane_action_failure(
+                            action.provider_id, action.lane_id, f"the load command could not be sent: {exc}"
+                        )
                         return False
 
             elif action.action == "stop":
@@ -8421,6 +8603,11 @@ class CapacityPlanner:
                     action.provider_id,
                     action.lane_id,
                     details="confirmation timeout",
+                )
+                self.record_lane_action_failure(
+                    action.provider_id,
+                    action.lane_id,
+                    f"the worker accepted the load but the lane did not reach the loaded state within {int(timeout_seconds)} s",
                 )
             # Sleep confirmation timeout: the command was sent, so the lane
             # is likely sleeping even though we couldn't verify.  Clear the

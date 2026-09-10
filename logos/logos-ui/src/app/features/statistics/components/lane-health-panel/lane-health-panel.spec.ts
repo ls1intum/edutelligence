@@ -1,5 +1,6 @@
 import { SimpleChange } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { vi } from 'vitest';
 import {
   LaneHealthPanel,
   acceptedModelIsResolved,
@@ -329,6 +330,10 @@ describe('LaneHealthPanel pending-note baseline', () => {
               new Promise<void>((resolve) => {
                 resolveAdd = resolve;
               }),
+            // The 202 starts the outcome poll, whose first tick lands 2.5 s
+            // later — beyond these tests' horizon, but a slow CI must not hit
+            // a stub without this method.
+            getLaneLoadStatus: () => Promise.resolve({ status: 'running' }),
           },
         },
       ],
@@ -390,5 +395,236 @@ describe('LaneHealthPanel pending-note baseline', () => {
 
     pushLanes({ 'planner-foo': lane({ model: 'foo', runtime_state: 'loaded' }) });
     expect(panel.acceptedModel()).toBe('foo');
+  });
+});
+
+/**
+ * The outcome poll behind the pending note.
+ *
+ * addLane's 202 only says "accepted"; the planner refuses some loads in the
+ * background (not enough VRAM for a second replica, the worker rejected the
+ * command, the confirmation timed out) and until this poll existed that
+ * refusal was a log line — the note stayed up forever. The poll asks the
+ * orchestrator for the recorded outcome of the (provider, model) load:
+ * "failed" turns the note into an error in the reopened picker, "succeeded"
+ * stops the poll but keeps the note until the lane actually shows up, and
+ * "running"/"unknown" leave everything exactly as it is.
+ */
+describe('LaneHealthPanel load outcome poll', () => {
+  // Private tuning constants, reached the same way pickerProviderId is.
+  const pollMs = (LaneHealthPanel as unknown as {
+    LOAD_STATUS_POLL_INTERVAL_MS: number;
+    LOAD_STATUS_POLL_CAP_MS: number;
+  });
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let loadStatusCalls: number;
+  /** What the next poll gets — set per test. */
+  let loadStatusStub: () => Promise<{ status?: string; reason?: string }>;
+  /** The poll's interval callback, held instead of waiting 2.5 s real time. */
+  let pollTick: (() => void) | null = null;
+  let clearedIntervals: number;
+  let fakeNow: number;
+
+  beforeEach(async () => {
+    loadStatusCalls = 0;
+    loadStatusStub = () => Promise.resolve({ status: 'running' });
+    pollTick = null;
+    clearedIntervals = 0;
+    fakeNow = Date.now();
+    // The suite runs zoneless, so fakeAsync's tick() is not available: hold
+    // the poll's timer and fire it by hand, and advance Date.now for the cap.
+    vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+    vi.spyOn(globalThis, 'setInterval').mockImplementation(
+      ((callback: () => void) => {
+        pollTick = callback;
+        return 0;
+      }) as unknown as typeof setInterval
+    );
+    vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => {
+      clearedIntervals += 1;
+    });
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [
+        {
+          provide: StatisticsService,
+          useValue: {
+            addLane: () => Promise.resolve(),
+            getLaneLoadStatus: () => {
+              loadStatusCalls += 1;
+              return loadStatusStub();
+            },
+            getProviderModels: () => Promise.resolve([{ model_id: 1, model_name: 'foo' }]),
+          },
+        },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-foo': lane({ model: 'foo', runtime_state: 'running' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    panel.loadModels.set([{ model_id: 1, model_name: 'foo' }] satisfies ProviderModel[]);
+    (panel as unknown as { pickerProviderId: number | null }).pickerProviderId = 1;
+    panel.selectedModel.set('foo');
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Let the poll's promise chain (HTTP answer, then-handler) settle. */
+  async function settle(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  /** One status-stream push, as the baseline describe does. */
+  function pushLanes(next: Record<string, LaneSignalData>): void {
+    const prev = panel.lanesByProvider;
+    panel.lanesByProvider = { ...prev, 'gpu-01': next };
+    panel.ngOnChanges({ lanesByProvider: new SimpleChange(prev, panel.lanesByProvider, false) });
+  }
+
+  /** The 202 arrives: the note is up and the poll runs behind it. */
+  async function acceptLoad(): Promise<void> {
+    await panel.handleAddLane();
+    expect(panel.acceptedModel()).toBe('foo');
+    expect(panel.pickerOpen()).toBe(false);
+    expect(pollTick).not.toBeNull();
+  }
+
+  it('turns a background refusal into an error and re-offers the model', async () => {
+    await acceptLoad();
+    loadStatusStub = () =>
+      Promise.resolve({
+        status: 'failed',
+        reason:
+          'not enough free VRAM for this model: it needs ~48.4 GB in total, but the worker reports only 63.4 GB free',
+      });
+
+    pollTick?.(); // first poll fires
+    await settle();
+
+    // The note is gone, the picker came back with the recorded reason — where
+    // a synchronous refusal lands — and the model may be retried.
+    expect(panel.acceptedModel()).toBeNull();
+    expect(panel.pickerOpen()).toBe(true);
+    expect(panel.addError()).toBe(
+      'Loading foo failed: not enough free VRAM for this model: it needs ~48.4 GB in total, but the worker reports only 63.4 GB free'
+    );
+    expect(filterLoadableModels(panel.loadModels(), panel.acceptedModel())).toEqual([
+      { model_id: 1, model_name: 'foo' },
+    ]);
+    // And the poll is over with it — a stray later firing must not re-ask.
+    expect(clearedIntervals).toBeGreaterThan(0);
+    const calls = loadStatusCalls;
+    pollTick?.();
+    await settle();
+    expect(loadStatusCalls).toBe(calls);
+  });
+
+  it('shows a reason-less refusal with a fallback instead of an empty message', async () => {
+    await acceptLoad();
+    loadStatusStub = () => Promise.resolve({ status: 'failed' });
+    pollTick?.();
+    await settle();
+    expect(panel.addError()).toBe('Loading foo failed: no reason was recorded');
+    expect(panel.acceptedModel()).toBeNull();
+  });
+
+  it('keeps the note after a recorded success until the lane shows up', async () => {
+    // Clearing the note on "succeeded" would re-offer the model in the gap
+    // between the planner's record and the next status push — the lane row
+    // owns the note from here, not the outcome poll.
+    await acceptLoad();
+    loadStatusStub = () => Promise.resolve({ status: 'succeeded' });
+    pollTick?.();
+    await settle();
+    expect(panel.acceptedModel()).toBe('foo');
+    expect(panel.addError()).toBeNull();
+    expect(clearedIntervals).toBeGreaterThan(0); // a terminal answer stops the poll
+
+    // The lane arrives in the stream: the note goes.
+    pushLanes({
+      'planner-foo': lane({ model: 'foo', runtime_state: 'running' }),
+      'planner-foo-2': lane({ model: 'foo', runtime_state: 'loaded' }),
+    });
+    expect(panel.acceptedModel()).toBeNull();
+  });
+
+  it('keeps waiting while the load is running or its outcome unrecorded', async () => {
+    // "unknown" is what the orchestrator answers after a restart — it must
+    // not read as a failure, the note just keeps saying what it says.
+    await acceptLoad();
+    pollTick?.();
+    await settle();
+    expect(panel.acceptedModel()).toBe('foo');
+    expect(panel.addError()).toBeNull();
+    expect(loadStatusCalls).toBe(1);
+
+    loadStatusStub = () => Promise.resolve({ status: 'unknown' });
+    pollTick?.();
+    await settle();
+    expect(panel.acceptedModel()).toBe('foo');
+    expect(panel.addError()).toBeNull();
+    expect(loadStatusCalls).toBe(2);
+  });
+
+  it('stops the poll when the operator switches provider', async () => {
+    await acceptLoad();
+    // The provider dropdown lives outside the panel: deliver the input change
+    // the way pushLanes does, as the framework would. The second provider has
+    // a provider_id like every real one — the switch guard compares the
+    // picker's provider against the current one.
+    panel.providerMeta = { 'gpu-01': { provider_id: 1 }, 'gpu-02': { provider_id: 2 } };
+    panel.selectedProvider = 'gpu-02';
+    panel.ngOnChanges({
+      selectedProvider: new SimpleChange('gpu-01', 'gpu-02', true),
+    });
+    expect(panel.acceptedModel()).toBeNull();
+    expect(clearedIntervals).toBeGreaterThan(0);
+    pollTick?.();
+    await settle();
+    expect(loadStatusCalls).toBe(0);
+  });
+
+  it('stops the poll on a backend that predates the load_status route', async () => {
+    // A 404/501 is not a blip to retry: the deployed Spring has no route, so
+    // the poll would 404 until the cap. Stop and fall back to the
+    // lane-appearance check, which needs no backend support.
+    await acceptLoad();
+    loadStatusStub = () =>
+      Promise.reject(Object.assign(new Error('Not Found'), { status: 404 }));
+    pollTick?.();
+    await settle();
+    expect(panel.acceptedModel()).toBe('foo'); // note untouched
+    expect(clearedIntervals).toBeGreaterThan(0);
+    pollTick?.();
+    await settle();
+    expect(loadStatusCalls).toBe(1);
+  });
+
+  it('gives up at the cap and leaves the note to the stream check', async () => {
+    // Past the orchestrator's load command timeout the live outcome is gone;
+    // re-asking for the same "running" is noise. The note stays — a lane that
+    // still arrives resolves it via the stream.
+    await acceptLoad();
+    pollTick?.();
+    await settle();
+    expect(loadStatusCalls).toBe(1);
+
+    fakeNow += pollMs.LOAD_STATUS_POLL_CAP_MS + 1;
+    pollTick?.();
+    await settle();
+    expect(panel.acceptedModel()).toBe('foo');
+    expect(clearedIntervals).toBeGreaterThan(0);
+    const calls = loadStatusCalls;
+    pollTick?.();
+    await settle();
+    expect(loadStatusCalls).toBe(calls);
   });
 });

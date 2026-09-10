@@ -2,6 +2,7 @@ import {
   Component,
   Input,
   OnChanges,
+  OnDestroy,
   SimpleChanges,
   inject,
   signal,
@@ -194,7 +195,7 @@ export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './lane-health-panel.scss',
 })
-export class LaneHealthPanel implements OnChanges {
+export class LaneHealthPanel implements OnChanges, OnDestroy {
   @Input() lanesByProvider: Record<string, Record<string, LaneSignalData>> = {};
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
   @Input() selectedProvider: string | null = null;
@@ -226,6 +227,29 @@ export class LaneHealthPanel implements OnChanges {
   private readonly modelsInFlight = new Set<number>();
   /** Provider the currently visible picker state belongs to. */
   private pickerProviderId: number | null = null;
+
+  // ── Accepted-load outcome polling ────────────────────────────────────────
+  /**
+   * How often to ask for the outcome of an accepted background load. The
+   * load itself takes minutes; the question here is cheap and only interesting
+   * because a refusal in the background is otherwise a log line.
+   */
+  private static readonly LOAD_STATUS_POLL_INTERVAL_MS = 2500;
+  /**
+   * Hard stop for the outcome poll. The orchestrator resolves every manual
+   * load within its load command timeout (30 min) — refusal, confirmed lane,
+   * or a recorded timeout — so well past that the live outcome is gone
+   * (planner restart, entry aged out) and the poll can only re-ask for the
+   * same "unknown". The lane-appearance check in ngOnChanges keeps owning the
+   * note from there on.
+   */
+  private static readonly LOAD_STATUS_POLL_CAP_MS = 31 * 60 * 1000;
+  /** Timer handle of the outcome poll; null while not polling. */
+  private loadStatusPoll: ReturnType<typeof setInterval> | null = null;
+  /** Provider the outcome poll belongs to — anything else is a stale poll. */
+  private loadStatusPollProviderId: number | null = null;
+  /** When the outcome poll must stop regardless of what it is told. */
+  private loadStatusPollDeadline = 0;
 
   get providerName(): string | null {
     return this.selectedProvider ?? Object.keys(this.lanesByProvider)[0] ?? null;
@@ -461,6 +485,7 @@ export class LaneHealthPanel implements OnChanges {
     this.selectedModel.set(null);
     this.addError.set(null);
     this.pickerProviderId = null;
+    this.stopLoadStatusPoll();
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -488,6 +513,7 @@ export class LaneHealthPanel implements OnChanges {
       ) {
         this.acceptedModel.set(null);
         this.acceptedLaneIds = null;
+        this.stopLoadStatusPoll();
       }
     }
   }
@@ -495,6 +521,102 @@ export class LaneHealthPanel implements OnChanges {
   selectModel(event: Event): void {
     const value = (event.target as HTMLSelectElement).value;
     this.selectedModel.set(value || null);
+  }
+
+  /**
+   * Start asking for the outcome of an accepted background load.
+   *
+   * addLane's 202 only says "accepted", and the planner refuses some loads
+   * after the fact — not enough VRAM for a second replica, the worker
+   * rejected the command, the confirmation timed out. Until this poll existed,
+   * such a refusal was a log line and the pending note stayed up forever.
+   * While the note is up, the poll turns a recorded "failed" into an error
+   * (and re-offers the model) and a "succeeded" is noted as well; "running"
+   * and "unknown" leave everything as it is, because the lane-appearance
+   * check in ngOnChanges remains the primary exit for a load that arrives.
+   */
+  private startLoadStatusPoll(providerId: number, model: string): void {
+    this.stopLoadStatusPoll();
+    this.loadStatusPollProviderId = providerId;
+    this.loadStatusPollDeadline = Date.now() + LaneHealthPanel.LOAD_STATUS_POLL_CAP_MS;
+    this.loadStatusPoll = setInterval(
+      () => this.pollLoadStatus(providerId, model),
+      LaneHealthPanel.LOAD_STATUS_POLL_INTERVAL_MS
+    );
+  }
+
+  private stopLoadStatusPoll(): void {
+    if (this.loadStatusPoll != null) {
+      clearInterval(this.loadStatusPoll);
+      this.loadStatusPoll = null;
+    }
+    this.loadStatusPollProviderId = null;
+    this.loadStatusPollDeadline = 0;
+  }
+
+  private pollLoadStatus(providerId: number, model: string): void {
+    // The note went away (lane appeared, operator acted) or the operator moved
+    // to another provider — this poll is stale, whatever the next answer says.
+    if (
+      this.loadStatusPollProviderId !== providerId ||
+      this.providerId !== providerId ||
+      this.acceptedModel()?.trim().toLowerCase() !== model.trim().toLowerCase()
+    ) {
+      this.stopLoadStatusPoll();
+      return;
+    }
+    if (Date.now() > this.loadStatusPollDeadline) {
+      // The orchestrator has long since resolved this load; keep the note,
+      // stop re-asking for an outcome that no longer exists.
+      this.stopLoadStatusPoll();
+      return;
+    }
+    this.statisticsService
+      .getLaneLoadStatus(providerId, model)
+      .then((outcome) => this.applyLoadStatus(outcome, model))
+      .catch((err: unknown) => {
+        // A blip is fine — the next tick retries. 404/501 means the backend
+        // predates the load_status route, where the poll can never succeed:
+        // stop and fall back to the lane-appearance check.
+        const e = err as { status?: number };
+        if (e.status === 404 || e.status === 501) this.stopLoadStatusPoll();
+      });
+  }
+
+  /**
+   * Fold one load_status answer into the pending note.
+   *
+   * "failed" is the interesting one: the load is over, its reason is
+   * recorded, so the picker comes back with the error — exactly where a
+   * synchronous refusal lands — and the model is offered again. "succeeded"
+   * only stops the poll: the note stays until the lane actually shows up in
+   * the stream, so the model is not re-offered in the gap between the
+   * planner's record and the next status push. "running"/"unknown" change
+   * nothing.
+   */
+  private applyLoadStatus(
+    outcome: { status?: string; reason?: string },
+    model: string
+  ): void {
+    // The answer can land after the note already went away — apply nothing.
+    if (this.acceptedModel()?.trim().toLowerCase() !== model.trim().toLowerCase()) {
+      this.stopLoadStatusPoll();
+      return;
+    }
+    const status = (outcome.status ?? '').trim().toLowerCase();
+    if (status !== 'failed') {
+      if (status === 'succeeded') this.stopLoadStatusPoll();
+      return;
+    }
+    this.stopLoadStatusPoll();
+    this.acceptedModel.set(null);
+    this.acceptedLaneIds = null;
+    // The picker closed with the 202; reopen it so the reason sits next to
+    // the retry, like a synchronous refusal does.
+    this.openPicker();
+    this.addError.set(
+      `Loading ${model} failed: ${outcome.reason?.trim() || 'no reason was recorded'}`
+    );
   }
 
   async handleAddLane(): Promise<void> {
@@ -551,6 +673,10 @@ export class LaneHealthPanel implements OnChanges {
       ) {
         this.acceptedModel.set(null);
         this.acceptedLaneIds = null;
+      } else {
+        // The note stays up — put the outcome poll behind it, so a refusal in
+        // the background ends it with a reason instead of running away.
+        this.startLoadStatusPoll(pid, model);
       }
     } catch (err: unknown) {
       this.addingLane.set(false);
@@ -561,6 +687,10 @@ export class LaneHealthPanel implements OnChanges {
         this.addError.set(`Loading ${model} failed: ${this.failureDetail(err)}`);
       }
     }
+  }
+
+  ngOnDestroy(): void {
+    this.stopLoadStatusPoll();
   }
 }
 
