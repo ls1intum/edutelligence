@@ -57,14 +57,22 @@ export class WorkerGpuPanel implements OnChanges {
   /** Worker the in-flight calibrate call was started on — its answer must not
    *  land under a worker the operator has moved on to. */
   private calibrateProvider: string | null = null;
+  /** The resolved worker the last input change settled on. */
+  private resolvedProvider: string | null = null;
 
-  ngOnChanges(changes: SimpleChanges): void {
-    if (!changes['activeProvider']) return;
+  ngOnChanges(_changes: SimpleChanges): void {
+    const resolved = this.resolvedActiveProvider;
+    if (resolved === this.resolvedProvider) return;
     // The state is the answer to an action on *one* worker: "Calibrating 2
     // model(s): …" said on worker A means nothing under worker B's panel, so
-    // switching workers drops it instead of letting it hang around.
+    // a worker change drops it instead of letting it hang around. Compared
+    // against the *resolved* worker, not the raw selection: with no explicit
+    // selection the panel falls back to the first provider, and that fallback
+    // can change on its own — a worker leaves the list or goes offline — even
+    // though activeProvider itself never changed.
     this.calibrateState.set({ kind: 'idle' });
     this.calibrateProvider = null;
+    this.resolvedProvider = resolved;
   }
 
   // Sorted providers: online-first, then alphabetical
@@ -191,10 +199,11 @@ export class WorkerGpuPanel implements OnChanges {
 
     try {
       const body = await this.statisticsService.calibrateUncalibrated(pid);
-      // The operator can switch workers while the call is in flight; the
-      // answer belongs to the worker it was asked for, so a stale one is
-      // dropped — the switch has already reset the state to idle.
-      if (this.calibrateProvider !== active) return;
+      // The operator can switch workers while the call is in flight — or the
+      // fallback worker can change under a null selection — and the answer
+      // belongs to the worker it was asked for, so a stale one is dropped
+      // rather than shown under the panel the operator is looking at now.
+      if (this.calibrateProvider !== active || this.resolvedActiveProvider !== active) return;
       const count = typeof body?.count === 'number' ? body.count : 0;
       const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
       const message =
@@ -203,7 +212,7 @@ export class WorkerGpuPanel implements OnChanges {
           : `Calibrating ${count} model(s): ${models.join(', ')}`;
       this.calibrateState.set({ kind: 'success', message });
     } catch (err: unknown) {
-      if (this.calibrateProvider !== active) return;
+      if (this.calibrateProvider !== active || this.resolvedActiveProvider !== active) return;
       const e = err as { status?: number; error?: { error?: string } };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.calibrateState.set({

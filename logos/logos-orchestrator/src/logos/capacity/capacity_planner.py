@@ -8338,19 +8338,20 @@ class CapacityPlanner:
                         # did not (or no per-GPU data exists) — say which GPUs
                         # fell short, or this line reads as a bug: need <
                         # avail, yet the reservation was denied.
-                        # Report the gate's effective numbers (raw free minus
-                        # what in-flight operations already committed), not
-                        # the raw snapshot — raw free can look sufficient
-                        # while the reservation is correctly denied.
+                        # Report the gate's effective numbers, not the raw
+                        # snapshot: at provider level the gate compares
+                        # needed against raw free minus what in-flight
+                        # operations already committed (raw free can look
+                        # sufficient while the reservation is correctly
+                        # denied). Per-GPU, _get_per_gpu_free already returns
+                        # the ledger-adjusted free the gate reads — use it
+                        # directly, subtracting commitments again would
+                        # under-report.
                         _vram = self._vram_ledger
                         effective_avail = _vram.get_effective_available_mb(action.provider_id, raw_avail)
                         gpu_free_parts: list[str] = []
                         if _per_gpu_free:
-                            gpu_free_parts = [
-                                f"GPU {dev}: "
-                                f"{_vram.get_gpu_effective_available_mb(action.provider_id, dev, free):.0f}MB"
-                                for dev, free in sorted(_per_gpu_free.items())
-                            ]
+                            gpu_free_parts = [f"GPU {dev}: {free:.0f}MB" for dev, free in sorted(_per_gpu_free.items())]
                         tp_size = len(self._parse_gpu_device_ids(_lane_gpus)) if _lane_gpus else 0
                         per_gpu_need = (
                             _estimated_load_vram / tp_size * self.VRAM_SAFETY_MARGIN

@@ -122,4 +122,33 @@ describe('WorkerGpuPanel calibration message', () => {
 
     expect(panel.calibrateState()).toEqual({ kind: 'error', message: 'boom' });
   });
+
+  it('drops a stale answer when the fallback worker changes under a null selection', async () => {
+    // No explicit selection: the panel shows providers[0]. The calibrate
+    // call goes out to that worker; while it is in flight the worker leaves
+    // the sample list, so the fallback flips to the next worker — without
+    // activeProvider ever changing. The answer must not land under the new
+    // panel.
+    panel.activeProvider = null;
+    panel.ngOnChanges({ activeProvider: new SimpleChange('w-a', null, true) });
+    expect(panel.resolvedActiveProvider).toBe('w-a');
+
+    const pending = panel.handleCalibrateUncalibrated();
+    expect(panel.calibrateState().kind).toBe('loading');
+
+    const previous = panel.providerLatestSamples;
+    panel.providerLatestSamples = { 'w-b': null };
+    panel.ngOnChanges({
+      providerLatestSamples: new SimpleChange(previous, panel.providerLatestSamples, true),
+    });
+    expect(panel.resolvedActiveProvider).toBe('w-b');
+    expect(panel.calibrateState().kind).toBe('idle'); // the flip already dropped the state
+
+    calibrateResult.body = { count: 1, models: ['org/a'] };
+    settleCalibrate?.();
+    await pending;
+
+    // The answer belongs to w-a; w-b's panel stays idle.
+    expect(panel.calibrateState().kind).toBe('idle');
+  });
 });
