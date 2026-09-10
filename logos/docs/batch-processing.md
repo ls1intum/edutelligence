@@ -124,7 +124,9 @@ are held by Logos (in the database, so the UI can serve them and a redeploy
 does not lose them). Progress is published as it goes, so
 `request_counts.completed` moves while the batch runs; cancelling stops it
 before the next line rather than killing the one in flight. A batch left
-running by a restart is picked up again.
+running by a restart is picked up again on the next pass of the runner
+(`LOGOS_BATCH_LOCAL_POLL_INTERVAL_S`, default 15 s), which is also what starts
+one submitted while the process was down.
 
 ## What Logos enforces
 
@@ -141,7 +143,12 @@ do, so the passthrough is not blind:
   minted them, with a provider credential shared by every key allowed to use
   that provider. Logos records each id with its owning team; a lifecycle call
   for an id another team owns is answered `404`, exactly like an id that never
-  existed, and listings show only the caller team's objects.
+  existed. `GET /v1/batches` and `GET /v1/files` are answered from Logos' own
+  record rather than forwarded, so they show the caller team's objects and
+  nobody else's — and cover the batches Logos ran itself, which no provider
+  knows about. They return one page (`has_more` is always `false`); the
+  provider's paging cursors describe its own unfiltered list and would mislead
+  a client walking ours.
 - **Budget.** Creating a batch is refused with `402` when the key or its team is
   already over its monthly budget. The batch's own cost is settled when it
   finishes (see below), so it is not known up front.
