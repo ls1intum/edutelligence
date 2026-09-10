@@ -61,7 +61,6 @@ from logos.logosnode_snapshot import (
     _merge_provider_samples,
     _profile_native_context_length,
     _resolve_requested_model_name,
-    _runtime_modes_for_lanes,
     _safe_float,
     _sample_snapshot_id,
 )
@@ -247,7 +246,7 @@ def _load_persisted_local_provider_vram_payload(
 ) -> Dict[str, Any]:
     with DBManager() as db:
         if int(after_snapshot_id or 0) > 0:
-            payload, status = db.get_ollama_vram_deltas(
+            payload, status = db.get_provider_vram_deltas(
                 logos_key,
                 day=day,
                 after_snapshot_id=int(after_snapshot_id or 0),
@@ -258,14 +257,14 @@ def _load_persisted_local_provider_vram_payload(
             # snapshots — the UI only renders a 30-min live window anyway,
             # and live deltas keep flowing afterwards via after_snapshot_id.
             recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
-            payload, status = db.get_ollama_vram_deltas(
+            payload, status = db.get_provider_vram_deltas(
                 logos_key,
                 day="all",
                 after_snapshot_id=0,
                 since=recent_since,
             )
         else:
-            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+            payload, status = db.get_provider_vram_stats(logos_key, day=day, bucket_seconds=5)
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -336,10 +335,7 @@ def _merge_local_provider_vram_payload(
         entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
 
         runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
-        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
-        runtime_modes = _runtime_modes_for_lanes(lanes)
-        if runtime_modes:
-            entry["runtime_modes"] = runtime_modes
+        entry["runtime_modes"] = ["vllm"]
         transport = (
             runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
         )
@@ -709,6 +705,27 @@ def _close_orphaned_request_logs() -> None:
         logger.info("Closed %d request log(s) left in-flight by a previous orchestrator process", closed)
 
 
+def _assert_no_ollama_typed_providers() -> None:
+    """Refuse to start while provider rows of the dropped 'ollama' type exist.
+
+    Ollama servers are gone from the deployment — every worker lane runs
+    vLLM — so a provider still typed 'ollama' would be routed nowhere. Dropping
+    it from scheduling silently would hide the data problem; a startup failure
+    forces the operator to retype the row (worker-backed: 'logosnode') or
+    delete it before any traffic is accepted.
+    """
+    with DBManager() as db:
+        stale = db.find_ollama_typed_providers()
+    if stale:
+        rows = ", ".join(f"#{p['id']} {p['name']!r}" for p in stale)
+        raise RuntimeError(
+            "Startup aborted: providers of the dropped type 'ollama' still exist "
+            f"in the database: {rows}. Ollama is no longer served by Logos — "
+            "retype each provider as 'logosnode' (worker-backed) or delete it, "
+            "then restart."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -751,6 +768,10 @@ async def lifespan(app: FastAPI):
     # went away — close it before accepting new traffic, while "no terminal
     # state" unambiguously means "orphaned by a restart".
     _close_orphaned_request_logs()
+
+    # Ollama-typed provider rows are a data problem, not a runtime state —
+    # abort loudly instead of scheduling around them.
+    _assert_no_ollama_typed_providers()
 
     # Start Pipeline
     await start_pipeline()
@@ -1124,9 +1145,8 @@ def _prefer_deployments_with_context_room(
     Deliberate escape hatches, because this filter runs on an estimate:
 
     * A worker whose window is unknown is always kept. ``max_model_len`` is
-      absent for cloud providers, for Ollama lanes and for a vLLM lane the
-      worker has not reported a window for — none of those are evidence of a
-      *narrow* window.
+      absent for cloud providers and for a vLLM lane the worker has not
+      reported a window for — neither is evidence of a *narrow* window.
     * A model is never filtered out entirely. If every lane of a model has a
       known window that is too narrow, the widest of them is kept anyway.
       Downstream, proxy mode narrows this list to the requested model and
@@ -2712,7 +2732,7 @@ async def _execute_resource_mode(
     current system state.
 
     The scheduler is aware of:
-    - Real-time model availability (via Ollama/Azure SDI facades)
+    - Real-time model availability (via LogosNode/Azure SDI facades)
     - Current queue depths per model
     - Cold start penalties
     - Model utilization levels
