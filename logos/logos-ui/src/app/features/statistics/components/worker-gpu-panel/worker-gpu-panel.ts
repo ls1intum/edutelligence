@@ -1,4 +1,13 @@
-import { Component, Input, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  Input,
+  OnChanges,
+  SimpleChanges,
+  inject,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { StatisticsService } from '../../services/statistics.service';
 import {
@@ -35,7 +44,7 @@ export function formatMb(mb: number): string {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './worker-gpu-panel.scss',
 })
-export class WorkerGpuPanel {
+export class WorkerGpuPanel implements OnChanges {
   @Input() providerLatestSamples: Record<string, VramV2Sample | null> = {};
   @Input() providerDevices: Record<string, DeviceInfo[]> = {};
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
@@ -45,6 +54,18 @@ export class WorkerGpuPanel {
   private statisticsService = inject(StatisticsService);
 
   calibrateState = signal<CalibrateState>({ kind: 'idle' });
+  /** Worker the in-flight calibrate call was started on — its answer must not
+   *  land under a worker the operator has moved on to. */
+  private calibrateProvider: string | null = null;
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (!changes['activeProvider']) return;
+    // The state is the answer to an action on *one* worker: "Calibrating 2
+    // model(s): …" said on worker A means nothing under worker B's panel, so
+    // switching workers drops it instead of letting it hang around.
+    this.calibrateState.set({ kind: 'idle' });
+    this.calibrateProvider = null;
+  }
 
   // Sorted providers: online-first, then alphabetical
   get providers(): string[] {
@@ -163,11 +184,17 @@ export class WorkerGpuPanel {
 
   async handleCalibrateUncalibrated(): Promise<void> {
     const pid = this.activeProviderId;
-    if (pid == null) return;
+    const active = this.resolvedActiveProvider;
+    if (pid == null || active == null) return;
+    this.calibrateProvider = active;
     this.calibrateState.set({ kind: 'loading' });
 
     try {
       const body = await this.statisticsService.calibrateUncalibrated(pid);
+      // The operator can switch workers while the call is in flight; the
+      // answer belongs to the worker it was asked for, so a stale one is
+      // dropped — the switch has already reset the state to idle.
+      if (this.calibrateProvider !== active) return;
       const count = typeof body?.count === 'number' ? body.count : 0;
       const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
       const message =
@@ -176,6 +203,7 @@ export class WorkerGpuPanel {
           : `Calibrating ${count} model(s): ${models.join(', ')}`;
       this.calibrateState.set({ kind: 'success', message });
     } catch (err: unknown) {
+      if (this.calibrateProvider !== active) return;
       const e = err as { status?: number; error?: { error?: string } };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.calibrateState.set({

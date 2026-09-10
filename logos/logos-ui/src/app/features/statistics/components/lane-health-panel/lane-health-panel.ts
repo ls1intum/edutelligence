@@ -380,6 +380,9 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       this.unloadingLaneId.set(null);
     } catch (err: unknown) {
       this.unloadingLaneId.set(null);
+      // The operator may have switched workers while the call was in flight;
+      // the refusal belongs to the worker it was sent to, not the one now shown.
+      if (this.providerId !== pid) return;
       const e = err as { status?: number };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.unloadError.set('Action not available on this server yet.');
@@ -400,6 +403,9 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       this.sleepingLaneId.set(null);
     } catch (err: unknown) {
       this.sleepingLaneId.set(null);
+      // The operator may have switched workers while the call was in flight;
+      // the refusal belongs to the worker it was sent to, not the one now shown.
+      if (this.providerId !== pid) return;
       this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, err));
     }
   }
@@ -415,6 +421,9 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       this.wakingLaneId.set(null);
     } catch (err: unknown) {
       this.wakingLaneId.set(null);
+      // The operator may have switched workers while the call was in flight;
+      // the refusal belongs to the worker it was sent to, not the one now shown.
+      if (this.providerId !== pid) return;
       this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, err));
     }
   }
@@ -498,6 +507,14 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       this.modelsLoading.set(false);
       this.acceptedModel.set(null);
       this.acceptedLaneIds = null;
+      // Action feedback belongs to the worker it was reported on: an unload
+      // error or a still-spinning button from worker A must not sit under
+      // worker B's panel after the switch.
+      this.unloadError.set(null);
+      this.unloadingLaneId.set(null);
+      this.sleepWakeError.set(null);
+      this.sleepingLaneId.set(null);
+      this.wakingLaneId.set(null);
     }
     // The lane the operator asked for has arrived in the status stream — the
     // row itself now reports its state, so the pending note has nothing to

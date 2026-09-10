@@ -628,3 +628,96 @@ describe('LaneHealthPanel load outcome poll', () => {
     expect(loadStatusCalls).toBe(calls);
   });
 });
+
+/**
+ * Action feedback follows the worker it was reported on.
+ *
+ * An unload refusal or a calibration note is the answer to an action on one
+ * specific worker: after the operator moves the dropdown, it means nothing
+ * under the new worker's panel — neither the message that was already up nor
+ * the answer of a call that is still in flight.
+ */
+describe('LaneHealthPanel action feedback follows the worker', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let unloadResult: { body?: unknown; error?: unknown };
+  let settleUnload: (() => void) | null;
+
+  beforeEach(async () => {
+    unloadResult = {};
+    settleUnload = null;
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [
+        {
+          provide: StatisticsService,
+          useValue: {
+            unloadLane: () =>
+              new Promise((resolve, reject) => {
+                settleUnload = () =>
+                  unloadResult.error ? reject(unloadResult.error) : resolve(unloadResult.body ?? {});
+              }),
+            getLaneLoadStatus: () => Promise.resolve({ status: 'running' }),
+          },
+        },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-foo': lane({ model: 'foo', runtime_state: 'running' }) },
+      'gpu-02': { 'planner-bar': lane({ model: 'bar', runtime_state: 'running' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', {
+      'gpu-01': { provider_id: 1 },
+      'gpu-02': { provider_id: 2 },
+    });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+  });
+
+  /** Move the provider dropdown, as the framework would. */
+  function switchTo(provider: string): void {
+    panel.selectedProvider = provider;
+    panel.ngOnChanges({ selectedProvider: new SimpleChange('gpu-01', provider, true) });
+  }
+
+  it('drops an unload error when the operator switches worker', async () => {
+    unloadResult.error = { status: 500, error: 'denied by worker-a' };
+    const pending = panel.handleUnload('planner-foo');
+    settleUnload?.();
+    await pending;
+    expect(panel.unloadError()).toBe('Unload of planner-foo failed: denied by worker-a');
+
+    switchTo('gpu-02');
+    expect(panel.unloadError()).toBeNull();
+  });
+
+  it('drops a sleep/wake error on the switch as well', async () => {
+    panel.sleepWakeError.set('Sleep of planner-foo failed: the worker said no');
+
+    switchTo('gpu-02');
+    expect(panel.sleepWakeError()).toBeNull();
+  });
+
+  it('clears the spinner of a call that is still in flight at the switch', async () => {
+    panel.handleUnload('planner-foo');
+    expect(panel.unloadingLaneId()).toBe('planner-foo');
+
+    switchTo('gpu-02');
+    expect(panel.unloadingLaneId()).toBeNull();
+  });
+
+  it('does not show a stale unload error under the switched-to worker', async () => {
+    const pending = panel.handleUnload('planner-foo');
+    // The call is still in flight when the operator switches.
+    switchTo('gpu-02');
+
+    unloadResult.error = { status: 500, error: 'denied by worker-a' };
+    settleUnload?.();
+    await pending;
+
+    // The refusal belongs to gpu-01; gpu-02's panel shows nothing.
+    expect(panel.unloadError()).toBeNull();
+  });
+});
