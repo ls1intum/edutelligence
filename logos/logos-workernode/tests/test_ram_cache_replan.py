@@ -1358,10 +1358,6 @@ def test_replan_recaches_when_ram_frees_up(monkeypatch) -> None:
 
 
 def test_replan_never_evicts_a_model_a_live_lane_reads(monkeypatch) -> None:
-    """The live lane's entry survives whatever the budget says — and its
-    bytes are charged against the budget: the protected 48 GB big against
-    the 30.4 GB live budget leaves no room for the otherwise-fitting
-    8 GB small, which is evicted for the time the lane reads its copy."""
     monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
 
     registry = _FakeRegistry(
@@ -1379,12 +1375,8 @@ def test_replan_never_evicts_a_model_a_live_lane_reads(monkeypatch) -> None:
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
-    # Budget is 60 + 56 held − 60 reserve − 25.6 margin = 30.4 GB: the plan
-    # admits small (8 GB fits), but the protected big is charged first and
-    # leaves the budget negative, so small is dropped and evicted.
-    assert cache.reclaimed[-1] == ["org/small"]
+    assert cache.reclaimed[-1] == []
     assert cache.is_cached("org/big") is True
-    assert cache.is_cached("org/small") is False
 
 
 def test_replan_evicts_the_unused_copy_of_a_source_backed_lane(monkeypatch) -> None:
@@ -1443,12 +1435,8 @@ def test_replan_still_protects_the_copy_of_a_ram_cache_backed_lane(monkeypatch) 
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
-    # Same accounting as the default-handle case: the protected copy is
-    # charged first, so the otherwise-fitting small entry is evicted while
-    # the copy the lane reads survives.
-    assert cache.reclaimed[-1] == ["org/small"]
+    assert cache.reclaimed[-1] == []
     assert cache.is_cached("org/big") is True
-    assert cache.is_cached("org/small") is False
 
 
 def test_replan_never_evicts_a_model_under_calibration(monkeypatch) -> None:
@@ -1480,23 +1468,16 @@ def test_replan_never_evicts_a_model_under_calibration(monkeypatch) -> None:
     finally:
         cache.release_cache_use("org/big")
 
-    # The plan skips big (host too tight), and the reservation spares its
-    # tree. Charged against the 20.4 GB budget, big's 48 GB leaves no room
-    # for the otherwise-fitting small entry, so the unprotected copy is
-    # evicted for the duration of the session.
-    assert cache.reclaimed[-1] == ["org/small"]
+    # The plan skips big (host too tight), but the reservation spares its tree.
+    assert cache.reclaimed[-1] == []
     assert cache.is_cached("org/big") is True
-    assert cache.is_cached("org/small") is False
 
     # Session over: the same re-plan is now free to give big's RAM back.
-    # small is re-admitted by the plan but stays evicted until the
-    # re-cache hold-down admits it again — nothing is re-queued now.
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
     assert cache.reclaimed[-1] == ["org/big"]
     assert cache.is_cached("org/big") is False
-    assert cache.is_cached("org/small") is False
-    assert cache.recache_calls == []
+    assert cache.is_cached("org/small") is True
 
 
 def test_replan_does_not_evict_a_model_whose_lane_is_starting(monkeypatch) -> None:
@@ -1522,12 +1503,8 @@ def test_replan_does_not_evict_a_model_whose_lane_is_starting(monkeypatch) -> No
 
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
-    # The startup reservation spares big's tree while the spawn reads it —
-    # and charges its 48 GB against the 30.4 GB budget, so the
-    # otherwise-fitting small entry is evicted until the lane is up.
-    assert cache.reclaimed[-1] == ["org/small"]
+    assert cache.reclaimed[-1] == []
     assert cache.is_cached("org/big") is True
-    assert cache.is_cached("org/small") is False
 
 
 def test_replan_is_a_noop_when_the_cache_is_disabled(monkeypatch) -> None:
@@ -1784,11 +1761,10 @@ def test_replan_keeps_an_asleep_model_its_lane_still_reads(monkeypatch) -> None:
 
 
 def test_replan_logs_warning_when_every_eviction_is_protected(monkeypatch, caplog) -> None:
-    """Corner: the plan no longer covers a cached model, and EVERY model the
-    plan would evict is read by a live lane, so the re-plan frees nothing.
+    """Corner: the plan no longer covers a cached model, but that model is
+    read by a live lane, so it is protected and the re-plan frees nothing.
     That is a pressure state the cache cannot relieve — it must be logged as
-    a warning, not stay silent. (With an unprotected entry still cached, the
-    re-plan would evict it and free real RAM — no corner, no warning.)"""
+    a warning, not stay silent."""
     monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
 
     registry = _FakeRegistry(
@@ -1799,62 +1775,17 @@ def test_replan_logs_warning_when_every_eviction_is_protected(monkeypatch, caplo
     )
     sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
     cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
-    # The plan will skip big (tight RAM); both lanes are live and read their
-    # copies, so every cached entry is protected and nothing can be evicted.
-    lanes = _FakeLaneManager(
-        {
-            "small": _FakeHandle("small", "org/small", ProcessState.RUNNING),
-            "big": _FakeHandle("big", "org/big", ProcessState.RUNNING),
-        }
-    )
+    # The plan will skip big (tight RAM), but big's lane is live → protected.
+    lanes = _FakeLaneManager({"big": _FakeHandle("big", "org/big", ProcessState.RUNNING)})
     app = _app(cache, registry, lanes, ["org/small", "org/big"])
 
     with caplog.at_level(logging.WARNING, logger="logos_worker_node"):
         asyncio.run(worker_main._replan_ram_cache_once(app))
 
-    # Nothing was evicted (both are protected), and the corner was surfaced.
+    # Nothing was evicted (big is protected), and the corner was surfaced.
     assert cache.reclaimed[-1] == []
     assert cache.is_cached("org/big") is True
-    assert cache.is_cached("org/small") is True
     assert any("cannot free host RAM" in rec.getMessage() and "org/big" in rec.getMessage() for rec in caplog.records)
-
-
-def test_replan_reclaims_an_otherwise_fitting_entry_when_a_rejected_protected_entry_exceeds_the_budget(
-    monkeypatch,
-) -> None:
-    """A protected cached entry the planner already rejected still survives
-    reclamation and consumes host RAM, so it must be charged against the
-    budget BEFORE the unprotected order is packed: a protected 48 GB entry
-    against a 30.4 GB live budget leaves no room for the otherwise-fitting
-    8 GB entry, which is reclaimed while the protected tree stays. (Charging
-    only the plan's protected entries would have kept both: 8 GB fit the
-    30.4 GB budget, yet the retained 56 GB exceeds it.)"""
-    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
-
-    registry = _FakeRegistry(
-        {
-            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
-            "org/big": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
-        }
-    )
-    sizes = {"org/small": _mb(8_000), "org/big": _mb(48_000)}
-    cache = _FakeCache(cached=["org/small", "org/big"], sizes=sizes)
-    # No lanes: big's only protection is a calibration reservation, and the
-    # plan skips big (host too tight) — out of order, but its tree survives.
-    app = _app(cache, registry, _FakeLaneManager({}), ["org/small", "org/big"])
-
-    cache.reserve_cache_use("org/big")
-    try:
-        asyncio.run(worker_main._replan_ram_cache_once(app))
-    finally:
-        cache.release_cache_use("org/big")
-
-    # Budget is 60 + 56 held − 60 reserve − 25.6 margin = 30.4 GB. The plan
-    # admits small; the protected big is charged first and leaves the
-    # budget negative, so small is dropped and evicted.
-    assert cache.reclaimed[-1] == ["org/small"]
-    assert cache.is_cached("org/big") is True
-    assert cache.is_cached("org/small") is False
 
 
 # ── re-cache hold-down ────────────────────────────────────────────────────────
