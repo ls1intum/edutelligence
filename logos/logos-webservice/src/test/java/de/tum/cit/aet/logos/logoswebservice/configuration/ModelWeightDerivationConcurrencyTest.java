@@ -137,6 +137,13 @@ class ModelWeightDerivationConcurrencyTest {
 
     @Test
     void lateAdminSaveDoesNotClobberDerivedWeightsAndPins() throws Exception {
+        // Baseline: 5102's pairs are already derived (as by an earlier
+        // derivation run), so the fleet-wide gate passes once 5101's
+        // in-test derivation lands. 5101 itself is still at the defaults.
+        jdbc.update("UPDATE model_provider SET derived_samples = 12, "
+            + "derived_total_latency_ms = 900, derived_cost_usd = 0.060000 "
+            + "WHERE id IN (7103, 7104)");
+
         // Pin the cost dimension first, so the override map is non-trivially
         // asserted at the end: the late full-row flush must not empty it.
         // 5101 is cheapest of the cloud pairs, so the pin visibly deviates

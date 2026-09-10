@@ -13,13 +13,16 @@ VALUES
 INSERT INTO model_provider (id, provider_id, model_id)
 VALUES (7101, 6101, 5101), (7102, 6102, 5101), (7103, 6101, 5102), (7104, 6102, 5102);
 
--- Cloud model prices (per-1K-token, micro-cents): fast 1000/2000, slow 4000/8000
-INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_token)
+-- Cloud model prices (per-1K-token, micro-cents): fast 1000/2000, slow 4000/8000.
+-- Price rows sit on the canonical billed_* quantities (changelog 023 remapped
+-- them off prompt_tokens/completion_tokens); the 9101/9102 usage types above
+-- stay for the usage_tokens rows below.
+INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_unit)
 VALUES
-  (92101, 9101, 5101, 6101, NOW() - INTERVAL '1 year', 1000),
-  (92102, 9102, 5101, 6101, NOW() - INTERVAL '1 year', 2000),
-  (92103, 9101, 5102, 6101, NOW() - INTERVAL '1 year', 4000),
-  (92104, 9102, 5102, 6101, NOW() - INTERVAL '1 year', 8000);
+  (92101, (SELECT id FROM token_types WHERE name = 'billed_input_uncached'), 5101, 6101, NOW() - INTERVAL '1 year', 1000),
+  (92102, (SELECT id FROM token_types WHERE name = 'billed_output_text'), 5101, 6101, NOW() - INTERVAL '1 year', 2000),
+  (92103, (SELECT id FROM token_types WHERE name = 'billed_input_uncached'), 5102, 6101, NOW() - INTERVAL '1 year', 4000),
+  (92104, (SELECT id FROM token_types WHERE name = 'billed_output_text'), 5102, 6101, NOW() - INTERVAL '1 year', 8000);
 
 -- 12 warm successful requests per pair, 10 completion tokens each
 -- (5101, cloud): ttft 100ms, total 500ms; (5101, local): ttft 9000ms, total 40000ms

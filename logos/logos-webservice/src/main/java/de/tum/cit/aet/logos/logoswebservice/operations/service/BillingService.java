@@ -19,6 +19,42 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryBillin
 @Service
 public class BillingService {
 
+    private static final Map<String, String> LEGACY_BILLING_TYPES = Map.of(
+            "prompt_tokens", "billed_input_uncached",
+            "completion_tokens", "billed_output_text",
+            "prompt_cached_tokens", "billed_input_cache_read",
+            "completion_reasoning_tokens", "billed_output_reasoning",
+            "prompt_audio_tokens", "billed_input_audio",
+            "completion_audio_tokens", "billed_output_audio"
+    );
+
+    private static final Map<String, String> BILLABLE_TYPE_UNITS = Map.ofEntries(
+            Map.entry("billed_input_uncached", "token"),
+            Map.entry("billed_input_cache_read", "token"),
+            Map.entry("billed_input_cache_write", "token"),
+            Map.entry("billed_input_cache_write_1h", "token"),
+            Map.entry("billed_input_audio", "token"),
+            Map.entry("billed_input_audio_cache_read", "token"),
+            Map.entry("billed_input_audio_cache_write", "token"),
+            Map.entry("billed_input_image_tokens", "token"),
+            Map.entry("billed_output_text", "token"),
+            Map.entry("billed_output_reasoning", "token"),
+            Map.entry("billed_output_audio", "token"),
+            Map.entry("billed_output_image_tokens", "token"),
+            Map.entry("billed_input_characters", "character"),
+            Map.entry("billed_output_characters", "character"),
+            Map.entry("billed_requests", "request"),
+            Map.entry("billed_input_images", "image"),
+            Map.entry("billed_output_images", "image"),
+            Map.entry("billed_input_pixels", "pixel"),
+            Map.entry("billed_output_pixels", "pixel"),
+            Map.entry("billed_ocr_pages", "page"),
+            Map.entry("billed_ocr_credits", "credit"),
+            Map.entry("billed_annotation_pages", "page"),
+            Map.entry("billed_search_queries", "query"),
+            Map.entry("audio_milliseconds", "millisecond")
+    );
+
     private static final Map<Integer, String> BUCKET_TO_PG_INTERVAL = Map.of(
             3600, "hour",
             86400, "day",
@@ -40,17 +76,25 @@ public class BillingService {
 
     public Map<String, Object> addBilling(String typeName, double typeCost,
                                           String validFrom, Integer modelId) {
-        Integer typeId = tokenTypeRepository.findByName(typeName)
+        String canonicalType = LEGACY_BILLING_TYPES.getOrDefault(typeName, typeName);
+        String unit = BILLABLE_TYPE_UNITS.get(canonicalType);
+        if (unit == null) {
+            throw new IllegalArgumentException("Token type is not a billable quantity: " + typeName);
+        }
+        Integer typeId = tokenTypeRepository.findByName(canonicalType)
             .orElseThrow(() -> new IllegalArgumentException("Token name not found"))
             .getId();
 
         Instant validFromInstant = ZonedDateTime.parse(validFrom.replace("Z", "+00:00"))
                                                 .withZoneSameInstant(ZoneOffset.UTC).toInstant();
 
+        // Manual entries are token/default/entry-tier rows (unit, min_context_tokens,
+        // service_tier keep their column defaults).
         TokenPrice price = new TokenPrice();
         price.setTypeId(typeId);
+        price.setUnit(unit);
         price.setValidFrom(validFromInstant);
-        price.setPricePerKToken(Math.round(typeCost));
+        price.setPricePerKUnit(Math.round(typeCost));
         if (modelId != null) price.setModelId(modelId);
         TokenPrice saved = tokenPriceRepository.save(price);
         return Map.of("result", "Successfully added billing", "billing-id", saved.getId());

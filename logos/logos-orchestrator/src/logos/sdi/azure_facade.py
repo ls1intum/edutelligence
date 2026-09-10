@@ -26,7 +26,7 @@ class AzureSchedulingDataFacade:
     - Providing type-safe responses via dataclasses
 
     Note: Azure is a cloud provider with no visibility into queue state or active requests.
-    For local queue tracking, see OllamaSchedulingDataFacade.
+    For local queue tracking, see LogosNodeSchedulingDataFacade.
 
     Usage:
         facade = AzureSchedulingDataFacade(db_manager)
@@ -290,7 +290,7 @@ class AzureSchedulingDataFacade:
     # NOTE: Cloud providers (Azure) manage queues internally.
     # We have no visibility into their queue state, active requests, or queue depth.
     # Therefore, request lifecycle tracking methods are not applicable for Azure.
-    # For Ollama providers with local queue visibility, see OllamaSchedulingDataFacade.
+    # For worker-backed providers with local queue visibility, see LogosNodeSchedulingDataFacade.
 
     def _get_provider_for_model(self, model_id: int, provider_id: int) -> AzureDataProvider:
         """

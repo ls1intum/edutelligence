@@ -42,7 +42,7 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  *   </li>
  *   <li>Cost (cloud pairs): mean of the available prompt/completion catalogue
  *       prices, in the same per-million unit the model list displays
- *       (price_per_k_token / 100000).</li>
+ *       (price_per_k_unit / 100000).</li>
  *   <li>Cost (local pairs): VRAM x latency proxy
  *       (total_vram_mb x total_latency_hours x {@link #LOCAL_COST_PER_MB_HOUR}),
  *       i.e. USD for one typical request occupying the whole card.

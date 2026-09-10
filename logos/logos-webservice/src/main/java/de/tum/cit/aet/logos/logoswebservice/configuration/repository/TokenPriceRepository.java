@@ -10,8 +10,11 @@ import org.springframework.data.repository.query.Param;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.TokenPrice;
 
 public interface TokenPriceRepository extends JpaRepository<TokenPrice, Integer> {
-    Optional<TokenPrice> findTopByModelIdAndTypeIdAndProviderIdOrderByValidFromDesc(
-            Integer modelId, Integer typeId, Integer providerId);
+
+    Optional<TokenPrice>
+    findTopByModelIdAndTypeIdAndProviderIdAndUnitAndMinContextTokensAndServiceTierOrderByValidFromDesc(
+            Integer modelId, Integer typeId, Integer providerId,
+            String unit, Long minContextTokens, String serviceTier);
 
     /**
      * Closes the current validity of the provider's open price rows. The rows

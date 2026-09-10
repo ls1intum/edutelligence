@@ -218,9 +218,9 @@ class ModelMetricsControllerTest {
         jdbc.update("DELETE FROM token_prices WHERE model_id = 5101 AND provider_id = 6101");
         AtomicInteger priceUpdateRan = new AtomicInteger();
         doAnswer(invocation -> {
-            jdbc.update("INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_token) "
-                + "VALUES (92201, 9101, 5101, 6101, NOW() - INTERVAL '1 year', 1000), "
-                + "       (92202, 9102, 5101, 6101, NOW() - INTERVAL '1 year', 2000)");
+            jdbc.update("INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_unit) "
+                + "VALUES (92201, (SELECT id FROM token_types WHERE name = 'billed_input_uncached'), 5101, 6101, NOW() - INTERVAL '1 year', 1000), "
+                + "       (92202, (SELECT id FROM token_types WHERE name = 'billed_output_text'), 5101, 6101, NOW() - INTERVAL '1 year', 2000)");
             priceUpdateRan.set(1);
             return null;
         }).when(priceUpdaterService).updatePricesForModel(eq(5101), anyString());
@@ -407,11 +407,11 @@ class ModelMetricsControllerTest {
             parked.countDown();
             release.await(10, TimeUnit.SECONDS);
             if (priceInstalls.compareAndSet(0, 1)) {
-                jdbc.update("INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_token) "
-                    + "VALUES (92210, 9101, 5101, 6102, NOW() - INTERVAL '1 year', 1000), "
-                    + "       (92211, 9102, 5101, 6102, NOW() - INTERVAL '1 year', 2000), "
-                    + "       (92212, 9101, 5102, 6102, NOW() - INTERVAL '1 year', 4000), "
-                    + "       (92213, 9102, 5102, 6102, NOW() - INTERVAL '1 year', 8000)");
+                jdbc.update("INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_unit) "
+                    + "VALUES (92210, (SELECT id FROM token_types WHERE name = 'billed_input_uncached'), 5101, 6102, NOW() - INTERVAL '1 year', 1000), "
+                    + "       (92211, (SELECT id FROM token_types WHERE name = 'billed_output_text'), 5101, 6102, NOW() - INTERVAL '1 year', 2000), "
+                    + "       (92212, (SELECT id FROM token_types WHERE name = 'billed_input_uncached'), 5102, 6102, NOW() - INTERVAL '1 year', 4000), "
+                    + "       (92213, (SELECT id FROM token_types WHERE name = 'billed_output_text'), 5102, 6102, NOW() - INTERVAL '1 year', 8000)");
                 pricesInstalled.countDown();
             }
             pricesInstalled.await(10, TimeUnit.SECONDS);
@@ -559,9 +559,9 @@ class ModelMetricsControllerTest {
         // before the change, its write only lands after the change committed.
         providerService.updateProvider(
             new UpdateProviderRequestDTO(6101, null, null, null, null, null, null, "anthropic", null));
-        staleRefresh.storeFetchedCataloguePrices(5101, 6101, "openai",
+        staleRefresh.storeFetchedCataloguePrices(5101, 6101, "fast-model", "openai",
             Map.of("input_cost_per_token", 2e-8, "output_cost_per_token", 4e-8));
-        staleRefresh.storeFetchedCataloguePrices(5102, 6101, "openai",
+        staleRefresh.storeFetchedCataloguePrices(5102, 6101, "slow-model", "openai",
             Map.of("input_cost_per_token", 3e-8, "output_cost_per_token", 6e-8));
 
         // The stale pages are discarded: no new open row for the previous

@@ -167,25 +167,29 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
      */
     @Query(value = """
         SELECT
-            (SELECT tp.price_per_k_token
-             FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id AND tt.name = 'prompt_tokens'
+            (SELECT tp.price_per_k_unit
+             FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id AND tt.name = 'billed_input_uncached'
              WHERE (tp.model_id = :modelId OR tp.model_id IS NULL)
                AND (tp.provider_id = :providerId OR tp.provider_id IS NULL)
+               AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
                AND tp.valid_from <= NOW()
                AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
              ORDER BY (tp.model_id = :modelId) DESC NULLS LAST,
                       (tp.provider_id = :providerId) DESC NULLS LAST,
-                      tp.valid_from DESC
+                      tp.valid_from DESC,
+                      tp.id DESC
              LIMIT 1) AS input_price_per_k,
-            (SELECT tp.price_per_k_token
-             FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id AND tt.name = 'completion_tokens'
+            (SELECT tp.price_per_k_unit
+             FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id AND tt.name = 'billed_output_text'
              WHERE (tp.model_id = :modelId OR tp.model_id IS NULL)
                AND (tp.provider_id = :providerId OR tp.provider_id IS NULL)
+               AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
                AND tp.valid_from <= NOW()
                AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
              ORDER BY (tp.model_id = :modelId) DESC NULLS LAST,
                       (tp.provider_id = :providerId) DESC NULLS LAST,
-                      tp.valid_from DESC
+                      tp.valid_from DESC,
+                      tp.id DESC
              LIMIT 1) AS output_price_per_k
         FROM model_provider mp
         WHERE mp.model_id = :modelId AND mp.provider_id = :providerId

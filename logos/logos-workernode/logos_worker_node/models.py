@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -10,8 +11,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+logger = logging.getLogger(__name__)
+
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
+# Container path of the model volume. Compose mounts the model volume here,
+# and existing Ollama-era configs (and the engines.ollama migration) may
+# still carry LEGACY_OLLAMA_MODELS_PATH — WorkerConfig._translate_legacy_ollama_models_path
+# rewrites it to NEW_MODELS_PATH so a config left on the old path keeps working.
+NEW_MODELS_PATH = "/usr/share/logos/models"
+LEGACY_OLLAMA_MODELS_PATH = "/usr/share/ollama/.ollama/models"
 
 
 def _normalize_gpu_devices(raw: str) -> str:
@@ -31,28 +40,6 @@ def _gpu_device_count(value: str) -> int | None:
     if normalized in {"", "all", "none"}:
         return None
     return len(normalized.split(","))
-
-
-class OllamaConfig(BaseModel):
-    """Shared Ollama engine defaults for all non-vLLM lanes."""
-
-    ollama_binary: str = "/usr/local/bin/ollama"
-    gpu_devices: str = "all"
-    max_queue: int = 512
-    sched_spread: bool = False
-    multiuser_cache: bool = False
-    gpu_overhead_bytes: int = 0
-    load_timeout: str = ""
-    origins: list[str] = Field(default_factory=list)
-    noprune: bool = False
-    llm_library: str = ""
-    models_path: str = "/usr/share/ollama/.ollama/models"
-    env_overrides: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("gpu_devices")
-    @classmethod
-    def _validate_gpu_devices(cls, value: str) -> str:
-        return _normalize_gpu_devices(value)
 
 
 class VllmConfig(BaseModel):
@@ -75,6 +62,18 @@ class VllmConfig(BaseModel):
     )
     dtype: str = Field(default="auto")
     quantization: str = Field(default="")
+    sharded_checkpoint_enabled: bool | None = Field(
+        default=None,
+        description="Per-model switch for the pre-sharded checkpoint used by "
+        "TP>1 lanes. None (default) follows the worker-wide "
+        "engines.vllm.sharded_checkpoint_enabled. Set false to keep one model "
+        "on the full checkpoint — e.g. a quantization whose weight layout does "
+        "not survive the sharded_state round trip — without giving up the "
+        "optimization for every other model on the node; set true to opt a "
+        "single model in on a node where the worker-wide default is off. "
+        "Settable per model under engines.vllm.model_overrides.<model>. See "
+        "model_uses_sharded_checkpoint for the resolution.",
+    )
     gpu_memory_utilization: float | None = Field(
         default=None,
         ge=0.1,
@@ -338,11 +337,86 @@ class VllmEngineConfig(BaseModel):
         return (value or "").strip().upper()
 
 
+class MetalConfig(BaseModel):
+    """Apple-Silicon / vllm-metal engine settings.
+
+    Only consulted when the worker runs the Metal backend (macOS, or
+    LOGOS_WORKER_BACKEND=metal). The vllm-metal plugin keeps vLLM's CLI and
+    tracks vLLM releases closely — it currently vendors the same 0.28.x the
+    CUDA image pins — so lanes still carry an ordinary VllmConfig. What differs
+    is that Metal has a handful of knobs exposed only as environment variables,
+    and that a few CUDA-only CLI flags do not exist in this build at all.
+
+    Field set verified against vllm_metal.envs of
+    vllm-metal 0.3.0.dev20260826. Upstream renames these between dev builds
+    (0.2.0 had VLLM_METAL_BLOCK_SIZE and VLLM_METAL_PREFIX_CACHE*, both gone),
+    so re-check after an upgrade rather than assuming.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    vllm_binary: str = Field(
+        default="",
+        description="Path to the vllm CLI inside the vllm-metal venv. Empty "
+        "(default) resolves <LOGOS_METAL_VENV or ~/.venv-vllm-metal>/bin/vllm, "
+        "then PATH — matching the layout vllm-metal's install.sh creates.",
+    )
+    metal_python: str = Field(
+        default="",
+        description="Interpreter used once at startup to read "
+        "mlx.core.device_info() for GPU telemetry. Empty (default) resolves "
+        "<LOGOS_METAL_VENV or ~/.venv-vllm-metal>/bin/python. Overridable via "
+        "LOGOS_METAL_PYTHON.",
+    )
+    memory_fraction: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=1.0,
+        description="Fraction of the Metal working set a lane may use, passed "
+        "as VLLM_METAL_MEMORY_FRACTION. None (default) leaves it at vllm-metal's "
+        "'auto', which derives a --gpu-memory-utilization itself (0.92 observed "
+        "on a 36 GB M3 Pro) and logs the full memory breakdown at startup. Set "
+        "a float only to override that.",
+    )
+    use_paged_attention: bool | None = Field(
+        default=None,
+        description="Select vllm-metal's paged-attention KV path via "
+        "VLLM_METAL_USE_PAGED_ATTENTION (upstream default: enabled). None "
+        "(default) leaves the plugin's choice alone. Required for hybrid "
+        "SDPA+GDN models such as Qwen3.5/3.8, where the plugin translates "
+        "vLLM's block size to a Metal-compatible one.",
+    )
+    multimodal_mode: str = Field(
+        default="",
+        description="VLLM_METAL_MULTIMODAL_MODE: 'auto' (default), "
+        "'text-only-compat', or 'multimodal-native'. Relevant for the "
+        "Qwen3.5/3.6/3.8 conditional-generation wrappers, which advertise a "
+        "multimodal config even when served text-only. Empty = leave unset.",
+    )
+    env_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra environment variables for every Metal lane on this "
+        "worker — the escape hatch for VLLM_METAL_* knobs without a dedicated "
+        "field (GDN_LAZY_KERNELS, DECODE_PIPELINE, COMPILED_MLP, MLA_KERNEL, "
+        "VISIBLE_DEVICES, …). Applied before the lane's own "
+        "vllm_config.env_overrides, so a per-model setting still wins.",
+    )
+
+    @field_validator("multimodal_mode")
+    @classmethod
+    def _validate_multimodal_mode(cls, value: str) -> str:
+        cleaned = (value or "").strip()
+        valid = {"", "auto", "text-only-compat", "multimodal-native"}
+        if cleaned not in valid:
+            raise ValueError(f"Invalid multimodal_mode: {value!r}. Use one of {sorted(valid - {''})}, or leave empty.")
+        return cleaned
+
+
 class EnginesConfig(BaseModel):
     """Shared engine defaults."""
 
-    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     vllm: VllmEngineConfig = Field(default_factory=VllmEngineConfig)
+    metal: MetalConfig = Field(default_factory=MetalConfig)
 
 
 class WorkerConfig(BaseModel):
@@ -367,13 +441,28 @@ class WorkerConfig(BaseModel):
             "(e.g. air-gapped hosts that pre-stage weights out of band)."
         ),
     )
+    models_path: str = Field(
+        default="/usr/share/logos/models",
+        description=(
+            "Persistent model store directory (the deployment's model volume). "
+            "Holds the HuggingFace model store that vLLM lanes load from. "
+            "Also the default for cache_path when that field is empty."
+        ),
+    )
+    gpu_devices: str = Field(
+        default="all",
+        description=(
+            "Worker-wide default GPU placement ('all', 'none', or a "
+            "comma-separated index list like '0,1'). A lane's own "
+            "gpu_devices overrides this when set."
+        ),
+    )
     cache_path: str = Field(
         default="",
         description=(
             "Persistent root directory for HF model weights, vLLM compilation "
             "cache, torch inductor cache, and FlashInfer JIT kernels. Empty "
-            "(default) → fall back to engines.ollama.models_path so existing "
-            "ollama-aware deployments keep working unchanged. The env var "
+            "(default) → fall back to worker.models_path. The env var "
             "LOGOS_WORKER_CACHE_ROOT, when set, takes precedence over this "
             "field."
         ),
@@ -409,6 +498,42 @@ class WorkerConfig(BaseModel):
             "faster GPU receives proportionally more requests."
         ),
     )
+
+    @field_validator("gpu_devices")
+    @classmethod
+    def _validate_gpu_devices(cls, value: str) -> str:
+        return _normalize_gpu_devices(value)
+
+    @field_validator("models_path")
+    @classmethod
+    def _translate_legacy_ollama_models_path(cls, value: str) -> str:
+        """Translate the Ollama-era container path to the current mount point.
+
+        Existing deployment configs (and the engines.ollama migrator) may
+        still carry the Ollama-era container path. The container now mounts
+        the model volume at /usr/share/logos/models (resolving the legacy
+        OLLAMA_MODELS_MOUNT variable / pre-existing volume), so a config
+        left on the old path would point at a directory that no longer
+        exists in the container. Translated for backwards compatibility.
+        """
+        if value == LEGACY_OLLAMA_MODELS_PATH:
+            logger.warning(
+                "worker.models_path: translating legacy Ollama container path %s -> %s. "
+                "Update your config file to the new path.",
+                value,
+                NEW_MODELS_PATH,
+            )
+            return NEW_MODELS_PATH
+        if value.startswith(LEGACY_OLLAMA_MODELS_PATH + "/"):
+            translated = NEW_MODELS_PATH + value[len(LEGACY_OLLAMA_MODELS_PATH) :]
+            logger.warning(
+                "worker.models_path: translating legacy Ollama container subpath %s -> %s. "
+                "Update your config file to the new path.",
+                value,
+                translated,
+            )
+            return translated
+        return value
 
 
 class LogosConfig(BaseModel):
@@ -476,11 +601,9 @@ class LaneConfig(BaseModel):
 
     lane_id: str | None = None
     model: str
-    vllm: bool = False
+    vllm: bool = True
     num_parallel: int = Field(default=20, ge=1)
     context_length: int = Field(default=_DEFAULT_LANE_CONTEXT_LENGTH, ge=128)
-    keep_alive: str = "2m"
-    kv_cache_type: str = "q8_0"
     flash_attention: bool = True
     gpu_devices: str = ""
     vllm_config: VllmConfig | None = None
@@ -490,13 +613,36 @@ class LaneConfig(BaseModel):
     def _validate_gpu_devices(cls, value: str) -> str:
         return _normalize_gpu_devices(value)
 
-    @model_validator(mode="after")
-    def _validate_backend_specific_fields(self) -> LaneConfig:
-        if not self.vllm:
-            if self.vllm_config is not None:
-                raise ValueError("Remove vllm_config or set vllm=true.")
-            return self
+    @field_validator("vllm")
+    @classmethod
+    def _validate_vllm(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError(
+                "vllm=false is no longer supported: the worker only runs vLLM lanes, "
+                "the Ollama engine was removed. Remove the field (the default is true) "
+                "or set it to true."
+            )
+        return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_ollama_lane_fields(cls, values: Any) -> Any:
+        """Config keys that belonged to the removed Ollama engine.
+
+        extra='forbid' would already refuse them, but with a generic
+        'extra fields not permitted' message — say what they were instead.
+        """
+        if isinstance(values, dict):
+            removed = [key for key in ("keep_alive", "kv_cache_type") if key in values]
+            if removed:
+                raise ValueError(
+                    f"Lane field(s) {removed} belonged to the removed Ollama engine "
+                    "and are no longer supported. Remove them from the lane config."
+                )
+        return values
+
+    @model_validator(mode="after")
+    def _validate_vllm_fields(self) -> LaneConfig:
         if self.vllm_config is None:
             self.vllm_config = VllmConfig()
 
@@ -525,6 +671,45 @@ class AppConfig(BaseModel):
         "dicts with fields like base_residency_mb, kv_per_token_bytes, etc.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_ollama_engine_fields(cls, values: Any) -> Any:
+        """Carry ``engines.ollama.models_path``/``gpu_devices`` into ``worker.*``.
+
+        Existing deployment configs still set these keys under the removed
+        Ollama engine section. The worker-wide values they held are now
+        ``worker.models_path`` and ``worker.gpu_devices`` — move them instead
+        of dropping them silently. Fields the worker never consumed from the
+        Ollama section (queue/sleep/cache tuning) are gone on purpose.
+        """
+        if not isinstance(values, dict):
+            return values
+        engines = values.get("engines")
+        if not isinstance(engines, dict):
+            return values
+        ollama = engines.get("ollama")
+        if not isinstance(ollama, dict):
+            return values
+        worker = values.get("worker")
+        if not isinstance(worker, dict):
+            worker = {}
+        migrated = []
+        for old_key, new_key in (
+            ("models_path", "models_path"),
+            ("gpu_devices", "gpu_devices"),
+        ):
+            if old_key in ollama and new_key not in worker:
+                worker[new_key] = ollama[old_key]
+                migrated.append(f"engines.ollama.{old_key} -> worker.{new_key}")
+        if migrated:
+            values["worker"] = worker
+            logger.warning(
+                "Migrating legacy Ollama config keys: %s. Move them to the [worker] "
+                "section and drop the [engines.ollama] section from your config file.",
+                ", ".join(migrated),
+            )
+        return values
+
 
 def model_can_sleep(cfg: AppConfig, model_name: str) -> bool:
     """Effective enable_sleep_mode for a model on this worker.
@@ -549,6 +734,43 @@ def model_can_sleep(cfg: AppConfig, model_name: str) -> bool:
     if "enable_sleep_mode" in ov_caps:
         return bool(ov_caps["enable_sleep_mode"])
     return True
+
+
+def model_uses_sharded_checkpoint(
+    engine_cfg: VllmEngineConfig | None,
+    model_name: str,
+    lane_value: bool | None = None,
+) -> bool:
+    """Effective sharded-checkpoint switch for one model on this worker.
+
+    A per-model ``sharded_checkpoint_enabled`` wins over the worker-wide
+    ``engines.vllm.sharded_checkpoint_enabled`` in *both* directions: a single
+    model whose quantized weight layout does not survive the sharded_state
+    round trip can be kept on the full checkpoint without costing every other
+    model on the node its cache, and a single model can equally be opted *in*
+    where the worker-wide default is off. ``None`` — the default — follows the
+    worker-wide flag.
+
+    ``lane_value`` is the value already merged onto a lane's ``vllm_config`` by
+    ``LaneManager._apply_model_vllm_overrides``, and wins over a fresh
+    ``model_overrides`` lookup so the spawn path honours what the lane was
+    actually built with. The calibration trigger has no lane yet and passes
+    nothing, so it reads ``model_overrides`` here instead.
+
+    Centralized so the lane-spawn path (vllm_process) and the
+    server-orchestrated calibration trigger (logos_bridge) cannot drift: a
+    conversion the spawner would never read is a conversion not worth running.
+    """
+    if engine_cfg is None:
+        return lane_value if lane_value is not None else True
+    per_model = lane_value
+    if per_model is None:
+        override = (engine_cfg.model_overrides.get(model_name) or {}).get("sharded_checkpoint_enabled")
+        if override is not None:
+            per_model = bool(override)
+    if per_model is not None:
+        return per_model
+    return bool(getattr(engine_cfg, "sharded_checkpoint_enabled", True))
 
 
 class ProcessState(str, enum.Enum):
@@ -576,7 +798,7 @@ class LoadedModel(BaseModel):
 
 class DeviceInfo(BaseModel):
     device_id: str
-    kind: Literal["nvidia", "derived"] = "nvidia"
+    kind: Literal["nvidia", "derived", "metal"] = "nvidia"
     name: str = ""
     memory_used_mb: float = 0.0
     memory_total_mb: float = 0.0
@@ -589,8 +811,14 @@ class DeviceInfo(BaseModel):
 
 class DeviceSummary(BaseModel):
     timestamp: datetime
-    mode: Literal["nvidia", "derived", "none"] = "none"
+    mode: Literal["nvidia", "derived", "none", "metal"] = "none"
     nvidia_smi_available: bool = False
+    # Backend-neutral successor to nvidia_smi_available: "this worker measured
+    # the numbers below on real hardware, so free_memory_mb can be trusted".
+    # nvidia-smi is one such source, Metal's device_info() is another. Kept as
+    # a separate field so pre-Metal orchestrators, which only know
+    # nvidia_smi_available, keep working unchanged.
+    telemetry_available: bool = False
     degraded_reason: str = ""
     devices: list[DeviceInfo] = Field(default_factory=list)
     total_memory_mb: float = 0.0
@@ -601,13 +829,14 @@ class DeviceSummary(BaseModel):
 class HostMemorySummary(BaseModel):
     """Host-RAM telemetry independent of GPU memory.
 
-    Sourced from /proc/meminfo. The planner needs this to gate cold loads:
+    Sourced from /proc/meminfo on Linux and from sysctl/vm_stat on macOS,
+    where there is no /proc. The planner needs this to gate cold loads:
     vLLM's sleep_l1 frees VRAM but retains weights in host RAM, so VRAM
     headroom alone is insufficient when picking eviction victims.
     """
 
     timestamp: datetime
-    source: Literal["proc-meminfo", "unavailable"] = "unavailable"
+    source: Literal["proc-meminfo", "sysctl", "unavailable"] = "unavailable"
     total_mb: float = 0.0
     available_mb: float = 0.0
     used_mb: float = 0.0
@@ -638,7 +867,7 @@ class LaneStatus(BaseModel):
     lane_uid: str = ""
     model: str
     port: int
-    vllm: bool = False
+    vllm: bool = True
     is_static: bool = False
     process: ProcessStatus
     runtime_state: Literal["cold", "starting", "loaded", "running", "sleeping", "stopped", "error"]
@@ -646,8 +875,6 @@ class LaneStatus(BaseModel):
     inference_endpoint: str = "/v1/chat/completions"
     num_parallel: int = 0
     context_length: int = 0
-    keep_alive: str = ""
-    kv_cache_type: str = ""
     flash_attention: bool = False
     gpu_devices: str = ""
     effective_gpu_devices: str = ""
@@ -667,6 +894,14 @@ class LaneStatus(BaseModel):
     # subprocesses whose RSS each carries a full copy of the weights.
     host_ram_mb: float = 0.0
     host_ram_source: Literal["pss", "rss", "unknown"] = "unknown"
+    # Wall-clock seconds from process spawn to first healthy response.
+    # None until the first successful cold load has been observed.
+    # Consumed by the orchestrator LatencyStore to learn per-model load times.
+    last_cold_load_s: float | None = None
+    # Wall-clock seconds of the most recent /wake_up call (sleep → awake).
+    # None until at least one wake has completed. Consumed by the orchestrator
+    # LatencyStore to learn per-model wake-from-sleep times (SLEEPING tier).
+    last_wake_from_sleep_s: float | None = None
 
 
 class WorkerRuntimeStatus(BaseModel):

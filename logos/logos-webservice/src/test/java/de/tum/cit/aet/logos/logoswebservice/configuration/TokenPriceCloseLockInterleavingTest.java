@@ -191,8 +191,8 @@ class TokenPriceCloseLockInterleavingTest {
                 return catalogueTx.execute(status -> {
                     providerRepository.lockProviderDerivation(ModelMetricsService.providerDerivationLockKey(6101));
                     jdbc.update(
-                        "INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_token) "
-                            + "VALUES (92105, 9101, 5101, 6101, ?, 2500)",
+                        "INSERT INTO token_prices (id, type_id, model_id, provider_id, valid_from, price_per_k_unit) "
+                            + "VALUES (92105, (SELECT id FROM token_types WHERE name = 'billed_input_uncached'), 5101, 6101, ?, 2500)",
                         Timestamp.from(validFrom));
                     catalogueWritten.countDown();
                     try {
@@ -300,10 +300,14 @@ class TokenPriceCloseLockInterleavingTest {
                 Timestamp.from(boundaryTs.toInstant().plusSeconds(60)),
                 "hour")
             .stream().mapToLong(BudgetBucketProjection::getCostMicroCents).sum();
+        // The token-cost decomposition splits the 500 completion tokens into
+        // the 300 text remainder (billed_output_text at 2000/1K) and the 200
+        // reasoning tokens (billed_output_reasoning at 3000/1K) - the reasoning
+        // tokens are not billed a second time inside the completion count.
         assertThat(fullCost)
             .as("the request at the shared boundary bills every token type "
-                + "(1000 x 2500 + 500 x 2000 + 200 x 3000 over 1K)")
-            .isEqualTo(1000L * 2500 / 1000 + 500L * 2000 / 1000 + 200L * 3000 / 1000);
+                + "(1000 x 2500 + (500 - 200) x 2000 + 200 x 3000 over 1K)")
+            .isEqualTo(1000L * 2500 / 1000 + 300L * 2000 / 1000 + 200L * 3000 / 1000);
     }
 
     /**

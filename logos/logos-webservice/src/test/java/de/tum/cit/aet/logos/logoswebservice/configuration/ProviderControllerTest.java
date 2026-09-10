@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.timeout;
@@ -77,6 +78,56 @@ class ProviderControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").value("Created Provider."))
            .andExpect(jsonPath("$['provider-id']").isNumber());
+    }
+
+    @Test
+    void addProvider_logosnodeGeneratesApiKeyWhenAbsent() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"local-node\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"logosnode\",\"privacy_level\":\"LOCAL\","
+                    + "\"auth_name\":\"\",\"auth_format\":\"{}\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Created Provider."))
+           .andExpect(jsonPath("$.api_key")
+               .value(org.hamcrest.Matchers.matchesPattern("[A-Za-z0-9_-]{64}")));
+    }
+
+    @Test
+    void addProvider_logosnodeEchoesExplicitlyProvidedKey() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"local-node-2\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"logosnode\",\"privacy_level\":\"LOCAL\","
+                    + "\"auth_name\":\"\",\"auth_format\":\"{}\",\"api_key\":\"my-shared-key\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.api_key").value("my-shared-key"));
+    }
+
+    @Test
+    void addProvider_cloudDoesNotGenerateApiKey() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"cloud-p\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"cloud\",\"privacy_level\":\"CLOUD_IN_EU_BY_US_PROVIDER\","
+                    + "\"auth_name\":\"Authorization\",\"auth_format\":\"Bearer {}\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.api_key").doesNotExist());
+    }
+
+    @Test
+    void addProvider_rejectsDroppedOllamaType() throws Exception {
+        mvc.perform(post("/logosdb/add_provider")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_name\":\"ollama-provider\",\"base_url\":\"http://example.com\","
+                    + "\"provider_type\":\"ollama\",\"privacy_level\":\"LOCAL\","
+                    + "\"auth_name\":\"Authorization\",\"auth_format\":\"Bearer {}\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value(containsString("no longer supported")));
     }
 
     @Test
