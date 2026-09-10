@@ -848,26 +848,36 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # live headroom. This pass is the pressure corrector, not the
     # pre-populator: the unclamped sleepable_tmpfs_budget_mb (pool (available
     # + held) minus the sleep reserve and the safety margin) is a CUMULATIVE
-    # bound on the resulting cache order, enforced across the whole order,
-    # not per entry — several individually fitting trees together can still
-    # push the host below the margin. Retained protected entries of the order
-    # are accounted first: a live RAM-cache lane or a running calibration
-    # keeps its tree whatever the budget says, so its bytes leave less room
-    # for the rest. (Protected entries the plan already rejected — e.g. a
-    # reservation pinning a skipped model's existing tree — stay outside this
-    # accounting: the protection carve-out in _apply_ram_cache_plan wins
-    # there by design, and charging them here would evict what the plan
-    # keeps.) The remaining entries are then packed in plan order —
-    # unsleepable first, then sleepable, both groups sorted small→large —
-    # against what the retained ones leave. Dropped models also leave
-    # plan.order, so the re-cache logic below neither re-queues them (no
-    # pressure-fighting refill) nor carries their hold-down stamps forward;
-    # when headroom returns, a later pass re-admits and re-caches them after
-    # the hold-down.
+    # bound on what the cache keeps, enforced across the whole order, not
+    # per entry — several individually fitting trees together can still push
+    # the host below the margin. Every protected entry that will survive
+    # reclamation is charged BEFORE the unprotected order is packed: both
+    # the plan's protected entries and a protected cached model the planner
+    # already rejected (a live RAM-cache lane or a running calibration keeps
+    # its tree whatever the budget says) — an out-of-order 48 GB entry
+    # against a 30 GB budget leaves no room for the rest, and letting the
+    # rest in would push the retained cache past the live budget. The
+    # remaining entries are then packed in plan order — unsleepable first,
+    # then sleepable, both groups sorted small→large — against what the
+    # retained ones leave. Dropped models also leave plan.order, so the
+    # re-cache logic below neither re-queues them (no pressure-fighting
+    # refill) nor carries their hold-down stamps forward; when headroom
+    # returns, a later pass re-admits and re-caches them after the hold-down.
     candidate_size_mb = {c.name: c.size_bytes / (1024 * 1024) for c in candidates}
+
+    def _size_mb(name: str) -> float:
+        # Candidates carry their size; a protected entry the plan rejected
+        # (out of order) falls back to the same source walk the candidate
+        # builder uses.
+        size = candidate_size_mb.get(name)
+        if size is None:
+            size = model_cache.model_size_bytes(name) / (1024 * 1024)
+        return size
+
     remaining_budget_mb = plan.sleepable_tmpfs_budget_mb
-    for m in sorted(set(plan.order) & protected):
-        remaining_budget_mb -= candidate_size_mb[m]
+    retained = (set(plan.order) | set(model_cache.cached_models())) & protected
+    for m in sorted(retained):
+        remaining_budget_mb -= _size_mb(m)
     dropped: set[str] = set()
     for m in plan.order:
         if m in protected:
