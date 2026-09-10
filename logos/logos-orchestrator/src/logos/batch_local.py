@@ -185,6 +185,18 @@ async def run_local_batch(batch: Dict[str, Any]) -> Optional[str]:
     batch_object_id = int(batch["id"])
     if batch_object_id in _running:
         return None
+    # Claimed before the first await, so two passes of the runner loop in this
+    # process cannot both take the same batch. The database claim below is the
+    # equivalent guard across processes.
+    _running.add(batch_object_id)
+    try:
+        return await _start(batch, batch_object_id)
+    finally:
+        _running.discard(batch_object_id)
+
+
+async def _start(batch: Dict[str, Any], batch_object_id: int) -> Optional[str]:
+    """Load a batch's input and hand it to the runner."""
     with DBManager() as db:
         # in_progress rows are re-offered after a restart, so a batch this
         # process already owns must not be started twice; the conditional
@@ -207,11 +219,7 @@ async def run_local_batch(batch: Dict[str, Any]) -> Optional[str]:
             db.finish_local_batch(batch_object_id, status="failed")
         return None
 
-    _running.add(batch_object_id)
-    try:
-        return await _execute_lines(batch_object_id, batch, parse_request_lines(content), auth)
-    finally:
-        _running.discard(batch_object_id)
+    return await _execute_lines(batch_object_id, batch, parse_request_lines(content), auth)
 
 
 async def _execute_lines(

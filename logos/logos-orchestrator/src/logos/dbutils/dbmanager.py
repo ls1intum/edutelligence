@@ -2596,7 +2596,7 @@ class DBManager:
                 """
                 SELECT id, upstream_id, provider_id, api_key_id, team_id, user_id, status
                 FROM batch_objects
-                WHERE kind = 'batch' AND settled_at IS NULL
+                WHERE kind = 'batch' AND settled_at IS NULL AND execution = 'provider'
                 ORDER BY created_at
                 LIMIT :limit
                 """
@@ -2772,7 +2772,8 @@ class DBManager:
                 """
                 SELECT id, upstream_id, input_file_id, endpoint, api_key_id, team_id, user_id, status
                 FROM batch_objects
-                WHERE kind = 'batch' AND execution = 'logos' AND status IN ('validating', 'in_progress')
+                WHERE kind = 'batch' AND execution = 'logos'
+                  AND status IN ('validating', 'in_progress', 'cancelling')
                 ORDER BY created_at
                 LIMIT :limit
                 """

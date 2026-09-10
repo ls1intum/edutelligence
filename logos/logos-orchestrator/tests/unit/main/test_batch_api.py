@@ -1552,3 +1552,117 @@ def test_a_local_batch_object_looks_like_a_providers(monkeypatch):
     assert rendered["request_counts"] == {"total": 3, "completed": 2, "failed": 1}
     assert rendered["completed_at"] == int(now.timestamp())
     assert rendered["metadata"] == {"run": "bench"}
+
+
+def test_a_cancel_before_the_runner_started_still_finishes_the_batch(monkeypatch):
+    # The cancel moves a queued batch to 'cancelling'; without the runner
+    # picking that state up it would sit there forever.
+    finished = {}
+
+    class _CancelDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, object_id):
+            raise AssertionError("a cancelling batch is not claimed as new work")
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return {
+                "id": 11,
+                "key_value": "lg-test",
+                "name": "k",
+                "key_type": "user",
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "environment": "test",
+                "log": "BILLING",
+                "settings": {},
+                "default_priority": 1,
+            }
+
+        def update_local_batch_progress(self, object_id, completed, failed):
+            return True  # a cancel is pending
+
+        def store_local_batch_file(self, **kwargs):
+            return 1
+
+        def finish_local_batch(self, object_id, **kwargs):
+            finished.update(kwargs)
+
+    monkeypatch.setattr(batch_local, "DBManager", _CancelDB)
+
+    asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2001,
+                "upstream_id": "batch_c",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "cancelling",
+            }
+        )
+    )
+
+    assert finished["status"] == "cancelled"
+    assert finished["completed"] == 0
+
+
+def test_a_batch_already_running_here_is_not_started_again(monkeypatch):
+    # The runner loop re-offers in_progress rows (so a batch interrupted by a
+    # restart resumes), which would otherwise start a second run of one this
+    # process is already working through.
+    claimed = []
+
+    class _ClaimDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, object_id):
+            claimed.append(object_id)
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return None
+
+        def get_local_batch_file_content(self, object_id):
+            return None
+
+        def finish_local_batch(self, object_id, **kwargs):
+            pass
+
+    monkeypatch.setattr(batch_local, "DBManager", _ClaimDB)
+    row = {
+        "id": 2002,
+        "upstream_id": "batch_d",
+        "input_file_id": "file-in",
+        "api_key_id": 11,
+        "team_id": OWN_TEAM,
+        "user_id": 13,
+        "status": "validating",
+    }
+
+    batch_local._running.add(2002)
+    try:
+        assert asyncio.run(batch_local.run_local_batch(row)) is None
+        assert claimed == []  # it never reached the database claim
+    finally:
+        batch_local._running.discard(2002)
+
+    # With the guard clear it runs — and the claim is what decides across
+    # processes.
+    asyncio.run(batch_local.run_local_batch(row))
+    assert claimed == [2002]
