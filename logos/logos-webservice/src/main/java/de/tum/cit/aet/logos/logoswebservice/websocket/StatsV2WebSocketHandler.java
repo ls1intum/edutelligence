@@ -327,9 +327,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                         pushTimelineDelta(session, state);
                     }
                 }
-                if (t % 5 == 0) {
-                    pushVramDelta(session, state);
-                }
+                // VRAM deltas ride every tick: a lane the worker just loaded
+                // reaches the UI within one second of its status report
+                // instead of waiting up to five for the next vram cadence.
+                // The fetch is cursor-scoped (new snapshots only) and the
+                // provider-status hop is cached for 3 s, so the per-tick cost
+                // stays small; the push itself is still skipped when nothing
+                // moved (no new samples, cursor, or connection state).
+                pushVramDelta(session, state);
                 // Aggregates are the expensive push (findTotals alone scans the
                 // range twice more for tokens and cost), so they go out at a
                 // tenth of the request cadence and only when something in
