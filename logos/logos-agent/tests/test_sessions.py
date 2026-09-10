@@ -14,7 +14,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from app.config import settings
 from app.schemas import (
     ACTIVE_STATUSES,

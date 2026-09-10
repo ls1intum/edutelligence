@@ -13,7 +13,6 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
 from app import controls, triggers
 
 AGENT = "LogosOSSAgent"
