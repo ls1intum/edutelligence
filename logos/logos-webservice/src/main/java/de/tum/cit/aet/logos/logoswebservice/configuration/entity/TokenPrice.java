@@ -38,6 +38,9 @@ public class TokenPrice {
     @Column(nullable = false)
     private Instant validFrom;
 
+    /** Open end of the price generation; NULL means the row is still current. */
+    private Instant validTo;
+
     /** Micro-cents per 1000 units of {@link #unit}. */
     @Column(name = "price_per_k_unit", nullable = false)
     private Long pricePerKUnit;
@@ -52,6 +55,7 @@ public class TokenPrice {
     public Long getMinContextTokens() { return minContextTokens; }
     public String getServiceTier() { return serviceTier; }
     public Instant getValidFrom() { return validFrom; }
+    public Instant getValidTo() { return validTo; }
     public Long getPricePerKUnit() { return pricePerKUnit; }
 
     public void setTypeId(Integer typeId) { this.typeId = typeId; }
@@ -61,5 +65,6 @@ public class TokenPrice {
     public void setMinContextTokens(Long minContextTokens) { this.minContextTokens = minContextTokens; }
     public void setServiceTier(String serviceTier) { this.serviceTier = serviceTier; }
     public void setValidFrom(Instant validFrom) { this.validFrom = validFrom; }
+    public void setValidTo(Instant validTo) { this.validTo = validTo; }
     public void setPricePerKUnit(Long pricePerKUnit) { this.pricePerKUnit = pricePerKUnit; }
 }

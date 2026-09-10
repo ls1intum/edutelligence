@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Price generations have an open end: a row is current from valid_from
+         until valid_to (NULL = still open). A provider type change closes the
+         rows opened under the previous type instead of deleting them, so the
+         historical billing rows stay valid for requests made before the
+         change, while no price selection (billing, model list, cost
+         derivation) can read them as current afterwards. A failed or empty
+         catalogue refresh after the change therefore derives no cost from
+         the previous provider type's prices. -->
+    <changeSet id="032-token-price-valid-to" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="token_prices" columnName="valid_to"/></not>
+        </preConditions>
+        <addColumn tableName="token_prices">
+            <column name="valid_to" type="TIMESTAMPTZ"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="032-resolve-unit-price-valid-to" author="wasnertobias">
+        <comment>
+            Re-replaces the logos_resolve_unit_price of changelog 023
+            (changeSet 022-2-resolve-unit-price) with the valid_to-aware
+            version: the LATERAL now only matches rows that are still open at
+            p_valid_at, so a generation closed by a provider type change is
+            never selected again, while requests made before the close still
+            match their closed row. A SQL-language function is validated at
+            CREATE time, which is why this replacement lives in the same
+            changelog as the column it references. The pre-023 budget_usage
+            recreation is dropped instead: 023 rebuilt budget_usage on
+            log_entry_cost, which picks up the boundary through this function.
+        </comment>
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_resolve_unit_price(
+                p_quantity       text,
+                p_model_id       integer,
+                p_provider_id    integer,
+                p_valid_at       timestamptz,
+                p_context_tokens bigint,
+                p_service_tier   text
+            ) RETURNS bigint
+            LANGUAGE sql STABLE AS $fn$
+                WITH chain(name, depth) AS (
+                    SELECT p_quantity, 0
+                    UNION ALL
+                    SELECT x.fb, x.d
+                    FROM (VALUES
+                        ('billed_input_cache_read',     'billed_input_uncached',    1),
+                        ('billed_input_cache_write',    'billed_input_uncached',    1),
+                        ('billed_input_cache_write_1h', 'billed_input_cache_write', 1),
+                        ('billed_input_cache_write_1h', 'billed_input_uncached',    2),
+                        ('billed_input_audio',          'billed_input_uncached',    1),
+                        ('billed_input_audio_cache_read','billed_input_audio',       1),
+                        ('billed_input_audio_cache_read','billed_input_cache_read',  2),
+                        ('billed_input_audio_cache_read','billed_input_uncached',    3),
+                        ('billed_input_audio_cache_write','billed_input_audio',      1),
+                        ('billed_input_audio_cache_write','billed_input_cache_write',2),
+                        ('billed_input_audio_cache_write','billed_input_uncached',   3),
+                        ('billed_input_image_tokens',   'billed_input_uncached',    1),
+                        ('billed_output_reasoning',     'billed_output_text',       1),
+                        ('billed_output_audio',         'billed_output_text',       1),
+                        ('billed_output_image_tokens',  'billed_output_text',       1)
+                        ,('billed_output_video_tokens', 'billed_output_text',       1)
+                        -- Most catalogues carry only the scalar search price, so
+                        -- fall size-suffixed low/high quantities back to it.
+                        ,('billed_search_queries_low',  'billed_search_queries',    1)
+                        ,('billed_search_queries_high', 'billed_search_queries',    1)
+                        ,('billed_search_prompts_low',  'billed_search_prompts',    1)
+                        ,('billed_search_prompts_high', 'billed_search_prompts',    1)
+                    ) AS x(orig, fb, d)
+                    WHERE x.orig = p_quantity
+                )
+                SELECT price.price_per_k_unit
+                FROM chain c
+                JOIN token_types tt ON tt.name = c.name
+                JOIN LATERAL (
+                    SELECT tp.price_per_k_unit
+                    FROM token_prices tp
+                    WHERE tp.type_id = tt.id
+                      AND tp.unit = CASE
+                          WHEN c.name LIKE '%characters' THEN 'character'
+                          WHEN c.name LIKE '%images' THEN 'image'
+                          WHEN c.name LIKE '%pixels' THEN 'pixel'
+                          WHEN c.name LIKE '%milliseconds%' OR c.name = 'audio_milliseconds' THEN 'millisecond'
+                          WHEN c.name LIKE '%pages' THEN 'page'
+                          WHEN c.name LIKE '%credits' THEN 'credit'
+                          WHEN c.name LIKE '%queries%' THEN 'query'
+                          WHEN c.name LIKE '%prompts%' THEN 'request'
+                          WHEN c.name = 'billed_requests' THEN 'request'
+                          WHEN c.name LIKE '%sessions' THEN 'session'
+                          WHEN c.name LIKE 'billed_guardrail_%' THEN 'unit'
+                          ELSE 'token'
+                      END
+                      AND (tp.model_id = p_model_id OR tp.model_id IS NULL)
+                      AND (tp.provider_id = p_provider_id OR tp.provider_id IS NULL)
+                      AND tp.valid_from <= p_valid_at
+                      AND (tp.valid_to IS NULL OR tp.valid_to > p_valid_at)
+                      AND tp.min_context_tokens <= COALESCE(p_context_tokens, 0)
+                      AND (tp.service_tier = COALESCE(p_service_tier, 'default')
+                           OR tp.service_tier = 'default')
+                    ORDER BY (tp.model_id = p_model_id) DESC NULLS LAST,
+                             (tp.provider_id = p_provider_id) DESC NULLS LAST,
+                             (tp.service_tier = COALESCE(p_service_tier, 'default')) DESC,
+                             tp.min_context_tokens DESC,
+                             tp.valid_from DESC,
+                             tp.id DESC
+                    LIMIT 1
+                ) price ON true
+                ORDER BY c.depth
+                LIMIT 1
+            $fn$;
+        ]]></sql>
+    </changeSet>
+
+</databaseChangeLog>

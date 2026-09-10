@@ -19,6 +19,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -136,13 +137,15 @@ public class PriceUpdaterService {
     private final ProviderRepository providerRepository;
     private final TokenTypeRepository tokenTypeRepository;
     private final TokenPriceRepository tokenPriceRepository;
+    private final TransactionTemplate transactionTemplate;
 
     public PriceUpdaterService(ObjectMapper objectMapper,
                                ModelRepository modelRepository,
                                ModelProviderRepository modelProviderRepository,
                                ProviderRepository providerRepository,
                                TokenTypeRepository tokenTypeRepository,
-                               TokenPriceRepository tokenPriceRepository) {
+                               TokenPriceRepository tokenPriceRepository,
+                               TransactionTemplate transactionTemplate) {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         this.modelRepository = modelRepository;
@@ -150,6 +153,7 @@ public class PriceUpdaterService {
         this.providerRepository = providerRepository;
         this.tokenTypeRepository = tokenTypeRepository;
         this.tokenPriceRepository = tokenPriceRepository;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @Scheduled(initialDelay = 0, fixedDelay = 86_400_000)
@@ -201,7 +205,12 @@ public class PriceUpdaterService {
         updatePricesForModel(modelId, modelName);
     }
 
-    private void updatePricesForModel(int modelId, String modelName) {
+    /**
+     * Synchronous price refresh for one model's cloud pairs. Public so callers
+     * that need the prices before continuing (the auto-derivation, which reads
+     * token_prices) can run it inline instead of racing the async variant.
+     */
+    public void updatePricesForModel(int modelId, String modelName) {
         try {
             List<ModelProvider> links = modelProviderRepository.findByModelId(modelId);
             List<ModelProvider> cloudLinks = links.stream()
@@ -239,8 +248,41 @@ public class PriceUpdaterService {
                 modelName, providerId);
             return;
         }
+        storeFetchedCataloguePrices(modelId, providerId, modelName, cloudType, data);
+    }
 
-        ingestCatalog(modelId, providerId, modelName, data, Instant.now());
+    /**
+     * Write the prices of a fetched catalogue page for one model-provider
+     * pair, revalidating the provider's type first.
+     *
+     * The catalogue fetch runs without the provider lock (it is a network
+     * call), so a provider type change can land between the fetch and this
+     * write: the stale page was fetched for the previous type and must not
+     * open a price row under it. The revalidation and the inserts therefore
+     * run in one transaction that first takes the same provider advisory
+     * lock the type change takes before closing the open price rows, and
+     * re-reads the provider after taking it. A refresh that fetched under
+     * the previous type then either committed before the type change (whose
+     * price close covers its rows) or sees the new type here and discards
+     * its page, so it can never re-open the closed price generation.
+     */
+    public void storeFetchedCataloguePrices(int modelId, int providerId, String modelName,
+                                            String cloudType, Map<String, Object> data) {
+        Boolean stored = transactionTemplate.execute(status -> {
+            providerRepository.lockProviderDerivation(ModelMetricsService.providerDerivationLockKey(providerId));
+            Provider current = providerRepository.findById(providerId).orElse(null);
+            if (current == null || current.getCloudProviderType() == null
+                    || !current.getCloudProviderType().name().equals(cloudType)) {
+                log.info("price_updater: provider_id={} changed type while the catalogue fetch for "
+                    + "type {} was in flight, discarding the stale prices", providerId, cloudType);
+                return false;
+            }
+            ingestCatalog(modelId, providerId, modelName, data, Instant.now());
+            return true;
+        });
+        if (Boolean.TRUE.equals(stored)) {
+            log.info("price_updater: prices updated for model_id={} provider_id={}", modelId, providerId);
+        }
     }
 
     /**
@@ -387,7 +429,6 @@ public class PriceUpdaterService {
             upsertTokenPrice(modelId, providerId, dim.quantity(), dim.unit(),
                 dim.minContextTokens(), dim.serviceTier(), e.getValue().pricePerK(), validFrom);
         }
-        log.info("price_updater: prices updated for '{}' (id={}, provider_id={})", modelName, modelId, providerId);
     }
 
     @SuppressWarnings("unchecked")
@@ -422,7 +463,11 @@ public class PriceUpdaterService {
             .findTopByModelIdAndTypeIdAndProviderIdAndUnitAndMinContextTokensAndServiceTierOrderByValidFromDesc(
                 modelId, tokenType.getId(), providerId, unit, minContextTokens, serviceTier);
 
-        if (latest.isPresent() && latest.get().getPricePerKUnit() != null
+        // The same-value shortcut only applies within one open generation:
+        // a generation closed by a provider type change must be re-opened
+        // even when the catalogue returns the very same value.
+        if (latest.isPresent() && latest.get().getValidTo() == null
+                && latest.get().getPricePerKUnit() != null
                 && latest.get().getPricePerKUnit().longValue() == pricePerK) {
             return;
         }

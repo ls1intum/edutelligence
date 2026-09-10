@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.dto;
 
 import java.util.List;
+import java.util.Map;
 
 public record UpdateModelRequestDTO(
     Integer modelId,
@@ -11,5 +12,18 @@ public record UpdateModelRequestDTO(
     Integer weightAccuracy,
     Integer weightCost,
     Integer weightQuality,
+    /**
+     * Optional explicit replacement of the weight-override set:
+     * which dimensions the metrics derivation must not touch. When omitted,
+     * weight values that actually change are auto-marked as overrides.
+     */
+    Map<String, Boolean> weightOverrides,
     List<String> aliases
-) {}
+) {
+    public UpdateModelRequestDTO(Integer modelId, String name, String description, String tags,
+                                 Integer weightLatency, Integer weightAccuracy,
+                                 Integer weightCost, Integer weightQuality) {
+        this(modelId, name, description, tags, weightLatency, weightAccuracy, weightCost, weightQuality,
+            null, null);
+    }
+}

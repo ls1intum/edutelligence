@@ -34,5 +34,7 @@
     <include file="liquibase/changelog/028_log_entry_api_key_response_index.xml"/>
     <include file="liquibase/changelog/029_rename_provider_snapshots.xml"/>
     <include file="liquibase/changelog/030_refuse_ollama_typed_providers.xml"/>
+    <include file="liquibase/changelog/031_derived_model_provider_metrics.xml"/>
+    <include file="liquibase/changelog/032_token_price_valid_to.xml"/>
 
 </databaseChangeLog>
