@@ -1274,14 +1274,20 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
         if not number:
             fail("could not open a pull request")
             return None
-        run(
+        refreshed = run(
             ["gh", "pr", "edit", str(number), "--repo", slug, "--title", title, "--body", body],
             cwd=CHECKOUT,
             check=False,
             quiet=True,
         )
         url = str(info.get("url") or "")
-        log(f"reused existing pull request {url} and refreshed its title")
+        if refreshed.returncode == 0:
+            log(f"reused existing pull request {url} and refreshed its title")
+        else:
+            # The pull request exists and the code is pushed; only its words
+            # could not be brought in line. Say so rather than claim a refresh
+            # that did not happen, but still hand over the link.
+            log(f"reused existing pull request {url}; could not refresh its title")
         return url or None
 
     for line in process.stdout.splitlines():

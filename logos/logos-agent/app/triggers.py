@@ -1210,6 +1210,15 @@ class TriggerPoller:
             # other threads. Hand those over too, so the agent acts on what
             # was asked rather than replying that it cannot see the other one.
             other_inline = await self._other_inline_comments(number, thread) if inline and about_pull else []
+            if branch is not None and other_inline:
+                # A writable session hears only people who may direct a change,
+                # the same rule that trimmed this thread's own comments above.
+                # The other threads' notes are foreign text the agent is about
+                # to be handed a push credential beside, and a stranger's review
+                # note steering a code change is the injection that filter exists
+                # to stop. A read-only answer keeps every note: it can only be
+                # explained, not acted on.
+                other_inline = await self._trusted_comments(other_inline)
             candidates.append(
                 {
                     # The reference names the conversation and its latest

@@ -1153,7 +1153,7 @@ class TestHowAPullRequestIsOpened:
         assert title == "`Logos`: Fit the KPI card sparkline to its slot"
 
     @staticmethod
-    def reuse_capture(monkeypatch, tmp_path, *, number, url, commit_subject):
+    def reuse_capture(monkeypatch, tmp_path, *, number, url, commit_subject, edit_ok: bool = True):
         """A `gh pr create` that fails because the pull request already exists.
 
         The second (or later) iteration of a session hits this: the branch
@@ -1175,7 +1175,7 @@ class TestHowAPullRequestIsOpened:
             if cmd[:3] == ["gh", "pr", "view"]:
                 return _Out(0, json.dumps({"number": number, "url": url}))
             if cmd[:3] == ["gh", "pr", "edit"]:
-                return _Out(0, "")
+                return _Out(0, "") if edit_ok else _Out(1, "")
             return _Out(0, "")
 
         monkeypatch.setenv("LOGOS_REPO_SLUG", "x/y")
@@ -1229,6 +1229,26 @@ class TestHowAPullRequestIsOpened:
 
         assert url is None
         assert not any(cmd[:3] == ["gh", "pr", "edit"] for cmd in calls)
+
+    def test_a_reused_pull_request_is_reported_even_when_the_refresh_fails(self, monkeypatch, tmp_path, capsys):
+        # The pull request exists and the code is pushed; only the title
+        # refresh failed. Hand over the link anyway — the work is out there —
+        # but say plainly the title did not move.
+        self.reuse_capture(
+            monkeypatch,
+            tmp_path,
+            number=933,
+            url="https://github.com/x/y/pull/933",
+            commit_subject="Serve the paths",
+            edit_ok=False,
+        )
+
+        url = run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert url == "https://github.com/x/y/pull/933"
+        out = capsys.readouterr().out
+        assert "could not refresh its title" in out
+        assert "and refreshed its title" not in out
 
 
 class TestWhatTheAgentIsTold:
