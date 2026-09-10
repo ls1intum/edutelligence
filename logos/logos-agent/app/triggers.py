@@ -1002,6 +1002,24 @@ class TriggerPoller:
                 directed.append(comment)
         return directed
 
+    async def _readable_comments(self, comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The comments this session may read, once trusted work has been authorized.
+
+        Wider than :meth:`_trusted_comments`: the session was already handed a
+        branch by somebody who may direct a change, and the note it was told to
+        address may sit with a configured review app — in no team and pushing
+        nothing, but one the operator named. Reading what was asked is not
+        obeying a stranger, so a bot the repository already trusts comes over
+        the line. An untrusted account does not: this is where a foreign review
+        note would steer code, and the allowlist stays the wall.
+        """
+        readable = []
+        for comment in comments:
+            author = str((comment.get("user") or {}).get("login") or "")
+            if author and await self._worth_reading(author):
+                readable.append(comment)
+        return readable
+
     async def _other_inline_comments(self, number: int, thread: dict[str, Any]) -> list[dict[str, Any]]:
         """The pull request's inline comments that are not in this thread.
 
@@ -1215,14 +1233,17 @@ class TriggerPoller:
             # was asked rather than replying that it cannot see the other one.
             other_inline = await self._other_inline_comments(number, thread) if inline and about_pull else []
             if branch is not None and other_inline:
-                # A writable session hears only people who may direct a change,
-                # the same rule that trimmed this thread's own comments above.
-                # The other threads' notes are foreign text the agent is about
-                # to be handed a push credential beside, and a stranger's review
-                # note steering a code change is the injection that filter exists
-                # to stop. A read-only answer keeps every note: it can only be
+                # A writable session hears people who may direct a change and
+                # the review apps the operator named, and no one else. The
+                # other threads' notes are foreign text the agent is about to
+                # be handed a push credential beside, and a stranger's review
+                # note steering a code change is the injection that filter
+                # exists to stop — so the allowlist stays the wall. A named
+                # review bot is over it: the session was already authorized to
+                # act, and the note it was told to address may well be the
+                # bot's. A read-only answer keeps every note: it can only be
                 # explained, not acted on.
-                other_inline = await self._trusted_comments(other_inline)
+                other_inline = await self._readable_comments(other_inline)
             candidates.append(
                 {
                     # The reference names the conversation and its latest
