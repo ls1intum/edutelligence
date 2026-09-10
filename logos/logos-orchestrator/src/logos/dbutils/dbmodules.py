@@ -407,6 +407,16 @@ class BatchObject(Base):
     completed_requests = Column(Integer, nullable=False, default=0)
     failed_requests = Column(Integer, nullable=False, default=0)
     cancel_requested = Column(Boolean, nullable=False, default=False)
+    # The Logos model names a batch input file asks for, as uploaded. When a
+    # forwarded batch turns out that the provider cannot batch one of them,
+    # this is what gets marked as not batch-eligible on that provider.
+    models = Column(JSON)
+    # Lease of the runner currently executing a Logos-run batch: which process
+    # holds it, and until when. A row whose lease is expired (or empty) is
+    # recoverable, so a batch whose runner died is picked up again — but a
+    # batch another live process is running is not.
+    runner_id = Column(Text)
+    lease_expires_at = Column(TIMESTAMP(timezone=True))
     started_at = Column(TIMESTAMP(timezone=True))
     finished_at = Column(TIMESTAMP(timezone=True))
     created_at = Column(
@@ -451,6 +461,64 @@ class ProviderBatchCapability(Base):
     supports_batch = Column(Boolean, nullable=False, default=False)
     detail = Column(Text)
     checked_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class ProviderModelBatchEligibility(Base):
+    """Per-model Batch eligibility on one provider, as learned from the provider.
+
+    Serving a model and serving it *for batch* are two different things: an
+    Azure resource answers its Batch API with a Global-Batch deployment for
+    each model it offers for that, and a model that only exists as a Standard
+    deployment cannot be batched there no matter how capable the resource
+    looks. The Batch API does not publish a model list for its batch endpoint,
+    so the knowledge is learned from the provider's own refusals (a batch
+    creation or a failed batch naming the unsupported model) and tracked here —
+    one row per model, with the detail of what the provider said.
+
+    Absence means "unknown", which routes to the provider as before (its error
+    is then passed through and can teach this table); an ``eligible = false``
+    row is what moves the batch to Logos execution. Rows expire after a TTL so
+    a model the provider adds to Batch later is picked up automatically, at the
+    price of one more failed batch.
+    """
+
+    __tablename__ = "provider_model_batch_eligibility"
+    __table_args__ = (UniqueConstraint("provider_id", "model_id", name="uq_provider_model_batch_eligibility"),)
+
+    id = Column(BigInteger, primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
+    eligible = Column(Boolean, nullable=False, default=False)
+    detail = Column(Text)
+    checked_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class BatchLineResult(Base):
+    """One finished request line of a Logos-run batch, keyed by its custom_id.
+
+    The runner persists each line's result as it completes, so a batch whose
+    runner died (or was redeployed) is resumed from the checkpoint rather than
+    replayed from line zero — the finished lines were already sent through the
+    pipeline and already billed, and running them again would bill them twice.
+    The result file itself is only written when the batch finishes; this table
+    is what makes "finished" resumable.
+    """
+
+    __tablename__ = "batch_line_results"
+    __table_args__ = (UniqueConstraint("batch_object_id", "custom_id", name="uq_batch_line_results"),)
+
+    batch_object_id = Column(BigInteger, ForeignKey("batch_objects.id", ondelete="CASCADE"), primary_key=True)
+    custom_id = Column(Text, primary_key=True)
+    row = Column(JSON, nullable=False)
+    finished_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),

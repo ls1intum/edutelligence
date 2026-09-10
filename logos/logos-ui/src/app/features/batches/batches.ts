@@ -92,12 +92,16 @@ export class Batches implements OnInit, OnDestroy {
     if (!quiet) this.loading.set(true);
     try {
       const response = await this.batchService.list(keyId);
+      // The key may have changed while the request was in flight; a stale
+      // answer must not replace the new key's list.
+      if (this.selectedKeyId() !== keyId) return;
       this.batches.set(response.data ?? []);
       this.error.set(null);
     } catch {
+      if (this.selectedKeyId() !== keyId) return;
       if (!quiet) this.error.set('Could not load your batches.');
     } finally {
-      this.loading.set(false);
+      if (this.selectedKeyId() === keyId) this.loading.set(false);
     }
   }
 

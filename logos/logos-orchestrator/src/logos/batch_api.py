@@ -455,19 +455,32 @@ async def choose_execution_target(
     if provider is None:
         return None, permitted
 
-    # The provider only qualifies if it hosts every model the file names.
+    # The provider only qualifies if it hosts every model the file names — and
+    # actually batches every one of them. Hosting is the weaker half: a model
+    # can be linked on the provider through a Standard deployment while the
+    # provider's Batch API refuses it (Azure adds models to Batch long after
+    # Standard). What the provider has refused before is tracked per model,
+    # and those models count as not hosted for the choice made here.
     on_provider = [row for row in permitted if int(row["provider_id"]) == int(provider["id"])]
     hosted = {str(row["model_name"]).lower() for row in on_provider}
-    missing = sorted(name for name in model_names if name.lower() not in hosted)
+    model_id_by_name = {str(row["model_name"]).lower(): int(row["model_id"]) for row in on_provider}
+    ineligible = db.get_batch_model_ineligibility(int(provider["id"]))
+    missing = sorted(
+        name for name in model_names if name.lower() not in hosted or model_id_by_name.get(name.lower()) in ineligible
+    )
     if missing:
         if requested_execution == "provider" or _header(headers, BATCH_PROVIDER_HEADER):
             raise_openai_error(
                 400,
-                f"Provider {provider['name']!r} does not serve {', '.join(repr(n) for n in missing)}, "
+                f"Provider {provider['name']!r} cannot batch {', '.join(repr(n) for n in missing)}, "
                 "so it cannot run this batch. Omit the provider header to have Logos run it instead.",
                 code="model_not_available_for_batch",
             )
-        logger.info("Running batch locally: provider %s does not serve %s", provider.get("name"), ", ".join(missing))
+        logger.info(
+            "Running batch locally: provider %s cannot batch %s",
+            provider.get("name"),
+            ", ".join(missing),
+        )
         return None, permitted
     return provider, on_provider
 
@@ -866,12 +879,108 @@ async def settle_batch(provider: Dict[str, Any], owner: Dict[str, Any], batch_bo
     return written
 
 
+# Background work this module starts. The event loop keeps only weak
+# references to tasks, so a fire-and-forget task with no other reference can
+# be garbage collected while it is still running — which would abandon a
+# batch's settlement mid-download. Holding each task here until it finishes is
+# the remedy the asyncio documentation recommends.
+_background_tasks: set = set()
+
+
+def _spawn_background(coro, what: str) -> Optional[asyncio.Task]:
+    """Run a coroutine in the background, holding the task until it finishes."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # no loop (sync test context): nothing can run
+        coro.close()
+        logger.debug("No running loop for %s", what)
+        return None
+    task = loop.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 def _schedule_settlement(provider: Dict[str, Any], owner: Dict[str, Any], batch_body: Dict[str, Any]) -> None:
     """Settle in the background so a client's poll is not held up by it."""
+    _spawn_background(settle_batch(provider, owner, batch_body), f"batch settlement of {owner.get('upstream_id')}")
+
+
+# ---------------------------------------------------------------------------
+# Per-model Batch eligibility, learned from the provider
+# ---------------------------------------------------------------------------
+
+
+def _provider_error_text(body: Dict[str, Any]) -> str:
+    """The error messages a provider object or response carries, flattened."""
+    error = body.get("error")
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    errors = body.get("errors")
+    if isinstance(errors, list):
+        parts = []
+        for item in errors:
+            if isinstance(item, dict) and item.get("message"):
+                parts.append(str(item["message"]))
+            elif isinstance(item, str):
+                parts.append(item)
+        if parts:
+            return " ".join(parts)
+    return ""
+
+
+def _looks_like_batch_model_error(text: str) -> bool:
+    """Whether a provider error says a model cannot be batched there.
+
+    Deliberately narrow: this text becomes a routing decision (the model's
+    batches move to Logos), and an unrelated failure — a quota error, a bad
+    deployment name — must not be read as "this model is not for batch".
+    """
+    lowered = (text or "").lower()
+    return "batch" in lowered and any(marker in lowered for marker in ("not supported", "sku", "globalbatch"))
+
+
+def _learn_batch_ineligibility(provider: Dict[str, Any], input_file_id: Any, error_text: str) -> None:
+    """Remember, per model, that this provider refused to batch it.
+
+    The provider does not publish which of its models it offers for batch, so
+    its refusal is the only reliable source. The input file's model list (kept
+    at upload) is what says which models the refused batch named: an error
+    that names one of them marks just that model, and a refusal that does not
+    name any marks all of them — a batch file is one job at one place, so if
+    the provider could not batch the file it could not batch its models.
+    """
+    if not error_text or not _looks_like_batch_model_error(error_text) or not input_file_id:
+        return
     try:
-        asyncio.get_running_loop().create_task(settle_batch(provider, owner, batch_body))
-    except RuntimeError:  # pragma: no cover - no loop (sync test context)
-        logger.debug("No running loop for batch settlement of %s", owner.get("upstream_id"))
+        with DBManager() as db:
+            input_file = db.get_batch_object("file", str(input_file_id))
+        if not input_file:
+            return
+        models = input_file.get("models")
+        if not isinstance(models, list):
+            return
+        model_names = [name for name in models if isinstance(name, str)]
+        if not model_names:
+            return
+        lowered = error_text.lower()
+        targets = [name for name in model_names if name.lower() in lowered] or model_names
+        with DBManager() as db:
+            index = {
+                str(row["model_name"]).lower(): int(row["model_id"])
+                for row in db.get_provider_model_deployments(int(provider["id"]))
+            }
+            for name in targets:
+                model_id = index.get(name.lower())
+                if model_id is not None:
+                    db.record_model_batch_ineligibility(int(provider["id"]), model_id, error_text[:400])
+        logger.info(
+            "Provider %s refused to batch %s; that model's batches will run in Logos",
+            provider.get("name"),
+            ", ".join(targets),
+        )
+    except Exception:  # noqa: BLE001 - learning must never break the request path
+        logger.exception("Could not record Batch ineligibility on provider %s", provider.get("id"))
 
 
 async def reconcile_batches_once() -> int:
@@ -906,6 +1015,8 @@ async def reconcile_batches_once() -> int:
         with DBManager() as db:
             db.update_batch_object_status(str(owner["upstream_id"]), status)
         if status in TERMINAL_BATCH_STATES:
+            if status == "failed":
+                _learn_batch_ineligibility(provider, owner.get("input_file_id"), _provider_error_text(body))
             settled += await settle_batch(provider, owner, body)
     return settled
 
@@ -927,15 +1038,35 @@ async def batch_reconciler_loop() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _owns_object(auth: AuthContext, owned: Dict[str, Any]) -> bool:
+    """Whether this caller's principal owns the object's row.
+
+    A team's objects belong to the team; an object a team-less key created
+    belongs to that user alone, and to the key itself when even the user is
+    absent. Comparing team ids alone is not a scope: personal keys carry
+    ``team_id = NULL``, and ``NULL == NULL`` would make every unteamed key on
+    the instance the owner of every other one's batches and their output
+    files.
+    """
+    if auth.team_id is not None:
+        return owned.get("team_id") == auth.team_id
+    if owned.get("team_id") is not None:
+        return False
+    if auth.user_id is not None:
+        return owned.get("user_id") == auth.user_id
+    return owned.get("api_key_id") == auth.api_key_id
+
+
 def _owned_or_404(db: DBManager, auth: AuthContext, operation: BatchOperation) -> Dict[str, Any]:
     """The ownership row for the addressed id, or a 404 if it isn't the caller's.
 
-    An id another team owns is answered exactly like one that never existed:
-    saying it exists would already leak that another team is running it.
+    An id another principal owns is answered exactly like one that never
+    existed: saying it exists would already leak that someone else is running
+    it.
     """
     kind = "file" if operation.resource == "files" else "batch"
     owned = db.get_batch_object(kind, str(operation.resource_id))
-    if owned is None or owned.get("team_id") != auth.team_id:
+    if owned is None or not _owns_object(auth, owned):
         raise_openai_error(404, f"No such {kind}: {operation.resource_id!r}.", code="not_found")
     return owned
 
@@ -952,14 +1083,14 @@ def _response_json(response: Response) -> Optional[Dict[str, Any]]:
 
 
 def _listing_response(db: DBManager, auth: AuthContext, operation: BatchOperation) -> Response:
-    """List the caller team's own objects, from Logos' own record.
+    """List the caller's own objects (team, else user, else key), from Logos' record.
 
     Not forwarded: the shared upstream credential sees every team's objects,
     and Logos minted all of its own — so its record is both the safe answer and
     the complete one, covering batches it ran itself that no provider knows.
     """
     kind = "file" if operation.resource == "files" else "batch"
-    rows = db.list_batch_objects_for_team(auth.team_id, kind)
+    rows = db.list_batch_objects_for_principal(kind, auth.team_id, auth.user_id, auth.api_key_id)
     data = [
         (
             (local_file_object(row) if kind == "file" else local_batch_object(row))
@@ -1028,10 +1159,7 @@ def _serve_local_operation(db: DBManager, operation: BatchOperation, owner: Dict
 
 def _start_local_batch(batch_row: Dict[str, Any]) -> None:
     """Kick a freshly created batch off now instead of waiting for the poller."""
-    try:
-        asyncio.get_running_loop().create_task(run_local_batch(batch_row))
-    except RuntimeError:  # pragma: no cover - no loop (sync test context)
-        logger.debug("No running loop to start batch %s", batch_row.get("upstream_id"))
+    _spawn_background(run_local_batch(batch_row), f"local batch {batch_row.get('upstream_id')}")
 
 
 # ---------------------------------------------------------------------------
@@ -1106,6 +1234,7 @@ async def _handle_file_upload(request: Request, auth: AuthContext, headers: Dict
         "size": len(rewritten),
         "requests": sum(model_counts.values()),
         "model_ids": sorted(model_counts),
+        "models": sorted(str(row["model_name"]) for row in deployments if int(row["model_id"]) in model_counts),
         "execution": "provider" if provider else "logos",
     }
 
@@ -1132,7 +1261,7 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
     if not isinstance(input_file_id, str) or not input_file_id:
         raise_openai_error(400, "A batch needs an 'input_file_id'.", code="invalid_request_error")
     input_file = db.get_batch_object("file", input_file_id)
-    if input_file is None or input_file.get("team_id") != auth.team_id:
+    if input_file is None or not _owns_object(auth, input_file):
         raise_openai_error(404, f"No such file: {input_file_id!r}.", code="not_found")
 
     _check_batch_budget(db, auth)
@@ -1224,7 +1353,9 @@ async def handle_batch_api_request(request: Request) -> Response:
 
         if response is None:
             response = await forward_batch_operation(provider, operation, upload, json_body)
-            response = _register_upstream_object(response, operation, provider, auth, owner)
+            response = await _register_upstream_object(
+                response, operation, provider, auth, owner, file_models=log_payload.get("models")
+            )
     except HTTPException as exc:
         _finalize_batch_log(
             log_id,
@@ -1248,17 +1379,76 @@ async def handle_batch_api_request(request: Request) -> Response:
             result_status="error",
             error_message=error_text or f"Batch API upstream returned {response.status_code}",
         )
+        # A creation refused because one of the file's models is not batchable
+        # is the one refusal that teaches Logos to route that model locally
+        # from now on, instead of failing the same way on the next file.
+        if (
+            operation.is_batch_creation
+            and provider is not None
+            and isinstance(json_body, dict)
+            and json_body.get("input_file_id")
+        ):
+            _learn_batch_ineligibility(provider, json_body.get("input_file_id"), error_text)
     return response
 
 
-def _register_upstream_object(
+async def _record_upstream_object(db: DBManager, register_kwargs: Dict[str, Any]) -> None:
+    """Commit one ownership row, retrying the write.
+
+    The provider has already created the object when this runs, so a
+    transient database failure must not turn into "the object exists upstream
+    but nobody at Logos knows who owns it" — that orphan is both unreachable
+    for its owner and invisible to the settlement path. A few short retries
+    ride out the transient case; what survives them is handled by the caller,
+    which removes the provider object again.
+    """
+    last: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            db.register_batch_object(**register_kwargs)
+            return
+        except Exception as exc:  # noqa: BLE001 - the retries are the handling
+            last = exc
+            await asyncio.sleep(0.2 * (attempt + 1))
+    assert last is not None
+    raise last
+
+
+async def _remove_upstream_object(provider: Dict[str, Any], operation: BatchOperation, upstream_id: str) -> None:
+    """Best effort: delete what the provider just minted, so an unowned object does not linger there."""
+    resource = "files" if operation.resource == "files" else "batches"
+    delete = BatchOperation(
+        resource=resource,
+        method="DELETE",
+        path=f"v1/{resource}/{upstream_id}",
+        resource_id=upstream_id,
+    )
+    try:
+        await forward_batch_operation(provider, delete)
+        logger.warning("Removed upstream %s %s whose ownership could not be recorded", resource, upstream_id)
+    except Exception:  # noqa: BLE001 - the error below already says what happened
+        logger.exception("Could not remove upstream %s %s", resource, upstream_id)
+
+
+async def _register_upstream_object(
     response: Response,
     operation: BatchOperation,
     provider: Dict[str, Any],
     auth: AuthContext,
     owner: Optional[Dict[str, Any]],
+    file_models: Optional[List[str]] = None,
 ) -> Response:
-    """Record what the provider just minted, and settle a batch that finished."""
+    """Record what the provider just minted, and settle a batch that finished.
+
+    For the operations that mint something new (a file upload, a batch
+    creation) the response is not returned before the ownership row is
+    durable: with the provider credential shared by every key allowed to use
+    the provider, an object without an owner is an object anyone could later
+    fail to reach or — worse, if the row were simply skipped — an object any
+    key could use. When the row cannot be committed the provider object is
+    removed again and the caller gets an error, so the provider never holds
+    what Logos cannot account for.
+    """
     if response.status_code >= 400:
         return response
     payload = _response_json(response)
@@ -1267,31 +1457,78 @@ def _register_upstream_object(
 
     upstream_id = payload.get("id")
     if operation.is_file_upload and isinstance(upstream_id, str):
-        with DBManager() as db:
-            db.register_batch_object(
-                kind="file",
-                upstream_id=upstream_id,
-                provider_id=int(provider["id"]),
-                api_key_id=auth.api_key_id,
-                team_id=auth.team_id,
-                user_id=auth.user_id,
+        register_kwargs = dict(
+            kind="file",
+            upstream_id=upstream_id,
+            provider_id=int(provider["id"]),
+            api_key_id=auth.api_key_id,
+            team_id=auth.team_id,
+            user_id=auth.user_id,
+            models=file_models,
+        )
+        try:
+            with DBManager() as db:
+                await _record_upstream_object(db, register_kwargs)
+        except Exception:  # noqa: BLE001 - see the error below for the outcome
+            logger.exception("Could not record ownership of upstream file %s", upstream_id)
+            await _remove_upstream_object(provider, operation, upstream_id)
+            raise_openai_error(
+                502,
+                "The provider created the file, but Logos could not record who owns it and "
+                "removed it again. Try the upload once more.",
+                code="batch_ownership_unrecorded",
             )
     elif operation.is_batch_creation and isinstance(upstream_id, str):
-        with DBManager() as db:
-            db.register_batch_object(
-                kind="batch",
-                upstream_id=upstream_id,
-                provider_id=int(provider["id"]),
-                api_key_id=auth.api_key_id,
-                team_id=auth.team_id,
-                user_id=auth.user_id,
-                input_file_id=payload.get("input_file_id"),
-                status=payload.get("status"),
+        register_kwargs = dict(
+            kind="batch",
+            upstream_id=upstream_id,
+            provider_id=int(provider["id"]),
+            api_key_id=auth.api_key_id,
+            team_id=auth.team_id,
+            user_id=auth.user_id,
+            input_file_id=payload.get("input_file_id"),
+            status=payload.get("status"),
+        )
+        try:
+            with DBManager() as db:
+                await _record_upstream_object(db, register_kwargs)
+        except Exception:  # noqa: BLE001 - see the error below for the outcome
+            logger.exception("Could not record ownership of upstream batch %s", upstream_id)
+            await _remove_upstream_object(provider, operation, upstream_id)
+            raise_openai_error(
+                502,
+                "The provider created the batch, but Logos could not record who owns it and "
+                "removed it again. Try the creation once more.",
+                code="batch_ownership_unrecorded",
             )
     elif operation.resource == "batches" and operation.resource_id and owner is not None:
+        # Polling: nothing new to own, and a failure here is retried by the
+        # next poll and by the reconciler, so it must not turn a successful
+        # upstream poll into a 500.
         status = payload.get("status")
-        with DBManager() as db:
-            db.update_batch_object_status(str(operation.resource_id), status)
+        try:
+            with DBManager() as db:
+                db.update_batch_object_status(str(operation.resource_id), status)
+                # A terminal response is what names the result file (and the
+                # error file). Register both for the batch's owner now: they
+                # appear in the provider's list for every key that may use the
+                # provider, and without a row of their own the owner's result
+                # download would be a 404 while a stranger's would work.
+                for file_field in ("output_file_id", "error_file_id"):
+                    file_id = payload.get(file_field)
+                    if isinstance(file_id, str) and file_id:
+                        db.register_batch_object(
+                            kind="file",
+                            upstream_id=file_id,
+                            provider_id=int(provider["id"]),
+                            api_key_id=owner.get("api_key_id"),
+                            team_id=owner.get("team_id"),
+                            user_id=owner.get("user_id"),
+                        )
+            if status == "failed":
+                _learn_batch_ineligibility(provider, owner.get("input_file_id"), _provider_error_text(payload))
+        except Exception:  # noqa: BLE001 - the next poll (and the reconciler) retries this
+            logger.exception("Could not update the state of batch %s", operation.resource_id)
         if status in TERMINAL_BATCH_STATES and owner.get("settled_at") is None:
             _schedule_settlement(provider, owner, payload)
 

@@ -524,6 +524,9 @@ class _FakeDB:
         self.cancelled = []
         self.log_usage_kwargs = None
         self.finalization = None
+        self.ineligible = {}
+        self.eligibility_records = []
+        self.fail_registration = False
 
     def __enter__(self):
         return self
@@ -552,6 +555,8 @@ class _FakeDB:
         return self.owned.get((kind, upstream_id))
 
     def register_batch_object(self, **kwargs):
+        if self.fail_registration:
+            raise RuntimeError("the database is down")
         self.registered.append(kwargs)
         self.owned[(kwargs["kind"], kwargs["upstream_id"])] = {
             "id": 1,
@@ -561,8 +566,35 @@ class _FakeDB:
             **kwargs,
         }
 
-    def list_batch_objects_for_team(self, team_id, kind, limit=100):
-        return [row for key, row in self.owned.items() if key[0] == kind and row.get("team_id") == team_id]
+    def list_batch_objects_for_principal(self, kind, team_id, user_id, api_key_id, limit=100):
+        rows = []
+        for key, row in self.owned.items():
+            if key[0] != kind:
+                continue
+            if team_id is not None:
+                matches = row.get("team_id") == team_id
+            elif user_id is not None:
+                # A team-less key sees only its own user's objects — the same
+                # predicate the database query uses.
+                matches = row.get("team_id") is None and row.get("user_id") == user_id
+            else:
+                matches = row.get("api_key_id") == api_key_id
+            if matches:
+                rows.append(row)
+        return rows
+
+    def get_batch_model_ineligibility(self, provider_id):
+        return set(self.ineligible.get(int(provider_id), set()))
+
+    def record_model_batch_ineligibility(self, provider_id, model_id, detail=""):
+        self.eligibility_records.append((int(provider_id), int(model_id), detail))
+        self.ineligible.setdefault(int(provider_id), set()).add(int(model_id))
+
+    def get_provider_model_deployments(self, provider_id):
+        return [row for row in self.deployments if int(row["provider_id"]) == int(provider_id)]
+
+    def claim_batch_for_settlement(self, batch_object_id):
+        return False  # the settlement tests drive the latch themselves
 
     def update_batch_object_status(self, upstream_id, status):
         self.status_updates.append((upstream_id, status))
@@ -715,6 +747,9 @@ def test_file_upload_forwards_the_rewritten_file_and_records_ownership(monkeypat
             "api_key_id": 11,
             "team_id": OWN_TEAM,
             "user_id": 13,
+            # The models the file names are kept on the row: a later refusal
+            # by the provider is the evidence for which model to mark.
+            "models": ["gpt-4.1"],
         }
     ]
     assert db.log_usage_kwargs["input_payload"]["requests"] == 1
@@ -850,6 +885,57 @@ def test_an_id_logos_never_minted_is_a_404(monkeypatch):
     assert seen == []
 
 
+def test_a_team_less_key_cannot_reach_another_users_objects(monkeypatch):
+    # Both keys are team-less, so their objects carry team_id = NULL. A scope
+    # on "team_id IS NULL" would make every personal key on the instance the
+    # owner of every other one's batches; the user, then the key, is what
+    # separates them.
+    personal = {
+        "id": 5,
+        "team_id": None,
+        "user_id": 13,
+        "api_key_id": 21,
+        "provider_id": 7,
+        "execution": "provider",
+        "settled_at": None,
+        "created_at": datetime.now(timezone.utc),
+    }
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS, owned={("batch", "batch_p"): personal})
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "leaked"}))
+    stranger = SimpleNamespace(
+        key_value="lg-other",
+        api_key_id=22,
+        api_key_name="other-key",
+        key_type="user",
+        team_id=None,
+        user_id=14,
+        environment="test",
+        log_level="BILLING",
+        settings={},
+        default_priority=0,
+    )
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "leaked"}), auth=stranger)
+
+    # Another unteamed user is answered exactly like an unknown id, and the
+    # listing shows none of that user's objects either.
+    assert client.get("/v1/batches/batch_p").status_code == 404
+    listed = client.get("/v1/batches")
+    assert listed.status_code == 200
+    assert listed.json()["data"] == []
+    assert seen == []
+
+    # The owning user (team-less like the object) reaches it.
+    _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(200, json={"id": "batch_p", "status": "in_progress"}),
+        auth=_auth(api_key_id=21, team_id=None),
+    )
+    resp = client.get("/v1/batches/batch_p")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "batch_p"
+
+
 def test_a_listing_is_answered_from_logos_own_record(monkeypatch):
     # Not forwarded: the shared upstream credential sees every team's objects,
     # and Logos knows about the batches it ran itself, which no provider does.
@@ -888,6 +974,44 @@ def test_polling_records_the_status_and_settles_a_finished_batch(monkeypatch):
     assert resp.status_code == 200
     assert db.status_updates == [("batch_1", "completed")]
     assert settled == [(77, "completed")]
+
+
+def test_a_poll_registers_the_result_file_the_provider_minted(monkeypatch):
+    # The provider mints the output (and error) file under the shared
+    # credential: it shows up in the provider's file list for every key that
+    # may use the provider. Without an ownership row of its own, the batch
+    # owner's result download would be a 404 while a stranger's would work.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("batch", "batch_1"): _remote(77, OWN_TEAM)},
+    )
+    _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(
+            200,
+            json={
+                "id": "batch_1",
+                "status": "completed",
+                "output_file_id": "file-out",
+                "error_file_id": "file-err",
+            },
+        ),
+    )
+    monkeypatch.setattr(batch_api, "_schedule_settlement", lambda *args: None)
+
+    assert client.get("/v1/batches/batch_1").status_code == 200
+
+    file_rows = [row for (kind, _), row in db.owned.items() if kind == "file"]
+    assert {row["upstream_id"] for row in file_rows} == {"file-out", "file-err"}
+    assert all(row["team_id"] == OWN_TEAM for row in file_rows)
+
+    # And the owner can now download the result through the files route.
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, content=b'{"custom_id": "one"}\n'))
+    download = client.get("/v1/files/file-out/content")
+    assert download.status_code == 200
+    assert download.content == b'{"custom_id": "one"}\n'
 
 
 def test_an_unfinished_batch_is_not_settled(monkeypatch):
@@ -944,6 +1068,28 @@ def test_an_upstream_error_is_passed_through_and_logged(monkeypatch):
     assert resp.json()["error"]["message"] == "input file is empty"
     assert db.finalization["result_status"] == "error"
     assert "input file is empty" in db.finalization["error_message"]
+
+
+def test_an_unrecordable_upload_is_removed_upstream_and_reported(monkeypatch):
+    # The provider has the file but nobody at Logos knows who owns it: with
+    # the shared credential that object is reachable by every key. Rather
+    # than return success for an unowned object, Logos removes it again and
+    # says so.
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS)
+    db.fail_registration = True
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "file-abc"}))
+
+    resp = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "batch_ownership_unrecorded"
+    # The provider object is gone again: minted, then deleted.
+    assert [request.method for request in seen] == ["POST", "DELETE"]
+    assert str(seen[-1].url).endswith("/v1/files/file-abc")
 
 
 def test_an_unreachable_upstream_is_a_502(monkeypatch):
@@ -1283,6 +1429,75 @@ def test_a_cloud_model_its_provider_cannot_batch_is_run_by_logos(monkeypatch):
     assert seen == []
 
 
+def test_a_model_the_provider_refused_before_runs_in_logos(monkeypatch):
+    # The model is hosted on the batch-capable provider — through a Standard
+    # deployment — but a refusal recorded before marked it as not batchable
+    # there. Hosting alone must not qualify it: forwarding would just fail
+    # the batch the same way it failed before.
+    hosted_but_not_batchable = [
+        {
+            "model_id": 92,
+            "model_name": "gpt-5.6-luna",
+            "endpoint": "https://res.openai.azure.com/openai/deployments/gpt-5.6-luna/responses",
+            "provider_id": 8,  # the batch-capable provider itself
+            "provider_type": "cloud",
+            "cloud_provider_type": "azure",
+        }
+    ]
+    db = _FakeDB([AZURE_PROVIDER], AZURE_DEPLOYMENTS + hosted_but_not_batchable)
+    db.ineligible[8] = {92}
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "file-abc"}))
+
+    resp = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_line(model="gpt-5.6-luna")), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["logos_execution"] == "logos"
+    assert seen == []
+
+
+def test_a_refused_creation_teaches_the_next_file_to_run_in_logos(monkeypatch):
+    # The provider does not publish which of its models it offers for batch,
+    # so its refusal is the only source: a creation refused for the model
+    # records it, and the same file uploaded again is routed to Logos instead
+    # of failing the same way.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+    )
+    seen = _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(
+            400, json={"error": {"message": "The model 'gpt-4.1' is not supported on the batch SKU."}}
+        ),
+    )
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 400
+    # The refusal named the model, so only that model is recorded — and the
+    # record is what the next upload reads.
+    assert [record[:2] for record in db.eligibility_records] == [(7, 25)]
+
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    assert upload.status_code == 200
+    assert upload.json()["logos_execution"] == "logos"
+    # The learned routing kept the file out of the provider entirely.
+    assert [request.method for request in seen] == ["POST"]
+
+
 def test_the_execution_header_forces_a_local_run(monkeypatch):
     db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS)
     seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "file-abc"}))
@@ -1433,7 +1648,8 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def claim_local_batch(self, batch_object_id):
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            stored.setdefault("claims", []).append((batch_object_id, runner_id, lease_seconds))
             return True
 
         def get_local_object_by_upstream_id(self, kind, upstream_id):
@@ -1456,8 +1672,14 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
                 "default_priority": 10,
             }
 
-        def update_local_batch_progress(self, object_id, completed, failed):
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
             return False
+
+        def save_local_batch_lines(self, object_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
 
         def log_usage(self, **kwargs):
             stored.setdefault("logged", []).append(kwargs)
@@ -1506,6 +1728,195 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
     assert row["custom_id"] == "a"
     assert row["response"]["status_code"] == 200
     assert row["error"] is None
+    # Every finished line is checkpointed durably: on a restart that is what
+    # tells the runner which lines must not run (and bill) a second time.
+    assert {checkpoint["custom_id"] for checkpoint in stored["checkpoints"]} == {"a", "b"}
+    # The claim is the cross-process guard, and it carries this process' id
+    # and the lease the other processes will wait on.
+    assert stored["claims"] == [(2000, batch_local.RUNNER_ID, batch_local.LOCAL_BATCH_LEASE_TTL_S)]
+
+
+def _runner_key_row(default_priority=1):
+    return {
+        "id": 11,
+        "key_value": "lg-test",
+        "name": "k",
+        "key_type": "user",
+        "team_id": OWN_TEAM,
+        "user_id": 13,
+        "environment": "test",
+        "log": "BILLING",
+        "settings": {},
+        "default_priority": default_priority,
+    }
+
+
+def test_a_resumed_batch_skips_the_lines_already_checkpointed(monkeypatch):
+    # A restart must not re-run (and re-bill) the lines the previous pass
+    # finished: they are read back from the checkpoint, and only the missing
+    # lines go through the pipeline.
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        executed.append(body["model"])
+        return {"status_code": 200, "data": {"usage": {"prompt_tokens": 5}}}
+
+    stored = {}
+    done = batch_local._result_row(_local_line("a"), {"status_code": 200, "data": {"usage": {"prompt_tokens": 5}}})[0]
+
+    class _ResumeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a"), _local_line("b"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {"a": done}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            return False
+
+        def save_local_batch_lines(self, object_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            stored.setdefault("logged", []).append(kwargs)
+            return {"log-id": 500 + len(stored["logged"])}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, **kwargs):
+            stored["finish"] = kwargs
+
+    monkeypatch.setattr(batch_local, "DBManager", _ResumeDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2003,
+                "upstream_id": "batch_r",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",  # left behind by a dead runner
+            }
+        )
+    )
+
+    assert len(executed) == 1  # only the line without a checkpoint ran
+    assert len(stored["logged"]) == 1  # ... and was the only one billed
+    assert stored["finish"]["completed"] == 2
+    assert stored["finish"]["failed"] == 0
+    # The output file carries both rows, in input order — the resumed one
+    # from the checkpoint, the fresh one from this run.
+    output = [json.loads(line) for line in stored["content"].splitlines()]
+    assert [row["custom_id"] for row in output] == ["a", "b"]
+    assert output[0] == done
+
+
+def test_a_lost_lease_stops_the_runner_without_writing_results(monkeypatch):
+    # A progress write that says "you no longer hold this batch" must stop the
+    # runner before the next line: the new holder resumes from the checkpoints
+    # already written, and two finishers would write two result files.
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        executed.append(1)
+        return {"status_code": 200, "data": {}}
+
+    stored = {}
+
+    class _LostLeaseDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a"), _local_line("b"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            return None  # another runner took the batch over
+
+        def save_local_batch_lines(self, object_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            return {"log-id": 600}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, **kwargs):
+            stored["finish"] = kwargs
+
+    monkeypatch.setattr(batch_local, "DBManager", _LostLeaseDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    result = asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2004,
+                "upstream_id": "batch_l",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+        )
+    )
+
+    assert result is None  # no output file id: this runner wrote nothing
+    assert executed == []
+    assert "finish" not in stored
+    assert "content" not in stored
+
+
+class _LineLogDB:
+    """The minimum of a database a single line needs: its usage-log row."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def log_usage(self, **kwargs):
+        return {"log-id": 600}, 200
 
 
 def test_a_failing_line_is_reported_without_stopping_the_batch(monkeypatch):
@@ -1514,6 +1925,7 @@ def test_a_failing_line_is_reported_without_stopping_the_batch(monkeypatch):
             raise RuntimeError("upstream exploded")
         return {"status_code": 400, "data": {"error": {"message": "context length exceeded"}}}
 
+    monkeypatch.setattr(batch_local, "DBManager", _LineLogDB)
     monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
     monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
 
@@ -1522,6 +1934,31 @@ def test_a_failing_line_is_reported_without_stopping_the_batch(monkeypatch):
     assert failed is True
     assert row["error"]["code"] == "400"
     assert "context length" in row["error"]["message"]
+
+
+def test_a_line_without_a_log_row_is_refused_not_run_unbilled(monkeypatch):
+    # Without the log row the pipeline would run the request and bill nothing,
+    # so the line is refused instead of run — the batch reports it as failed.
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        executed.append(body)
+        return {"status_code": 200, "data": {}}
+
+    class _BrokenLogDB(_LineLogDB):
+        def log_usage(self, **kwargs):
+            raise RuntimeError("the ledger is down")
+
+    monkeypatch.setattr(batch_local, "DBManager", _BrokenLogDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    row, failed = asyncio.run(batch_local._run_line(_local_line("a"), _auth(), {}, asyncio.Semaphore(1)))
+
+    assert failed is True
+    assert row["response"]["status_code"] == 500
+    assert "could not be started" in row["error"]["message"]
+    assert executed == []  # no unbilled request may reach the provider
 
 
 def test_a_local_batch_object_looks_like_a_providers(monkeypatch):
@@ -1556,7 +1993,11 @@ def test_a_local_batch_object_looks_like_a_providers(monkeypatch):
 
 def test_a_cancel_before_the_runner_started_still_finishes_the_batch(monkeypatch):
     # The cancel moves a queued batch to 'cancelling'; without the runner
-    # picking that state up it would sit there forever.
+    # picking that state up it would sit there forever. 'cancelling' goes
+    # through the same lease claim as every other state: the claim is what
+    # makes the takeover exclusive, and the pending cancel is read off the
+    # first progress write.
+    claimed = []
     finished = {}
 
     class _CancelDB:
@@ -1566,8 +2007,9 @@ def test_a_cancel_before_the_runner_started_still_finishes_the_batch(monkeypatch
         def __exit__(self, *exc):
             return False
 
-        def claim_local_batch(self, object_id):
-            raise AssertionError("a cancelling batch is not claimed as new work")
+        def claim_local_batch(self, object_id, runner_id, lease_seconds):
+            claimed.append(object_id)
+            return True
 
         def get_local_object_by_upstream_id(self, kind, upstream_id):
             return {"id": 1000}
@@ -1589,7 +2031,10 @@ def test_a_cancel_before_the_runner_started_still_finishes_the_batch(monkeypatch
                 "default_priority": 1,
             }
 
-        def update_local_batch_progress(self, object_id, completed, failed):
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
             return True  # a cancel is pending
 
         def store_local_batch_file(self, **kwargs):
@@ -1614,6 +2059,7 @@ def test_a_cancel_before_the_runner_started_still_finishes_the_batch(monkeypatch
         )
     )
 
+    assert claimed == [2001]  # taken over like any other queued batch
     assert finished["status"] == "cancelled"
     assert finished["completed"] == 0
 
@@ -1631,7 +2077,7 @@ def test_a_batch_already_running_here_is_not_started_again(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def claim_local_batch(self, object_id):
+        def claim_local_batch(self, object_id, runner_id, lease_seconds):
             claimed.append(object_id)
             return True
 

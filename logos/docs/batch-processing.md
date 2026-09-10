@@ -78,6 +78,8 @@ A request line looks like this:
 A polling script is the normal client:
 
 ```python
+import time
+
 while batch.status not in ("completed", "failed", "expired", "cancelled"):
     time.sleep(120)
     batch = client.batches.retrieve(batch.id)
@@ -103,6 +105,18 @@ Whether a provider serves a Batch API is probed rather than configured — a
 self-hosted OpenAI-shaped inference endpoint answers `/chat/completions` and
 nothing else, and a hand-set flag would go stale. The result is cached for
 `LOGOS_BATCH_CAPABILITY_TTL_HOURS` (default 24).
+
+Serving a Batch API and batching a *given model* are two different things:
+on Azure each model needs its own Global-Batch deployment, and a model that
+only exists as a Standard deployment cannot be batched there even though the
+resource serves the Batch API. The provider does not publish its batch model
+list, so Logos learns this from its own refusals: when it refuses a batch
+creation (or a batch finishes failed) with a model-availability error, the
+models of that input file are recorded as not batch-eligible on that provider
+and route to Logos execution from the next file on. The record expires after
+`LOGOS_BATCH_MODEL_ELIGIBILITY_TTL_DAYS` (default 90), so a model the provider
+adds to Batch later is picked up automatically; the cost of a stale record is
+one more refused batch.
 
 `X-Logos-Batch-Execution` overrides the choice:
 
@@ -141,8 +155,9 @@ do, so the passthrough is not blind:
   addressed.
 - **Ownership.** File and batch ids are used for hours after the call that
   minted them, with a provider credential shared by every key allowed to use
-  that provider. Logos records each id with its owning team; a lifecycle call
-  for an id another team owns is answered `404`, exactly like an id that never
+  that provider. Logos records each id with its owner — the creating team, or
+  the creating user and key for a team-less personal key; a lifecycle call for
+  an id someone else owns is answered `404`, exactly like an id that never
   existed. `GET /v1/batches` and `GET /v1/files` are answered from Logos' own
   record rather than forwarded, so they show the caller team's objects and
   nobody else's — and cover the batches Logos ran itself, which no provider

@@ -35,5 +35,6 @@
     <include file="liquibase/changelog/029_rename_provider_snapshots.xml"/>
     <include file="liquibase/changelog/030_refuse_ollama_typed_providers.xml"/>
     <include file="liquibase/changelog/031_batch_api.xml"/>
+    <include file="liquibase/changelog/032_batch_runner.xml"/>
 
 </databaseChangeLog>

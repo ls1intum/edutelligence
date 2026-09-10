@@ -12,7 +12,10 @@ statement — these assert on the bound parameters and the call structure.)
 from __future__ import annotations
 
 import datetime
+import json
 from unittest.mock import MagicMock
+
+import pytest
 
 from logos import DBManager
 from logos.dbutils import dbmanager
@@ -51,7 +54,7 @@ def test_a_failed_settlement_is_released_for_a_retry():
 
 def test_batch_usage_is_written_and_then_priced_by_the_shared_snapshot():
     db = _db()
-    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101,), (102,)])
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101, None), (102, None)])
     db.add_token_type = lambda name, description="": ({"token-type-id": 1}, 200)
 
     written = db.record_batch_usage(
@@ -71,7 +74,7 @@ def test_batch_usage_is_written_and_then_priced_by_the_shared_snapshot():
 
 def test_batch_rows_default_to_the_batch_service_tier():
     db = _db()
-    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101,)])
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101, None)])
     db.add_token_type = lambda name, description="": ({"token-type-id": 1}, 200)
 
     db.record_batch_usage([{"timestamp": _now(), "usage": {}}])
@@ -86,7 +89,7 @@ def test_batch_rows_default_to_the_batch_service_tier():
 
 def test_an_owner_is_carried_onto_every_row():
     db = _db()
-    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101,)])
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101, None)])
     db.add_token_type = lambda name, description="": ({"token-type-id": 1}, 200)
 
     db.record_batch_usage(
@@ -111,7 +114,7 @@ def test_an_owner_is_carried_onto_every_row():
 
 def test_zero_and_boolean_token_counts_are_not_billed():
     db = _db()
-    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101,)])
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101, None)])
     db.add_token_type = lambda name, description="": ({"token-type-id": 1}, 200)
 
     db.record_batch_usage(
@@ -124,7 +127,7 @@ def test_zero_and_boolean_token_counts_are_not_billed():
 
 def test_rows_are_written_in_chunks():
     db = _db()
-    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101,)])
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(101, None)])
     db.add_token_type = lambda name, description="": ({"token-type-id": 1}, 200)
 
     # A single batch can carry tens of thousands of results; they must not go
@@ -144,7 +147,7 @@ def test_no_rows_writes_nothing():
 def test_a_snapshot_failure_does_not_lose_the_usage_rows():
     db = _db()
     db.session.execute.side_effect = [
-        MagicMock(fetchall=lambda: [(101,)]),
+        MagicMock(fetchall=lambda: [(101, None)]),
         MagicMock(),
         RuntimeError("logos_price_usage failed"),
     ]
@@ -164,8 +167,28 @@ def test_ownership_and_listing_queries_are_scoped():
     assert db.get_batch_object("file", "file-abc") is None
     assert _params_of(db.session.execute.call_args) == {"kind": "file", "upstream_id": "file-abc"}
 
-    db.list_batch_objects_for_team(12, "batch")
-    assert _params_of(db.session.execute.call_args) == {"kind": "batch", "team_id": 12, "limit": 100}
+
+@pytest.mark.parametrize(
+    ("team_id", "user_id", "api_key_id", "expected_params"),
+    [
+        # A team sees the team's objects.
+        (12, 13, 11, {"kind": "batch", "team_id": 12, "limit": 100}),
+        # A team-less key sees only its own user's objects — never the objects
+        # of another unteamed user, which a "team_id IS NULL" scope would leak.
+        (None, 13, 11, {"kind": "batch", "user_id": 13, "limit": 100}),
+        # A key without a user falls back to the key itself.
+        (None, None, 11, {"kind": "batch", "api_key_id": 11, "limit": 100}),
+    ],
+)
+def test_listing_is_scoped_by_the_callers_principal(team_id, user_id, api_key_id, expected_params):
+    db = _db()
+    db.session.execute.return_value.mappings.return_value.all.return_value = []
+
+    db.list_batch_objects_for_principal("batch", team_id, user_id, api_key_id)
+
+    # Exactly one of the three scope parameters is bound — the one naming the
+    # caller's principal — so the WHERE clause can only match that principal's rows.
+    assert _params_of(db.session.execute.call_args) == expected_params
 
 
 def test_capability_is_cached_per_provider_with_a_timestamp():
@@ -182,3 +205,153 @@ def test_the_snapshot_statement_the_batch_path_reuses_is_the_shared_one():
     # the same statement.
     assert "logos_price_usage" in dbmanager._SETTLED_COST_SNAPSHOT_SQL
     assert "{where_clause}" in dbmanager._SETTLED_COST_SNAPSHOT_SQL
+
+
+def test_usage_tokens_follow_the_request_id_not_the_insert_order():
+    # A multi-row INSERT ... RETURNING does not promise its rows back in the
+    # order they went in; the usage tokens must attach by request_id or one
+    # line's tokens could be priced as another line's.
+    db = _db()
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(102, "b"), (101, "a")])
+    db.add_token_type = lambda name, description="": ({"token-type-id": 1}, 200)
+
+    db.record_batch_usage(
+        [
+            {"timestamp": _now(), "request_id": "a", "usage": {"total_tokens": 7}},
+            {"timestamp": _now(), "request_id": "b", "usage": {"total_tokens": 3}},
+        ]
+    )
+
+    calls = db.session.execute.call_args_list
+    # Row "a" was returned second (id 101), row "b" first (id 102) — the usage
+    # insert still puts 7 tokens on 101 and 3 on 102.
+    usage_params = _params_of(calls[1])
+    assert (usage_params["log_0"], usage_params["count_0"]) == (101, 7)
+    assert (usage_params["log_1"], usage_params["count_1"]) == (102, 3)
+
+
+def test_registering_a_file_keeps_the_models_it_names():
+    db = _db()
+    db.register_batch_object(
+        kind="file",
+        upstream_id="file-abc",
+        provider_id=7,
+        api_key_id=11,
+        team_id=12,
+        user_id=13,
+        models=["gpt-4.1", "gpt-4o"],
+    )
+
+    params = _params_of(db.session.execute.call_args)
+    assert json.loads(params["models"]) == ["gpt-4.1", "gpt-4o"]
+
+    # A row that names no models stores NULL, and the upsert keeps what is
+    # already there rather than blanking it.
+    db.session.execute.reset_mock()
+    db.register_batch_object(
+        kind="batch", upstream_id="batch-abc", provider_id=7, api_key_id=11, team_id=12, user_id=13
+    )
+    assert _params_of(db.session.execute.call_args)["models"] is None
+
+
+def test_claiming_a_local_batch_stamps_the_runner_and_the_lease():
+    db = _db()
+    db.session.execute.return_value = MagicMock(rowcount=1)
+    assert db.claim_local_batch(5, "runner-1", 600) is True
+
+    params = _params_of(db.session.execute.call_args)
+    assert params["id"] == 5
+    assert params["runner"] == "runner-1"
+    assert params["lease"] == 600
+    assert isinstance(params["now"], datetime.datetime)
+
+    # A live lease (or a terminal batch) leaves the update unmatched.
+    db.session.execute.return_value = MagicMock(rowcount=0)
+    assert db.claim_local_batch(5, "runner-1", 600) is False
+
+
+def test_progress_updates_are_conditional_on_still_holding_the_batch():
+    db = _db()
+    db.session.execute.return_value = MagicMock(fetchone=lambda: (True,))
+    assert db.update_local_batch_progress(5, "runner-1", 3, 1, 600) is True
+
+    params = _params_of(db.session.execute.call_args)
+    assert (params["id"], params["runner"]) == (5, "runner-1")
+    assert (params["completed"], params["failed"]) == (3, 1)
+
+    # No cancel pending -> False; the row no longer belongs to this runner
+    # (another one took it over after the lease lapsed) -> None, which the
+    # runner treats as "stop, do not write an output file".
+    db.session.execute.return_value = MagicMock(fetchone=lambda: (False,))
+    assert db.update_local_batch_progress(5, "runner-1", 4, 1, 600) is False
+    db.session.execute.return_value = MagicMock()
+    db.session.execute.return_value.fetchone.return_value = None
+    assert db.update_local_batch_progress(5, "runner-1", 4, 1, 600) is None
+
+
+def test_finishing_a_local_batch_releases_the_runner():
+    db = _db()
+    db.finish_local_batch(5, status="completed", output_file_id="file-out", completed=9, failed=1)
+
+    params = _params_of(db.session.execute.call_args)
+    assert params["id"] == 5
+    assert params["status"] == "completed"
+    assert params["output_file_id"] == "file-out"
+    assert (params["completed"], params["failed"]) == (9, 1)
+
+
+def test_line_checkpoints_are_upserted_per_line():
+    db = _db()
+    db.save_local_batch_lines(
+        5,
+        [
+            {"custom_id": "q-1", "row": {"status_code": 200}},
+            {"custom_id": "q-2", "row": {"status_code": 500}},
+        ],
+    )
+
+    params = _params_of(db.session.execute.call_args)
+    assert (params["id_0"], params["cid_0"]) == (5, "q-1")
+    assert json.loads(params["row_0"]) == {"status_code": 200}
+    assert (params["id_1"], params["cid_1"]) == (5, "q-2")
+
+    # Nothing finished -> nothing to write.
+    db.session.execute.reset_mock()
+    db.save_local_batch_lines(5, [])
+    db.session.execute.assert_not_called()
+
+
+def test_the_checkpoint_reads_back_by_custom_id():
+    db = _db()
+    db.session.execute.return_value.mappings.return_value.all.return_value = [
+        {"custom_id": "q-1", "row": {"status_code": 200}},
+        {"custom_id": "q-2", "row": {"status_code": 500}},
+    ]
+
+    assert db.get_local_batch_lines(5) == {
+        "q-1": {"status_code": 200},
+        "q-2": {"status_code": 500},
+    }
+    assert _params_of(db.session.execute.call_args) == {"id": 5}
+
+
+def test_eligibility_rows_are_read_back_within_the_ttl():
+    db = _db()
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(25,), (26,)])
+
+    assert db.get_batch_model_ineligibility(7) == {25, 26}
+
+    params = _params_of(db.session.execute.call_args)
+    assert params["pid"] == 7
+    assert isinstance(params["now"], datetime.datetime)
+    assert params["ttl"] == dbmanager.BATCH_MODEL_ELIGIBILITY_TTL_DAYS
+
+
+def test_a_refusal_is_recorded_per_model_and_truncated():
+    db = _db()
+    db.record_model_batch_ineligibility(7, 25, "x" * 600)
+
+    params = _params_of(db.session.execute.call_args)
+    assert (params["pid"], params["mid"]) == (7, 25)
+    assert len(params["detail"]) == 500
+    assert isinstance(params["now"], datetime.datetime)

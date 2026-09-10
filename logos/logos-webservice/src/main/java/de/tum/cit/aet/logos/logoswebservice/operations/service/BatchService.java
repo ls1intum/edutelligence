@@ -1,12 +1,15 @@
 package de.tum.cit.aet.logos.logoswebservice.operations.service;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
@@ -23,6 +26,8 @@ import org.springframework.web.client.RestTemplate;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 
+import jakarta.annotation.PostConstruct;
+
 /**
  * The batch pages, served by talking to the orchestrator as the user's own key.
  *
@@ -33,6 +38,10 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository
  * second implementation in Java would be a second set of those rules to keep in
  * step, so this forwards to the same endpoints a script would call, with the
  * API key the user picked in the UI.
+ *
+ * The key is the user's secret, so where it may travel is checked at startup
+ * (HTTPS, or plain HTTP on loopback for local development) and the template
+ * used never follows a redirect that could carry it to another authority.
  */
 @Service
 public class BatchService {
@@ -45,9 +54,36 @@ public class BatchService {
     @Value("${logos.orchestrator.url:}")
     private String orchestratorUrl;
 
-    public BatchService(RestTemplate restTemplate, ApiKeyRepository apiKeyRepository) {
+    public BatchService(@Qualifier("batchRestTemplate") RestTemplate restTemplate, ApiKeyRepository apiKeyRepository) {
         this.restTemplate = restTemplate;
         this.apiKeyRepository = apiKeyRepository;
+    }
+
+    /**
+     * The batch proxy sends the caller's API key to this URL on every call, so
+     * a URL that would put the key on the wire in cleartext is a
+     * misconfiguration that should fail the deployment, not the request.
+     * HTTPS is fine anywhere; plain HTTP only on loopback, matching the
+     * orchestrator's own rule for credentials.
+     */
+    @PostConstruct
+    void validateOrchestratorUrl() {
+        if (orchestratorUrl.isBlank()) return;
+        URI uri;
+        try {
+            uri = URI.create(orchestratorUrl);
+        } catch (IllegalArgumentException exc) {
+            throw new IllegalStateException("logos.orchestrator.url is not a valid URL: " + orchestratorUrl, exc);
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+        boolean loopback = "localhost".equals(host) || "127.0.0.1".equals(host) || "::1".equals(host);
+        if ("https".equals(scheme) || ("http".equals(scheme) && loopback)) return;
+        throw new IllegalStateException(
+            "The batch proxy sends the caller's API key to logos.orchestrator.url ("
+                + orchestratorUrl
+                + "), which is not HTTPS. Point it at an HTTPS endpoint (plain HTTP is only accepted on loopback) "
+                + "so the key does not travel in cleartext.");
     }
 
     /** Raised when the caller may not act as the key they named. */
@@ -178,6 +214,17 @@ public class BatchService {
         String url = orchestratorUrl.replaceAll("/+$", "") + path;
         try {
             ResponseEntity<byte[]> response = restTemplate.exchange(url, method, entity, byte[].class);
+            if (response.getStatusCode().is3xxRedirection()) {
+                // The template never follows a redirect, and the request
+                // carries the caller's key — so a 3xx is an error to report,
+                // not a hop to take.
+                log.warn("batch proxy to {} answered with a redirect: {}", path, response.getStatusCode());
+                return new ProxiedResponse(
+                    502,
+                    MediaType.APPLICATION_JSON_VALUE,
+                    "{\"error\":{\"message\":\"The orchestrator answered with a redirect, which the batch proxy does not follow.\"}}"
+                        .getBytes(StandardCharsets.UTF_8));
+            }
             return new ProxiedResponse(
                 response.getStatusCode().value(),
                 response.getHeaders().getContentType() != null

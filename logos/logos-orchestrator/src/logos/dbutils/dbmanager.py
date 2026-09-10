@@ -54,6 +54,13 @@ DEFAULT_LOCAL_TPM_LIMIT = 10000
 DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
 
+# How long a learned "this provider does not batch this model" fact is trusted
+# before the model is offered to the provider again. Generous, because the
+# change it guards against (the provider adding the model to Batch) is rare —
+# and the cost of a stale row is one more failed batch, from which the row is
+# re-learned only if the refusal repeats.
+BATCH_MODEL_ELIGIBILITY_TTL_DAYS = int(os.getenv("LOGOS_BATCH_MODEL_ELIGIBILITY_TTL_DAYS", "90"))
+
 # Derived from the ThresholdLevel declaration order (the single definition —
 # see that class for the trust ordering and the copies this mirrors): a new
 # level added to the enum is accepted by provider registration automatically.
@@ -2381,6 +2388,59 @@ class DBManager:
         )
         self.session.commit()
 
+    def get_batch_model_ineligibility(self, provider_id: int) -> set:
+        """The model ids this provider is known not to batch, right now.
+
+        Feeds the choice of where a batch runs: a model on this list counts as
+        not hosted for Batch, so a file naming it runs in Logos instead of
+        being forwarded to a provider that would refuse it. Rows expire after
+        the eligibility TTL — a model the provider adds to Batch later is
+        picked up automatically.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT model_id FROM provider_model_batch_eligibility
+                WHERE provider_id = :pid AND eligible = false
+                  AND checked_at > :now - make_interval(days => :ttl)
+                """
+            ),
+            {
+                "pid": int(provider_id),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+                "ttl": int(BATCH_MODEL_ELIGIBILITY_TTL_DAYS),
+            },
+        ).fetchall()
+        return {int(row[0]) for row in rows}
+
+    def record_model_batch_ineligibility(self, provider_id: int, model_id: int, detail: str = "") -> None:
+        """Remember that the provider refused to batch one of its models.
+
+        Learned from the provider's own refusal — a batch creation refused for
+        the model, or a batch that finished failed with its SKU error — rather
+        than configured, because which models a resource offers for batch is a
+        fact about the upstream that changes on the provider's schedule.
+        """
+        self.session.execute(
+            text(
+                """
+                INSERT INTO provider_model_batch_eligibility (provider_id, model_id, eligible, detail, checked_at)
+                VALUES (:pid, :mid, false, :detail, :now)
+                ON CONFLICT (provider_id, model_id)
+                DO UPDATE SET eligible = false,
+                              detail = EXCLUDED.detail,
+                              checked_at = EXCLUDED.checked_at
+                """
+            ),
+            {
+                "pid": int(provider_id),
+                "mid": int(model_id),
+                "detail": (detail or "")[:500],
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
     def get_batch_model_deployments(self, api_key_id: int, provider_id: Optional[int] = None) -> list[Dict[str, Any]]:
         """The models this key may run, with the provider that serves each.
 
@@ -2474,19 +2534,27 @@ class DBManager:
         user_id: Optional[int],
         input_file_id: Optional[str] = None,
         status: Optional[str] = None,
+        models: Optional[List[str]] = None,
     ) -> None:
-        """Record who owns an object the provider just minted."""
+        """Record who owns an object the provider just minted.
+
+        ``models`` is the input file's Logos model names, kept on file rows:
+        when the provider later shows it cannot batch one of them, the batch
+        that named them is the evidence, and this list is what still says which
+        models the file asked for.
+        """
         self.session.execute(
             text(
                 """
                 INSERT INTO batch_objects
                     (kind, upstream_id, provider_id, api_key_id, team_id, user_id,
-                     input_file_id, status, created_at, updated_at)
+                     input_file_id, status, models, created_at, updated_at)
                 VALUES (:kind, :upstream_id, :provider_id, :api_key_id, :team_id, :user_id,
-                        :input_file_id, :status, :now, :now)
+                        :input_file_id, :status, CAST(:models AS JSONB), :now, :now)
                 ON CONFLICT (provider_id, kind, upstream_id)
                 DO UPDATE SET status = COALESCE(EXCLUDED.status, batch_objects.status),
                               input_file_id = COALESCE(EXCLUDED.input_file_id, batch_objects.input_file_id),
+                              models = COALESCE(EXCLUDED.models, batch_objects.models),
                               updated_at = EXCLUDED.updated_at
                 """
             ),
@@ -2499,6 +2567,7 @@ class DBManager:
                 "user_id": user_id,
                 "input_file_id": input_file_id,
                 "status": status,
+                "models": _json_for_jsonb(models) if models else None,
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         )
@@ -2521,25 +2590,48 @@ class DBManager:
         )
         return dict(row) if row else None
 
-    def list_batch_objects_for_team(self, team_id: Optional[int], kind: str, limit: int = 100) -> list[Dict[str, Any]]:
-        """The team's own batch objects of one kind, newest first.
+    def list_batch_objects_for_principal(
+        self,
+        kind: str,
+        team_id: Optional[int],
+        user_id: Optional[int],
+        api_key_id: int,
+        limit: int = 100,
+    ) -> list[Dict[str, Any]]:
+        """The caller's own batch objects of one kind, newest first.
 
         Listings are answered from here rather than by forwarding to the
         provider: the shared upstream credential sees every team's objects, and
         Logos minted all of its own, so its own record is both the safe answer
         and the complete one — it covers batches it ran itself, which no
         provider knows about.
+
+        The scope is the same principal predicate a lifecycle check uses: a
+        team sees the team's objects, and a team-less key sees only what its
+        own user created (falling back to the key itself when even that is
+        absent). Scoping team-less keys by "team_id IS NULL" alone would let
+        every personal key on the instance list — and reach — every other
+        personal key's objects.
         """
+        if team_id is not None:
+            where = "kind = :kind AND team_id = :team_id"
+            params: Dict[str, Any] = {"kind": kind, "team_id": int(team_id), "limit": int(limit)}
+        elif user_id is not None:
+            where = "kind = :kind AND team_id IS NULL AND user_id = :user_id"
+            params = {"kind": kind, "user_id": int(user_id), "limit": int(limit)}
+        else:
+            where = "kind = :kind AND api_key_id = :api_key_id"
+            params = {"kind": kind, "api_key_id": int(api_key_id), "limit": int(limit)}
         row_set = self.session.execute(
             text(
-                """
+                f"""
                 SELECT * FROM batch_objects
-                WHERE kind = :kind AND team_id IS NOT DISTINCT FROM :team_id
+                WHERE {where}
                 ORDER BY created_at DESC
                 LIMIT :limit
                 """
             ),
-            {"kind": kind, "team_id": team_id, "limit": int(limit)},
+            params,
         ).mappings()
         return [dict(row) for row in row_set.all()]
 
@@ -2742,21 +2834,38 @@ class DBManager:
         )
         return dict(row) if row else None
 
-    def claim_local_batch(self, batch_object_id: int) -> bool:
-        """Move a queued batch to in_progress; False when another runner won it.
+    def claim_local_batch(self, batch_object_id: int, runner_id: str, lease_seconds: int) -> bool:
+        """Take the lease on a Logos-run batch; False when another runner holds it.
 
-        Conditional on the status, so two orchestrator processes cannot run the
-        same file twice.
+        Queued batches (``validating``) and batches left behind by a dead
+        runner (``in_progress`` with an expired lease) are claimed the same
+        way: the conditional update stamps ``runner_id`` and a lease deadline,
+        and only lets a caller through when no *live* lease exists. That is
+        what separates "the process is gone, recover the batch" from "another
+        replica is running it right now, stay out" — without the lease the
+        recovery path that re-offers in_progress rows would run an active
+        batch a second time.
         """
         result = self.session.execute(
             text(
                 """
                 UPDATE batch_objects
-                SET status = 'in_progress', started_at = COALESCE(started_at, :now), updated_at = :now
-                WHERE id = :id AND kind = 'batch' AND execution = 'logos' AND status = 'validating'
+                SET status = CASE WHEN status = 'validating' THEN 'in_progress' ELSE status END,
+                    started_at = COALESCE(started_at, :now),
+                    runner_id = :runner,
+                    lease_expires_at = :now + make_interval(secs => :lease),
+                    updated_at = :now
+                WHERE id = :id AND kind = 'batch' AND execution = 'logos'
+                  AND status IN ('validating', 'in_progress', 'cancelling')
+                  AND (runner_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= :now)
                 """
             ),
-            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
+            {
+                "id": int(batch_object_id),
+                "runner": str(runner_id),
+                "lease": int(lease_seconds),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
         )
         self.session.commit()
         return bool(result.rowcount)
@@ -2782,26 +2891,42 @@ class DBManager:
         ).mappings()
         return [dict(row) for row in rows.all()]
 
-    def update_local_batch_progress(self, batch_object_id: int, completed: int, failed: int) -> bool:
-        """Publish how far the runner has got, and report a pending cancel."""
+    def update_local_batch_progress(
+        self, batch_object_id: int, runner_id: str, completed: int, failed: int, lease_seconds: int
+    ) -> Optional[bool]:
+        """Publish how far the runner has got, refreshing the lease on the way.
+
+        The progress row doubles as the heartbeat: while the runner makes
+        progress the lease stays alive, and a runner that stops writing stops
+        holding the batch. Conditional on the lease: when another runner took
+        the batch over after an expired lease, this caller must stop touching
+        the row instead of clobbering the new holder's counters and lease.
+
+        Returns whether a cancel is pending, or ``None`` when this runner no
+        longer holds the batch.
+        """
         row = self.session.execute(
             text(
                 """
                 UPDATE batch_objects
-                SET completed_requests = :completed, failed_requests = :failed, updated_at = :now
-                WHERE id = :id
+                SET completed_requests = :completed, failed_requests = :failed,
+                    lease_expires_at = :now + make_interval(secs => :lease),
+                    updated_at = :now
+                WHERE id = :id AND runner_id = :runner
                 RETURNING cancel_requested
                 """
             ),
             {
                 "id": int(batch_object_id),
+                "runner": str(runner_id),
                 "completed": int(completed),
                 "failed": int(failed),
+                "lease": int(lease_seconds),
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         ).fetchone()
         self.session.commit()
-        return bool(row[0]) if row else False
+        return bool(row[0]) if row else None
 
     def finish_local_batch(
         self,
@@ -2828,6 +2953,8 @@ class DBManager:
                     error_file_id = COALESCE(:error_file_id, error_file_id),
                     completed_requests = COALESCE(:completed, completed_requests),
                     failed_requests = COALESCE(:failed, failed_requests),
+                    runner_id = NULL,
+                    lease_expires_at = NULL,
                     finished_at = :now,
                     settled_at = :now,
                     updated_at = :now
@@ -2866,6 +2993,53 @@ class DBManager:
             {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
         )
         self.session.commit()
+
+    def save_local_batch_lines(self, batch_object_id: int, rows: List[Dict[str, Any]]) -> None:
+        """Persist finished request lines of a Logos-run batch as its checkpoint.
+
+        One durable write per finished line, keyed by its custom_id, so a
+        resumed batch knows exactly which lines are done and can skip them —
+        including the result row the output file will carry for them.
+        """
+        if not rows:
+            return
+        params: Dict[str, Any] = {}
+        for index, row in enumerate(rows):
+            params[f"id_{index}"] = int(batch_object_id)
+            params[f"cid_{index}"] = row["custom_id"]
+            params[f"row_{index}"] = _json_for_jsonb(row["row"])
+            params[f"now_{index}"] = datetime.datetime.now(datetime.timezone.utc)
+        self.session.execute(
+            text(
+                """
+                INSERT INTO batch_line_results (batch_object_id, custom_id, row, finished_at)
+                VALUES
+                """
+                + ", ".join(f"(:id_{i}, :cid_{i}, CAST(:row_{i} AS JSONB), :now_{i})" for i in range(len(rows)))
+                + """
+                ON CONFLICT (batch_object_id, custom_id)
+                DO UPDATE SET row = EXCLUDED.row, finished_at = EXCLUDED.finished_at
+                """
+            ),
+            params,
+        )
+        self.session.commit()
+
+    def get_local_batch_lines(self, batch_object_id: int) -> Dict[str, Dict[str, Any]]:
+        """The batch's checkpoint: custom_id → the result row already written.
+
+        A resumed batch runs only the lines missing here.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT custom_id, row FROM batch_line_results
+                WHERE batch_object_id = :id
+                """
+            ),
+            {"id": int(batch_object_id)},
+        ).mappings()
+        return {row["custom_id"]: row["row"] for row in rows.all()}
 
     def get_api_key_by_id(self, api_key_id: int) -> Optional[Dict[str, Any]]:
         """One active api key by id, in the shape ``authenticate_api_key`` uses.
@@ -2970,15 +3144,34 @@ class DBManager:
                          service_tier, result_status, error_message)
                     VALUES """
                     + ", ".join(values_sql)
-                    + " RETURNING id"
+                    + " RETURNING id, request_id"
                 ),
                 params,
             ).fetchall()
-            log_ids = [int(record[0]) for record in inserted]
+            # The rows come back keyed by the request_id they were inserted
+            # with, not by position: a multi-row INSERT ... RETURNING does not
+            # guarantee that the returned order matches the VALUES order, and
+            # a positional zip could attach one line's usage tokens to another
+            # line's log row — settling the cost against the wrong request.
+            log_ids_by_request: Dict[str, int] = {}
+            orphaned_ids: List[int] = []
+            for log_id, request_id in ((int(record[0]), record[1]) for record in inserted):
+                if request_id is None:
+                    orphaned_ids.append(log_id)
+                else:
+                    log_ids_by_request[str(request_id)] = log_id
+            log_ids = list(log_ids_by_request.values()) + orphaned_ids
 
             usage_values = []
             usage_params: Dict[str, Any] = {}
-            for index, (log_id, row) in enumerate(zip(log_ids, chunk)):
+            for index, row in enumerate(chunk):
+                request_id = row.get("request_id")
+                if request_id is not None:
+                    log_id = log_ids_by_request.get(str(request_id))
+                else:
+                    # A row without a request id has no identity to match on;
+                    # it takes the next id the insert returned without one.
+                    log_id = orphaned_ids.pop(0) if orphaned_ids else log_ids[index]
                 for token_type, token_count in (row.get("usage") or {}).items():
                     if not isinstance(token_count, int) or isinstance(token_count, bool) or token_count <= 0:
                         continue

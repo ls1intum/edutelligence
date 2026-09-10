@@ -47,11 +47,41 @@ LOCAL_BATCH_POLL_INTERVAL_S = int(os.getenv("LOGOS_BATCH_LOCAL_POLL_INTERVAL_S",
 # scheduler uses: batch work yields to everything interactive.
 LOCAL_BATCH_PRIORITY = 1
 
+# How long the runner's right to a batch lasts before another process may take
+# it over. Refreshed with every chunk of progress, so a live runner holds its
+# batch and a dead one's lease runs out; the trade-off is that a batch whose
+# runner just died stays paused for up to this long before it is resumed.
+LOCAL_BATCH_LEASE_TTL_S = int(os.getenv("LOGOS_BATCH_LEASE_TTL_S", "600"))
+
 _TERMINAL_LOCAL_STATES = {"completed", "failed", "cancelled", "expired"}
+
+# This process, as named in the batch_objects lease. One id per process, so
+# the lease tells the database which runner holds a batch.
+RUNNER_ID = secrets.token_hex(8)
 
 # Batches currently being run by this process, so a second pass does not start
 # one twice within the same orchestrator.
 _running: set[int] = set()
+
+# The background tasks this module starts, held for their whole lifetime.
+# The event loop keeps only weak references to tasks, so an unheld task can be
+# garbage collected while it is still running — which would drop a batch's
+# execution mid-file.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def spawn_background(coro, what: str) -> Optional[asyncio.Task]:
+    """Run a coroutine in the background, holding the task until it finishes."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # no loop (sync test context): nothing can run
+        coro.close()
+        logger.debug("No running loop for %s", what)
+        return None
+    task = loop.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 def new_object_id(prefix: str) -> str:
@@ -169,11 +199,22 @@ async def _run_line(
 
     async with semaphore:
         log_id = _open_line_log(auth, body)
+        if log_id is None:
+            # Fail closed: without the log row the pipeline would run the
+            # request and bill nothing, so the line is refused instead of run
+            # unbilled. The batch reports it as a failed line like any other.
+            logger.error("No usage log for batch line %s; refusing to run it unbilled", line.get("custom_id"))
+            return _result_row(
+                line, {"status_code": 500, "data": {"error": {"message": "the request could not be started"}}}
+            )
         try:
             result = await execute_proxy_job(endpoint, dict(headers), dict(body), None, auth, log_id)
-        except Exception as exc:  # noqa: BLE001 - one bad line must not stop the batch
+        except Exception:  # noqa: BLE001 - one bad line must not stop the batch
+            # The exception itself stays in the server log; the result file is
+            # downloadable by the caller, so it carries a generic message
+            # rather than internal details.
             logger.exception("Batch line %s failed", line.get("custom_id"))
-            result = {"status_code": 500, "data": {"error": {"message": f"{type(exc).__name__}: {exc}"}}}
+            result = {"status_code": 500, "data": {"error": {"message": "the request failed"}}}
     return _result_row(line, result if isinstance(result, dict) else {})
 
 
@@ -198,10 +239,12 @@ async def run_local_batch(batch: Dict[str, Any]) -> Optional[str]:
 async def _start(batch: Dict[str, Any], batch_object_id: int) -> Optional[str]:
     """Load a batch's input and hand it to the runner."""
     with DBManager() as db:
-        # in_progress rows are re-offered after a restart, so a batch this
-        # process already owns must not be started twice; the conditional
-        # claim only lets the first attempt through.
-        if batch.get("status") == "validating" and not db.claim_local_batch(batch_object_id):
+        # Every state the runner can take over — queued, or left in_progress
+        # by a process that died — goes through the lease claim. It is what
+        # keeps two processes from running the same batch: a live lease keeps
+        # everyone else out, and an expired one is exactly what makes a dead
+        # runner's batch recoverable.
+        if not db.claim_local_batch(batch_object_id, RUNNER_ID, LOCAL_BATCH_LEASE_TTL_S):
             return None
         input_object = db.get_local_object_by_upstream_id("file", str(batch["input_file_id"]))
         content = db.get_local_batch_file_content(int(input_object["id"])) if input_object else None
@@ -228,39 +271,65 @@ async def _execute_lines(
     lines: List[Dict[str, Any]],
     auth: AuthContext,
 ) -> Optional[str]:
-    """Run every line, publishing progress, and write the result file."""
+    """Run every unfinished line, publishing progress, and write the result file.
+
+    A batch that is resumed after its runner died does not start over: each
+    finished line was checkpointed as it completed, and those lines already
+    went through the pipeline and were billed, so only the lines without a
+    checkpoint are run.
+    """
     headers = {"logos_key": auth.key_value}
     semaphore = asyncio.Semaphore(max(1, LOCAL_BATCH_CONCURRENCY))
-    rows: List[Dict[str, Any]] = []
-    completed = 0
-    failed = 0
+
+    with DBManager() as db:
+        finished = db.get_local_batch_lines(batch_object_id)
+    completed = sum(1 for row in finished.values() if not row.get("error"))
+    failed = len(finished) - completed
+    pending = [line for line in lines if line.get("custom_id") not in finished]
     cancelled = False
 
     # Chunked rather than one gather over the whole file: progress becomes
     # visible while the batch runs, which is what a polling script watches, and
     # a cancel takes effect within a chunk instead of at the end.
     chunk_size = max(1, LOCAL_BATCH_CONCURRENCY)
-    for start in range(0, len(lines), chunk_size):
+    for start in range(0, len(pending), chunk_size):
+        # The progress write is also the lease heartbeat. None means the lease
+        # was lost — another runner took the batch over after it lapsed — and
+        # this one must stop touching it. Its finished lines are checkpointed,
+        # so the new holder resumes from where this one got to.
         with DBManager() as db:
-            if db.update_local_batch_progress(batch_object_id, completed, failed):
-                cancelled = True
-                break
-        chunk = lines[start : start + chunk_size]
+            still_running = db.update_local_batch_progress(
+                batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
+            )
+        if still_running is None:
+            logger.warning("Lost the lease on batch %s; another runner takes over", batch.get("upstream_id"))
+            return None
+        if still_running:
+            cancelled = True
+            break
+        chunk = pending[start : start + chunk_size]
         results = await asyncio.gather(
             *(_run_line(line, auth, headers, semaphore) for line in chunk), return_exceptions=True
         )
+        checkpoint: List[Dict[str, Any]] = []
         for line, outcome in zip(chunk, results):
             if isinstance(outcome, BaseException):
                 logger.exception("Batch line %s raised", line.get("custom_id"), exc_info=outcome)
                 row, line_failed = _result_row(line, {"status_code": 500, "data": {"error": {"message": "failed"}}})
             else:
                 row, line_failed = outcome
-            rows.append(row)
+            finished[line.get("custom_id")] = row
             if line_failed:
                 failed += 1
             else:
                 completed += 1
+            checkpoint.append({"custom_id": line.get("custom_id"), "row": row})
+        # Durable per chunk: that is what makes the resume below skip exactly
+        # these lines, no matter when the process dies.
+        with DBManager() as db:
+            db.save_local_batch_lines(batch_object_id, checkpoint)
 
+    rows = [finished[line.get("custom_id")] for line in lines if line.get("custom_id") in finished]
     output_file_id = new_object_id("file")
     content = ("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n").encode() if rows else b""
     with DBManager() as db:
@@ -352,8 +421,9 @@ def local_file_object(file_row: Dict[str, Any]) -> Dict[str, Any]:
 async def local_batch_runner_loop() -> None:
     """Start every queued Logos-run batch, forever.
 
-    Also picks up batches left ``in_progress`` by a process that died mid-file:
-    their remaining lines are re-run rather than the batch hanging.
+    Also offers batches left ``in_progress`` by a process that died mid-file:
+    the lease claim lets exactly one runner take each of them over, and it
+    resumes from the checkpointed lines rather than re-running the file.
     """
     while True:
         try:
@@ -362,7 +432,9 @@ async def local_batch_runner_loop() -> None:
                 pending = db.get_runnable_local_batches()
             for batch in pending:
                 if int(batch["id"]) not in _running:
-                    asyncio.create_task(run_local_batch(batch))
+                    # The claim each run makes decides across processes; this
+                    # pass simply offers the batch.
+                    spawn_background(run_local_batch(batch), f"local batch {batch.get('upstream_id')}")
         except asyncio.CancelledError:  # pragma: no cover - shutdown path
             raise
         except Exception:  # noqa: BLE001 - the loop outlives its failures
