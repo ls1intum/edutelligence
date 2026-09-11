@@ -9,7 +9,9 @@ services:
       context: .
       args:
         BASE_IMAGE: ${BASE_IMAGE:-ubuntu:24.04}
-        VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm}
+        # [audio] mirrors the Dockerfile default: without it the speech-to-text
+        # endpoints cannot decode any upload (see the pin comment there).
+        VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm[audio]}
         NCCL_PIP_SPEC: ${NCCL_PIP_SPEC:-}
     container_name: logos-workernode
     init: true
