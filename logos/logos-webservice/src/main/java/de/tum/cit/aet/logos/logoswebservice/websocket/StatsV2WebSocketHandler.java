@@ -65,6 +65,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // the moment it is swapped out, whatever the writer paused on.
         final AtomicReference<VramWindow> vramWindow = new AtomicReference<>(new VramWindow(null, 0, "", false));
 
+        // The one ordering mechanism between window transitions and
+        // publication. The tick's delta (capture to send) and every
+        // transition (the swap plus its init push) run under it, so a push
+        // for a superseded window always reaches the viewer before the newer
+        // window's init: the compareAndSet guards the state, this guard
+        // guards the order the messages arrive in.
+        final Object vramLock = new Object();
+
         // The user-selected window. The live delta slide advances only the end
         // to "now"; the start stays anchored where the preset put it.
         volatile String timelineStart;
@@ -215,8 +223,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         state.initialized = false;
 
         Object dayObj = msg.get("vram_day");
-        state.vramWindow.set(new VramWindow(
-            (dayObj instanceof String s && !s.isBlank()) ? s : null, 0, "", false));
+        String vramDay = (dayObj instanceof String s && !s.isBlank()) ? s : null;
 
         Object tdObj = msg.get("timeline_deltas");
         state.deltaEnabled = tdObj == null || coerceBool(tdObj, true);
@@ -245,7 +252,12 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         state.prevScopeSig = "";
 
         pushTimelineInit(session, state);
-        pushVramInit(session, state);
+        // The window swap and its init publication are one critical section
+        // on the vram lock — see vramLock.
+        synchronized (state.vramLock) {
+            state.vramWindow.set(new VramWindow(vramDay, 0, "", false));
+            pushVramInit(session, state);
+        }
         pushRequests(session, state, true);
         state.initialized = true;
     }
@@ -305,8 +317,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private void handleSetVramDay(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         Object dayObj = msg.get("day");
         if (dayObj instanceof String s && !s.isBlank()) {
-            state.vramWindow.set(new VramWindow(s, 0, "", false));
-            pushVramInit(session, state);
+            // One critical section on the vram lock — see vramLock.
+            synchronized (state.vramLock) {
+                state.vramWindow.set(new VramWindow(s, 0, "", false));
+                pushVramInit(session, state);
+            }
         }
     }
 
@@ -402,46 +417,56 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     }
 
     private void pushVramDelta(WebSocketSession session, SessionState state) {
-        try {
-            // The snapshot is one atomic read: whatever the in-flight query
-            // fetched is checked against the very reference it was captured
-            // from, and written back only by compareAndSet. A window change
-            // (init, set_vram_day) swaps the reference, so an in-flight delta
-            // spanning the change is dropped whatever it fetched — it can
-            // never send previous-day samples or overwrite the new day's
-            // cursor and connection-state baseline.
-            VramWindow window = state.vramWindow.get();
-            // A window whose init has not gone out yet is not consumable by a
-            // delta: init and the first delta after a day change query the
-            // same (day, cursor 0) and race for the write-back — whichever
-            // loses the compareAndSet drops its push, and a delta winning
-            // that race would owe the viewer a full-day "init" that never
-            // comes. Instead the tick retries the owed init: one transient
-            // failure of the websocket thread's init must not wedge the
-            // session's vram feed behind a window no push will ever touch.
-            if (!window.baselineSent()) {
-                pushVramInit(session, state);
-                return;
-            }
-            String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
-            Map<String, Object> payload = vramService.getVramStats(day, window.cursor());
-            Object sid = payload.get("last_snapshot_id");
-            int nextCursor = sid instanceof Number n ? n.intValue() : window.cursor();
-            // Providers are always present (connection metadata is attached
-            // even without new snapshots), so deltas are pushed only when new
-            // samples arrived, the cursor moved, or a provider's connection
-            // state flipped (e.g. a worker went offline — exactly the moment
-            // no new snapshots arrive anymore).
-            boolean hasNewSamples = hasSamples(payload);
-            String metaSig = vramMetaSig(payload);
-            boolean metaChanged = !metaSig.equals(window.metaSig());
-            if (hasNewSamples || nextCursor != window.cursor() || metaChanged) {
-                if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), nextCursor, metaSig, window.baselineSent()))) {
-                    send(session, Map.of("type", "vram_delta", "payload", payload));
+        // The whole capture-to-send section runs on the vram lock (see
+        // vramLock): a window transition cannot land between this delta's
+        // capture and its publication, so a push for a superseded window
+        // always reaches the viewer before the newer window's init. The
+        // compareAndSet below stays as the state-level guard.
+        synchronized (state.vramLock) {
+            try {
+                // The snapshot is one atomic read: whatever the in-flight
+                // query fetched is checked against the very reference it was
+                // captured from, and written back only by compareAndSet. A
+                // window change (init, set_vram_day) swaps the reference, so
+                // an in-flight delta spanning the change is dropped whatever
+                // it fetched — it can never send previous-day samples or
+                // overwrite the new day's cursor and connection-state
+                // baseline.
+                VramWindow window = state.vramWindow.get();
+                // A window whose init has not gone out yet is not consumable
+                // by a delta: init and the first delta after a day change
+                // query the same (day, cursor 0) and race for the write-back
+                // — whichever loses the compareAndSet drops its push, and a
+                // delta winning that race would owe the viewer a full-day
+                // "init" that never comes. Instead the tick retries the owed
+                // init: one transient failure of the websocket thread's init
+                // must not wedge the session's vram feed behind a window no
+                // push will ever touch.
+                if (!window.baselineSent()) {
+                    pushVramInit(session, state);
+                    return;
                 }
+                String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
+                Map<String, Object> payload = vramService.getVramStats(day, window.cursor());
+                Object sid = payload.get("last_snapshot_id");
+                int nextCursor = sid instanceof Number n ? n.intValue() : window.cursor();
+                // Providers are always present (connection metadata is
+                // attached even without new snapshots), so deltas are pushed
+                // only when new samples arrived, the cursor moved, or a
+                // provider's connection state flipped (e.g. a worker went
+                // offline — exactly the moment no new snapshots arrive
+                // anymore).
+                boolean hasNewSamples = hasSamples(payload);
+                String metaSig = vramMetaSig(payload);
+                boolean metaChanged = !metaSig.equals(window.metaSig());
+                if (hasNewSamples || nextCursor != window.cursor() || metaChanged) {
+                    if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), nextCursor, metaSig, window.baselineSent()))) {
+                        send(session, Map.of("type", "vram_delta", "payload", payload));
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[ws/stats/v2] vram_delta error: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("[ws/stats/v2] vram_delta error: {}", e.getMessage());
         }
     }
 
