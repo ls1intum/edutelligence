@@ -27,6 +27,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -2089,6 +2090,48 @@ def test_calibration_copy_admission_is_blocked_when_the_floor_escalation_fails()
     assert hf == str(Path("/fake/tmpfs"))
     assert ensure_cached_calls == 1
     assert cache_use_reserved[0] is True
+
+
+def test_tp_escalation_forwards_the_floor_callback_to_the_probe(monkeypatch, tmp_path) -> None:
+    """Regression: calibrate_with_tp_escalation always passes
+    establish_host_ram_floor through cal_kwargs into _try_calibrate — when
+    _try_calibrate does not accept and forward the keyword, EVERY
+    calibrate_with_tp_escalation() call (server-driven and boot, even with
+    the value None) raises TypeError at the call site — OUTSIDE _try_calibrate's
+    exception conversion — before any probe starts. Drives the public entry
+    point with the REAL _try_calibrate (only calibrate_model is faked) and
+    asserts the callback reaches the probe."""
+
+    def sentinel() -> bool:
+        return True
+
+    seen: list[Any] = []
+
+    def fake_calibrate_model(plan: dict[str, Any], **kwargs: Any) -> calibration.CalibrationResult:
+        seen.append(kwargs.get("establish_host_ram_floor"))
+        return calibration.CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=int(plan.get("tensor_parallel_size", 1)),
+            gpu_devices=str(plan.get("gpu_devices") or ""),
+            kv_cache_sent_mb=0.0,
+            success=True,
+        )
+
+    monkeypatch.setattr(calibration, "calibrate_model", fake_calibrate_model)
+    result = calibration.calibrate_with_tp_escalation(
+        {"model": "org/entry", "tensor_parallel_size": 1},
+        vllm_binary="/bin/true",
+        port=1,
+        log_dir=tmp_path,
+        sleep_level=0,
+        ready_timeout_s=1.0,
+        available_gpus=1,
+        establish_host_ram_floor=sentinel,
+    )
+    assert result.success
+    # available_gpus=1 pins the run to tp=1 (no binary search), so exactly
+    # one probe ran — and it saw the caller's callback, not a dropped None.
+    assert seen == [sentinel]
 
 
 def test_replan_reconciles_again_when_a_late_reservation_releases_mid_pass(monkeypatch) -> None:

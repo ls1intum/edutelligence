@@ -3323,6 +3323,7 @@ def _try_calibrate(
     hf_home: str | None = None,
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], bool] | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -3338,6 +3339,7 @@ def _try_calibrate(
             hf_home=hf_home,
             model_cache=model_cache,
             cancel_event=cancel_event,
+            establish_host_ram_floor=establish_host_ram_floor,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
