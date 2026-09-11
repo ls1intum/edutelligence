@@ -370,8 +370,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     }
 
     private void pushVramInit(WebSocketSession session, SessionState state) {
+        VramWindow window = null;
         try {
-            VramWindow window = state.vramWindow.get();
+            window = state.vramWindow.get();
             // A baseline already went out for this window — the websocket
             // thread's init or an earlier tick's retry established it:
             // pushing the full day again would only restate what the viewer
@@ -390,7 +391,13 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             }
         } catch (Exception e) {
             log.warn("[ws/stats/v2] vram_init error: {}", e.getMessage());
-            send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
+            // The error belongs to the window this init was captured for. If
+            // a day change swapped it out while the query was in flight, the
+            // newer window's init owns the viewer's baseline now — publishing
+            // this stale failure would overwrite a good day with an error.
+            if (window != null && isCurrentVramWindow(state, window)) {
+                send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
+            }
         }
     }
 

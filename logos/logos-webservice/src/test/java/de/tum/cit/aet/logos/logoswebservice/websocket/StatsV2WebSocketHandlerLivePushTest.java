@@ -259,6 +259,50 @@ class StatsV2WebSocketHandlerLivePushTest {
     }
 
     @Test
+    void a_stale_failed_init_does_not_publish_an_error_over_a_newer_day() throws Exception {
+        // Stop the tick scheduler: the test drives the two threads' steps
+        // itself, in the interleaving order.
+        handler.shutdown();
+
+        String day1 = "2026-09-01";
+        String day2 = "2026-09-02";
+        when(vramService.getVramStats(day1, 0)).thenReturn(vramPayload(100, "connected"));
+        when(vramService.getVramStats(day2, 0)).thenReturn(vramPayload(200, "offline"));
+
+        handler.afterConnectionEstablished(session);
+        handler.handleMessage(session, new TextMessage("{\"action\":\"init\",\"vram_day\":\"" + day1 + "\"}"));
+        clearInvocations(session);
+
+        StatsV2WebSocketHandler.SessionState state = (StatsV2WebSocketHandler.SessionState)
+            ((Map<?, ?>) ReflectionTestUtils.getField(handler, "states")).get(session.getId());
+
+        // The init retry on the day1 window is in its query when the
+        // operator moves on to day2: day2's init establishes its baseline,
+        // and the stale day1 query then fails. Its error must not overwrite
+        // day2's fresh baseline — the success path drops a stale payload via
+        // the compareAndSet, and the error path must drop a stale failure the
+        // same way.
+        state.vramWindow.set(new StatsV2WebSocketHandler.VramWindow(day1, 0, "", false));
+        when(vramService.getVramStats(day1, 0)).thenAnswer(inv -> {
+            handler.handleMessage(session, new TextMessage("{\"action\":\"set_vram_day\",\"day\":\"" + day2 + "\"}"));
+            throw new RuntimeException("db blip");
+        });
+        ReflectionTestUtils.invokeMethod(handler, "pushVramInit", session, state);
+
+        // Day2's baseline is what the viewer is on now, and no stale error
+        // has gone out on top of it.
+        assertThat(state.vramWindow.get().day()).isEqualTo(day2);
+        assertThat(state.vramWindow.get().cursor()).isEqualTo(200);
+        assertThat(state.vramWindow.get().baselineSent()).isTrue();
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, atLeastOnce()).sendMessage(captor.capture());
+        assertThat(captor.getAllValues())
+            .anyMatch(m -> m.getPayload().contains("\"type\":\"vram_init\"")
+                    && m.getPayload().contains("\"last_snapshot_id\":200"))
+            .noneMatch(m -> m.getPayload().contains("Failed to load VRAM data"));
+    }
+
+    @Test
     void a_stale_day_with_a_fresh_generation_is_not_a_current_window() {
         // The interleaving the separate volatile fields had to survive — the
         // delta reads the day before set_vram_day runs, the generation after
