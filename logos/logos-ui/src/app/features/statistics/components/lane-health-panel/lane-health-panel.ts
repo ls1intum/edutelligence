@@ -380,25 +380,47 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     return messageIn(e?.error) ?? `HTTP ${e?.status ?? 0}`;
   }
 
+  /**
+   * Whether a lane action captured for provider `pid` may still touch the
+   * shared signal and error state on its completion.
+   *
+   * The signal is shared between attempts while `ngOnChanges` reassigns it on
+   * every provider switch: it only still belongs to the finishing attempt if
+   * the provider is unchanged AND the signal still names the attempt's lane.
+   * A finishing attempt that failed both must not clear the signal — after an
+   * A → B switch, B's own in-flight attempt holds it, and clearing it here
+   * would release the in-flight guard while B's call is still running, so the
+   * next click dispatches a duplicate action to the same lane. The provider
+   * half of the check matters even when the lane ids collide, because a lane
+   * id is per-worker and the same id can be in flight on two workers at once.
+   */
+  private actionStillOwned(pid: number | null, signal: () => string | null, laneId: string): boolean {
+    return this.providerId === pid && signal() === laneId;
+  }
+
   async handleUnload(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.unloadingLaneId() != null) return;
     this.unloadingLaneId.set(laneId);
     this.unloadError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.unloadLane(pid, laneId);
-      this.unloadingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // The operator may have switched workers while the call was in flight;
+    // only the attempt that still owns its signal may settle it — see
+    // actionStillOwned.
+    if (this.actionStillOwned(pid, this.unloadingLaneId, laneId)) {
       this.unloadingLaneId.set(null);
-      // The operator may have switched workers while the call was in flight;
-      // the refusal belongs to the worker it was sent to, not the one now shown.
-      if (this.providerId !== pid) return;
-      const e = err as { status?: number };
+      if (failed === null) return;
+      const e = failed as { status?: number };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.unloadError.set('Action not available on this server yet.');
       } else {
-        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(err)}`);
+        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(failed)}`);
       }
     }
   }
@@ -409,15 +431,16 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     this.sleepingLaneId.set(laneId);
     this.sleepWakeError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.sleepLane(pid, laneId);
-      this.sleepingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // Same ownership rule as handleUnload.
+    if (this.actionStillOwned(pid, this.sleepingLaneId, laneId)) {
       this.sleepingLaneId.set(null);
-      // The operator may have switched workers while the call was in flight;
-      // the refusal belongs to the worker it was sent to, not the one now shown.
-      if (this.providerId !== pid) return;
-      this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, err));
+      if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, failed));
     }
   }
 
@@ -427,15 +450,16 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     this.wakingLaneId.set(laneId);
     this.sleepWakeError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.wakeLane(pid, laneId);
-      this.wakingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // Same ownership rule as handleUnload.
+    if (this.actionStillOwned(pid, this.wakingLaneId, laneId)) {
       this.wakingLaneId.set(null);
-      // The operator may have switched workers while the call was in flight;
-      // the refusal belongs to the worker it was sent to, not the one now shown.
-      if (this.providerId !== pid) return;
-      this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, err));
+      if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, failed));
     }
   }
 

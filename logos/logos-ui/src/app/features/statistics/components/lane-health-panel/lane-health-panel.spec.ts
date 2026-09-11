@@ -713,10 +713,12 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
   let panel: LaneHealthPanel;
   let unloadResult: { body?: unknown; error?: unknown };
   let settleUnload: (() => void) | null;
+  let unloadSettlers: Array<() => void>;
 
   beforeEach(async () => {
     unloadResult = {};
     settleUnload = null;
+    unloadSettlers = [];
     await TestBed.configureTestingModule({
       imports: [LaneHealthPanel],
       providers: [
@@ -725,8 +727,10 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
           useValue: {
             unloadLane: () =>
               new Promise((resolve, reject) => {
-                settleUnload = () =>
+                const settle = () =>
                   unloadResult.error ? reject(unloadResult.error) : resolve(unloadResult.body ?? {});
+                unloadSettlers.push(settle);
+                settleUnload = settle;
               }),
             getLaneLoadStatus: () => Promise.resolve({ status: 'running' }),
           },
@@ -790,5 +794,29 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
 
     // The refusal belongs to gpu-01; gpu-02's panel shows nothing.
     expect(panel.unloadError()).toBeNull();
+  });
+
+  it("does not clear the switched-to worker's in-flight signal when the older call settles", async () => {
+    // gpu-01's unload is in flight…
+    const pendingA = panel.handleUnload('planner-foo');
+    // …the operator switches, and fires gpu-02's own unload.
+    switchTo('gpu-02');
+    const pendingB = panel.handleUnload('planner-bar');
+    expect(panel.unloadingLaneId()).toBe('planner-bar');
+
+    // gpu-01's delayed answer must not release the signal: it belongs to
+    // gpu-02's attempt now, and clearing it while that call is still running
+    // would lift the in-flight guard — the next click would dispatch a
+    // duplicate unload to the same lane.
+    unloadSettlers[0]();
+    await pendingA;
+
+    expect(panel.unloadingLaneId()).toBe('planner-bar');
+    expect(panel.unloadError()).toBeNull();
+
+    // …and the signal stays fully functional for the attempt that owns it.
+    settleUnload?.();
+    await pendingB;
+    expect(panel.unloadingLaneId()).toBeNull();
   });
 });

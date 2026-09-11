@@ -142,7 +142,7 @@ class StatsV2WebSocketHandlerLivePushTest {
 
         // The delta's day1 query (cursor 100) only returns after the
         // operator's set_vram_day has run to completion in the meantime —
-        // the exact interleaving the generation token guards against: the
+        // the exact interleaving the atomic window guards against: the
         // tick thread's in-flight query meets the websocket thread's window
         // change.
         when(vramService.getVramStats(day2, 0)).thenReturn(vramPayload(200, "offline"));
@@ -151,15 +151,15 @@ class StatsV2WebSocketHandlerLivePushTest {
             return vramPayload(100, "connected");
         });
 
-        Object state = ((Map<?, ?>) ReflectionTestUtils.getField(handler, "states")).get(session.getId());
+        StatsV2WebSocketHandler.SessionState state = (StatsV2WebSocketHandler.SessionState)
+            ((Map<?, ?>) ReflectionTestUtils.getField(handler, "states")).get(session.getId());
         ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
 
         // The late delta describes day1: it must not be sent, and it must
         // not write day1's cursor or connection-state baseline over the ones
         // day2's init just established.
-        assertThat(ReflectionTestUtils.getField(state, "vramCursor")).isEqualTo(200);
-        Object metaSig = ReflectionTestUtils.getField(state, "prevVramMetaSig");
-        assertThat(metaSig).asString().contains("offline").doesNotContain("connected");
+        assertThat(state.vramWindow.get().cursor()).isEqualTo(200);
+        assertThat(state.vramWindow.get().metaSig()).contains("offline").doesNotContain("connected");
 
         ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, atLeastOnce()).sendMessage(captor.capture());
@@ -169,23 +169,30 @@ class StatsV2WebSocketHandlerLivePushTest {
 
     @Test
     void a_stale_day_with_a_fresh_generation_is_not_a_current_window() {
-        // The interleaving the generation guard must survive: the delta reads
-        // the day before set_vram_day runs, the generation after it — the old
-        // day paired with the change's fresh generation. That snapshot must
-        // not pass the current-window check, whatever the query fetched for
-        // it; with the generation read first, it is the only pairing the
-        // capture order cannot produce.
+        // The interleaving the separate volatile fields had to survive — the
+        // delta reads the day before set_vram_day runs, the generation after
+        // it — is not expressible anymore: the window is one immutable
+        // reference, so a snapshot either is the current window or it is
+        // not, whatever the writer paused on and whatever the query fetched.
         StatsV2WebSocketHandler.SessionState state = new StatsV2WebSocketHandler.SessionState();
-        // The window has moved to day2 at generation 2.
-        state.vramDay = "2026-09-02";
-        state.vramCursor = 200;
-        state.vramDayGeneration = 2;
+        StatsV2WebSocketHandler.VramWindow stale = new StatsV2WebSocketHandler.VramWindow("2026-09-01", 100, "connected");
+        state.vramWindow.set(stale);
 
-        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(2, "2026-09-01", state)).isFalse();
+        // A snapshot of the window the state is in passes.
+        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(state, stale)).isTrue();
+
+        // The window moves to day2: the old snapshot is stale the moment it
+        // is swapped out, whatever the in-flight day1 query fetched for it.
+        StatsV2WebSocketHandler.VramWindow current = new StatsV2WebSocketHandler.VramWindow("2026-09-02", 200, "offline");
+        state.vramWindow.set(current);
+        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(state, stale)).isFalse();
         // A coherent snapshot of the window the state is in still passes.
-        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(2, "2026-09-02", state)).isTrue();
-        // And the fully stale snapshot of the moved-out window does not.
-        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(1, "2026-09-01", state)).isFalse();
+        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(state, current)).isTrue();
+        // And a superseded snapshot of the moved-in window does not: a delta
+        // paused between its capture and its write-back loses the
+        // compareAndSet against the writer's transition.
+        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(
+            state, new StatsV2WebSocketHandler.VramWindow("2026-09-02", 0, ""))).isFalse();
     }
 
     @Test

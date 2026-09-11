@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,20 +42,26 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static final int LATEST_REQUESTS_PUSH_SIZE = RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
 
 
+    // The vram window a session is looking at: the selected day (null =
+    // today), the cursor into it, and the provider connection-state baseline.
+    // One immutable reference so a transition (init, set_vram_day) is a single
+    // atomic swap and the tick thread's snapshot is a single atomic read —
+    // transition and snapshot can never disagree. Separate volatile fields
+    // (however ordered) cannot guarantee that: the writer can always pause
+    // between the generation bump and the day write, letting the tick capture
+    // a fresh generation with the stale day.
+    record VramWindow(String day, int cursor, String metaSig) {}
+
     // Package-private, with its fields, so the unit test can pin the
     // isCurrentVramWindow predicate on a real state instance.
     static class SessionState {
         volatile boolean initialized = false;
         volatile String logosKey = "";
 
-        volatile String vramDay = null;
-        volatile int vramCursor = 0;
-        // Bumped on every vram window change (init, set_vram_day) BEFORE the
-        // new day and cursor are written: it is the commit point of the
-        // change. A delta captured before the change holds the old generation
-        // and is discarded when the bump lands; a delta that reads the new
-        // generation never pairs it with the old day.
-        volatile int vramDayGeneration = 0;
+        // The current vram window; swapped atomically on every change. The
+        // reference identity is the generation: any earlier snapshot is stale
+        // the moment it is swapped out, whatever the writer paused on.
+        final AtomicReference<VramWindow> vramWindow = new AtomicReference<>(new VramWindow(null, 0, ""));
 
         // The user-selected window. The live delta slide advances only the end
         // to "now"; the start stays anchored where the preset put it.
@@ -96,7 +103,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // a baseline and does not trigger a redundant stats push on top of
         // the one timeline_init already sent.
         volatile String prevScopeSig = "";
-        volatile String prevVramMetaSig = "";
 
         // Traffic moved since the last aggregate push, so the totals the
         // statistics page shows are out of date. Recomputing them is a scan of
@@ -206,11 +212,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private void handleInit(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         state.initialized = false;
 
-        // The generation bump precedes the window fields — see vramDayGeneration.
-        state.vramDayGeneration++;
         Object dayObj = msg.get("vram_day");
-        state.vramDay = (dayObj instanceof String s && !s.isBlank()) ? s : null;
-        state.vramCursor = 0;
+        state.vramWindow.set(new VramWindow(
+            (dayObj instanceof String s && !s.isBlank()) ? s : null, 0, ""));
 
         Object tdObj = msg.get("timeline_deltas");
         state.deltaEnabled = tdObj == null || coerceBool(tdObj, true);
@@ -299,10 +303,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private void handleSetVramDay(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         Object dayObj = msg.get("day");
         if (dayObj instanceof String s && !s.isBlank()) {
-            // The generation bump precedes the window fields — see vramDayGeneration.
-            state.vramDayGeneration++;
-            state.vramDay = s;
-            state.vramCursor = 0;
+            state.vramWindow.set(new VramWindow(s, 0, ""));
             pushVramInit(session, state);
         }
     }
@@ -368,12 +369,18 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
     private void pushVramInit(WebSocketSession session, SessionState state) {
         try {
-            String day = state.vramDay != null ? state.vramDay : LocalDate.now(ZoneOffset.UTC).toString();
+            VramWindow window = state.vramWindow.get();
+            String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
             Map<String, Object> payload = vramService.getVramStats(day, 0);
             Object sid = payload.get("last_snapshot_id");
-            state.vramCursor = sid instanceof Number n ? n.intValue() : 0;
-            state.prevVramMetaSig = vramMetaSig(payload);
-            send(session, Map.of("type", "vram_init", "payload", payload));
+            int cursor = sid instanceof Number n ? n.intValue() : 0;
+            // The payload belongs to the window it was captured for; if a
+            // window change swapped the reference meanwhile, that window's
+            // init is responsible for the push — the stale baseline is
+            // dropped together with the stale payload.
+            if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), cursor, vramMetaSig(payload)))) {
+                send(session, Map.of("type", "vram_init", "payload", payload));
+            }
         } catch (Exception e) {
             send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
         }
@@ -381,21 +388,18 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
     private void pushVramDelta(WebSocketSession session, SessionState state) {
         try {
-            // The generation is captured first, before the day and the
-            // cursor: a window change on the websocket thread (init,
-            // set_vram_day) bumps the generation before it writes the new
-            // day, so a stale day can never be paired with a fresh
-            // generation, and whatever the in-flight query fetched is
-            // checked against the window that is current when it returns —
-            // writing it back otherwise would send previous-day samples and
-            // overwrite the new day's cursor and connection-state baseline.
-            int generation = state.vramDayGeneration;
-            String day = state.vramDay != null ? state.vramDay : LocalDate.now(ZoneOffset.UTC).toString();
-            int cursor = state.vramCursor;
-            Map<String, Object> payload = vramService.getVramStats(day, cursor);
-            if (!isCurrentVramWindow(generation, day, state)) return;
+            // The snapshot is one atomic read: whatever the in-flight query
+            // fetched is checked against the very reference it was captured
+            // from, and written back only by compareAndSet. A window change
+            // (init, set_vram_day) swaps the reference, so an in-flight delta
+            // spanning the change is dropped whatever it fetched — it can
+            // never send previous-day samples or overwrite the new day's
+            // cursor and connection-state baseline.
+            VramWindow window = state.vramWindow.get();
+            String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
+            Map<String, Object> payload = vramService.getVramStats(day, window.cursor());
             Object sid = payload.get("last_snapshot_id");
-            int nextCursor = sid instanceof Number n ? n.intValue() : state.vramCursor;
+            int nextCursor = sid instanceof Number n ? n.intValue() : window.cursor();
             // Providers are always present (connection metadata is attached
             // even without new snapshots), so deltas are pushed only when new
             // samples arrived, the cursor moved, or a provider's connection
@@ -403,26 +407,25 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // no new snapshots arrive anymore).
             boolean hasNewSamples = hasSamples(payload);
             String metaSig = vramMetaSig(payload);
-            boolean metaChanged = !metaSig.equals(state.prevVramMetaSig);
-            if (hasNewSamples || nextCursor != state.vramCursor || metaChanged) {
-                state.vramCursor = nextCursor;
-                state.prevVramMetaSig = metaSig;
-                send(session, Map.of("type", "vram_delta", "payload", payload));
+            boolean metaChanged = !metaSig.equals(window.metaSig());
+            if (hasNewSamples || nextCursor != window.cursor() || metaChanged) {
+                if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), nextCursor, metaSig))) {
+                    send(session, Map.of("type", "vram_delta", "payload", payload));
+                }
             }
         } catch (Exception e) {
             log.warn("[ws/stats/v2] vram_delta error: {}", e.getMessage());
         }
     }
 
-    // Whether a vram window snapshot captured on the tick thread still
-    // describes the state's current window. The generation is the primary
-    // check; the day comparison is what makes the capture order matter —
-    // a stale day read before a window change can never be paired with the
-    // change's fresh generation and pass, so an in-flight query that spans
-    // the change is dropped whatever it fetched.
-    static boolean isCurrentVramWindow(int generation, String day, SessionState state) {
-        return generation == state.vramDayGeneration
-                && (state.vramDay == null || state.vramDay.equals(day));
+    // Whether a vram window snapshot captured on the tick thread is still the
+    // state's current window. The reference identity is the check: a
+    // transition is a single atomic swap, so a fresh-generation/stale-day
+    // pairing — what separate volatile fields allowed when the writer paused
+    // between the generation bump and the day write — is not expressible,
+    // and any snapshot swapped out is stale whatever it fetched.
+    static boolean isCurrentVramWindow(SessionState state, VramWindow snapshot) {
+        return state.vramWindow.get() == snapshot;
     }
 
     private static boolean hasSamples(Map<String, Object> payload) {
