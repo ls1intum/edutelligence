@@ -532,6 +532,7 @@ def _build_ram_cache_candidates(
     model_profiles: ModelProfileRegistry,
     caps: list[str],
     reserve_replicas: dict[str, int] | None = None,
+    pending_lane_models: set[str] | None = None,
 ) -> tuple[list[CacheCandidate], list[str]]:
     """Cache-plan candidates for the capability models that have profile data.
 
@@ -607,6 +608,28 @@ def _build_ram_cache_candidates(
                 # sleepable — is the only correct one; model_can_sleep can
                 # disagree via capabilities_overrides.
                 can_sleep=True,
+            )
+        )
+    # In-flight adds not covered above: an UNCATALOGUED pending lane with
+    # sleep disabled appears in none of the sets the planner otherwise
+    # reads — not in caps (uncatalogued), not in reserve_replicas (its
+    # lane cannot sleep), and its copy has not started, so not yet in any
+    # cache state either. The add path re-plans while the model exists only
+    # in lane_manager.pending_lanes, so without this the candidate list can
+    # be empty, the empty path zeroes the floor, and the add's
+    # ensure_cached() admits the copy without the host safety margin.
+    # Sleep-enabled pending lanes are already reserve-backed (in `seen`).
+    for m in sorted(pending_lane_models or set()):
+        if m in seen:
+            continue
+        seen.add(m)
+        candidates.append(
+            CacheCandidate(
+                name=m,
+                can_sleep=False,
+                sleeping_host_ram_mb=0.0,
+                size_bytes=model_cache.model_size_bytes(m),
+                sleeping_replicas=1,
             )
         )
     # Uncatalogued cache residents (see docstring): an on-demand model — a
@@ -819,10 +842,18 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # instead of returning here and leaving the floor unset. Counts are per
     # model because same-model replicas each keep their own sleeping weights.
     reserve_replicas = _sleepable_lane_replicas(cfg, lane_manager)
-    candidates, _uncalibrated = _build_ram_cache_candidates(cfg, model_cache, model_profiles, caps, reserve_replicas)
+    # In-flight adds whose model is otherwise invisible to the planner
+    # (uncatalogued, sleep disabled): their copy is admitted while the lane
+    # is still pending, so the floor must be live for it (see
+    # _build_ram_cache_candidates).
+    pending_lane_models = {lane.model for _, lane in lane_manager.pending_lanes} if lane_manager is not None else set()
+    candidates, _uncalibrated = _build_ram_cache_candidates(
+        cfg, model_cache, model_profiles, caps, reserve_replicas, pending_lane_models
+    )
     if not candidates:
         # No calibrated capability models, no sleep-capable static/live/
-        # pending lane models, and no uncatalogued cache resident (cached or
+        # pending lane models, no uncatalogued sleep-disabled pending lane,
+        # and no uncatalogued cache resident (cached or
         # pending models now enter as unsleepable candidates above): the
         # sleep reserve is zero. Still clear the
         # previous pass's state — the last sleep-capable lane may have just

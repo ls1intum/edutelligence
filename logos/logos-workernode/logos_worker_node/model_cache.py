@@ -282,6 +282,18 @@ class ModelRamCache:
             return False, 0
         return available - size_bytes < self._host_ram_floor_bytes, available
 
+    def host_ram_headroom_ok(self) -> bool:
+        """Whether the host is currently at or above the cache floor.
+
+        The size-0 admission question: nothing new would be written, the
+        existing residency just has to fit. Like the admission checks this
+        fails open on a zero floor or an unreadable /proc/meminfo — callers
+        must pair a True answer with a re-plan pass that has run since the
+        last reservation change, so the floor it compares against is live.
+        """
+        starves, _ = self._would_starve_host(0)
+        return not starves
+
     def cached_models(self) -> list[str]:
         """List models currently in the cache."""
         return sorted(self._cached_models)
@@ -1277,6 +1289,9 @@ class _DisabledModelRamCache:
 
     def set_host_ram_floor_mb(self, floor_mb: float) -> None:  # noqa: ARG002
         pass
+
+    def host_ram_headroom_ok(self) -> bool:
+        return True
 
     def reserve_cache_use(self, model_name: str) -> None:  # noqa: ARG002
         pass

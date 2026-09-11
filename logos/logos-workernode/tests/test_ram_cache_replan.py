@@ -131,6 +131,12 @@ class _FakeCache:
         self.floor_mb = floor_mb
         self.floor_calls += 1
 
+    def host_ram_headroom_ok(self) -> bool:
+        # Mirrors ModelRamCache.host_ram_headroom_ok (the size-0 admission
+        # question); None host state never rejects, as before the
+        # below-floor fallback was modelled.
+        return self.host_available_mb is None or self.host_available_mb >= self.floor_mb
+
     async def wait_for_cached(self, model: str) -> bool:  # noqa: ANN001
         return True
 
@@ -139,6 +145,12 @@ class _FakeCache:
         # floor at the moment of admission — the pending-lane reserve must
         # already hold the lane's sleeping footprint by then.
         self.floor_at_ensure_cached = self.floor_mb
+        if model in self._cached and self.host_available_mb is not None and self.host_available_mb < self.floor_mb:
+            # Same already-cached below-floor rejection as the sync path
+            # (the lane's first sleep must have planned host RAM).
+            return "/fake/source"
+        # The copy landed: the real cache adds the model to _cached_models.
+        self._cached.add(model)
         return str(self._cache_hub.parent)
 
     def ensure_cached_sync(self, model: str) -> str:  # noqa: ANN001
@@ -1284,6 +1296,108 @@ def test_replan_reserves_pending_lane_before_its_cache_copy_is_admitted(monkeypa
     assert manager._handles["org_pending"].launched_from_ram_cache is True  # noqa: SLF001
 
 
+def test_replan_keeps_the_floor_for_an_uncatalogued_pending_lane_with_sleep_disabled(monkeypatch) -> None:
+    """Regression [high]: an uncatalogued lane with effective sleep mode
+    DISABLED is in none of the sets the planner otherwise reads — not in
+    capabilities_models, not in the sleepable lane reserve (its lane cannot
+    sleep), and its copy has not started, so not yet in any cache state
+    either. On a worker with no other candidates the add-path re-plan (the
+    one _add_lane_unlocked runs BEFORE ensure_cached) therefore built an
+    empty candidate list, took the empty path, zeroed the floor, and the
+    following copy was admitted without the host safety margin. Pending
+    lane models not already reserve-backed must enter as unsleepable
+    candidates, so the margin is live when the copy is admitted.
+
+    Drives the REAL add_lane path (process I/O stubbed) with sleep mode
+    off and a valid zero MemAvailable reading — the sharpest case, where
+    only a non-empty candidate list keeps the floor at the margin.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(0.0))
+    # Uncatalogued: no profile for the model at all.
+    cache = _FakeCache(sizes={"org/nonleep": _mb(8_000)})
+
+    class _AddHandle:
+        """A live vLLM handle for the spawned lane (no process I/O)."""
+
+        hf_home_override: str | None = None
+        launched_from_ram_cache: bool = False
+
+        def __init__(self, lane_id: str, port: int) -> None:
+            self.lane_id = lane_id
+            self.port = port
+            self.lane_config: LaneConfig | None = None
+
+        def status(self):
+            return SimpleNamespace(state=ProcessState.RUNNING)
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lane_config: LaneConfig):
+            self.lane_config = lane_config
+            return SimpleNamespace(state=ProcessState.RUNNING, return_code=None)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+        async def is_sleeping(self) -> bool:
+            return False
+
+    def _fake_create_handle(_lid, _port, _gcfg, _vcfg, lane_config, **_kw):  # noqa: ANN001
+        return _AddHandle(_lid, _port)
+
+    manager = LaneManager(
+        WorkerConfig(),
+        nvidia_smi_available=lambda: True,
+        model_cache=cache,
+        on_lane_added=lambda: worker_main._replan_ram_cache_once(app),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_port_alloc",
+        SimpleNamespace(allocate=lambda lid: 8802, get_port=lambda lid: 8802, release=lambda lid: None),
+    )
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=AppConfig(logos=LogosConfig(capabilities_models=[]), static_lanes=[]),
+            model_cache=cache,
+            model_profiles=_FakeRegistry({}),
+            lane_manager=manager,
+            ram_cache_replan_lock=asyncio.Lock(),
+            ram_cache_in_plan_since={},
+        )
+    )
+    monkeypatch.setattr(lane_mod, "_create_handle", _fake_create_handle)
+    monkeypatch.setattr(manager, "_auto_tensor_parallel", lambda lc: lc)
+
+    async def _auto_place(_lid, lc):  # noqa: ANN001
+        return lc
+
+    monkeypatch.setattr(manager, "_auto_place_gpu_devices", _auto_place)
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=None))
+
+    lane = LaneConfig(
+        model="org/nonleep",
+        vllm=True,
+        lane_id="org_nonleep",
+        vllm_config=VllmConfig(enable_sleep_mode=False),
+    )
+    asyncio.run(manager.add_lane(lane))
+
+    margin = worker_main._host_ram_safety_margin_mb(512_000.0)
+    # The floor at the moment of copy admission is the live safety margin,
+    # not the stale zero the empty-candidate path would have left: with a
+    # valid zero reading the admission check now fails closed instead of
+    # open. (No sleep reserve — the lane cannot sleep — so exactly margin.)
+    assert cache.floor_at_ensure_cached == pytest.approx(margin)
+    assert cache.floor_mb == pytest.approx(margin)
+    # The copy was admitted from the tmpfs root (RAM-cache-backed lane).
+    assert manager._handles["org_nonleep"].launched_from_ram_cache is True  # noqa: SLF001
+
+
 def test_replan_clears_stale_floor_and_hold_down_when_last_sleepable_lane_goes(monkeypatch) -> None:
     """Regression [medium]: when the last sleep-capable lane disappears on an
     empty-capabilities worker, the re-plan must not carry the previous
@@ -2064,13 +2178,15 @@ def test_calibration_copy_admission_is_blocked_when_the_floor_escalation_fails()
 
     # Timed-out pass: the callback returns False.
     cache_use_reserved = [False]
-    hf = calibration._reserve_and_admit_calibration_copy(
+    hf, blocked = calibration._reserve_and_admit_calibration_copy(
         cache,
         "org/probe",
         cache_use_reserved=cache_use_reserved,
         establish_host_ram_floor=lambda: False,
     )
-    assert hf is None
+    # Nothing was admitted and no rejection happened — no resident tree to
+    # reconcile, so the probe may still proceed from source.
+    assert (hf, blocked) == (None, None)
     assert ensure_cached_calls == 0
     assert cache_use_reserved[0] is False
     assert "org/probe" not in cache.cache_use_reservations()
@@ -2079,25 +2195,25 @@ def test_calibration_copy_admission_is_blocked_when_the_floor_escalation_fails()
     def broken_floor() -> bool:
         raise TimeoutError("re-plan pass timed out")
 
-    hf = calibration._reserve_and_admit_calibration_copy(
+    hf, blocked = calibration._reserve_and_admit_calibration_copy(
         cache,
         "org/probe",
         cache_use_reserved=cache_use_reserved,
         establish_host_ram_floor=broken_floor,
     )
-    assert hf is None
+    assert (hf, blocked) == (None, None)
     assert ensure_cached_calls == 0
     assert cache_use_reserved[0] is False
     assert "org/probe" not in cache.cache_use_reservations()
 
     # Control: a pass that completed (True) admits the copy as before.
-    hf = calibration._reserve_and_admit_calibration_copy(
+    hf, blocked = calibration._reserve_and_admit_calibration_copy(
         cache,
         "org/probe",
         cache_use_reserved=cache_use_reserved,
         establish_host_ram_floor=lambda: True,
     )
-    assert hf == str(Path("/fake/tmpfs"))
+    assert (hf, blocked) == (str(Path("/fake/tmpfs")), None)
     assert ensure_cached_calls == 1
     assert cache_use_reserved[0] is True
 
@@ -2169,7 +2285,7 @@ def test_source_fallback_reconciles_an_already_cached_entry_before_the_probe_sta
         asyncio.run(worker_main._replan_ram_cache_once(app))
         return True
 
-    hf = calibration._reserve_and_admit_calibration_copy(
+    hf, blocked = calibration._reserve_and_admit_calibration_copy(
         cache,
         "org/probe",
         cache_use_reserved=cache_use_reserved,
@@ -2179,9 +2295,10 @@ def test_source_fallback_reconciles_an_already_cached_entry_before_the_probe_sta
     # Source fallback against the raised floor (the fake mirrors the real
     # already-cached rejection; the helper returns None so the probe keeps
     # the source HF_HOME) — and the now-unused entry is already reclaimed
-    # when the helper returns, so the source probe starts on a host at or
-    # above the floor instead of one a dead tree is still eating into.
+    # when the helper returns (CONFIRMED removal), so the source probe may
+    # start instead of aborting.
     assert hf is None
+    assert blocked is None
     assert cache.floor_at_ensure_cached == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
     assert cache.is_cached("org/probe") is False
     assert cache_use_reserved[0] is False
@@ -2189,6 +2306,97 @@ def test_source_fallback_reconciles_an_already_cached_entry_before_the_probe_sta
     # Pass 1 (reservation live) could not touch the protected entry; the
     # post-fallback pass reclaims it once the release is visible.
     assert cache.reclaimed == [[], ["org/probe"]]
+
+
+def test_source_fallback_blocks_the_probe_when_the_post_fallback_pass_does_not_complete(monkeypatch) -> None:
+    """Regression: the post-fallback reconciliation must CONFIRM safety.
+    A timed-out or failed pass proves nothing about the tree — when the
+    callback returns False the entry may still be resident while the host
+    is below the floor, so the probe must be blocked (abort) instead of
+    starting a disk-backed load onto the over-committed host."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(20_000.0))
+    cache = _FakeCache(
+        cached=["org/probe"],
+        sizes={"org/probe": _mb(48_000)},
+        host_available_mb=20_000.0,
+    )
+    app = _app(cache, _FakeRegistry({}), _FakeLaneManager({}), [])
+    cache_use_reserved = [False]
+    calls = 0
+
+    def escalate() -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # The pre-admission pass runs and establishes the floor.
+            asyncio.run(worker_main._replan_ram_cache_once(app))
+            return True
+        # The post-fallback pass times out (the bridge callback returns
+        # False) — no re-measurement happens at all.
+        return False
+
+    hf, blocked = calibration._reserve_and_admit_calibration_copy(
+        cache,
+        "org/probe",
+        cache_use_reserved=cache_use_reserved,
+        establish_host_ram_floor=escalate,
+    )
+
+    # Blocked with a reason; the tree is still resident (that is exactly
+    # why), the reservation is released, and the probe must not start.
+    assert hf is None
+    assert blocked is not None
+    assert cache.is_cached("org/probe") is True
+    assert calls == 2
+    assert cache_use_reserved[0] is False
+    assert "org/probe" not in cache.cache_use_reservations()
+
+
+def test_source_fallback_blocks_the_probe_when_another_reference_keeps_the_entry(monkeypatch) -> None:
+    """Regression: even a COMPLETED post-fallback pass can retain the
+    entry for another live reference (a second session's reservation),
+    after which the host is still below the floor. Without the confirmed-
+    safety check the probe would start from source on exactly that
+    over-committed host — the run must abort instead."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(20_000.0))
+    cache = _FakeCache(
+        cached=["org/probe"],
+        sizes={"org/probe": _mb(48_000)},
+        host_available_mb=20_000.0,
+    )
+    app = _app(cache, _FakeRegistry({}), _FakeLaneManager({}), [])
+    cache_use_reserved = [False]
+    calls = 0
+
+    def escalate() -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            # A second session reserves the same model between the
+            # release and the post-fallback pass's eviction decision.
+            cache.reserve_cache_use("org/probe")
+        asyncio.run(worker_main._replan_ram_cache_once(app))
+        return True
+
+    try:
+        hf, blocked = calibration._reserve_and_admit_calibration_copy(
+            cache,
+            "org/probe",
+            cache_use_reserved=cache_use_reserved,
+            establish_host_ram_floor=escalate,
+        )
+    finally:
+        # The second session's reference (the probe's own was released by
+        # the helper before the post-fallback pass).
+        cache.release_cache_use("org/probe")
+
+    # The pass completed but spared the entry for the live reservation and
+    # the host is still below the floor: blocked, entry still resident.
+    assert hf is None
+    assert blocked is not None
+    assert cache.is_cached("org/probe") is True
+    assert calls == 2
+    assert cache_use_reserved[0] is False
 
 
 def test_replan_reconciles_again_when_a_late_reservation_releases_mid_pass(monkeypatch) -> None:
