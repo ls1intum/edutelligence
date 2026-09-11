@@ -134,6 +134,13 @@ class _FakeCache:
         self.floor_at_ensure_cached = self.floor_mb
         return str(self._cache_hub.parent)
 
+    def ensure_cached_sync(self, model: str) -> str:  # noqa: ANN001
+        # Mirrors ModelRamCache.ensure_cached_sync (the calibration path):
+        # record the floor at the moment of admission — the probe's floor
+        # escalation must have re-established it before this call.
+        self.floor_at_ensure_cached = self.floor_mb
+        return str(self._cache_hub.parent)
+
     async def reclaim(self, keep: set[str]) -> list[str]:
         # Same coordination as ModelRamCache.reclaim: a copy in flight is
         # left alone, rejected queue entries are dropped, and the live
@@ -1987,6 +1994,39 @@ def test_replan_keeps_the_floor_while_a_provisional_calibration_copy_runs(monkey
     # the margin (the copy path's brake stays on) and nothing is evicted.
     assert cache.floor_mb == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
     assert cache.reclaimed[-1] == []
+
+
+def test_calibration_copy_admission_sees_the_reestablished_floor(monkeypatch) -> None:
+    """The calibration probe reserves its model and then admits a
+    SYNCHRONOUS copy on an executor thread, with no re-plan tick in between
+    (calibration.py runs establish_host_ram_floor() between the two).
+    Starting from the zero floor an earlier empty-candidate tick left, the
+    reservation-triggered re-plan must re-establish the safety margin
+    BEFORE the admission check runs, or both admission checks fail open
+    against the stale zero and the copy eats the margin. Exercises the
+    probe's actual reserve → floor-escalation → ensure_cached_sync sequence
+    without a manual re-plan in front of it."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(0.0))
+    cache = _FakeCache(sizes={"org/probe": _mb(48_000)})
+    # The zero floor an earlier empty-candidate tick left behind.
+    cache.set_host_ram_floor_mb(0.0)
+    app = _app(cache, _FakeRegistry({}), _FakeLaneManager({}), [])
+
+    # The probe's sequence: reserve, escalate the floor with one re-plan
+    # pass for the new reservation (the executor-thread callback runs it on
+    # the event loop and waits), then admit the synchronous copy.
+    cache.reserve_cache_use("org/probe")
+    try:
+        asyncio.run(worker_main._replan_ram_cache_once(app))
+        hf = cache.ensure_cached_sync("org/probe")
+    finally:
+        cache.release_cache_use("org/probe")
+
+    # The admission saw the re-established margin, not the stale zero —
+    # with a valid zero MemAvailable reading the admission check now fails
+    # closed instead of open.
+    assert cache.floor_at_ensure_cached == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
+    assert hf == str(Path("/fake/tmpfs"))
 
 
 def test_replan_reconciles_again_when_a_late_reservation_releases_mid_pass(monkeypatch) -> None:

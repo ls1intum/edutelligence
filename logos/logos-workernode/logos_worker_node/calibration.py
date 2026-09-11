@@ -48,7 +48,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 try:
     import yaml
@@ -1442,6 +1442,7 @@ def calibrate_model(
     hf_home: str | None = None,
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker — the public entry point.
 
@@ -1451,6 +1452,14 @@ def calibrate_model(
     source fallback reads no tmpfs bytes — and holds it for the probe
     lifetime so the re-plan cannot reclaim the tree mid-session; this
     function releases it when the run ends, on every exit.
+
+    ``establish_host_ram_floor`` is called right after that reservation and
+    before the probe's synchronous copy admission: the reservation alone only
+    makes the entry visible to future re-plans, while this probe runs on an
+    executor thread with no tick in between, so the caller (which owns the
+    event loop) supplies a callback that runs one re-plan pass for the new
+    reservation and waits — establishing the floor before the admission
+    checks can fail open against a stale zero.
     """
     # One-element list (not a plain bool) so the reservation taken deep
     # inside the probe's closures is observable here without a shared
@@ -1469,6 +1478,7 @@ def calibrate_model(
             model_cache=model_cache,
             cancel_event=cancel_event,
             cache_use_reserved=cache_use_reserved,
+            establish_host_ram_floor=establish_host_ram_floor,
         )
     finally:
         # Release on EVERY exit — a failed, cancelled, or early-returned run
@@ -1490,6 +1500,7 @@ def _calibrate_model_probe(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
     cache_use_reserved: list[bool],
+    establish_host_ram_floor: Callable[[], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker and return a :class:`CalibrationResult`.
 
@@ -1856,6 +1867,28 @@ def _calibrate_model_probe(
             if not cache_use_reserved[0]:
                 model_cache.reserve_cache_use(model)
                 cache_use_reserved[0] = True
+                # Reserve-then-floor-then-admit: the reservation alone only
+                # makes the entry visible to FUTURE re-plans. This probe
+                # admits a synchronous copy on the executor thread with no
+                # tick in between, so a zero floor left by an earlier
+                # empty-candidate tick would fail open both admission checks
+                # and let the copy eat the safety margin. One re-plan pass
+                # for the new reservation establishes the floor (sleep
+                # reserve + safety margin) before ensure_cached_sync checks
+                # it. A failed escalation degrades to the pre-fix behaviour
+                # (admit against the stale floor) rather than aborting the
+                # calibration.
+                if establish_host_ram_floor is not None:
+                    try:
+                        establish_host_ram_floor()
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "  [RAM cache] host-RAM floor escalation before the "
+                            "synchronous copy of %s failed — admitting against "
+                            "the stale floor",
+                            model,
+                            exc_info=True,
+                        )
             _hf = model_cache.ensure_cached_sync(model) or None
             if _hf:
                 is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
@@ -3279,6 +3312,7 @@ def calibrate_with_tp_escalation(
     model_cache: Any | None = None,
     available_gpus: int | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model using a max-first, search-down TP strategy.
 
@@ -3334,6 +3368,7 @@ def calibrate_with_tp_escalation(
         nccl_p2p_available=nccl_p2p_available,
         model_cache=_mc,
         cancel_event=cancel_event,
+        establish_host_ram_floor=establish_host_ram_floor,
     )
 
     def _retry_with_trust_remote_code_if_needed(

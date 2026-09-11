@@ -1712,6 +1712,28 @@ class LogosBridgeClient:
                 # is the same instance the stop RPC sets — wait_ready polls
                 # it every 2s and bails immediately.
                 loop = asyncio.get_running_loop()
+
+                def _establish_host_ram_floor_for_probe() -> None:
+                    # The probe reserves its tmpfs entry on the executor
+                    # thread and immediately admits a synchronous copy, with
+                    # no re-plan tick in between: run one re-plan pass for
+                    # the new reservation on the bridge's event loop and
+                    # wait, so the floor (sleep reserve + safety margin) is
+                    # established before ensure_cached_sync's admission
+                    # checks could fail open against a stale zero floor.
+                    try:
+                        from logos_worker_node.main import _replan_ram_cache_once  # noqa: PLC0415
+
+                        asyncio.run_coroutine_threadsafe(
+                            _replan_ram_cache_once(self._app),
+                            loop,
+                        ).result(timeout=30.0)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "[Calibration] host-RAM floor escalation before " "the synchronous calibration copy failed",
+                            exc_info=True,
+                        )
+
                 try:
                     result = await loop.run_in_executor(
                         None,
@@ -1725,6 +1747,7 @@ class LogosBridgeClient:
                             nccl_p2p_available=nccl_p2p,
                             model_cache=_mc,
                             cancel_event=session.cancel_event,
+                            establish_host_ram_floor=_establish_host_ram_floor_for_probe,
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001
