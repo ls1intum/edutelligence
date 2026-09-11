@@ -512,11 +512,15 @@ def test_too_many_request_lines_are_refused(monkeypatch):
 class _FakeDB:
     """One fake DBManager shared by every ``with DBManager()`` in a request."""
 
-    def __init__(self, providers, deployments, owned=None, budget_error=None):
+    def __init__(self, providers, deployments, owned=None, budget_error=None, key_permissions=None):
         self.providers = providers
         self.deployments = deployments
         self.owned = dict(owned or {})
         self.budget_error = budget_error
+        # api_key_id -> the narrower answer its effective permissions yield.
+        # A key not named here keeps the shared one, like a key whose
+        # permissions the fixture did not touch.
+        self.key_permissions = dict(key_permissions or {})
         # The registration retries run on the shared session: without a
         # rollback between attempts the second attempt would raise
         # PendingRollbackError instead of retrying, so the retry path touches
@@ -542,7 +546,8 @@ class _FakeDB:
 
     # resolution
     def get_batch_provider_candidates(self, api_key_id):
-        return list(self.providers)
+        scoped = self.key_permissions.get(int(api_key_id))
+        return list(scoped["providers"]) if scoped else list(self.providers)
 
     def record_provider_batch_capability(self, provider_id, supports, detail=""):
         pass
@@ -551,7 +556,8 @@ class _FakeDB:
         return next((p for p in self.providers if int(p["id"]) == int(provider_id)), None)
 
     def get_batch_model_deployments(self, api_key_id, provider_id=None):
-        rows = list(self.deployments)
+        scoped = self.key_permissions.get(int(api_key_id))
+        rows = list(scoped["deployments"]) if scoped else list(self.deployments)
         if provider_id is None:
             return rows
         return [row for row in rows if int(row["provider_id"]) == int(provider_id)]
@@ -874,6 +880,54 @@ def test_batch_creation_registers_the_new_batch(monkeypatch):
     assert db.registered[0]["kind"] == "batch"
     assert db.registered[0]["upstream_id"] == "batch_1"
     assert db.registered[0]["team_id"] == OWN_TEAM
+
+
+def test_a_narrower_team_key_cannot_run_a_wider_key_s_file_at_the_provider(monkeypatch):
+    # Ownership is the team's, the permission is the key's: the wide key
+    # uploaded a file that also names a model the narrow team key may not
+    # run. The creation is refused before the shared provider credential is
+    # asked to run what the creating key no longer may.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1", "gpt-4o"])},
+        key_permissions={22: {"providers": [OPENAI_PROVIDER], "deployments": OPENAI_DEPLOYMENTS}},
+    )
+    seen = _patch_env(
+        monkeypatch, db, lambda request: httpx.Response(200, json={"id": "batch_1"}), auth=_auth(api_key_id=22)
+    )
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "model_not_permitted"
+    assert "gpt-4o" in resp.json()["error"]["message"]
+    assert seen == []
+
+
+def test_a_key_that_lost_the_provider_cannot_run_its_file_at_the_provider(monkeypatch):
+    # The upload key's provider link is revoked after the upload: the team
+    # still owns the file, but the key may no longer spend the shared
+    # credential on it, so the creation is refused rather than forwarded.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+        key_permissions={11: {"providers": [], "deployments": []}},
+    )
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "batch_1"}))
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "batch_provider_not_authorized"
+    assert seen == []
 
 
 def test_a_key_over_budget_cannot_start_a_batch(monkeypatch):
@@ -2079,6 +2133,141 @@ def test_a_local_batch_is_created_and_reported_in_the_openai_shape(monkeypatch):
     assert started == [body["id"]]
 
 
+def test_a_local_batch_must_match_the_endpoint_of_its_lines(monkeypatch):
+    # The runner would execute the lines' own urls while the batch advertised
+    # the other endpoint; a provider-run batch is refused for that mismatch,
+    # so is a local one.
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+    monkeypatch.setattr(batch_api, "_start_local_batch", lambda row: None)
+
+    embedding = {
+        "custom_id": "one",
+        "method": "POST",
+        "url": "/v1/embeddings",
+        "body": {"model": "qwen3-32b", "input": "hi"},
+    }
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(embedding), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    assert upload.status_code == 200
+    file_id = upload.json()["id"]
+
+    created = client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "invalid_batch_line"
+    assert db.local_batches == {}
+
+
+@pytest.mark.parametrize("window", ["48h", None])
+def test_a_local_batch_requires_the_one_supported_window(monkeypatch, window):
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_local_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    file_id = upload.json()["id"]
+    body = {"input_file_id": file_id, "endpoint": "/v1/chat/completions"}
+    if window is not None:
+        body["completion_window"] = window
+
+    created = client.post("/v1/batches", json=body)
+
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "invalid_request_error"
+    assert db.local_batches == {}
+
+
+def test_a_local_batch_requires_a_supported_endpoint(monkeypatch):
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_local_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    file_id = upload.json()["id"]
+
+    created = client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/audio/transcriptions", "completion_window": "24h"},
+    )
+
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "unsupported_batch_endpoint"
+    assert db.local_batches == {}
+
+
+def test_a_local_batch_line_must_be_a_post(monkeypatch):
+    # The upload does not look at the method, and the runner would ignore it
+    # too: a non-POST line is not a batch request, so the creation refuses it.
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+
+    get_line = {
+        "custom_id": "one",
+        "method": "GET",
+        "url": "/v1/chat/completions",
+        "body": {"model": "qwen3-32b", "messages": [{"role": "user", "content": "hi"}]},
+    }
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(get_line), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    assert upload.status_code == 200
+    file_id = upload.json()["id"]
+
+    created = client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "invalid_batch_line"
+    assert db.local_batches == {}
+
+
+def test_a_rerun_whose_lines_do_not_match_the_endpoint_stays_refused(monkeypatch):
+    # The rerun is the alternative to the provider's refusal, not a rewrite
+    # of the contract: lines that do not call the requested endpoint leave
+    # the refusal standing instead of starting a lying batch.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+    )
+
+    def upstream(request):
+        if request.url.path.endswith("/files/file-own/content"):
+            return httpx.Response(200, content=_jsonl(_line("one")))
+        return httpx.Response(
+            400, json={"error": {"message": "The model 'gpt-4.1' is not supported on the batch SKU."}}
+        )
+
+    seen = _patch_env(monkeypatch, db, upstream)
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/embeddings", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 400
+    assert db.local_batches == {}
+    assert db.stored_files == {}
+    assert [request.method for request in seen] == ["POST", "GET"]
+
+
 def test_a_local_batch_is_polled_and_cancelled_through_the_same_routes(monkeypatch):
     db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
     seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
@@ -2089,7 +2278,10 @@ def test_a_local_batch_is_polled_and_cancelled_through_the_same_routes(monkeypat
         files={"file": ("batch.jsonl", _jsonl(_local_line()), "application/jsonl")},
         data={"purpose": "batch"},
     )
-    batch_id = client.post("/v1/batches", json={"input_file_id": upload.json()["id"]}).json()["id"]
+    batch_id = client.post(
+        "/v1/batches",
+        json={"input_file_id": upload.json()["id"], "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    ).json()["id"]
 
     polled = client.get(f"/v1/batches/{batch_id}")
     assert polled.status_code == 200

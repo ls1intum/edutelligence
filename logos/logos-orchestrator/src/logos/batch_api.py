@@ -1333,6 +1333,77 @@ async def _handle_file_upload(request: Request, auth: AuthContext, headers: Dict
     return JSONResponse(content=local_file_object(stored)), None, log_payload
 
 
+def _assert_still_permitted(
+    db: DBManager, auth: AuthContext, provider: Dict[str, Any], input_file: Dict[str, Any]
+) -> None:
+    """The key that creates the batch may still use what the file lives on.
+
+    Ownership says who may order the job — the team. It does not say what the
+    creating key may still run: permissions can be key-specific, and they can
+    move after the upload. Without this re-check a narrower team key — or the
+    uploading key after its links were revoked — would run the file's
+    previously authorised models through the shared provider credential. Both
+    halves are therefore asked again at creation: the provider the file lives
+    on, and every model the file row recorded.
+    """
+    candidates = db.get_batch_provider_candidates(auth.api_key_id)
+    if not any(int(row["id"]) == int(provider["id"]) for row in candidates):
+        raise_openai_error(
+            403,
+            f"This key may no longer use provider {provider.get('name')!r}, which holds this file.",
+            code="batch_provider_not_authorized",
+        )
+    permitted = {str(row["model_name"]).lower() for row in db.get_batch_model_deployments(auth.api_key_id)}
+    missing = sorted(str(name) for name in (input_file.get("models") or []) if str(name).lower() not in permitted)
+    if missing:
+        raise_openai_error(
+            403,
+            f"This key may not use {', '.join(repr(name) for name in missing)}: the file asks for "
+            "models the key no longer may run.",
+            code="model_not_permitted",
+        )
+
+
+def _local_batch_contract(content: bytes, json_body: Dict[str, Any]) -> str:
+    """The contract a locally-run batch keeps with its stored lines, or a 400.
+
+    The provider enforces this contract for the batches it runs and refuses
+    the rest, so a batch Logos runs itself is held to the same one before it
+    exists: one supported endpoint, the one completion window, and every
+    stored line a POST to exactly that endpoint — because the runner executes
+    the lines' own urls while the batch object advertises the endpoint it was
+    created with. Returns the endpoint to store on the batch.
+    """
+    endpoint = str(json_body.get("endpoint") or "/v1/chat/completions")
+    wanted = _request_endpoint(endpoint)
+    if wanted not in _BATCH_REQUEST_ENDPOINTS:
+        raise_openai_error(
+            400,
+            f"Batch endpoint {endpoint!r} is not supported. Batches through Logos may call "
+            f"{', '.join('/v1/' + name for name in sorted(_BATCH_REQUEST_ENDPOINTS))}.",
+            code="unsupported_batch_endpoint",
+        )
+    if json_body.get("completion_window") != "24h":
+        raise_openai_error(400, "completion_window must be '24h'.", code="invalid_request_error")
+
+    for number, line in enumerate(parse_request_lines(content), start=1):
+        method = line.get("method")
+        if method is not None and str(method).upper() != "POST":
+            raise_openai_error(
+                400,
+                f"Line {number} uses method {method!r}; batch lines are POST requests.",
+                code="invalid_batch_line",
+            )
+        if _request_endpoint(line.get("url")) != wanted:
+            raise_openai_error(
+                400,
+                f"Line {number} addresses {line.get('url')!r}, but the batch is {endpoint!r}: every "
+                "line of a batch must call the endpoint the batch was created with.",
+                code="invalid_batch_line",
+            )
+    return f"/v1/{wanted}"
+
+
 async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, db: DBManager):
     """Authorise a batch and either create it here or hand it to the provider."""
     input_file_id = json_body.get("input_file_id")
@@ -1348,15 +1419,17 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
         provider = db.get_batch_provider(int(input_file["provider_id"]))
         if provider is None:
             raise_openai_error(502, "The provider holding this file is gone.", code="batch_upstream_unreachable")
+        _assert_still_permitted(db, auth, provider, input_file)
         return None, provider
 
     content = db.get_local_batch_file_content(int(input_file["id"])) or b""
+    endpoint = _local_batch_contract(content, json_body)
     batch_id = new_object_id("batch")
     db.create_local_batch(
         upstream_id=batch_id,
         input_file_id=input_file_id,
-        endpoint=str(json_body.get("endpoint") or "/v1/chat/completions"),
-        completion_window=json_body.get("completion_window"),
+        endpoint=endpoint,
+        completion_window="24h",
         metadata=json_body.get("metadata") if isinstance(json_body.get("metadata"), dict) else None,
         total_requests=len(parse_request_lines(content)),
         api_key_id=auth.api_key_id,
@@ -1406,6 +1479,14 @@ async def _rerun_refused_creation_locally(
     if not lines:
         return None
     stored = b"\n".join(lines) + b"\n"
+    try:
+        endpoint = _local_batch_contract(stored, json_body)
+    except HTTPException:
+        # The rerun is the alternative to the provider's refusal, not a
+        # rewrite of it: an input that no longer keeps the batch contract
+        # leaves the refusal standing. Checked before anything is stored, so
+        # a refusal here orphans no file.
+        return None
     file_id = new_object_id("file")
     batch_id = new_object_id("batch")
     with DBManager() as db:
@@ -1420,8 +1501,8 @@ async def _rerun_refused_creation_locally(
         db.create_local_batch(
             upstream_id=batch_id,
             input_file_id=file_id,
-            endpoint=str(json_body.get("endpoint") or "/v1/chat/completions"),
-            completion_window=json_body.get("completion_window"),
+            endpoint=endpoint,
+            completion_window="24h",
             metadata=json_body.get("metadata") if isinstance(json_body.get("metadata"), dict) else None,
             total_requests=len(parse_request_lines(stored)),
             api_key_id=auth.api_key_id,
