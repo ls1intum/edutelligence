@@ -358,6 +358,14 @@ public class ModelService {
     }
 
     public Map<Integer, ModelCapabilitiesDTO> getModelCapabilities(List<Integer> modelIds) {
+        Set<Integer> existingModelIds = modelRepository.findAllById(modelIds).stream()
+            .map(Model::getId)
+            .collect(Collectors.toSet());
+        for (Integer modelId : modelIds) {
+            if (!existingModelIds.contains(modelId)) {
+                throw new IllegalArgumentException("Model not found: " + modelId);
+            }
+        }
         return modelCapabilitiesRepository.findByModelIdIn(modelIds)
             .stream()
             .map(ModelService::toModelCapabilitiesDTO)

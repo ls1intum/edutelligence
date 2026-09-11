@@ -75,8 +75,9 @@ public class ModelCapabilitiesUpdaterService {
         }
     }
 
+    // Package-private so the unit tests can drive the matching logic directly.
     @SuppressWarnings("unchecked")
-    private boolean extractAndStoreCapabilities(
+    boolean extractAndStoreCapabilities(
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
@@ -143,7 +144,7 @@ public class ModelCapabilitiesUpdaterService {
         }
     }
 
-    private String extractModelName(String catalogKey) {
+    String extractModelName(String catalogKey) {
         if (catalogKey == null || catalogKey.isBlank()) {
             return null;
         }
@@ -155,7 +156,7 @@ public class ModelCapabilitiesUpdaterService {
         return normalizeModelName(modelName);
     }
 
-    private String normalizeModelName(String modelName) {
+    String normalizeModelName(String modelName) {
         if (modelName == null) {
             return null;
         }
@@ -168,7 +169,7 @@ public class ModelCapabilitiesUpdaterService {
         return normalized;
     }
 
-    private boolean modelNamesMatch(
+    boolean modelNamesMatch(
             String requestedModelName,
             String catalogModelName) {
         if (requestedModelName == null || catalogModelName == null) {
