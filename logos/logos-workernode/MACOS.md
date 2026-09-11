@@ -53,7 +53,7 @@ CI (GitHub Actions)                    Mac (native)
 | CPU | Apple Silicon (arm64) — Rosetta Python cannot load MLX |
 | Python | 3.12+, native arm64 |
 | Docker | only to fetch and unpack the artifact |
-| vllm-metal | ≥ 0.28.0 for Qwen3.8 (0.2.0 cannot load it) |
+| vllm-metal | ≥ 0.29.0 — Qwen3.8 needs ≥ 0.28.0, embedders need 0.29.0 |
 | RAM | see the sizing table below |
 
 ---
@@ -114,7 +114,8 @@ The reference model for this document is
 `mlx-community/Qwen3.8-27B-4bit` (15.1 GB) and
 `mlx-community/Qwen3.8-27B-8bit` (27.5 GB). It is the model the *Sizing*
 table measures, and the reason the *Requirements* table pins
-vllm-metal ≥ 0.28.0.
+vllm-metal ≥ 0.28.0. Embedding models raise that floor to 0.29.0 — see
+*Embedding models* below.
 
 The seeded `config.yml` advertises the **4bit** build by default — the only
 one that fits the 36 GB reference machine. On a 64 GB+ Mac, point
@@ -269,6 +270,66 @@ but do not read the two numbers as independent pools.
 
 ---
 
+## Embedding models
+
+Embedders need **vllm-metal ≥ 0.29.0** and `--runner pooling`, passed through
+`extra_args` — the model is otherwise loaded as a text generator and exposes
+completions instead of `/v1/embeddings`.
+
+Two loading paths exist upstream, and which one a checkpoint takes decides
+whether it works at all:
+
+| Family | Path | Status |
+|---|---|---|
+| Encoder (BGE-M3, XLM-RoBERTa, multilingual E5) | encoder pooling, own loader — no paged attention, no KV cache | works |
+| Decoder (Qwen3-Embedding) | generation loader, then pooled | works from 0.29.0 |
+
+On 0.28.0 the decoder path failed both ways and neither error named the real
+cause. The official Qwen checkpoints store the backbone flat
+(`embed_tokens.weight`, `layers.0.…`) while mlx-lm's Qwen3 wraps it under
+`model.`, so every tensor was rejected — `Received 398 parameters not in
+model` (vllm-metal#730). The MLX re-quantizations (`-mxfp8`, `-4bit-DWQ`) got
+further and then died on `Missing 1 parameters: lm_head.weight`: the
+generation loader wanted a language-model head that an embedder does not
+have. 0.29.0 fixes the remap; both failures are gone.
+
+Worked example — `Qwen/Qwen3-Embedding-8B` on a 32 GB M2 Pro, measured:
+
+```yaml
+logos:
+  capabilities_models:
+    - "Qwen/Qwen3-Embedding-8B"
+
+engines:
+  vllm:
+    model_overrides:
+      "Qwen/Qwen3-Embedding-8B":
+        tensor_parallel_size: 1
+        max_model_len: 32768        # native window is 40960
+        mm_processor_cache_gb: 0
+        # The pooling runner has no chat-completions path, so the flags the
+        # worker adds by default would reach a server that cannot use them.
+        enable_auto_tool_choice: false
+        reasoning_parser: "none"
+        # Prefix caching is a decode-path optimization; a pooling request is
+        # a single-pass encode with nothing to reuse.
+        enable_prefix_caching: false
+        extra_args: ["--runner", "pooling"]
+
+model_profile_overrides:
+  "Qwen/Qwen3-Embedding-8B":
+    base_residency_mb: 15400        # model_memory 15.13 GB + overhead 0.64 GB
+    kv_per_token_bytes: 147456      # 36 layers x 2 x 8 kv_heads x 128 head_dim x 2 B
+    max_context_length: 32768
+    disk_size_bytes: 15134634568
+```
+
+That lane reports `usable_metal=22.78GB`, `kv_budget=7.00GB` and
+`max_tokens_cached=47488` — 1.45x concurrency at the full 32k window. It
+answers `/v1/embeddings` with 4096-dimensional vectors.
+
+---
+
 ## What differs from a CUDA node
 
 | | CUDA | Metal |
@@ -398,7 +459,7 @@ install aborts instead of running a half-patched installer). The staged
 installer is kept as a plain file in its own directory: a `scripts/lib.sh`
 sibling would switch upstream into its source-checkout branch. The venv is
 still created by the upstream installer, which installs a matched
-(vllm, mlx, torch) set — the pinned release gives vLLM 0.28.0, the same
+(vllm, mlx, torch) set — the pinned release gives vLLM 0.29.0, the same
 release the CUDA image pins. PyPI carries no macOS vLLM wheel, and pulling
 that set apart in our own requirements file is how you get an unbootable
 lane. And the installer's version floor (`VLLM_METAL_MIN_VERSION`, asserted
@@ -413,9 +474,9 @@ so automated vLLM bumps do not reach this path.
 
 Keep vllm-metal current. It moves fast and dev builds are published daily —
 but upstream prunes old dev releases, so the pin is the **stable** cut:
-v0.28.0 is the stable release that contains the build the *Sizing*
-measurements were taken with, plus 14 follow-up bugfix commits. Qwen3.8
-support landed in 08/2026, and 0.2.0 could not serve it at all. To upgrade,
+v0.29.0 is the current stable release; the *Sizing* measurements were
+taken on v0.28.0, which it supersedes. Qwen3.8 support landed in 08/2026,
+and 0.2.0 could not serve it at all; embedding models need 0.29.0. To upgrade,
 pick the stable release to move to, download its `install.sh`, its
 `scripts/lib.sh`, its release wheel, and the vLLM core wheel it names (the
 tag in `.github/vllm-release-tag.commit` at that release), compute the four
