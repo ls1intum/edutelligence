@@ -172,12 +172,28 @@ PY
 log "Unpacking $(printf '%s\n' "$LAYERS" | wc -l | tr -d ' ') layers"
 while IFS= read -r layer; do
     [ -n "$layer" ] || continue
-    # Layers are applied in order so later ones win, exactly as a container
-    # runtime would compose them. A layer without payload/ is normal (base
-    # image layers), hence the tolerated non-zero exit.
+    # Download first, extract second. Piping curl into tar would conflate a
+    # failed transfer with "this layer has no payload/", and only the latter is
+    # acceptable: the payload is spread over several layers, so a half-fetched
+    # one yields an incomplete tree that the --delete sync below would then
+    # publish over a working installation.
+    blob="$UNPACK/layer.tar.gz"
     curl -fsSL -H "Authorization: Bearer $TOKEN" \
-        "https://${REGISTRY}/v2/${REPO}/blobs/${layer}" \
-        | tar -xzf - -C "$UNPACK" payload 2>/dev/null || true
+        "https://${REGISTRY}/v2/${REPO}/blobs/${layer}" -o "$blob" \
+        || die "Failed to download layer ${layer%%:*}:${layer#*:} — aborting rather than deploying a partial payload."
+
+    # Layers are applied in order so later ones win, exactly as a container
+    # runtime would compose them. Listing first distinguishes the two cases a
+    # bare extract cannot: a layer that genuinely carries no payload/ (normal,
+    # base image layers) versus a corrupt archive (fatal).
+    if ! tar -tzf "$blob" >/dev/null 2>&1; then
+        die "Layer ${layer#*:} is not a readable gzip archive — aborting."
+    fi
+    if tar -tzf "$blob" 2>/dev/null | grep -q '^payload/'; then
+        tar -xzf "$blob" -C "$UNPACK" payload \
+            || die "Failed to extract payload/ from layer ${layer#*:}."
+    fi
+    rm -f "$blob"
 done <<EOF
 $LAYERS
 EOF
@@ -195,9 +211,12 @@ if launchctl list "$LAUNCH_AGENT_LABEL" >/dev/null 2>&1; then
 fi
 
 mkdir -p "$INSTALL_ROOT"
-# Sync code only. data/, logs/, config.yml, .env and .venv are operator or
-# runtime state and must survive a redeploy — hence the explicit excludes
-# rather than a wholesale copy.
+# Sync code only. data/, logs/, config.yml, .env, .venv and cache/ are operator
+# or runtime state and must survive a redeploy — hence the explicit excludes
+# rather than a wholesale copy. cache/ matters most: --delete removes anything
+# absent from the image, and the seeded config points cache_path at
+# <install root>/cache, so leaving it out of this list silently discards every
+# downloaded model (tens of GB) on each upgrade.
 log "Syncing code into $INSTALL_ROOT"
 rsync -a --delete \
     --exclude 'data/' \
@@ -205,6 +224,7 @@ rsync -a --delete \
     --exclude 'config.yml' \
     --exclude '.env' \
     --exclude '.venv/' \
+    --exclude 'cache/' \
     --exclude 'chat-templates/' \
     "$STAGING/" "$INSTALL_ROOT/"
 

@@ -410,11 +410,19 @@ engines:
 
 model_profile_overrides:
   "Qwen/Qwen3-Embedding-8B":
-    base_residency_mb: 15400        # model_memory 15.13 GB + overhead 0.64 GB
+    base_residency_mb: 15400        # (15.13 + 0.64) GB -> 15039 MiB, rounded up
     kv_per_token_bytes: 147456      # 36 layers x 2 x 8 kv_heads x 128 head_dim x 2 B
     max_context_length: 32768
     disk_size_bytes: 15134634568
 ```
+
+**The lane's log reports decimal GB, not GiB** — worth knowing before converting
+any of these numbers. Proof from the same machine: MLX reports
+`max_recommended_working_set_size = 26800603136` bytes, which is 26.80 GB
+decimal (24.96 GiB), and the lane logs `metal_limit=26.80GB`. So
+`base_residency_mb` is `(15.13 + 0.64) x 10^9 / 1024^2 = 15039 MiB`, rounded up
+to 15400. Reading those figures as GiB would inflate the profile by about
+1.1 GB and reject placements that in fact fit.
 
 That lane reports `usable_metal=22.78GB`, `kv_budget=7.00GB` and
 `max_tokens_cached=47488` — 1.45x concurrency at the full 32k window. It

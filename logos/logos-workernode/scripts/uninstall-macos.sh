@@ -56,6 +56,56 @@ done
 
 [ "$(uname -s)" = "Darwin" ] || die "macOS only (found $(uname -s))."
 
+# ── Path safety ──────────────────────────────────────────────────────────────
+# Both paths below are environment-controlled and both are handed to `rm -rf`.
+# A stale or mistyped LOGOS_MLX_HOME (say, "$HOME", or a value with an unset
+# variable in it that expands to "/") would take unrelated data with it — and
+# --yes removes the one prompt that might have caught it. So every deletion
+# target is canonicalized and checked against the places it must never be
+# before anything is removed.
+assert_safe_target() {
+    local label="$1" path="$2" resolved parent
+    [ -n "$path" ] || die "$label resolves to an empty path — refusing to delete."
+    case "$path" in
+        /*) ;;
+        *) die "$label must be an absolute path, got '$path' — refusing to delete." ;;
+    esac
+    # Canonicalize so symlinks and '..' cannot smuggle the target elsewhere.
+    # The directory may legitimately be gone already; resolve the parent then.
+    if [ -d "$path" ]; then
+        resolved="$(cd "$path" 2>/dev/null && pwd -P)" || die "Cannot resolve $label ('$path')."
+    else
+        parent="$(dirname "$path")"
+        [ -d "$parent" ] || return 0   # nothing there at all, nothing to guard
+        resolved="$(cd "$parent" 2>/dev/null && pwd -P)/$(basename "$path")"
+    fi
+    case "$resolved" in
+        /|/Users|/Users/*/|/System*|/Library*|/Applications*|/bin*|/usr*|/etc*|/var*|/opt|/opt/homebrew*)
+            die "$label resolves to '$resolved', which is not a Logos worker directory — refusing to delete." ;;
+    esac
+    [ "$resolved" != "$HOME" ] || die "$label resolves to your home directory — refusing to delete."
+    # An ancestor of $HOME would take the home directory with it.
+    case "$HOME/" in
+        "$resolved"/*) die "$label ('$resolved') contains your home directory — refusing to delete." ;;
+    esac
+    # Guard against a path so shallow it cannot be a dedicated install dir
+    # (/foo). Real targets sit at least two levels deep, e.g. /Users/x/y.
+    [ "$(printf '%s' "$resolved" | awk -F/ '{print NF-1}')" -ge 3 ] \
+        || die "$label ('$resolved') is too close to the filesystem root to be a worker directory — refusing to delete."
+    printf '%s' "$resolved"
+}
+
+INSTALL_ROOT="$(assert_safe_target 'LOGOS_MLX_HOME' "$INSTALL_ROOT")" || exit 1
+METAL_VENV="$(assert_safe_target 'LOGOS_METAL_VENV' "$METAL_VENV")" || exit 1
+# They must not overlap either: removing one would then remove part of the
+# other mid-run, leaving the second pass operating on a half-deleted tree.
+case "$METAL_VENV/" in
+    "$INSTALL_ROOT"/*) : ;;   # venv inside the install root is fine, it goes anyway
+    *) case "$INSTALL_ROOT/" in
+           "$METAL_VENV"/*) die "LOGOS_MLX_HOME lies inside LOGOS_METAL_VENV — refusing to delete." ;;
+       esac ;;
+esac
+
 # ── What is actually here ────────────────────────────────────────────────────
 # Report before removing: an uninstaller that prints nothing and deletes
 # everything is impossible to sanity-check before pressing enter.
