@@ -136,8 +136,16 @@ class _FakeCache:
 
     async def reclaim(self, keep: set[str]) -> list[str]:
         # Same coordination as ModelRamCache.reclaim: a copy in flight is
-        # left alone, rejected queue entries are dropped.
-        removed = sorted(m for m in self._cached - keep if m != self.caching_now)
+        # left alone, rejected queue entries are dropped, and the live
+        # reservation count is re-checked per model — a calibration can
+        # reserve an entry after the caller's protected snapshot.
+        removed: list[str] = []
+        for m in sorted(self._cached - keep):
+            if m == self.caching_now:
+                continue
+            if self._cache_use_refs.get(m, 0) > 0:
+                continue
+            removed.append(m)
         self._cached -= set(removed)
         self.queue = [m for m in self.queue if m in keep]
         self.reclaimed.append(removed)
@@ -1259,14 +1267,17 @@ def test_replan_reserves_pending_lane_before_its_cache_copy_is_admitted(monkeypa
 
 def test_replan_clears_stale_floor_and_hold_down_when_last_sleepable_lane_goes(monkeypatch) -> None:
     """Regression [medium]: when the last sleep-capable lane disappears on an
-    empty-capabilities worker, the re-plan must not early-return with the
-    previous pass's sleep reserve still in the host-RAM floor and a stale
-    hold-down deadline retained — a later on-demand lane calls ensure_cached
-    BEFORE it becomes a candidate, so an obsolete floor would force an
+    empty-capabilities worker, the re-plan must not carry the previous
+    pass's sleep reserve into the host-RAM floor, and a stale hold-down
+    deadline must not linger — a later on-demand lane calls ensure_cached
+    BEFORE it becomes a candidate, so an obsolete reserve would force an
     otherwise-fitting model to launch from disk for its lifetime.
 
-    Asserts the empty-candidate path zeroes the floor, resets the hold-down
-    state, and leaves the cached contents untouched (a later on-demand lane
+    The gone lane's cached copy now plans as an uncatalogued unsleepable
+    resident, so the pass runs the planner with a zero reserve instead of
+    early-returning: the floor keeps only the safety margin, the stale
+    hold-down deadline is reset (the resident itself re-enters with a fresh
+    stamp), and the cached contents stay untouched (a later on-demand lane
     still finds its copy).
     """
     monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(100_000.0))
@@ -1290,13 +1301,18 @@ def test_replan_clears_stale_floor_and_hold_down_when_last_sleepable_lane_goes(m
     reclaim_calls_before = len(cache.reclaimed)
     asyncio.run(worker_main._replan_ram_cache_once(app))
 
-    # The stale reserve is gone, the hold-down state is reset, and the cached
-    # contents are untouched.
-    assert cache.floor_mb == 0.0
-    assert app.state.ram_cache_in_plan_since == {}
+    # The sleep reserve is gone (the lane is gone) but the safety margin is
+    # kept: the cached copy now plans as an uncatalogued unsleepable resident
+    # with a zero reserve, so the floor bounds the next on-demand copy by
+    # the margin alone.
+    assert cache.floor_mb == pytest.approx(margin)
+    # The stale hold-down deadline is gone; the resident itself is in the
+    # plan now, so it carries a fresh stamp.
+    assert set(app.state.ram_cache_in_plan_since) == {"org/m"}
     assert cache.is_cached("org/m") is True
-    # The no-op path must not run the planner's reclaim at all.
-    assert len(cache.reclaimed) == reclaim_calls_before
+    # The reclaim ran against the resident plan and freed nothing.
+    assert len(cache.reclaimed) == reclaim_calls_before + 1
+    assert cache.reclaimed[-1] == []
 
 
 # ── _replan_ram_cache_once ───────────────────────────────────────────────────
@@ -1855,6 +1871,87 @@ def test_replan_reclaims_an_otherwise_fitting_entry_when_a_rejected_protected_en
     assert cache.reclaimed[-1] == ["org/small"]
     assert cache.is_cached("org/big") is True
     assert cache.is_cached("org/small") is False
+
+
+def test_replan_reclaims_an_uncatalogued_unsleepable_entry_on_a_zero_reading(monkeypatch) -> None:
+    """A model cached on demand outside the capability list produces no
+    calibrated candidate on its own, but its tmpfs copy still consumes host
+    RAM: at a valid zero MemAvailable reading the re-plan must evict the
+    unprotected copy and keep the safety floor — not zero it and return,
+    which would leave the copy resident even under maximum pressure."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(0.0))
+    # No capability models, no sleep-capable lanes: the only cache resident
+    # is an on-demand model the catalogue never saw.
+    cache = _FakeCache(cached=["org/onprem"], sizes={"org/onprem": _mb(48_000)})
+    app = _app(cache, _FakeRegistry({}), _FakeLaneManager({}), [])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    assert cache.reclaimed[-1] == ["org/onprem"]
+    assert cache.is_cached("org/onprem") is False
+    # The floor keeps the margin (an unsleepable entry reserves no sleep
+    # footprint) instead of being zeroed by the empty-candidate path.
+    assert cache.floor_mb == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_keeps_an_uncatalogued_unsleepable_entry_while_ram_allows(monkeypatch) -> None:
+    """The same uncatalogued resident is admitted while headroom lasts: a
+    comfortable MemAvailable reading packs it under the live budget, and the
+    floor holds the safety margin instead of the old empty-path zero — so
+    the copy path's brake stays on for whatever else gets cached next."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+    cache = _FakeCache(cached=["org/onprem"], sizes={"org/onprem": _mb(48_000)})
+    app = _app(cache, _FakeRegistry({}), _FakeLaneManager({}), [])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    assert cache.reclaimed[-1] == []
+    assert cache.is_cached("org/onprem") is True
+    assert cache.floor_mb == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
+def test_replan_reconciles_a_late_reservation_that_spared_an_uncharged_entry(monkeypatch) -> None:
+    """reclaim() re-checks cache-use reservations under the per-model lock,
+    so a calibration can reserve an entry AFTER the re-plan's protected
+    snapshot and keep its tree even though the planner rejected it. That
+    late survivor was never charged against the budget — the pass must
+    reconcile by reclaiming an otherwise-fitting unprotected entry instead
+    of leaving the retained cache over the live budget until another tick."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/late": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/late": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/late"], sizes=sizes)
+    app = _app(cache, registry, _FakeLaneManager({}), ["org/small", "org/late"])
+
+    original_reclaim = cache.reclaim
+
+    async def reclaim_with_late_reservation(keep: set[str]) -> list[str]:
+        # The calibration's executor thread lands between the protected
+        # snapshot (taken before _apply_ram_cache_plan) and reclaim's final
+        # per-model eviction decision.
+        if "org/late" not in cache.cache_use_reservations():
+            cache.reserve_cache_use("org/late")
+        return await original_reclaim(keep)
+
+    cache.reclaim = reclaim_with_late_reservation
+    try:
+        asyncio.run(worker_main._replan_ram_cache_once(app))
+    finally:
+        cache.release_cache_use("org/late")
+
+    # First reclaim: the plan admitted small (8 GB fit the 30.4 GB budget)
+    # and rejected late — but the reservation that landed mid-reclaim spared
+    # it. Reconciliation: late's uncharged 48 GB leaves no room, so the
+    # otherwise-fitting small entry is reclaimed to restore the budget.
+    assert cache.reclaimed == [[], ["org/small"]]
+    assert cache.is_cached("org/late") is True
+    assert cache.is_cached("org/small") is False
+    assert cache.floor_mb == pytest.approx(60_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
 
 
 # ── re-cache hold-down ────────────────────────────────────────────────────────
