@@ -13,6 +13,9 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_status_update_dto import (
     AutonomousTutorPipelineStatusUpdateDTO,
 )
+from iris.domain.chat.ask_user_chat.ask_user_chat_status_update_dto import (
+    AskUserChatStatusUpdateDTO,
+)
 from iris.domain.communication.communication_tutor_suggestion_status_update_dto import (
     TutorSuggestionStatusUpdateDTO,
 )
@@ -529,4 +532,28 @@ class AutonomousTutorCallback(StatusCallback):
             url,
             run_id,
             AutonomousTutorPipelineStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        )
+
+
+class AskUserStatusCallback(StatusCallback):
+    """Status callback for ask-user pipelines."""
+
+    # Inherits the base class's _TRANSIENT_RESULT_FIELDS = ("result", ...).
+    # The ask-user pipeline delivers its answer via a RUNNING update() ahead of
+    # the pipeline's terminal finish(). Once that update() is delivered
+    # successfully, "result" must be cleared from the reusable status DTO like
+    # any other transient field — otherwise the subsequent finish() re-sends the
+    # same answer a second time on the FINISHED payload. If the update() send
+    # fails, the base class leaves "result" in place so the terminal finish()
+    # still carries it, giving the answer one last chance at delivery.
+
+    def __init__(self, run_id: str, base_url: str, event: str | None = None, **_kwargs):
+        url = f"{base_url}/{self.api_url}/ask-user/runs/{run_id}/status"
+        super().__init__(
+            url,
+            run_id,
+            AskUserChatStatusUpdateDTO(
+                run_state=RunStateEnum.RUNNING,
+                event=event,
+            ),
         )

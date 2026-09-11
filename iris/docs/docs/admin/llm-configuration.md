@@ -46,6 +46,7 @@ Iris supports the following model types, each connecting to a different provider
 | ------------------ | --------------- | -------------------------------- |
 | `openai_chat`      | OpenAI API      | Chat completion models           |
 | `azure_chat`       | Azure OpenAI    | Chat completion models via Azure |
+| `google_gemini`    | Google Gemini   | Chat completion models           |
 | `ollama`           | Ollama (local)  | Locally hosted models            |
 | `openai_embedding` | OpenAI API      | Text embedding models            |
 | `azure_embedding`  | Azure OpenAI    | Text embedding models via Azure  |
@@ -105,6 +106,37 @@ Requires additional Azure-specific fields:
   tools: []
   cost_per_million_input_token: 0.4
   cost_per_million_output_token: 1.6
+```
+
+### Google Gemini Chat (`google_gemini`)
+
+For Google Gemini chat models via the Gemini `generateContent` API.
+
+| Field                  | Required | Description                                                                                   |
+| ---------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `endpoint`             | No       | Gemini API base URL. Defaults to `https://generativelanguage.googleapis.com/v1beta`            |
+| `supports_temperature` | No       | Set to `false` for models that reject the `temperature` parameter. Defaults to `true`          |
+| `generation_config`    | No       | Additional Gemini `generationConfig` values, for example `topP` or Gemini thinking settings    |
+| `safety_settings`      | No       | Gemini `safetySettings` entries forwarded to the API                                           |
+| `tool_config`          | No       | Gemini `toolConfig`, for example function-calling mode settings                                |
+
+:::note
+OpenAI-style `reasoning_effort`, `supports_reasoning_effort`, and `reasoning_effort_values` are not used by Gemini models. Configure Gemini thinking settings directly through `generation_config`.
+:::
+
+```yaml
+- id: "gemini-2.5-flash"
+  name: "Gemini 2.5 Flash"
+  description: "Gemini 2.5 Flash via Google Gemini API"
+  type: "google_gemini"
+  model: "gemini-2.5-flash"
+  api_key: "<your-gemini-api-key>"
+  supports_temperature: true
+  generation_config:
+    topP: 0.8
+  tools: []
+  cost_per_million_input_token: 0.3
+  cost_per_million_output_token: 2.5
 ```
 
 ### Ollama (`ollama`)

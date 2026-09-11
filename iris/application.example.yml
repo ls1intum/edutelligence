@@ -54,6 +54,9 @@ transcription:
   extract_audio_timeout_seconds: 600 # Audio extraction timeout
   no_speech_filter_threshold: 0.8 # Filter silent segments (0.0-1.0)
 
+pipelines:
+  ask_user_max_workers: 10 # Max concurrent ask-user (quiz) pipeline executions
+
 env_vars:
   SOME: "value"
 

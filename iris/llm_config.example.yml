@@ -205,3 +205,15 @@
   api_key: ""
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
+
+# ── Currently only for integration tests (not part of normal test suite) of Ask-user mode pipeline ─────────────────────────────────────────────────────────────────
+- id: gemini-3.1-pro
+  type: google_gemini
+  model: gemini-3.1-pro-preview
+  api_key: ""
+  supports_temperature: false
+  generation_config:
+    thinkingConfig:
+      thinkingLevel: medium
+  cost_per_million_input_token: 2.0
+  cost_per_million_output_token: 12.0
