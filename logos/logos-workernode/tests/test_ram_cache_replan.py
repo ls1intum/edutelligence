@@ -82,6 +82,7 @@ class _FakeCache:
         sizes: dict[str, int] | None = None,
         queue: list[str] | None = None,
         caching_now: str | None = None,
+        host_available_mb: float | None = None,
     ) -> None:
         self.enabled = True
         self._cached = set(cached or [])
@@ -90,6 +91,10 @@ class _FakeCache:
         self.caching_now = caching_now
         self.floor_mb = 0.0
         self.floor_calls = 0
+        # Host RAM available to the admission checks (None = never reject,
+        # as before the below-floor fallback was modelled): mirrors
+        # ModelRamCache._would_starve_host for the already-cached branch.
+        self.host_available_mb = host_available_mb
         self.reclaimed: list[list[str]] = []
         self.recache_calls: list[list[str]] = []
         # tmpfs root for add-path tests: ModelRamCache serves the RAM-cache
@@ -141,6 +146,11 @@ class _FakeCache:
         # record the floor at the moment of admission — the probe's floor
         # escalation must have re-established it before this call.
         self.floor_at_ensure_cached = self.floor_mb
+        if model in self._cached and self.host_available_mb is not None and self.host_available_mb < self.floor_mb:
+            # Already cached but the host is below the raised floor: the
+            # real cache serves this from the source (and leaves the entry
+            # evictable) — mirrors its _would_starve_host(0) re-check.
+            return "/fake/source"
         return str(self._cache_hub.parent)
 
     async def reclaim(self, keep: set[str]) -> list[str]:
@@ -2132,6 +2142,53 @@ def test_tp_escalation_forwards_the_floor_callback_to_the_probe(monkeypatch, tmp
     # available_gpus=1 pins the run to tp=1 (no binary search), so exactly
     # one probe ran — and it saw the caller's callback, not a dropped None.
     assert seen == [sentinel]
+
+
+def test_source_fallback_reconciles_an_already_cached_entry_before_the_probe_starts(monkeypatch) -> None:
+    """Regression: an already-cached entry the raised floor rejects is
+    served from the source — but the mandatory pre-admission pass ran while
+    the probe's reservation was still live, so it could not reclaim the
+    very entry that the fallback now leaves unused. Releasing the
+    reservation without another pass would let the source probe start
+    while the dead tree keeps eating the sleep reserve until the next
+    60-second tick, with the host already below the floor. The helper must
+    reconcile before it returns."""
+    # Zero-lane worker; the 48 GB entry is already resident under an
+    # earlier, smaller floor, and the host has since dropped below the
+    # safety margin (25.6 GB on a 512 GB host) the pass will raise.
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(20_000.0))
+    cache = _FakeCache(
+        cached=["org/probe"],
+        sizes={"org/probe": _mb(48_000)},
+        host_available_mb=20_000.0,
+    )
+    app = _app(cache, _FakeRegistry({}), _FakeLaneManager({}), [])
+    cache_use_reserved = [False]
+
+    def escalate() -> bool:
+        asyncio.run(worker_main._replan_ram_cache_once(app))
+        return True
+
+    hf = calibration._reserve_and_admit_calibration_copy(
+        cache,
+        "org/probe",
+        cache_use_reserved=cache_use_reserved,
+        establish_host_ram_floor=escalate,
+    )
+
+    # Source fallback against the raised floor (the fake mirrors the real
+    # already-cached rejection; the helper returns None so the probe keeps
+    # the source HF_HOME) — and the now-unused entry is already reclaimed
+    # when the helper returns, so the source probe starts on a host at or
+    # above the floor instead of one a dead tree is still eating into.
+    assert hf is None
+    assert cache.floor_at_ensure_cached == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
+    assert cache.is_cached("org/probe") is False
+    assert cache_use_reserved[0] is False
+    assert "org/probe" not in cache.cache_use_reservations()
+    # Pass 1 (reservation live) could not touch the protected entry; the
+    # post-fallback pass reclaims it once the release is visible.
+    assert cache.reclaimed == [[], ["org/probe"]]
 
 
 def test_replan_reconciles_again_when_a_late_reservation_releases_mid_pass(monkeypatch) -> None:

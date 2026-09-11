@@ -1444,7 +1444,10 @@ def _reserve_and_admit_calibration_copy(
     calibration must read the source: no usable copy, or the floor could
     not be established. The provisional reservation is released whenever
     the entry is not read from tmpfs (the ``calibrate_model`` wrapper's
-    finally releases it on every other exit).
+    finally releases it on every other exit). When the fallback leaves an
+    already-cached entry behind (the raised floor rejected it), one more
+    re-plan pass reclaims the now-unprotected entry before returning, so
+    the source probe does not start on a host still below the floor.
 
     Reserve-then-floor-then-admit: ``ensure_cached_sync`` hands back the
     tmpfs path the moment the entry is (already) cached, and the re-plan
@@ -1502,12 +1505,48 @@ def _reserve_and_admit_calibration_copy(
         # pinned for the rest of the calibration.
         model_cache.release_cache_use(model)
         cache_use_reserved[0] = False
+        if model_cache.is_cached(model):
+            # An already-resident entry the raised floor now rejects: the
+            # pre-admission pass ran while this reservation was live, so it
+            # could not reclaim the very entry that is now unused — and
+            # nothing re-plans when the reservation drops. One more pass
+            # re-measures with the release visible and reclaims the entry
+            # (sparing it, and anything else, that a live lane or another
+            # reservation still reads) BEFORE the source probe starts,
+            # instead of letting the dead tree eat the sleep reserve until
+            # the next tick while the host is already below the floor.
+            _reconcile_ram_cache_after_source_fallback(establish_host_ram_floor, model)
         logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
     else:
         # No usable path at all — nothing to pin.
         model_cache.release_cache_use(model)
         cache_use_reserved[0] = False
     return None
+
+
+def _reconcile_ram_cache_after_source_fallback(
+    establish_host_ram_floor: Callable[[], bool] | None,
+    model: str,
+) -> None:
+    """Run one re-plan pass after a source fallback released its
+    provisional reservation, so a now-unprotected already-cached entry is
+    reclaimed before the source-backed probe starts.
+
+    Best effort: a missing callback (boot/CLI path — no event loop to
+    re-plan on) or a failed pass degrades to the next periodic tick.
+    """
+    if establish_host_ram_floor is None:
+        return
+    try:
+        establish_host_ram_floor()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "  [RAM cache] post-fallback re-plan after the source fallback "
+            "for %s failed — the now-unused entry waits for the next "
+            "periodic tick to be reclaimed",
+            model,
+            exc_info=True,
+        )
 
 
 def calibrate_model(
