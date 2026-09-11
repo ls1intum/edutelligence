@@ -22,7 +22,6 @@ prompts/
 │   ├── tutor_suggestion_chat_system_prompt.j2
 │   └── session_title_generation_prompt.j2
 ├── code_feedback_prompt.txt                   # Plain text prompt for code feedback
-├── citation_prompt.txt                        # Citation generation prompt
 ├── citation_keyword_prompt.txt                # Citation keyword extraction
 ├── citation_summary_prompt.txt                # Citation summary generation
 ├── summary_prompt.txt                         # General summarization

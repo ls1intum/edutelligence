@@ -51,9 +51,9 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     title_pipeline.tokens = None
     pipeline.session_title_pipeline = title_pipeline
 
-    citation_pipeline = MagicMock()
-    citation_pipeline.tokens = []
-    pipeline.citation_pipeline = citation_pipeline
+    # No enricher: the citation registry still hands out and expands handles,
+    # it just leaves keyword/summary empty instead of calling a model.
+    pipeline.citation_enricher = None
 
     suggestion_pipeline = MagicMock(return_value=["suggestion 1"])
     suggestion_pipeline.tokens = None

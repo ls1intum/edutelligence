@@ -1,3 +1,4 @@
+import contextvars
 import threading
 import time
 from types import SimpleNamespace
@@ -613,6 +614,41 @@ def test_partial_result_sender_clears_draft_on_reset_and_uses_run_state():
     assert all("activities" not in post["json"] for post in posts)
 
 
+def test_partials_are_posted_through_the_transform():
+    posts = []
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    ready = threading.Event()
+
+    def transform(text, final=False):  # pylint: disable=unused-argument
+        return text.replace("[cite:1]", "[cite:L:42:7:::K:S]" if ready.is_set() else "")
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=transform,
+        )
+        sender.start()
+        sender.on_delta("Gradients flow.[cite:1]")
+        _wait_until(lambda: len(posts) == 1)
+
+        ready.set()
+        _wait_until(lambda: len(posts) == 2)
+
+        sender.stop()
+
+    assert [post["partialResult"] for post in posts] == [
+        "Gradients flow.",
+        "Gradients flow.[cite:L:42:7:::K:S]",
+    ]
+    assert [post["partialSeq"] for post in posts] == [1, 2]
+
+
 def test_partial_post_timeout_is_bounded_by_stop_drain_budget():
     # The stop drain budget must strictly exceed the per-POST timeout, otherwise
     # stop() could return while a partial POST is still in flight and let a
@@ -717,6 +753,135 @@ def test_reset_during_in_flight_post_still_clears_draft():
     assert partial_results.index("") > partial_results.index("Hello")
 
 
+def test_reset_during_transform_suppresses_the_superseded_draft():
+    posts = []
+    in_transform = threading.Event()
+    release_transform = threading.Event()
+
+    def slow_transform(text):
+        if text == "Hello":
+            in_transform.set()
+            release_transform.wait(1.0)
+        return text
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=slow_transform,
+        )
+        sender.start()
+        sender.on_delta("Hello")
+        assert in_transform.wait(1.0)
+        sender.on_delta(None)
+        release_transform.set()
+        time.sleep(0.1)
+        sender.stop()
+
+    assert "Hello" not in [post["partialResult"] for post in posts]
+
+
+def test_appended_delta_during_transform_still_posts_the_snapshot():
+    posts = []
+    in_transform = threading.Event()
+    release_transform = threading.Event()
+
+    def slow_transform(text):
+        if text == "Hello":
+            in_transform.set()
+            release_transform.wait(1.0)
+        return text
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=slow_transform,
+        )
+        sender.start()
+        sender.on_delta("Hello")
+        assert in_transform.wait(1.0)
+        sender.on_delta(" world")
+        release_transform.set()
+        _wait_until(lambda: any(p["partialResult"] == "Hello world" for p in posts))
+        sender.stop()
+
+    partial_results = [post["partialResult"] for post in posts]
+    assert "Hello" in partial_results
+    assert "Hello world" in partial_results
+
+
+def test_transform_inherits_the_context_from_sender_creation():
+    posts = []
+    request_id = contextvars.ContextVar("test_request_id", default="missing")
+    request_id.set("request-1")
+    seen_contexts = []
+
+    def transform(text):
+        seen_contexts.append(request_id.get())
+        return text
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=transform,
+        )
+        request_id.set("changed-after-creation")
+        sender.start()
+        sender.on_delta("Hello")
+        _wait_until(lambda: len(posts) == 1)
+        sender.stop()
+
+    assert seen_contexts and set(seen_contexts) == {"request-1"}
+
+
+def test_transform_failure_is_retried_without_posting_raw_text():
+    posts = []
+    attempts = 0
+
+    def transform(text):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("temporary transform failure")
+        return text.replace("[cite:1]", "[cite:L:42:7:::K:S]")
+
+    def fake_post(url, headers, json, timeout):  # pylint: disable=unused-argument
+        posts.append(json)
+        return _Response(200)
+
+    with patch("iris.web.status.partial_result_sender.requests.post", fake_post):
+        sender = PartialResultSender(
+            "https://artemis.example/api/iris/internal/pipelines/chat/runs/run-1/status",
+            "run-1",
+            interval_seconds=0.01,
+            transform=transform,
+        )
+        sender.start()
+        sender.on_delta("Text.[cite:1]")
+        _wait_until(lambda: len(posts) == 1)
+        sender.stop()
+
+    assert attempts >= 2
+    assert [post["partialResult"] for post in posts] == ["Text.[cite:L:42:7:::K:S]"]
+
+
 def _make_dto(stream_response_marker, chat_mode=IrisChatMode.LECTURE):
     class Settings(SimpleNamespace):
         def is_local(self):
@@ -771,9 +936,7 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     title_pipeline.tokens = None
     pipeline.session_title_pipeline = title_pipeline
 
-    citation_pipeline = MagicMock()
-    citation_pipeline.tokens = []
-    pipeline.citation_pipeline = citation_pipeline
+    pipeline.citation_enricher = None
 
     suggestion_pipeline = MagicMock(return_value=["suggestion 1"])
     suggestion_pipeline.tokens = None
@@ -827,10 +990,11 @@ def _run_stubbed_pipeline_details(
     class FakeSender:
         """Stands in for PartialResultSender to record wiring calls."""
 
-        def __init__(self, url, run_id, interval_seconds=0.35):
+        def __init__(self, url, run_id, interval_seconds=0.35, transform=None):
             self.url = url
             self.run_id = run_id
             self.interval_seconds = interval_seconds
+            self.transform = transform
             self.deltas = []
             sender_instances.append(self)
 
@@ -888,6 +1052,7 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
     assert created_args[0].stream_handler == sender.on_delta
+    assert sender.transform is not None
     assert events.index("sender.start") < events.index("sender.stop")
     assert events.index("sender.stop") < events.index("callback.finish")
 

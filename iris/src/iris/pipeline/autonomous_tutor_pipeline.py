@@ -105,11 +105,6 @@ class AutonomousTutorPipeline(
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
 
-        if not hasattr(state, "lecture_content_storage"):
-            setattr(state, "lecture_content_storage", {})
-        if not hasattr(state, "faq_storage"):
-            setattr(state, "faq_storage", {})
-
         callback = state.callback
         if not isinstance(callback, AutonomousTutorCallback):
             callback = cast(AutonomousTutorCallback, state.callback)
@@ -153,7 +148,6 @@ class AutonomousTutorPipeline(
                     callback,
                     query_text,
                     state.message_history,
-                    getattr(state, "lecture_content_storage", {}),
                 )
             )
 
@@ -171,7 +165,6 @@ class AutonomousTutorPipeline(
                     callback,
                     query_text,
                     state.message_history,
-                    getattr(state, "faq_storage", {}),
                 )
             )
 

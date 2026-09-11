@@ -101,11 +101,6 @@ class TutorSuggestionPipeline(
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
 
-        if not hasattr(state, "lecture_content_storage"):
-            setattr(state, "lecture_content_storage", {})
-        if not hasattr(state, "faq_storage"):
-            setattr(state, "faq_storage", {})
-
         callback = state.callback
         if not isinstance(callback, TutorSuggestionCallback):
             callback = cast(TutorSuggestionCallback, state.callback)
@@ -166,7 +161,6 @@ class TutorSuggestionPipeline(
                     callback,
                     query_text,
                     state.message_history,
-                    getattr(state, "lecture_content_storage", {}),
                 )
             )
 
@@ -184,7 +178,6 @@ class TutorSuggestionPipeline(
                     callback,
                     query_text,
                     state.message_history,
-                    getattr(state, "faq_storage", {}),
                 )
             )
 
