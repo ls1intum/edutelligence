@@ -36,12 +36,17 @@ import jakarta.annotation.PostConstruct;
  * ownership of the ids, the budget guard, the choice between forwarding to a
  * provider and running the job here — lives in the orchestrator's Batch API. A
  * second implementation in Java would be a second set of those rules to keep in
- * step, so this forwards to the same endpoints a script would call, with the
+ * step, so this forwards to the same endpoints a script would call, as the
  * API key the user picked in the UI.
  *
- * The key is the user's secret, so where it may travel is checked at startup
- * (HTTPS, or plain HTTP on loopback for local development) and the template
- * used never follows a redirect that could carry it to another authority.
+ * What travels there is not the key itself: the key is the user's long-lived
+ * secret, and the shipped setup reaches the orchestrator over plain HTTP. The
+ * key value stays in this process; the ownership check runs here, and the
+ * scoped credential the orchestrator hands back in exchange for the key's id
+ * (short-lived, bound to that one key) is what authenticates the calls. Where
+ * the credential may travel is checked at startup (HTTPS anywhere; plain HTTP
+ * on loopback, or against the internal service URL when the credential
+ * exchange is configured), and the template used never follows a redirect.
  */
 @Service
 public class BatchService {
@@ -54,17 +59,22 @@ public class BatchService {
     @Value("${logos.orchestrator.url:}")
     private String orchestratorUrl;
 
+    @Value("${logos.orchestrator.internal-secret:}")
+    private String internalSecret;
+
     public BatchService(@Qualifier("batchRestTemplate") RestTemplate restTemplate, ApiKeyRepository apiKeyRepository) {
         this.restTemplate = restTemplate;
         this.apiKeyRepository = apiKeyRepository;
     }
 
     /**
-     * The batch proxy sends the caller's API key to this URL on every call, so
-     * a URL that would put the key on the wire in cleartext is a
+     * The batch proxy sends the caller's scoped credential to this URL on
+     * every call, so a URL that would put it on the wire in cleartext is a
      * misconfiguration that should fail the deployment, not the request.
-     * HTTPS is fine anywhere; plain HTTP only on loopback, matching the
-     * orchestrator's own rule for credentials.
+     * HTTPS is fine anywhere; plain HTTP on loopback (local development) or
+     * against the internal service URL when the credential exchange is
+     * configured — that is the mechanism that keeps the user's raw key off
+     * the hop, which is what the internal URL is permitted for.
      */
     @PostConstruct
     void validateOrchestratorUrl() {
@@ -78,12 +88,22 @@ public class BatchService {
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
         String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
         boolean loopback = "localhost".equals(host) || "127.0.0.1".equals(host) || "::1".equals(host);
-        if ("https".equals(scheme) || ("http".equals(scheme) && loopback)) return;
+        boolean exchangeConfigured = internalSecret != null && !internalSecret.isBlank();
+        if ("https".equals(scheme)) return;
+        if ("http".equals(scheme) && (loopback || exchangeConfigured)) return;
         throw new IllegalStateException(
-            "The batch proxy sends the caller's API key to logos.orchestrator.url ("
+            "The batch proxy sends the caller's scoped credential to logos.orchestrator.url ("
                 + orchestratorUrl
-                + "), which is not HTTPS. Point it at an HTTPS endpoint (plain HTTP is only accepted on loopback) "
-                + "so the key does not travel in cleartext.");
+                + "), which is not HTTPS. Point it at an HTTPS endpoint — plain HTTP is only accepted on loopback, "
+                + "or against the internal service URL when logos.orchestrator.internal-secret is configured, "
+                + "which is what keeps the user's key value off the hop.");
+    }
+
+    /** Raised when the scoped credential could not be obtained from the orchestrator. */
+    public static class CredentialExchangeException extends RuntimeException {
+        public CredentialExchangeException(String message) {
+            super(message);
+        }
     }
 
     /** Raised when the caller may not act as the key they named. */
@@ -117,18 +137,39 @@ public class BatchService {
     }
 
     /**
-     * The key's secret, once the caller is confirmed to own it.
+     * The scoped credential for the key, once the caller is confirmed to own it.
      *
-     * The UI never sees this value: it names a key by id, and the ownership
-     * check here is what stops one user from submitting work as another's key.
+     * The key value never leaves this process: the UI names a key by id (the
+     * ownership check here is what stops one user from submitting work as
+     * another's key), and what is asked of the orchestrator is the key's id —
+     * answered with a short-lived credential bound to that one key. That
+     * credential, not the key, is what authenticates the batch calls.
      */
-    private String keyValueOwnedBy(int userId, int apiKeyId) {
+    private String batchCredentialOwnedBy(int userId, int apiKeyId) {
         ApiKey key = apiKeyRepository.findById(apiKeyId).orElse(null);
         if (key == null || !Boolean.TRUE.equals(key.getIsActive())
                 || key.getUserId() == null || key.getUserId() != userId) {
             throw new KeyNotOwnedException("This API key does not belong to you.");
         }
-        return key.getKeyValue();
+        if (internalSecret == null || internalSecret.isBlank()) {
+            throw new CredentialExchangeException(
+                "The batch proxy cannot exchange a credential for this key: "
+                    + "logos.orchestrator.internal-secret is not configured.");
+        }
+        Map<String, Object> body = Map.of("api_key_id", key.getId());
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", "Bearer " + internalSecret);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ProxiedResponse exchanged =
+            exchange(HttpMethod.POST, "/internal/batch_credentials", new HttpEntity<>(body, headers));
+        if (exchanged.status() >= 400) {
+            throw new CredentialExchangeException("The orchestrator refused the credential for this key.");
+        }
+        String credential = readField(exchanged, "credential");
+        if (credential == null) {
+            throw new CredentialExchangeException("The orchestrator returned no batch credential.");
+        }
+        return credential;
     }
 
     public ProxiedResponse listBatches(int userId, int apiKeyId) {
@@ -157,7 +198,7 @@ public class BatchService {
      */
     public ProxiedResponse createBatch(int userId, int apiKeyId, String filename, byte[] content,
                                        String endpoint, String completionWindow, String execution) {
-        String keyValue = keyValueOwnedBy(userId, apiKeyId);
+        String credential = batchCredentialOwnedBy(userId, apiKeyId);
 
         MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
         ByteArrayResource file = new ByteArrayResource(content) {
@@ -169,13 +210,13 @@ public class BatchService {
         form.add("file", file);
         form.add("purpose", "batch");
 
-        HttpHeaders uploadHeaders = headers(keyValue, execution);
+        HttpHeaders uploadHeaders = headers(credential, execution);
         uploadHeaders.setContentType(MediaType.MULTIPART_FORM_DATA);
         ProxiedResponse uploaded = exchange(HttpMethod.POST, "/v1/files", new HttpEntity<>(form, uploadHeaders));
         if (uploaded.status() >= 400) {
             return uploaded;
         }
-        String fileId = readId(uploaded);
+        String fileId = readField(uploaded, "id");
         if (fileId == null) {
             return new ProxiedResponse(502, MediaType.APPLICATION_JSON_VALUE,
                 "{\"error\":{\"message\":\"The upload returned no file id.\"}}".getBytes(StandardCharsets.UTF_8));
@@ -187,23 +228,23 @@ public class BatchService {
         body.put("completion_window", completionWindow != null && !completionWindow.isBlank()
             ? completionWindow : "24h");
 
-        HttpHeaders createHeaders = headers(keyValue, execution);
+        HttpHeaders createHeaders = headers(credential, execution);
         createHeaders.setContentType(MediaType.APPLICATION_JSON);
         return exchange(HttpMethod.POST, "/v1/batches", new HttpEntity<>(body, createHeaders));
     }
 
     private ProxiedResponse call(int userId, int apiKeyId, HttpMethod method, String path,
                                  Object body, MediaType contentType) {
-        HttpHeaders requestHeaders = headers(keyValueOwnedBy(userId, apiKeyId), null);
+        HttpHeaders requestHeaders = headers(batchCredentialOwnedBy(userId, apiKeyId), null);
         if (contentType != null) {
             requestHeaders.setContentType(contentType);
         }
         return exchange(method, path, new HttpEntity<>(body, requestHeaders));
     }
 
-    private HttpHeaders headers(String keyValue, String execution) {
+    private HttpHeaders headers(String credential, String execution) {
         HttpHeaders requestHeaders = new HttpHeaders();
-        requestHeaders.set("logos_key", keyValue);
+        requestHeaders.set("logos_key", credential);
         if (execution != null && !execution.isBlank()) {
             requestHeaders.set("X-Logos-Batch-Execution", execution);
         }
@@ -245,10 +286,10 @@ public class BatchService {
         }
     }
 
-    /** The ``id`` of a JSON object response, without pulling in a parser. */
-    private String readId(ProxiedResponse response) {
+    /** A string field of a JSON object response, without pulling in a parser. */
+    private String readField(ProxiedResponse response, String field) {
         String body = new String(response.body(), StandardCharsets.UTF_8);
-        int marker = body.indexOf("\"id\"");
+        int marker = body.indexOf("\"" + field + "\"");
         if (marker < 0) {
             return null;
         }

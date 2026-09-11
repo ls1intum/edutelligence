@@ -94,6 +94,12 @@ MAX_BATCH_REQUESTS = int(os.getenv("LOGOS_MAX_BATCH_REQUESTS", "50000"))
 # How often the reconciler looks for batches that finished while nobody polled.
 RECONCILE_INTERVAL_S = int(os.getenv("LOGOS_BATCH_RECONCILE_INTERVAL_S", "300"))
 
+# How long a settlement's exclusive claim on a batch lasts. Settlement is a
+# download plus a ledger write, so this is generous; it only matters in the
+# failure case, where a shorter lease means the retried settlement can start
+# sooner after the first one died.
+SETTLEMENT_LEASE_TTL_S = int(os.getenv("LOGOS_BATCH_SETTLEMENT_LEASE_TTL_S", "1800"))
+
 # The operations a batch request line may address. A batch is an inference
 # channel; the Files API is its transport, not a general object store.
 _BATCH_REQUEST_ENDPOINTS = {
@@ -761,12 +767,23 @@ def _usage_rows_from_output(
     input_models: Dict[str, str],
     logging_context: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Turn a batch output file into one usage row per finished request."""
+    """Turn a batch output file into one usage row per finished request.
+
+    Each row's ``request_id`` is scoped to this batch (the batch object's id,
+    not the provider's id: it is the same for a settlement retry and unique
+    across batches no matter what two clients call their lines). The id is
+    what makes the ledger write idempotent — a settlement that is retried after
+    a partial commit skips its already-booked rows on it, and two batches that
+    reuse the same custom_id can no longer collide in the ledger at all.
+    """
     rows: List[Dict[str, Any]] = []
     now = datetime.now(timezone.utc)
+    batch_scope = f"batch-{owner.get('id')}-"
+    line_number = 0
     for raw_line in content.splitlines():
         if not raw_line.strip():
             continue
+        line_number += 1
         try:
             record = json.loads(raw_line)
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -778,6 +795,9 @@ def _usage_rows_from_output(
         body = response.get("body") if isinstance(response.get("body"), dict) else {}
         status_code = response.get("status_code")
         custom_id = record.get("custom_id")
+        # A line without a custom_id still gets a stable identity: its position
+        # in the result file, which the provider does not change.
+        request_id = f"{batch_scope}{custom_id}" if isinstance(custom_id, str) else f"{batch_scope}line-{line_number}"
 
         usage, _ = finalize_billing_inputs({}, body, "v1/chat/completions")
         model_id = _model_id_for(model_index, body.get("model"))
@@ -795,7 +815,7 @@ def _usage_rows_from_output(
                 "privacy_level": logging_context.get("log_level"),
                 "provider_id": int(provider["id"]),
                 "model_id": model_id,
-                "request_id": custom_id if isinstance(custom_id, str) else None,
+                "request_id": request_id,
                 "service_tier": "batch",
                 "result_status": "error" if failed else "success",
                 "error_message": json.dumps(record.get("error"))[:500] if record.get("error") else None,
@@ -836,13 +856,20 @@ async def settle_batch(provider: Dict[str, Any], owner: Dict[str, Any], batch_bo
 
     The provider metered the job and charged its batch rate; this brings the
     same numbers into Logos so the spend shows up under the team that ordered
-    it. The settlement latch is taken first, and released again if the output
-    file could not be read, so a transient failure is retried rather than
-    silently dropping a batch's cost.
+    it.
+
+    The order is what makes this safe to retry: the settlement *lease* is
+    taken first (what keeps the poll path and the reconciler exclusive of each
+    other), and ``settled_at`` is stamped only after the usage rows are
+    durably written. A settlement that dies in between — the process exits,
+    the task is cancelled — leaves the batch unsettled: the lease lapses and
+    the reconciler picks the batch up again, and the idempotent ledger write
+    skips whatever the first attempt already booked. Stamping first would have
+    put the batch out of the reconciler's reach forever and its cost with it.
     """
     output_file_id = batch_body.get("output_file_id") or batch_body.get("error_file_id")
     with DBManager() as db:
-        if not db.claim_batch_for_settlement(int(owner["id"])):
+        if not db.claim_batch_for_settlement(int(owner["id"]), SETTLEMENT_LEASE_TTL_S):
             return 0
         logging_context = (
             db.get_api_key_logging_context(int(owner["api_key_id"]))
@@ -853,8 +880,10 @@ async def settle_batch(provider: Dict[str, Any], owner: Dict[str, Any], batch_bo
 
     if not output_file_id:
         # A batch that failed before producing any output still costs nothing;
-        # keep the latch so it is not polled forever.
+        # close it out so it is not re-checked forever.
         logger.info("Batch %s finished without an output file; nothing to meter", owner.get("upstream_id"))
+        with DBManager() as db:
+            db.mark_batch_settled(int(owner["id"]))
         return 0
 
     try:
@@ -869,6 +898,10 @@ async def settle_batch(provider: Dict[str, Any], owner: Dict[str, Any], batch_bo
         rows = _usage_rows_from_output(output, owner, provider, model_index, input_models, logging_context)
         with DBManager() as db:
             written = db.record_batch_usage(rows)
+            # Only now is the batch settled: the rows above are durably in the
+            # ledger (or were already there from an earlier attempt of this
+            # same settlement, which the write skips by request_id).
+            db.mark_batch_settled(int(owner["id"]))
     except Exception:  # noqa: BLE001 - a failed settlement must stay retryable
         logger.exception("Settlement of batch %s failed; it will be retried", owner.get("upstream_id"))
         with DBManager() as db:
@@ -1155,6 +1188,18 @@ def _serve_local_operation(db: DBManager, operation: BatchOperation, owner: Dict
         return Response(content=content, media_type="application/jsonl")
 
     if operation.method == "DELETE":
+        # The runner reads the input's bytes when it starts the batch, not
+        # when the batch is created. Deleting a file a not-yet-finished batch
+        # still references would strand that batch: it would find no content
+        # and fail one it was accepted to run, so the delete is refused until
+        # every referencing batch is terminal.
+        if db.count_nonterminal_batches_for_input_file(str(owner["upstream_id"])) > 0:
+            raise_openai_error(
+                409,
+                f"File {owner['upstream_id']!r} is still the input of a batch that has not finished; "
+                "it can be deleted once that batch is done.",
+                code="batch_input_file_in_use",
+            )
         db.delete_batch_object(int(owner["id"]))
         return JSONResponse(content={"id": owner["upstream_id"], "object": "file", "deleted": True})
 
@@ -1294,6 +1339,73 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
     return JSONResponse(content=local_batch_object(created)), None
 
 
+async def _rerun_refused_creation_locally(
+    provider: Dict[str, Any], json_body: Dict[str, Any], auth: AuthContext
+) -> Optional[JSONResponse]:
+    """Run a refused batch creation here, from the file the provider holds.
+
+    Auto mode means "forward when that can work". A creation the provider
+    refused with a model-availability error has just said it cannot, so the
+    batch is created locally from the same input instead of the refusal being
+    the answer: the first request still ends in a batch, and the ineligibility
+    recorded alongside this rerun routes the next upload of the file locally
+    on its own.
+    """
+    input_file_id = json_body.get("input_file_id")
+    content = await _download_file(provider, str(input_file_id))
+    if content is None:
+        return None
+    # The provider holds the file as Logos uploaded it, i.e. with the model
+    # spellings the provider's deployments use. The local pipeline wants Logos
+    # model names, so those spellings are translated back on the way in.
+    with DBManager() as db:
+        deployments = db.get_provider_model_deployments(int(provider["id"]))
+    name_by_deployment = {str(_deployment_for(provider, row)).lower(): str(row["model_name"]) for row in deployments}
+    lines: List[bytes] = []
+    for raw_line in content.splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            line = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(line, dict) and isinstance(line.get("body"), dict):
+            model = line["body"].get("model")
+            if isinstance(model, str) and model.lower() in name_by_deployment:
+                line["body"]["model"] = name_by_deployment[model.lower()]
+        lines.append(json.dumps(line, ensure_ascii=False).encode("utf-8"))
+    if not lines:
+        return None
+    stored = b"\n".join(lines) + b"\n"
+    file_id = new_object_id("file")
+    batch_id = new_object_id("batch")
+    with DBManager() as db:
+        db.store_local_batch_file(
+            upstream_id=file_id,
+            content=stored,
+            filename=f"{input_file_id}_rerun.jsonl",
+            api_key_id=auth.api_key_id,
+            team_id=auth.team_id,
+            user_id=auth.user_id,
+        )
+        db.create_local_batch(
+            upstream_id=batch_id,
+            input_file_id=file_id,
+            endpoint=str(json_body.get("endpoint") or "/v1/chat/completions"),
+            completion_window=json_body.get("completion_window"),
+            metadata=json_body.get("metadata") if isinstance(json_body.get("metadata"), dict) else None,
+            total_requests=len(parse_request_lines(stored)),
+            api_key_id=auth.api_key_id,
+            team_id=auth.team_id,
+            user_id=auth.user_id,
+        )
+        created = db.get_local_batch(batch_id)
+    if created is None:
+        return None
+    _start_local_batch(created)
+    return JSONResponse(content=local_batch_object(created))
+
+
 async def handle_batch_api_request(request: Request) -> Response:
     """Authenticate, authorise, run or forward, and account for one operation.
 
@@ -1360,6 +1472,18 @@ async def handle_batch_api_request(request: Request) -> Response:
             response = await _register_upstream_object(
                 response, operation, provider, auth, owner, file_models=log_payload.get("models")
             )
+            # A file the provider actually deleted is gone from Logos's books
+            # as well: the ownership row would keep the dead id in the listing,
+            # and a later creation naming it would pass the local ownership
+            # check and only fail upstream.
+            if (
+                operation.method == "DELETE"
+                and owner is not None
+                and owner.get("execution") == "provider"
+                and response.status_code < 400
+            ):
+                with DBManager() as db:
+                    db.delete_batch_object(int(owner["id"]))
     except HTTPException as exc:
         _finalize_batch_log(
             log_id,
@@ -1393,6 +1517,16 @@ async def handle_batch_api_request(request: Request) -> Response:
             and json_body.get("input_file_id")
         ):
             _learn_batch_ineligibility(provider, json_body.get("input_file_id"), error_text)
+            # In auto mode the refusal is not the answer: the provider just
+            # said it cannot batch this file's models, so the same file is run
+            # here instead, and the first request still ends in a batch. A
+            # provider that was named or forced keeps the refusal — that is
+            # what it asked for.
+            execution = _header(headers, BATCH_EXECUTION_HEADER).lower()
+            if execution not in {"provider", "logos"} and not _header(headers, BATCH_PROVIDER_HEADER):
+                rerun = await _rerun_refused_creation_locally(provider, json_body, auth)
+                if rerun is not None:
+                    return rerun
     return response
 
 
@@ -1413,25 +1547,47 @@ async def _record_upstream_object(db: DBManager, register_kwargs: Dict[str, Any]
             return
         except Exception as exc:  # noqa: BLE001 - the retries are the handling
             last = exc
+            # A failed write leaves the shared session in an aborted
+            # transaction; without a rollback the next attempt would raise
+            # PendingRollbackError instead of retrying the write.
+            try:
+                db.session.rollback()
+            except Exception:  # noqa: BLE001 - the retry (or the raise) reports the state
+                pass
             await asyncio.sleep(0.2 * (attempt + 1))
     assert last is not None
     raise last
 
 
 async def _remove_upstream_object(provider: Dict[str, Any], operation: BatchOperation, upstream_id: str) -> None:
-    """Best effort: delete what the provider just minted, so an unowned object does not linger there."""
-    resource = "files" if operation.resource == "files" else "batches"
-    delete = BatchOperation(
-        resource=resource,
-        method="DELETE",
-        path=f"v1/{resource}/{upstream_id}",
-        resource_id=upstream_id,
-    )
+    """Best effort: undo what the provider just minted, so an unowned object does not linger there.
+
+    Files are deleted; a batch job is *cancelled*. The OpenAI Batch API has no
+    delete operation — the only way to stop a job is ``POST /v1/batches/{id}/cancel`` —
+    and a DELETE there comes back 405, which would leave the job running (and
+    billing under the shared credential) with nobody at Logos to account for it.
+    """
+    if operation.resource == "batches":
+        cleanup = BatchOperation(
+            resource="batches",
+            method="POST",
+            path=f"v1/batches/{upstream_id}/cancel",
+            resource_id=upstream_id,
+            suboperation="cancel",
+        )
+    else:
+        cleanup = BatchOperation(
+            resource="files",
+            method="DELETE",
+            path=f"v1/files/{upstream_id}",
+            resource_id=upstream_id,
+        )
     try:
-        await forward_batch_operation(provider, delete)
-        logger.warning("Removed upstream %s %s whose ownership could not be recorded", resource, upstream_id)
+        await forward_batch_operation(provider, cleanup)
+        verb = "cancelled" if operation.resource == "batches" else "removed"
+        logger.warning("%s upstream %s %s whose ownership could not be recorded", verb, operation.resource, upstream_id)
     except Exception:  # noqa: BLE001 - the error below already says what happened
-        logger.exception("Could not remove upstream %s %s", resource, upstream_id)
+        logger.exception("Could not remove upstream %s %s", operation.resource, upstream_id)
 
 
 async def _register_upstream_object(

@@ -138,6 +138,10 @@ public class BatchController {
             return builder.body(response.body());
         } catch (BatchService.KeyNotOwnedException exc) {
             return ResponseEntity.status(403).body(Map.of("detail", exc.getMessage()));
+        } catch (BatchService.CredentialExchangeException exc) {
+            // The key is fine and owned; what failed is the exchange with the
+            // orchestrator — a deployment problem, not the caller's.
+            return ResponseEntity.status(502).body(Map.of("detail", exc.getMessage()));
         }
     }
 }

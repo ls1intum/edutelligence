@@ -2551,7 +2551,12 @@ class DBManager:
                      input_file_id, status, models, created_at, updated_at)
                 VALUES (:kind, :upstream_id, :provider_id, :api_key_id, :team_id, :user_id,
                         :input_file_id, :status, CAST(:models AS JSONB), :now, :now)
-                ON CONFLICT (provider_id, kind, upstream_id)
+                -- The conflict target must mirror the uq_batch_objects_upstream
+                -- index expression (COALESCE, not the bare column: a Logos-run
+                -- object has no provider, and NULLs would compare as distinct) —
+                -- a bare-column target does not match an expression index and
+                -- the statement fails outright in PostgreSQL.
+                ON CONFLICT (COALESCE(provider_id, 0), kind, upstream_id)
                 DO UPDATE SET status = COALESCE(EXCLUDED.status, batch_objects.status),
                               input_file_id = COALESCE(EXCLUDED.input_file_id, batch_objects.input_file_id),
                               models = COALESCE(EXCLUDED.models, batch_objects.models),
@@ -2653,31 +2658,62 @@ class DBManager:
         )
         self.session.commit()
 
-    def claim_batch_for_settlement(self, batch_object_id: int) -> bool:
-        """Latch a batch for metering; False when someone else already did.
+    def claim_batch_for_settlement(self, batch_object_id: int, lease_seconds: int = 1800) -> bool:
+        """Take the settlement lease on a finished batch; False when held.
 
         The client's own poll and the reconciler can reach a finished batch at
         the same time. The conditional update makes the winner exclusive, so
         the output file is billed exactly once.
+
+        The claim is a *lease*, not the ``settled_at`` stamp: the stamp only
+        goes on once the usage rows are durably written. A settlement that
+        dies between the two (the process exits, the task is cancelled) must
+        stay retryable — stamping first would put the batch out of the
+        reconciler's reach forever and its cost with it. The lease expires on
+        its own, which is the recovery; the usage write itself is idempotent,
+        so a lease that lapses mid-settlement cannot double-bill.
         """
         result = self.session.execute(
             text(
                 """
                 UPDATE batch_objects
-                SET settled_at = :now, updated_at = :now
+                SET settlement_lease_expires_at = :now + make_interval(secs => :lease), updated_at = :now
                 WHERE id = :id AND settled_at IS NULL
+                  AND (settlement_lease_expires_at IS NULL OR settlement_lease_expires_at <= :now)
                 """
             ),
-            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
+            {
+                "id": int(batch_object_id),
+                "lease": int(lease_seconds),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
         )
         self.session.commit()
         return bool(result.rowcount)
 
     def release_batch_settlement(self, batch_object_id: int) -> None:
-        """Undo a settlement latch whose metering failed, so it is retried."""
+        """Give up a settlement lease whose metering failed, so it is retried now."""
         self.session.execute(
-            text("UPDATE batch_objects SET settled_at = NULL WHERE id = :id"),
+            text("UPDATE batch_objects SET settlement_lease_expires_at = NULL WHERE id = :id AND settled_at IS NULL"),
             {"id": int(batch_object_id)},
+        )
+        self.session.commit()
+
+    def mark_batch_settled(self, batch_object_id: int) -> None:
+        """Stamp a batch settled, once its usage rows are durably written.
+
+        Only from here on does the reconciler leave the batch alone; whatever
+        was written before this point is either idempotent or already skipped.
+        """
+        self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET settled_at = :now, settlement_lease_expires_at = NULL, updated_at = :now
+                WHERE id = :id
+                """
+            ),
+            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
         )
         self.session.commit()
 
@@ -2931,20 +2967,26 @@ class DBManager:
     def finish_local_batch(
         self,
         batch_object_id: int,
+        runner_id: str,
         *,
         status: str,
         output_file_id: Optional[str] = None,
         error_file_id: Optional[str] = None,
         completed: Optional[int] = None,
         failed: Optional[int] = None,
-    ) -> None:
+    ) -> bool:
         """Close out a Logos-run batch.
 
         ``settled_at`` is stamped here: its requests went through the ordinary
         pipeline and were metered one by one as they ran, so there is nothing
         left for the settlement pass to book.
+
+        Conditional on the lease like every other runner write: a runner whose
+        lease lapsed must not finalize a batch another runner is running, or
+        the new holder's in-flight lines would end in a batch that reports
+        "completed" without them.
         """
-        self.session.execute(
+        result = self.session.execute(
             text(
                 """
                 UPDATE batch_objects
@@ -2958,11 +3000,12 @@ class DBManager:
                     finished_at = :now,
                     settled_at = :now,
                     updated_at = :now
-                WHERE id = :id
+                WHERE id = :id AND runner_id = :runner
                 """
             ),
             {
                 "id": int(batch_object_id),
+                "runner": str(runner_id),
                 "status": status,
                 "output_file_id": output_file_id,
                 "error_file_id": error_file_id,
@@ -2972,11 +3015,32 @@ class DBManager:
             },
         )
         self.session.commit()
+        return bool(result.rowcount)
 
     def delete_batch_object(self, batch_object_id: int) -> None:
         """Drop a Logos-held object and its bytes."""
         self.session.execute(text("DELETE FROM batch_objects WHERE id = :id"), {"id": int(batch_object_id)})
         self.session.commit()
+
+    def count_nonterminal_batches_for_input_file(self, input_file_id: str) -> int:
+        """How many Logos-run batches not yet finished still read this file.
+
+        The runner loads the input's bytes when it starts, not when the batch
+        is created, so deleting the file a validating or in-progress batch
+        references would strand that batch: it would find no content and fail
+        one it was accepted to run.
+        """
+        row = self.session.execute(
+            text(
+                """
+                SELECT count(*) FROM batch_objects
+                WHERE kind = 'batch' AND execution = 'logos' AND input_file_id = :file_id
+                  AND status IN ('validating', 'in_progress', 'cancelling')
+                """
+            ),
+            {"file_id": str(input_file_id)},
+        ).fetchone()
+        return int(row[0]) if row else 0
 
     def request_local_batch_cancel(self, batch_object_id: int) -> None:
         """Ask the runner to stop before its next request line."""
@@ -2994,16 +3058,22 @@ class DBManager:
         )
         self.session.commit()
 
-    def save_local_batch_lines(self, batch_object_id: int, rows: List[Dict[str, Any]]) -> None:
+    def save_local_batch_lines(self, batch_object_id: int, runner_id: str, rows: List[Dict[str, Any]]) -> None:
         """Persist finished request lines of a Logos-run batch as its checkpoint.
 
         One durable write per finished line, keyed by its custom_id, so a
         resumed batch knows exactly which lines are done and can skip them —
         including the result row the output file will carry for them.
+
+        The update half is conditional on the batch still naming ``runner_id``
+        as its holder: a runner whose lease lapsed and who is deposed must not
+        overwrite the result row the new holder wrote for the same line. A new
+        line's insert is left unconditional on purpose — that line ran and was
+        billed, and the new holder should resume past it, not replay it.
         """
         if not rows:
             return
-        params: Dict[str, Any] = {}
+        params: Dict[str, Any] = {"runner": str(runner_id)}
         for index, row in enumerate(rows):
             params[f"id_{index}"] = int(batch_object_id)
             params[f"cid_{index}"] = row["custom_id"]
@@ -3019,6 +3089,8 @@ class DBManager:
                 + """
                 ON CONFLICT (batch_object_id, custom_id)
                 DO UPDATE SET row = EXCLUDED.row, finished_at = EXCLUDED.finished_at
+                WHERE (SELECT runner_id FROM batch_objects
+                       WHERE id = batch_line_results.batch_object_id) = :runner
                 """
             ),
             params,
@@ -3101,7 +3173,13 @@ class DBManager:
         when no batch rate is configured for the model, so an unpriced batch is
         over- rather than under-charged.
 
-        Returns the number of rows written.
+        Idempotent per row: each row's ``request_id`` is scoped to its batch
+        and unique in ``log_entry``, so a settlement that is retried after a
+        partial commit (a chunk committed before the process died) skips the
+        rows the earlier attempt already booked instead of colliding with the
+        unique index and stalling the batch forever.
+
+        Returns the number of rows written by this call.
         """
         if not rows:
             return 0
@@ -3144,7 +3222,12 @@ class DBManager:
                          service_tier, result_status, error_message)
                     VALUES """
                     + ", ".join(values_sql)
-                    + " RETURNING id, request_id"
+                    + """
+                    -- A row whose request_id the ledger already holds was
+                    -- committed by an earlier attempt of this same settlement
+                    -- (the chunks commit before the batch is marked settled);
+                    -- it is skipped, not an error.
+                    ON CONFLICT (request_id) DO NOTHING RETURNING id, request_id"""
                 ),
                 params,
             ).fetchall()
@@ -3153,6 +3236,8 @@ class DBManager:
             # guarantee that the returned order matches the VALUES order, and
             # a positional zip could attach one line's usage tokens to another
             # line's log row — settling the cost against the wrong request.
+            # A row an earlier attempt of this settlement already committed is
+            # not among the returned ids at all — and is not a failure.
             log_ids_by_request: Dict[str, int] = {}
             orphaned_ids: List[int] = []
             for log_id, request_id in ((int(record[0]), record[1]) for record in inserted):
@@ -3168,6 +3253,10 @@ class DBManager:
                 request_id = row.get("request_id")
                 if request_id is not None:
                     log_id = log_ids_by_request.get(str(request_id))
+                    if log_id is None:
+                        # Already booked by an earlier attempt of this
+                        # settlement: its tokens went in with the row.
+                        continue
                 else:
                     # A row without a request id has no identity to match on;
                     # it takes the next id the insert returned without one.

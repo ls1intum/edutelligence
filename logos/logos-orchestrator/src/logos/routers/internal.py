@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import logos.main as _main
 from logos.auth import AuthContext
+from logos.batch_credential import issue_batch_credential
 from logos.benchmarks.guidellm_runner import BENCHMARK_JOB_HEADER
 from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
 from logos.benchmarks.guidellm_runner import (
@@ -271,6 +272,33 @@ async def internal_live_streams(request: Request):
     """
     _require_internal_secret(request)
     return {"streams": _live_streams.snapshot()}
+
+
+@router.post("/internal/batch_credentials", tags=["admin"])
+async def internal_batch_credentials(request: Request):
+    """A scoped credential for the batch proxy, in place of the user's key.
+
+    The Spring webservice proxies the UI's batch pages to the Batch API as
+    the caller's own key. The user's key is a long-lived secret and the
+    internal hop is plain HTTP in the shipped setup, so the webservice names
+    the key by id here (its ownership check already ran) and gets back a
+    short-lived credential bound to that one key. That credential — not the
+    key value — is what travels to the Batch API.
+    """
+    _require_internal_secret(request, disabled_detail="Internal batch credential endpoint disabled")
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    api_key_id = body.get("api_key_id") if isinstance(body, dict) else None
+    if isinstance(api_key_id, bool) or not isinstance(api_key_id, int):
+        raise HTTPException(status_code=400, detail="A batch credential needs an integer 'api_key_id'.")
+    with DBManager() as db:
+        row = db.get_api_key_by_id(api_key_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No such active API key: {api_key_id}.")
+    credential, expires_in = issue_batch_credential(api_key_id)
+    return {"credential": credential, "expires_in": expires_in}
 
 
 # How often the live-stream SSE connection checks for a changed snapshot. The

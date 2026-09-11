@@ -252,14 +252,14 @@ async def _start(batch: Dict[str, Any], batch_object_id: int) -> Optional[str]:
     if content is None:
         logger.error("Batch %s has no readable input file", batch.get("upstream_id"))
         with DBManager() as db:
-            db.finish_local_batch(batch_object_id, status="failed")
+            db.finish_local_batch(batch_object_id, RUNNER_ID, status="failed")
         return None
 
     auth = auth_context_for_key(int(batch["api_key_id"])) if batch.get("api_key_id") else None
     if auth is None:
         logger.error("Batch %s was submitted by a key that no longer exists", batch.get("upstream_id"))
         with DBManager() as db:
-            db.finish_local_batch(batch_object_id, status="failed")
+            db.finish_local_batch(batch_object_id, RUNNER_ID, status="failed")
         return None
 
     return await _execute_lines(batch_object_id, batch, parse_request_lines(content), auth)
@@ -292,6 +292,10 @@ async def _execute_lines(
     # visible while the batch runs, which is what a polling script watches, and
     # a cancel takes effect within a chunk instead of at the end.
     chunk_size = max(1, LOCAL_BATCH_CONCURRENCY)
+    # The in-chunk heartbeat interval: a single line can legitimately run
+    # longer than the whole lease, and the write before the chunk alone would
+    # let the lease lapse while the lines are in flight.
+    heartbeat_interval = max(0.2, LOCAL_BATCH_LEASE_TTL_S / 3)
     for start in range(0, len(pending), chunk_size):
         # The progress write is also the lease heartbeat. None means the lease
         # was lost — another runner took the batch over after it lapsed — and
@@ -308,9 +312,41 @@ async def _execute_lines(
             cancelled = True
             break
         chunk = pending[start : start + chunk_size]
-        results = await asyncio.gather(
-            *(_run_line(line, auth, headers, semaphore) for line in chunk), return_exceptions=True
+        lost = asyncio.Event()
+        chunk_task = asyncio.ensure_future(
+            asyncio.gather(*(_run_line(line, auth, headers, semaphore) for line in chunk), return_exceptions=True)
         )
+
+        async def _heartbeat(chunk_task=chunk_task):
+            # Refresh the lease while the lines run. A None answer is the
+            # lease being gone: stop this runner before it checkpoints or
+            # finalizes, and cancel the in-flight lines so the new holder's
+            # run of them is not billed twice.
+            while not lost.is_set():
+                await asyncio.sleep(heartbeat_interval)
+                with DBManager() as db:
+                    still = db.update_local_batch_progress(
+                        batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
+                    )
+                if still is None:
+                    lost.set()
+                    chunk_task.cancel()
+                    return
+
+        heartbeat_task = asyncio.ensure_future(_heartbeat())
+        try:
+            results = await chunk_task
+        except asyncio.CancelledError:
+            if lost.is_set():
+                logger.warning(
+                    "Lost the lease on batch %s mid-chunk; another runner takes over", batch.get("upstream_id")
+                )
+                return None
+            raise
+        finally:
+            lost.set()
+            if not heartbeat_task.done():
+                heartbeat_task.cancel()
         checkpoint: List[Dict[str, Any]] = []
         for line, outcome in zip(chunk, results):
             if isinstance(outcome, BaseException):
@@ -325,9 +361,11 @@ async def _execute_lines(
                 completed += 1
             checkpoint.append({"custom_id": line.get("custom_id"), "row": row})
         # Durable per chunk: that is what makes the resume below skip exactly
-        # these lines, no matter when the process dies.
+        # these lines, no matter when the process dies. The write is
+        # conditional on the lease — a runner that was deposed mid-batch must
+        # not overwrite the rows the new holder wrote.
         with DBManager() as db:
-            db.save_local_batch_lines(batch_object_id, checkpoint)
+            db.save_local_batch_lines(batch_object_id, RUNNER_ID, checkpoint)
 
     rows = [finished[line.get("custom_id")] for line in lines if line.get("custom_id") in finished]
     output_file_id = new_object_id("file")
@@ -342,13 +380,22 @@ async def _execute_lines(
             user_id=batch.get("user_id"),
             purpose="batch_output",
         )
-        db.finish_local_batch(
+        finished = db.finish_local_batch(
             batch_object_id,
+            RUNNER_ID,
             status="cancelled" if cancelled else "completed",
             output_file_id=output_file_id,
             completed=completed,
             failed=failed,
         )
+    if not finished:
+        # The lease lapsed before the close-out; the new holder resumes from
+        # the checkpoint (every line is written by now) and finalizes the
+        # batch. This runner reports no result of its own.
+        logger.warning(
+            "Lost the lease on batch %s before finalizing; the new holder closes it out", batch.get("upstream_id")
+        )
+        return None
     logger.info(
         "Local batch %s finished: %d ok, %d failed%s",
         batch.get("upstream_id"),

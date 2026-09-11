@@ -110,3 +110,66 @@ def test_authenticate_logos_key_shim_returns_key_and_api_key_id(monkeypatch):
 
     assert ctx.key_value == "lg-test-abc"
     assert ctx.api_key_id == 5
+
+
+class _CredentialDB:
+    """A database in which the header value is a credential, not a key value."""
+
+    def __init__(self, row):
+        self.row = row
+        self.seen_by_id = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_api_key_by_value(self, key_value):
+        return None  # it is a credential, so the plain lookup finds nothing
+
+    def get_api_key_by_id(self, api_key_id):
+        self.seen_by_id = api_key_id
+        return self.row if self.row is not None and self.row["id"] == api_key_id else None
+
+
+def _patch_credential_db(monkeypatch, row):
+    from logos import batch_credential
+
+    fake = _CredentialDB(row)
+    monkeypatch.setattr(auth, "DBManager", lambda: fake)
+    monkeypatch.setenv("LOGOS_INTERNAL_SECRET", "internal")
+    credential, _ = batch_credential.issue_batch_credential(row["id"]) if row else (None, None)
+    return fake, credential
+
+
+def test_a_scoped_batch_credential_resolves_to_the_keys_own_row(monkeypatch):
+    # The proxy presents the credential in place of the key value; the
+    # context carries the key's own value, because the batch lines re-enter
+    # the pipeline as the key.
+    fake, credential = _patch_credential_db(monkeypatch, _api_key_row("lg-secret-value"))
+
+    ctx = auth.authenticate_api_key({"logos_key": credential})
+
+    assert fake.seen_by_id == 5
+    assert ctx.key_value == "lg-secret-value"
+    assert ctx.api_key_id == 5
+
+
+def test_a_dead_or_tampered_credential_is_a_401_like_any_bad_key(monkeypatch):
+    fake, credential = _patch_credential_db(monkeypatch, _api_key_row("lg-secret-value"))
+
+    # The key the credential names is gone (revoked after the hand-out): the
+    # row lookup is what kills it, at presentation time.
+    fake.row = None
+    with pytest.raises(HTTPException) as exc:
+        auth.authenticate_api_key({"logos_key": credential})
+    assert exc.value.status_code == 401
+
+    # A credential no one here signed: it never reaches the key lookup.
+    fake.row = _api_key_row("lg-secret-value")
+    fake.seen_by_id = None
+    with pytest.raises(HTTPException) as exc:
+        auth.authenticate_api_key({"logos_key": credential + "x"})
+    assert exc.value.status_code == 401
+    assert fake.seen_by_id is None

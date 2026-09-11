@@ -11,6 +11,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -516,6 +517,11 @@ class _FakeDB:
         self.deployments = deployments
         self.owned = dict(owned or {})
         self.budget_error = budget_error
+        # The registration retries run on the shared session: without a
+        # rollback between attempts the second attempt would raise
+        # PendingRollbackError instead of retrying, so the retry path touches
+        # it and the tests can see that it happened.
+        self.session = MagicMock()
         self.registered = []
         self.status_updates = []
         self.stored_files = {}
@@ -555,7 +561,9 @@ class _FakeDB:
         return self.owned.get((kind, upstream_id))
 
     def register_batch_object(self, **kwargs):
-        if self.fail_registration:
+        # True fails every registration; a kind fails only that one, so a test
+        # can keep the file row while breaking the batch row.
+        if self.fail_registration and self.fail_registration in (True, kwargs.get("kind")):
             raise RuntimeError("the database is down")
         self.registered.append(kwargs)
         self.owned[(kwargs["kind"], kwargs["upstream_id"])] = {
@@ -593,14 +601,31 @@ class _FakeDB:
     def get_provider_model_deployments(self, provider_id):
         return [row for row in self.deployments if int(row["provider_id"]) == int(provider_id)]
 
-    def claim_batch_for_settlement(self, batch_object_id):
+    def claim_batch_for_settlement(self, batch_object_id, lease_seconds=1800):
         return False  # the settlement tests drive the latch themselves
+
+    def release_batch_settlement(self, batch_object_id):
+        pass
+
+    def mark_batch_settled(self, batch_object_id):
+        pass
+
+    def count_nonterminal_batches_for_input_file(self, input_file_id):
+        states = {"validating", "in_progress", "cancelling"}
+        return sum(
+            1
+            for row in self.local_batches.values()
+            if row["input_file_id"] == input_file_id and row["status"] in states
+        )
 
     def update_batch_object_status(self, upstream_id, status):
         self.status_updates.append((upstream_id, status))
 
     def delete_batch_object(self, batch_object_id):
         self.deleted.append(batch_object_id)
+        for key, row in list(self.owned.items()):
+            if row.get("id") == batch_object_id:
+                del self.owned[key]
 
     # locally held objects
     def store_local_batch_file(self, *, upstream_id, content, filename, api_key_id, team_id, user_id, purpose="batch"):
@@ -1047,6 +1072,48 @@ def test_file_content_comes_back_as_raw_bytes(monkeypatch):
     assert resp.content == payload
 
 
+def test_a_deleted_provider_file_leaves_no_ownership_row_behind(monkeypatch):
+    # The provider's delete is forwarded, and a success means the object is
+    # gone there: keeping the row would park a dead id in the listing, and a
+    # later creation naming it would pass the local ownership check only to
+    # fail upstream.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM)},
+    )
+    seen = _patch_env(
+        monkeypatch, db, lambda request: httpx.Response(200, json={"id": "file-own", "object": "file", "deleted": True})
+    )
+
+    resp = client.delete("/v1/files/file-own")
+
+    assert resp.status_code == 200
+    assert [request.method for request in seen] == ["DELETE"]
+    assert db.deleted == [5]
+
+    # The listing, answered from Logos's own record, no longer shows it.
+    listed = client.get("/v1/files")
+    assert listed.json()["data"] == []
+
+
+def test_a_failed_provider_delete_keeps_the_ownership_row(monkeypatch):
+    # The other side of the same coin: the file is only gone from Logos's
+    # books when the provider says it is gone.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM)},
+    )
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(500))
+
+    resp = client.delete("/v1/files/file-own")
+
+    assert resp.status_code == 500
+    assert db.deleted == []
+    assert client.get("/v1/files").json()["data"] != []
+
+
 def test_an_upstream_error_is_passed_through_and_logged(monkeypatch):
     db = _FakeDB(
         [OPENAI_PROVIDER],
@@ -1090,6 +1157,37 @@ def test_an_unrecordable_upload_is_removed_upstream_and_reported(monkeypatch):
     # The provider object is gone again: minted, then deleted.
     assert [request.method for request in seen] == ["POST", "DELETE"]
     assert str(seen[-1].url).endswith("/v1/files/file-abc")
+    # Every failed attempt on the shared session was rolled back before the
+    # next one ran, so the retries actually retried the write instead of
+    # raising PendingRollbackError.
+    assert db.session.rollback.call_count == 3
+
+
+def test_an_unrecordable_batch_creation_is_cancelled_upstream_and_reported(monkeypatch):
+    # The batch equivalent of the upload case above — with one difference that
+    # matters: the Batch API has no delete. A job that is minted and left
+    # unowned would keep running on the shared credential, so the only
+    # cleanup is the cancel the API does have.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM)},
+    )
+    db.fail_registration = "batch"  # the file row stays, the batch row does not
+    seen = _patch_env(
+        monkeypatch, db, lambda request: httpx.Response(200, json={"id": "batch_1", "status": "validating"})
+    )
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "batch_ownership_unrecorded"
+    # Minted, then stopped — with a cancel, because a DELETE would 405.
+    assert [request.method for request in seen] == ["POST", "POST"]
+    assert str(seen[-1].url).endswith("/v1/batches/batch_1/cancel")
 
 
 def test_an_unreachable_upstream_is_a_502(monkeypatch):
@@ -1185,11 +1283,14 @@ INPUT_FILE = _jsonl(_line("one"), _line("two"))
 
 
 class _SettlingDB:
-    def __init__(self, claimable=True):
+    def __init__(self, claimable=True, fail_record_once=False):
         self.claimable = claimable
+        self.fail_record_once = fail_record_once
         self.claims = 0
         self.released = 0
+        self.settled = 0
         self.rows = []
+        self.booked = set()
 
     def __enter__(self):
         return self
@@ -1197,12 +1298,15 @@ class _SettlingDB:
     def __exit__(self, *exc):
         return False
 
-    def claim_batch_for_settlement(self, batch_object_id):
+    def claim_batch_for_settlement(self, batch_object_id, lease_seconds=1800):
         self.claims += 1
         return self.claimable
 
     def release_batch_settlement(self, batch_object_id):
         self.released += 1
+
+    def mark_batch_settled(self, batch_object_id):
+        self.settled += 1
 
     def get_api_key_logging_context(self, api_key_id):
         return {"environment": "test", "log_level": "BILLING"}
@@ -1217,8 +1321,22 @@ class _SettlingDB:
         ]
 
     def record_batch_usage(self, rows, chunk_size=500):
-        self.rows.extend(rows)
-        return len(rows)
+        # Models the ledger's ON CONFLICT (request_id) DO NOTHING: a row an
+        # earlier attempt of the same settlement already booked is skipped,
+        # and only the newly written rows are counted.
+        written = 0
+        for row in rows:
+            if row["request_id"] in self.booked:
+                continue
+            self.booked.add(row["request_id"])
+            self.rows.append(row)
+            written += 1
+        if self.fail_record_once:
+            # The chunks committed and then the process died: the rows are in
+            # the ledger, but the batch was never stamped settled.
+            self.fail_record_once = False
+            raise RuntimeError("the ledger connection dropped")
+        return written
 
 
 def _files_upstream(request):
@@ -1245,6 +1363,7 @@ async def test_settlement_books_one_usage_row_per_result(monkeypatch):
     )
 
     assert written == 2
+    assert db.settled == 1  # stamped only after the rows were written
     ok, failed = db.rows
     assert ok["usage"]["prompt_tokens"] == 120
     assert ok["usage"]["completion_tokens"] == 30
@@ -1254,6 +1373,9 @@ async def test_settlement_books_one_usage_row_per_result(monkeypatch):
     assert ok["result_status"] == "success"
     assert failed["result_status"] == "error"
     assert "context length" in failed["error_message"]
+    # Scoped to this batch, from the line's own custom_id: that stable id is
+    # what makes a retried settlement skip the rows it already booked.
+    assert (ok["request_id"], failed["request_id"]) == ("batch-77-one", "batch-77-two")
 
 
 @pytest.mark.asyncio
@@ -1270,11 +1392,14 @@ async def test_a_batch_is_settled_only_once(monkeypatch):
 
     assert written == 0
     assert db.rows == []
+    assert db.settled == 0
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_result_file_releases_the_latch(monkeypatch):
+async def test_an_unreadable_result_file_releases_the_lease(monkeypatch):
     # Otherwise a transient failure would drop a whole batch's cost silently.
+    # The lease, not a settled stamp, is what is released: the batch must stay
+    # claimable for the retry.
     db = _SettlingDB()
     monkeypatch.setattr(batch_api, "DBManager", lambda: db)
     monkeypatch.setattr(
@@ -1289,6 +1414,30 @@ async def test_an_unreadable_result_file_releases_the_latch(monkeypatch):
 
     assert written == 0
     assert db.released == 1
+    assert db.settled == 0
+
+
+@pytest.mark.asyncio
+async def test_a_settlement_retry_books_the_rows_only_once(monkeypatch):
+    # The usage chunks commit before the batch is stamped settled, so a
+    # settlement that dies in between is retried with the rows already in the
+    # ledger: the retry skips them on their stable request id, bills nothing
+    # twice, and is what finally stamps the batch.
+    db = _SettlingDB(fail_record_once=True)
+    monkeypatch.setattr(batch_api, "DBManager", lambda: db)
+    monkeypatch.setattr(
+        batch_api, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(_files_upstream))
+    )
+    owner = {"id": 77, "api_key_id": 11, "team_id": OWN_TEAM, "user_id": 13, "upstream_id": "batch_1"}
+    batch_body = {"status": "completed", "output_file_id": "file-out", "input_file_id": "file-in"}
+
+    assert await settle_batch(OPENAI_PROVIDER, owner, batch_body) == 0
+    assert db.released == 1 and db.settled == 0
+    assert len(db.rows) == 2  # the partial commit made it into the ledger
+
+    assert await settle_batch(OPENAI_PROVIDER, owner, batch_body) == 0  # nothing new to book
+    assert len(db.rows) == 2  # ... and nothing was booked twice
+    assert db.settled == 1
 
 
 @pytest.mark.asyncio
@@ -1315,8 +1464,14 @@ async def test_the_reconciler_settles_a_batch_nobody_polled(monkeypatch):
         def update_batch_object_status(self, upstream_id, status):
             settling.rows.append(("status", upstream_id, status))
 
-        def claim_batch_for_settlement(self, batch_object_id):
-            return settling.claim_batch_for_settlement(batch_object_id)
+        def claim_batch_for_settlement(self, batch_object_id, lease_seconds=1800):
+            return settling.claim_batch_for_settlement(batch_object_id, lease_seconds)
+
+        def release_batch_settlement(self, batch_object_id):
+            settling.release_batch_settlement(batch_object_id)
+
+        def mark_batch_settled(self, batch_object_id):
+            settling.mark_batch_settled(batch_object_id)
 
         def get_api_key_logging_context(self, api_key_id):
             return settling.get_api_key_logging_context(api_key_id)
@@ -1338,6 +1493,7 @@ async def test_the_reconciler_settles_a_batch_nobody_polled(monkeypatch):
 
     assert await reconcile_batches_once() == 2
     assert ("status", "batch_1", "completed") in settling.rows
+    assert settling.settled == 1
 
 
 @pytest.mark.asyncio
@@ -1555,7 +1711,83 @@ def test_a_refused_creation_teaches_the_next_file_to_run_in_logos(monkeypatch):
     )
     assert upload.status_code == 200
     assert upload.json()["logos_execution"] == "logos"
-    # The learned routing kept the file out of the provider entirely.
+    # The learned routing kept the file out of the provider entirely. The GET
+    # is the in-request rerun's attempt to pull the input back from the
+    # provider, which this canned upstream also refuses — so the refusal stays
+    # the answer here, and the rerun is covered by its own test.
+    assert [request.method for request in seen] == ["POST", "GET"]
+
+
+def test_a_refused_auto_creation_is_rerun_locally_on_the_first_request(monkeypatch):
+    # Auto mode means "forward when that can work". A creation the provider
+    # refused with a model-availability error has just said it cannot, so the
+    # same input is pulled back from the provider and run here: the first
+    # request still ends in a batch, and no second upload is needed.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+    )
+    started = []
+    monkeypatch.setattr(batch_api, "_start_local_batch", lambda row: started.append(row["upstream_id"]))
+
+    def upstream(request):
+        if request.url.path.endswith("/files/file-own/content"):
+            return httpx.Response(200, content=_jsonl(_line("one"), _line("two")))
+        return httpx.Response(
+            400, json={"error": {"message": "The model 'gpt-4.1' is not supported on the batch SKU."}}
+        )
+
+    seen = _patch_env(monkeypatch, db, upstream)
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "batch"
+    assert body["logos_execution"] == "logos"
+    assert body["request_counts"]["total"] == 2
+    # The input was stored here under a fresh id, named after the provider's file.
+    assert body["input_file_id"].startswith("file-")
+    assert db.stored_files[body["input_file_id"]][0]["filename"] == "file-own_rerun.jsonl"
+    assert started == [body["id"]]
+    # The refusal taught the routing alongside the rerun: the model is marked,
+    # so the next upload of it stays local without another refusal.
+    assert [record[:2] for record in db.eligibility_records] == [(7, 25)]
+    # The creation went out once, and the input came back once.
+    assert [request.method for request in seen] == ["POST", "GET"]
+
+
+def test_a_named_provider_keeps_the_refused_creation_refused(monkeypatch):
+    # The rerun is what "auto" promises. A provider the client named was
+    # demanded, not suggested: its refusal is the answer, unrerun.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+    )
+
+    def upstream(request):
+        if request.url.path.endswith("/files/file-own/content"):
+            return httpx.Response(200, content=_jsonl(_line("one")))
+        return httpx.Response(
+            400, json={"error": {"message": "The model 'gpt-4.1' is not supported on the batch SKU."}}
+        )
+
+    seen = _patch_env(monkeypatch, db, upstream)
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        headers={batch_api.BATCH_PROVIDER_HEADER: "openai"},
+    )
+
+    assert resp.status_code == 400
+    assert db.local_batches == {}
+    assert db.stored_files == {}
     assert [request.method for request in seen] == ["POST"]
 
 
@@ -1679,6 +1911,37 @@ def test_a_local_result_file_is_downloaded_through_the_files_route(monkeypatch):
     assert seen == []
 
 
+def test_an_input_file_is_not_deletable_while_a_batch_still_runs_on_it(monkeypatch):
+    # The runner reads the input's bytes when it starts the batch, not when
+    # the batch is created. A delete in between would strand the batch:
+    # accepted to run, then finding no content. So the delete waits for
+    # terminal.
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+    monkeypatch.setattr(batch_api, "_start_local_batch", lambda row: None)  # keep it nonterminal
+
+    file_id = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_local_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    ).json()["id"]
+    client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    refused = client.delete(f"/v1/files/{file_id}")
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "batch_input_file_in_use"
+
+    # Every referencing batch terminal -> the same delete goes through.
+    batch_row = next(row for row in db.local_batches.values() if row["input_file_id"] == file_id)
+    batch_row["status"] = "completed"
+    allowed = client.delete(f"/v1/files/{file_id}")
+    assert allowed.status_code == 200
+    assert allowed.json()["deleted"] is True
+
+
 def test_another_teams_local_object_is_a_404(monkeypatch):
     db = _FakeDB(
         [OPENAI_PROVIDER],
@@ -1739,8 +2002,9 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
         def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
             return False
 
-        def save_local_batch_lines(self, object_id, rows):
+        def save_local_batch_lines(self, object_id, runner_id, rows):
             stored.setdefault("checkpoints", []).extend(rows)
+            stored.setdefault("checkpoint_runners", []).append(runner_id)
 
         def log_usage(self, **kwargs):
             stored.setdefault("logged", []).append(kwargs)
@@ -1750,8 +2014,9 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
             stored.update(kwargs)
             return 1
 
-        def finish_local_batch(self, object_id, **kwargs):
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
             stored["finish"] = kwargs
+            return True
 
     monkeypatch.setattr(batch_local, "DBManager", _RunnerDB)
     monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
@@ -1792,6 +2057,9 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
     # Every finished line is checkpointed durably: on a restart that is what
     # tells the runner which lines must not run (and bill) a second time.
     assert {checkpoint["custom_id"] for checkpoint in stored["checkpoints"]} == {"a", "b"}
+    # The checkpoint write is bound to this holder: a runner deposed mid-batch
+    # must not overwrite the rows the new holder wrote for the same lines.
+    assert set(stored["checkpoint_runners"]) == {batch_local.RUNNER_ID}
     # The claim is the cross-process guard, and it carries this process' id
     # and the lease the other processes will wait on.
     assert stored["claims"] == [(2000, batch_local.RUNNER_ID, batch_local.LOCAL_BATCH_LEASE_TTL_S)]
@@ -1850,8 +2118,9 @@ def test_a_resumed_batch_skips_the_lines_already_checkpointed(monkeypatch):
         def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
             return False
 
-        def save_local_batch_lines(self, object_id, rows):
+        def save_local_batch_lines(self, object_id, runner_id, rows):
             stored.setdefault("checkpoints", []).extend(rows)
+            stored.setdefault("checkpoint_runners", []).append(runner_id)
 
         def log_usage(self, **kwargs):
             stored.setdefault("logged", []).append(kwargs)
@@ -1861,8 +2130,9 @@ def test_a_resumed_batch_skips_the_lines_already_checkpointed(monkeypatch):
             stored.update(kwargs)
             return 1
 
-        def finish_local_batch(self, object_id, **kwargs):
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
             stored["finish"] = kwargs
+            return True
 
     monkeypatch.setattr(batch_local, "DBManager", _ResumeDB)
     monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
@@ -1930,7 +2200,7 @@ def test_a_lost_lease_stops_the_runner_without_writing_results(monkeypatch):
         def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
             return None  # another runner took the batch over
 
-        def save_local_batch_lines(self, object_id, rows):
+        def save_local_batch_lines(self, object_id, runner_id, rows):
             stored.setdefault("checkpoints", []).extend(rows)
 
         def log_usage(self, **kwargs):
@@ -1940,8 +2210,9 @@ def test_a_lost_lease_stops_the_runner_without_writing_results(monkeypatch):
             stored.update(kwargs)
             return 1
 
-        def finish_local_batch(self, object_id, **kwargs):
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
             stored["finish"] = kwargs
+            return True
 
     monkeypatch.setattr(batch_local, "DBManager", _LostLeaseDB)
     monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
@@ -1963,6 +2234,90 @@ def test_a_lost_lease_stops_the_runner_without_writing_results(monkeypatch):
 
     assert result is None  # no output file id: this runner wrote nothing
     assert executed == []
+    assert "finish" not in stored
+    assert "content" not in stored
+
+
+def test_a_lease_lost_mid_chunk_cancels_the_lines_and_writes_nothing(monkeypatch):
+    # A single line can run longer than the whole lease, so the heartbeat
+    # refreshes it in chunks. When the heartbeat finds the lease gone, the
+    # in-flight lines are cancelled — the new holder will run them, and a
+    # cancelled line must not bill for the half it already spent — and this
+    # runner checkpoints nothing and finalizes nothing.
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_LEASE_TTL_S", 0.6)  # heartbeat every 0.2 s
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        await asyncio.sleep(0.5)  # longer than the heartbeat interval
+        executed.append(1)
+        return {"status_code": 200, "data": {}}
+
+    stored = {}
+
+    class _MidChunkDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a"), _local_line("b"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            # The write before the chunk still holds the lease; the heartbeat
+            # mid-chunk finds it gone. Counted in the closure: every
+            # ``with DBManager()`` opens a fresh instance.
+            stored["progress_calls"] = stored.get("progress_calls", 0) + 1
+            return False if stored["progress_calls"] == 1 else None
+
+        def save_local_batch_lines(self, object_id, runner_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            return {"log-id": 700}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
+            stored["finish"] = kwargs
+            return True
+
+    monkeypatch.setattr(batch_local, "DBManager", _MidChunkDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    result = asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2005,
+                "upstream_id": "batch_m",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+        )
+    )
+
+    assert result is None
+    assert executed == []  # the lines were cancelled before they finished
+    assert "checkpoints" not in stored
     assert "finish" not in stored
     assert "content" not in stored
 
@@ -2101,8 +2456,9 @@ def test_a_cancel_before_the_runner_started_still_finishes_the_batch(monkeypatch
         def store_local_batch_file(self, **kwargs):
             return 1
 
-        def finish_local_batch(self, object_id, **kwargs):
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
             finished.update(kwargs)
+            return True
 
     monkeypatch.setattr(batch_local, "DBManager", _CancelDB)
 
@@ -2148,7 +2504,7 @@ def test_a_batch_already_running_here_is_not_started_again(monkeypatch):
         def get_local_batch_file_content(self, object_id):
             return None
 
-        def finish_local_batch(self, object_id, **kwargs):
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
             pass
 
     monkeypatch.setattr(batch_local, "DBManager", _ClaimDB)

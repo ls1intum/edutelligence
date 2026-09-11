@@ -1,8 +1,9 @@
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
+from logos import batch_credential
 from logos.dbutils.dbmanager import DBManager
 
 
@@ -64,11 +65,33 @@ class AuthContext:
     local_rl: Optional[dict] = None
 
 
+def _resolve_batch_credential(credential: str) -> Optional[Dict[str, Any]]:
+    """The key row a scoped batch credential names, or None.
+
+    The webservice's batch proxy authenticates with a short-lived credential
+    instead of the user's raw key value (see batch_credential): this turns it
+    back into the key's own row. The row lookup is what keeps it honest — a
+    key revoked after the credential was handed out stops working the moment
+    it is presented again.
+    """
+    if not isinstance(credential, str) or not credential.startswith(batch_credential.BATCH_CREDENTIAL_PREFIX):
+        return None
+    api_key_id = batch_credential.resolve_batch_credential(credential)
+    if api_key_id is None:
+        return None
+    with DBManager() as db:
+        return db.get_api_key_by_id(api_key_id)
+
+
 def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
     logos_key = _resolve_logos_key(headers)
     with DBManager() as db:
         row = db.get_api_key_by_value(logos_key)
-
+    if row is None:
+        # A key value that is not a key value: try the scoped credential the
+        # batch proxy exchanges for the key (the raw value never reaches the
+        # Batch API over the internal hop).
+        row = _resolve_batch_credential(logos_key)
     if row is None:
         raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
 
@@ -77,7 +100,10 @@ def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
         k_type = k_type.value
 
     return AuthContext(
-        key_value=logos_key,
+        # The key's own value, not what the header carried: for a scoped
+        # credential the header holds the credential, and the downstream
+        # (batch lines re-enter the pipeline as the key) needs the value.
+        key_value=row["key_value"],
         api_key_id=row["id"],
         api_key_name=row["name"],
         key_type=str(k_type),

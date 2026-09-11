@@ -12,7 +12,9 @@ statement — these assert on the bound parameters and the call structure.)
 from __future__ import annotations
 
 import datetime
+import inspect
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -40,6 +42,13 @@ def test_settlement_latch_reports_whether_this_caller_won_it():
     db.session.execute.return_value = MagicMock(rowcount=1)
     assert db.claim_batch_for_settlement(77) is True
 
+    # The claim is a lease, not the settled_at stamp: a settlement that dies
+    # before the ledger write must stay retryable, so the claim carries an
+    # expiry and touches no settled column at all.
+    params = _params_of(db.session.execute.call_args)
+    assert params["id"] == 77
+    assert params["lease"] == 1800
+
     # The client's own poll and the reconciler can both reach a finished batch;
     # the conditional UPDATE lets only one of them bill it.
     db.session.execute.return_value = MagicMock(rowcount=0)
@@ -50,6 +59,15 @@ def test_a_failed_settlement_is_released_for_a_retry():
     db = _db()
     db.release_batch_settlement(77)
     assert _params_of(db.session.execute.call_args) == {"id": 77}
+
+
+def test_settling_a_batch_stamps_it_and_clears_the_lease():
+    db = _db()
+    db.mark_batch_settled(77)
+
+    params = _params_of(db.session.execute.call_args)
+    assert params["id"] == 77
+    assert isinstance(params["now"], datetime.datetime)
 
 
 def test_batch_usage_is_written_and_then_priced_by_the_shared_snapshot():
@@ -230,6 +248,30 @@ def test_usage_tokens_follow_the_request_id_not_the_insert_order():
     assert (usage_params["log_1"], usage_params["count_1"]) == (102, 3)
 
 
+def test_a_settlement_retry_skips_rows_the_ledger_already_holds():
+    # The chunks commit before the batch is marked settled, so a settlement
+    # retried after a partial commit re-inserts rows that are already booked.
+    # They are skipped on the unique request_id, not an error: no second token
+    # write, no snapshot over the old rows, and only the new rows are counted.
+    db = _db()
+    db.session.execute.return_value = MagicMock(fetchall=lambda: [(102, "batch-5-b")])
+    db.add_token_type = lambda name, description="": ({"token-type-id": 1}, 200)
+
+    written = db.record_batch_usage(
+        [
+            {"timestamp": _now(), "request_id": "batch-5-a", "usage": {"total_tokens": 7}},
+            {"timestamp": _now(), "request_id": "batch-5-b", "usage": {"total_tokens": 3}},
+        ]
+    )
+
+    assert written == 1
+    calls = db.session.execute.call_args_list
+    usage_params = _params_of(calls[1])
+    assert (usage_params["log_0"], usage_params["count_0"]) == (102, 3)
+    assert "log_1" not in usage_params
+    assert _params_of(calls[2]) == {"log_ids": [102]}
+
+
 def test_registering_a_file_keeps_the_models_it_names():
     db = _db()
     db.register_batch_object(
@@ -252,6 +294,37 @@ def test_registering_a_file_keeps_the_models_it_names():
         kind="batch", upstream_id="batch-abc", provider_id=7, api_key_id=11, team_id=12, user_id=13
     )
     assert _params_of(db.session.execute.call_args)["models"] is None
+
+
+def test_the_registration_conflict_target_matches_the_migrated_index():
+    # The unique index on batch_objects is on a COALESCE *expression*, not the
+    # bare columns, and PostgreSQL can only infer an expression index when the
+    # ON CONFLICT target repeats the expression exactly. A bare-column target
+    # does not match and the statement fails outright — which would turn every
+    # provider upload into a 502. This keeps the two sides in lockstep; the
+    # unit environment stubs the SQL away, so the migration file is the check.
+    migration = (
+        Path(dbmanager.__file__).parents[4]
+        / "logos-webservice"
+        / "src"
+        / "main"
+        / "resources"
+        / "liquibase"
+        / "changelog"
+        / "031_batch_api.xml"
+    )
+    lines = migration.read_text(encoding="utf-8").splitlines()
+    index_lines = [
+        lines[index + 1]
+        for index, line in enumerate(lines)
+        if "CREATE" in line and "uq_batch_objects_upstream" in line and index + 1 < len(lines)
+    ]
+    assert len(index_lines) == 1
+    assert "ON batch_objects(" in index_lines[0]
+    expression = index_lines[0].split("ON batch_objects(", 1)[1].rstrip(");").strip()
+
+    source = inspect.getsource(DBManager.register_batch_object)
+    assert f"ON CONFLICT ({expression})" in source
 
 
 def test_claiming_a_local_batch_stamps_the_runner_and_the_lease():
@@ -289,21 +362,31 @@ def test_progress_updates_are_conditional_on_still_holding_the_batch():
     assert db.update_local_batch_progress(5, "runner-1", 4, 1, 600) is None
 
 
-def test_finishing_a_local_batch_releases_the_runner():
+def test_finishing_a_local_batch_requires_still_holding_the_lease():
     db = _db()
-    db.finish_local_batch(5, status="completed", output_file_id="file-out", completed=9, failed=1)
+    db.session.execute.return_value = MagicMock(rowcount=1)
+    assert (
+        db.finish_local_batch(5, "runner-1", status="completed", output_file_id="file-out", completed=9, failed=1)
+        is True
+    )
 
     params = _params_of(db.session.execute.call_args)
-    assert params["id"] == 5
+    assert (params["id"], params["runner"]) == (5, "runner-1")
     assert params["status"] == "completed"
     assert params["output_file_id"] == "file-out"
     assert (params["completed"], params["failed"]) == (9, 1)
+
+    # A runner whose lease lapsed must not finalize the batch the new holder
+    # is running.
+    db.session.execute.return_value = MagicMock(rowcount=0)
+    assert db.finish_local_batch(5, "runner-1", status="completed") is False
 
 
 def test_line_checkpoints_are_upserted_per_line():
     db = _db()
     db.save_local_batch_lines(
         5,
+        "runner-1",
         [
             {"custom_id": "q-1", "row": {"status_code": 200}},
             {"custom_id": "q-2", "row": {"status_code": 500}},
@@ -314,10 +397,13 @@ def test_line_checkpoints_are_upserted_per_line():
     assert (params["id_0"], params["cid_0"]) == (5, "q-1")
     assert json.loads(params["row_0"]) == {"status_code": 200}
     assert (params["id_1"], params["cid_1"]) == (5, "q-2")
+    # The update half is bound to the holder: a deposed runner's write must not
+    # overwrite the new holder's rows for the same lines.
+    assert params["runner"] == "runner-1"
 
     # Nothing finished -> nothing to write.
     db.session.execute.reset_mock()
-    db.save_local_batch_lines(5, [])
+    db.save_local_batch_lines(5, "runner-1", [])
     db.session.execute.assert_not_called()
 
 
