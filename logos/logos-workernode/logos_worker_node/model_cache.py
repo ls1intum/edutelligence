@@ -1112,6 +1112,11 @@ class ModelRamCache:
         died underneath the wait — in all of those the caller serves from
         the source. A missing worker loop means no background worker was
         ever started, so nothing can own the writer: proceed lock-free.
+
+        A timed-out acquisition is cancelled (or released, if it completed
+        in the meantime): left queued it would take the lock once the
+        worker's copy finished, with no owner left to release it,
+        permanently wedging every later ensure_cached/reclaim for the model.
         """
         loop = self._worker_loop
         if loop is None:
@@ -1121,13 +1126,23 @@ class ModelRamCache:
                 return False, None
         except RuntimeError:
             pass  # non-loop thread: the normal calibration shape
+        future = asyncio.run_coroutine_threadsafe(self._acquire_model_writer_lock(model_name), loop)
         try:
-            future = asyncio.run_coroutine_threadsafe(self._acquire_model_writer_lock(model_name), loop)
             return True, future.result(timeout=SYNC_BACKGROUND_WAIT_TIMEOUT_S)
         except Exception:  # noqa: BLE001
             # Timed out (the worker's copy is still in flight) or the loop
             # died: writer ownership is unproven, so the caller serves from
-            # the source instead of starting a competing copy.
+            # the source instead of starting a competing copy. result()
+            # discarding the future does NOT stop the acquisition: it is
+            # still queued behind the lock's waiters and would take the lock
+            # later with nobody left to release it. Cancel it; if it
+            # completed in the meantime (cancel returns False), it already
+            # holds the lock, so release the one we are not going to use.
+            try:
+                if not future.cancel():
+                    self._release_writer_lock_sync(future.result(timeout=0))
+            except Exception:  # noqa: BLE001
+                pass
             logger.warning(
                 "Model %s: could not take the per-model writer lock for the "
                 "synchronous copy (background attempt in flight after %.0fs, "

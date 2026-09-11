@@ -1139,7 +1139,10 @@ async def test_ensure_cached_sync_serves_from_source_when_the_worker_outlives_th
     """Regression [high] (background-first interleaving, timeout bound): when
     the worker's copy outlives SYNC_BACKGROUND_WAIT_TIMEOUT_S, the sync path
     gives up waiting and serves from the source — it must not start its own
-    copy behind the worker's back."""
+    copy behind the worker's back, and the timed-out acquisition must not
+    leak the writer lock: once the worker's copy lands, a subsequent writer
+    and reclaim (both of which take the same per-model lock) must complete
+    instead of blocking forever behind the abandoned waiter."""
     monkeypatch.setattr("logos_worker_node.model_cache.SYNC_BACKGROUND_WAIT_TIMEOUT_S", 0.2)
     model = ram_cache_env["model_name"]
     cache = ModelRamCache(
@@ -1185,6 +1188,20 @@ async def test_ensure_cached_sync_serves_from_source_when_the_worker_outlives_th
     assert hf_home == str(Path(ram_cache_env["source_hf"]).parent)
     assert sync_copy_calls == 0
     assert copy_calls == 1  # the worker's attempt is the only copy
+
+    # Let the worker's copy land, then prove the timed-out acquisition did
+    # not leave the lock wedged: a subsequent worker-side writer and reclaim
+    # both take the same per-model lock and must complete (a leaked waiter
+    # would hold it forever — the wait_for bounds catch that as a hang).
+    for _ in range(100):
+        if cache.is_cached(model):
+            break
+        await asyncio.sleep(0.05)
+    assert cache.is_cached(model)
+    hf_home = await asyncio.wait_for(cache.ensure_cached(model), 10)
+    assert hf_home == ram_cache_env["tmpfs"]
+    reclaimed = await asyncio.wait_for(cache.reclaim(set()), 10)
+    assert reclaimed == [model]
     await cache.stop_background_caching()
 
 
