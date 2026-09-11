@@ -113,6 +113,60 @@ class StatsV2WebSocketHandlerLivePushTest {
         clearInvocations(session);
     }
 
+    private static Map<String, Object> vramPayload(int lastSnapshotId, String connectionState) {
+        Map<String, Object> provider = new HashMap<>();
+        provider.put("provider_id", 1);
+        provider.put("name", "worker-a");
+        provider.put("data", List.of());
+        provider.put("connection_state", connectionState);
+        provider.put("calibrating", null);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("providers", List.of(provider));
+        payload.put("last_snapshot_id", lastSnapshotId);
+        return payload;
+    }
+
+    @Test
+    void a_stale_vram_delta_is_dropped_after_a_day_change() throws Exception {
+        // Stop the tick scheduler: the test drives pushVramDelta itself, and
+        // a concurrent real tick would race for the stubs below.
+        handler.shutdown();
+
+        String day1 = "2026-09-01";
+        String day2 = "2026-09-02";
+        when(vramService.getVramStats(day1, 0)).thenReturn(vramPayload(100, "connected"));
+
+        handler.afterConnectionEstablished(session);
+        handler.handleMessage(session, new TextMessage("{\"action\":\"init\",\"vram_day\":\"" + day1 + "\"}"));
+        clearInvocations(session);
+
+        // The delta's day1 query (cursor 100) only returns after the
+        // operator's set_vram_day has run to completion in the meantime —
+        // the exact interleaving the generation token guards against: the
+        // tick thread's in-flight query meets the websocket thread's window
+        // change.
+        when(vramService.getVramStats(day2, 0)).thenReturn(vramPayload(200, "offline"));
+        when(vramService.getVramStats(day1, 100)).thenAnswer(inv -> {
+            handler.handleMessage(session, new TextMessage("{\"action\":\"set_vram_day\",\"day\":\"" + day2 + "\"}"));
+            return vramPayload(100, "connected");
+        });
+
+        Object state = ((Map<?, ?>) ReflectionTestUtils.getField(handler, "states")).get(session.getId());
+        ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
+
+        // The late delta describes day1: it must not be sent, and it must
+        // not write day1's cursor or connection-state baseline over the ones
+        // day2's init just established.
+        assertThat(ReflectionTestUtils.getField(state, "vramCursor")).isEqualTo(200);
+        Object metaSig = ReflectionTestUtils.getField(state, "prevVramMetaSig");
+        assertThat(metaSig).asString().contains("offline").doesNotContain("connected");
+
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, atLeastOnce()).sendMessage(captor.capture());
+        assertThat(captor.getAllValues())
+            .noneMatch(m -> m.getPayload().contains("\"type\":\"vram_delta\""));
+    }
+
     @Test
     void a_live_update_reaches_the_viewer_as_a_requests_push() throws Exception {
         connectAndInit();

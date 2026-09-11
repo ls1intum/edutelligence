@@ -47,6 +47,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
         volatile String vramDay = null;
         volatile int vramCursor = 0;
+        // Bumped on every vram window change (init, set_vram_day). A delta
+        // query that is in flight on the tick thread when the window changes
+        // on the websocket thread must not write the previous window's
+        // cursor and connection-state baseline back into the fresh state.
+        volatile int vramDayGeneration = 0;
 
         // The user-selected window. The live delta slide advances only the end
         // to "now"; the start stays anchored where the preset put it.
@@ -201,6 +206,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         Object dayObj = msg.get("vram_day");
         state.vramDay = (dayObj instanceof String s && !s.isBlank()) ? s : null;
         state.vramCursor = 0;
+        state.vramDayGeneration++;
 
         Object tdObj = msg.get("timeline_deltas");
         state.deltaEnabled = tdObj == null || coerceBool(tdObj, true);
@@ -291,6 +297,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         if (dayObj instanceof String s && !s.isBlank()) {
             state.vramDay = s;
             state.vramCursor = 0;
+            state.vramDayGeneration++;
             pushVramInit(session, state);
         }
     }
@@ -370,7 +377,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private void pushVramDelta(WebSocketSession session, SessionState state) {
         try {
             String day = state.vramDay != null ? state.vramDay : LocalDate.now(ZoneOffset.UTC).toString();
+            int generation = state.vramDayGeneration;
             Map<String, Object> payload = vramService.getVramStats(day, state.vramCursor);
+            // The window can change on the websocket thread (init, set_vram_day)
+            // while the query is in flight on the tick thread. The late result
+            // then describes the previous day and is dropped — writing it back
+            // would send previous-day samples and overwrite the new day's
+            // cursor and connection-state baseline.
+            if (generation != state.vramDayGeneration) return;
             Object sid = payload.get("last_snapshot_id");
             int nextCursor = sid instanceof Number n ? n.intValue() : state.vramCursor;
             // Providers are always present (connection metadata is attached
