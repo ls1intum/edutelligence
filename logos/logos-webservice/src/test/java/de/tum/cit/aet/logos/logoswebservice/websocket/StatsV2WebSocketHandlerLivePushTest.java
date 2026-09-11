@@ -187,25 +187,74 @@ class StatsV2WebSocketHandlerLivePushTest {
         // set_vram_day has swapped in the fresh window, and its init captured
         // that window and is in its query. The tick thread's delta runs
         // against the very same window while that query is in flight: it must
-        // not consume the window's baseline — if it won the write-back, the
-        // init would lose its compareAndSet and the viewer would get a
-        // "delta" where the full-day "init" the day change owes it never
-        // comes.
+        // not consume the window's baseline as a delta — if it won the
+        // write-back, the viewer would get a "delta" where the full-day
+        // "init" the day change owes it never comes. The delta therefore
+        // retries the owed init; the two inits then race the write-back like
+        // any two pushes, and the loser drops.
         state.vramWindow.set(new StatsV2WebSocketHandler.VramWindow(day2, 0, "", false));
+        final boolean[] deltaRan = { false };
         when(vramService.getVramStats(day2, 0)).thenAnswer(inv -> {
-            ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
+            // Once only: the delta's init retry issues the very same query,
+            // and re-running the delta on its answer would recurse.
+            if (!deltaRan[0]) {
+                deltaRan[0] = true;
+                ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
+            }
             return vramPayload(200, "offline");
         });
         ReflectionTestUtils.invokeMethod(handler, "pushVramInit", session, state);
 
-        // The init went out as an init — not shadowed by a delta — and left
-        // the window baseline-established for the next tick's deltas.
+        // The baseline went out as an init — not shadowed by a delta — and
+        // the window is baseline-established for the next tick's deltas.
         assertThat(state.vramWindow.get().cursor()).isEqualTo(200);
         assertThat(state.vramWindow.get().baselineSent()).isTrue();
         ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, atLeastOnce()).sendMessage(captor.capture());
         assertThat(captor.getAllValues())
             .anyMatch(m -> m.getPayload().contains("\"type\":\"vram_init\""))
+            .noneMatch(m -> m.getPayload().contains("\"type\":\"vram_delta\""));
+    }
+
+    @Test
+    void a_transient_init_failure_recovers_on_the_next_tick() throws Exception {
+        // Stop the tick scheduler: the test drives the two threads' steps
+        // itself, in order.
+        handler.shutdown();
+
+        String day1 = "2026-09-01";
+        String day2 = "2026-09-02";
+        when(vramService.getVramStats(day1, 0)).thenReturn(vramPayload(100, "connected"));
+
+        handler.afterConnectionEstablished(session);
+        handler.handleMessage(session, new TextMessage("{\"action\":\"init\",\"vram_day\":\"" + day1 + "\"}"));
+        clearInvocations(session);
+
+        StatsV2WebSocketHandler.SessionState state = (StatsV2WebSocketHandler.SessionState)
+            ((Map<?, ?>) ReflectionTestUtils.getField(handler, "states")).get(session.getId());
+
+        // The day change's init hits a transient error: the error init goes
+        // out, but the window is still owed its baseline. A delta that only
+        // skipped uninitialised windows would leave the session's vram feed
+        // wedged behind this one failed query until a manual day change or a
+        // reconnect.
+        state.vramWindow.set(new StatsV2WebSocketHandler.VramWindow(day2, 0, "", false));
+        when(vramService.getVramStats(day2, 0)).thenThrow(new RuntimeException("db blip"))
+            .thenReturn(vramPayload(200, "offline"));
+        ReflectionTestUtils.invokeMethod(handler, "pushVramInit", session, state);
+        assertThat(state.vramWindow.get().baselineSent()).isFalse();
+
+        // The next tick's delta retries the owed init instead, and the
+        // recovered full-day payload reaches the viewer as a vram_init.
+        ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
+
+        assertThat(state.vramWindow.get().baselineSent()).isTrue();
+        assertThat(state.vramWindow.get().cursor()).isEqualTo(200);
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, atLeastOnce()).sendMessage(captor.capture());
+        assertThat(captor.getAllValues())
+            .anyMatch(m -> m.getPayload().contains("\"type\":\"vram_init\"")
+                    && m.getPayload().contains("\"last_snapshot_id\":200"))
             .noneMatch(m -> m.getPayload().contains("\"type\":\"vram_delta\""));
     }
 

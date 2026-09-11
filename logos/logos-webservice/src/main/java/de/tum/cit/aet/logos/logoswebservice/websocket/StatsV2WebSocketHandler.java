@@ -372,6 +372,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private void pushVramInit(WebSocketSession session, SessionState state) {
         try {
             VramWindow window = state.vramWindow.get();
+            // A baseline already went out for this window — the websocket
+            // thread's init or an earlier tick's retry established it:
+            // pushing the full day again would only restate what the viewer
+            // has.
+            if (window.baselineSent()) return;
             String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
             Map<String, Object> payload = vramService.getVramStats(day, 0);
             Object sid = payload.get("last_snapshot_id");
@@ -384,6 +389,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 send(session, Map.of("type", "vram_init", "payload", payload));
             }
         } catch (Exception e) {
+            log.warn("[ws/stats/v2] vram_init error: {}", e.getMessage());
             send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
         }
     }
@@ -398,14 +404,18 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // never send previous-day samples or overwrite the new day's
             // cursor and connection-state baseline.
             VramWindow window = state.vramWindow.get();
-            // A window whose init has not gone out yet is not consumable:
-            // init and the first delta after a day change query the same
-            // (day, cursor 0) and race for the write-back — whichever loses
-            // the compareAndSet drops its push, and a delta winning that race
-            // would owe the viewer a full-day "init" that never comes. The
-            // init runs on the websocket thread the moment the window moves,
-            // so the next tick already sees the baseline.
-            if (!window.baselineSent()) return;
+            // A window whose init has not gone out yet is not consumable by a
+            // delta: init and the first delta after a day change query the
+            // same (day, cursor 0) and race for the write-back — whichever
+            // loses the compareAndSet drops its push, and a delta winning
+            // that race would owe the viewer a full-day "init" that never
+            // comes. Instead the tick retries the owed init: one transient
+            // failure of the websocket thread's init must not wedge the
+            // session's vram feed behind a window no push will ever touch.
+            if (!window.baselineSent()) {
+                pushVramInit(session, state);
+                return;
+            }
             String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
             Map<String, Object> payload = vramService.getVramStats(day, window.cursor());
             Object sid = payload.get("last_snapshot_id");
