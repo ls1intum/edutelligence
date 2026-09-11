@@ -1916,7 +1916,10 @@ def test_replan_reconciles_a_late_reservation_that_spared_an_uncharged_entry(mon
     snapshot and keep its tree even though the planner rejected it. That
     late survivor was never charged against the budget — the pass must
     reconcile by reclaiming an otherwise-fitting unprotected entry instead
-    of leaving the retained cache over the live budget until another tick."""
+    of leaving the retained cache over the live budget until another tick.
+    The reconciled drop must also leave plan.order: with an expired
+    hold-down stamp, the re-cache logic would otherwise re-queue it for an
+    immediate recopy under this same pressure."""
     monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
     registry = _FakeRegistry(
         {
@@ -1927,6 +1930,11 @@ def test_replan_reconciles_a_late_reservation_that_spared_an_uncharged_entry(mon
     sizes = {"org/small": _mb(8_000), "org/late": _mb(48_000)}
     cache = _FakeCache(cached=["org/small", "org/late"], sizes=sizes)
     app = _app(cache, registry, _FakeLaneManager({}), ["org/small", "org/late"])
+
+    # small's hold-down has long expired — without the fix, the reconciliation
+    # drop would stay in plan.order and be re-queued for an immediate recopy.
+    hold = worker_main.RAM_CACHE_RECACHE_HOLD_SECONDS
+    app.state.ram_cache_in_plan_since["org/small"] = time.monotonic() - hold - 1.0
 
     original_reclaim = cache.reclaim
 
@@ -1952,6 +1960,10 @@ def test_replan_reconciles_a_late_reservation_that_spared_an_uncharged_entry(mon
     assert cache.is_cached("org/late") is True
     assert cache.is_cached("org/small") is False
     assert cache.floor_mb == pytest.approx(60_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+    # The drop left plan.order, so the expired stamp neither re-queues small
+    # nor survives on the hold-down state.
+    assert cache.recache_calls == []
+    assert "org/small" not in app.state.ram_cache_in_plan_since
 
 
 # ── re-cache hold-down ────────────────────────────────────────────────────────

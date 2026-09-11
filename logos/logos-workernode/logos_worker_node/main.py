@@ -956,7 +956,13 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
             to_drop.append(m)
             held_now_mb -= _size_mb(m)
         if to_drop:
-            reconciled = await model_cache.reclaim((set(plan.order) - set(to_drop)) | live)
+            # The drops leave plan.order like the walk's do: the re-cache
+            # logic below must not re-queue what the reconciliation just
+            # evicted under this same pressure (no pressure-fighting
+            # refill), and their hold-down stamps are cleared with the plan
+            # membership.
+            plan = replace(plan, order=[m for m in plan.order if m not in to_drop])
+            reconciled = await model_cache.reclaim(set(plan.order) | live)
             logger.info(
                 "Re-planned RAM cache: a late cache-use reservation kept an "
                 "uncharged entry resident — reclaimed %d model(s) to restore "
