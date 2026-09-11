@@ -545,12 +545,13 @@ def _build_ram_cache_candidates(
     are not served at all, so they never enter the plan (``reserve_replicas``
     are the exception: they are served regardless of calibration).
 
-    Uncatalogued cache residents — models already cached or being copied that
-    appear in neither the capability list nor the sleepable lane set (an
-    on-demand lane's model, a calibration target) — are admitted as
-    unsleepable: without a profile there is no sleeping footprint to reserve,
-    but their tmpfs copy still consumes host RAM, so the pressure walk must be
-    able to evict them like any other entry.
+    Uncatalogued cache residents — models already cached, being copied, or
+    provisionally reserved by a calibration whose synchronous copy has not
+    landed yet — that appear in neither the capability list nor the
+    sleepable lane set (an on-demand lane's model, a calibration target) are
+    admitted as unsleepable: without a profile there is no sleeping footprint
+    to reserve, but their tmpfs copy still consumes host RAM, so the pressure
+    walk must be able to evict them like any other entry.
 
     Each candidate carries the numbers the planner balances:
 
@@ -619,8 +620,17 @@ def _build_ram_cache_candidates(
     # pressure while live-lane and calibration protection still spare it in
     # use. Pending copies join for the same reason: the floor must hold the
     # margin before their ensure_cached() finishes, or the post-copy check
-    # admits them against a zero floor.
-    residents = set(model_cache.cached_models()) | set(model_cache.pending_or_caching())
+    # admits them against a zero floor. Provisional cache-use reservations
+    # join as well: a SYNCHRONOUS calibration copy is neither cached nor in
+    # the background queue until it completes, so on a zero-lane /
+    # all-uncalibrated worker its reservation alone must keep candidates
+    # non-empty — otherwise the empty path zeroes the floor and disables
+    # both starvation checks for the whole copy.
+    residents = (
+        set(model_cache.cached_models())
+        | set(model_cache.pending_or_caching())
+        | set(model_cache.cache_use_reservations())
+    )
     for m in sorted(residents - seen):
         candidates.append(
             CacheCandidate(
@@ -940,33 +950,46 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # under the per-model lock, so a calibration can reserve an entry AFTER
     # `protected` was snapshotted and keep its tree even though the planner
     # rejected it and the packing above never charged it. While it stays,
-    # the retained cache exceeds the live budget — evict unprotected
-    # entries in reverse pack order (the marginal admits first) until the
-    # retained cache fits again. `live` is re-read: the pass ran long enough
-    # for the lane set to move as well.
-    live = _lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations()
-    held_now_mb = sum(_size_mb(m) for m in model_cache.cached_models())
-    if held_now_mb > plan.sleepable_tmpfs_budget_mb:
+    # the retained cache exceeds the live budget. The correction therefore
+    # loops with a FRESH reservation/cache snapshot each iteration: a
+    # reservation can RELEASE before the next reclaim (its entry becomes
+    # evictable again — stale `live` would keep it) or LAND on a selected
+    # drop mid-reclaim (reclaim spares it), so one pass over a stale
+    # snapshot can itself end above budget. Evictable entries are dropped
+    # plan-members-first in reverse pack order (the marginal admits), then
+    # out-of-order survivors largest-first, until the retained cache fits or
+    # only currently protected entries remain (the corner the protection
+    # warning covers). Every drop leaves plan.order — like the walk's — so
+    # the re-cache logic below neither re-queues it under this same pressure
+    # nor carries its hold-down stamp forward; that also bounds the loop,
+    # since each iteration either evicts a drop or moves it behind a live
+    # reservation, and plan membership only shrinks.
+    while True:
+        live = _lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations()
+        cached = list(model_cache.cached_models())
+        held_now_mb = sum(_size_mb(m) for m in cached)
+        if held_now_mb <= plan.sleepable_tmpfs_budget_mb:
+            break
+        evictable = {m for m in cached if m not in live}
+        if not evictable:
+            break
+        plan_rank = {m: i for i, m in enumerate(plan.order)}
+        ordered = [m for m in reversed(plan.order) if m in evictable] + sorted(
+            (m for m in evictable if m not in plan_rank), key=_size_mb, reverse=True
+        )
         to_drop: list[str] = []
-        for m in reversed(plan.order):
+        for m in ordered:
             if held_now_mb <= plan.sleepable_tmpfs_budget_mb:
                 break
-            if m in live or not model_cache.is_cached(m):
-                continue
             to_drop.append(m)
             held_now_mb -= _size_mb(m)
-        if to_drop:
-            # The drops leave plan.order like the walk's do: the re-cache
-            # logic below must not re-queue what the reconciliation just
-            # evicted under this same pressure (no pressure-fighting
-            # refill), and their hold-down stamps are cleared with the plan
-            # membership.
-            plan = replace(plan, order=[m for m in plan.order if m not in to_drop])
-            reconciled = await model_cache.reclaim(set(plan.order) | live)
+        plan = replace(plan, order=[m for m in plan.order if m not in to_drop])
+        reconciled = await model_cache.reclaim(set(plan.order) | live)
+        if reconciled:
             logger.info(
-                "Re-planned RAM cache: a late cache-use reservation kept an "
-                "uncharged entry resident — reclaimed %d model(s) to restore "
-                "the host-RAM budget: %s",
+                "Re-planned RAM cache: late or released cache-use "
+                "reservations left the retained cache above the host-RAM "
+                "budget — reclaimed %d model(s) to restore it: %s",
                 len(reconciled),
                 reconciled,
             )

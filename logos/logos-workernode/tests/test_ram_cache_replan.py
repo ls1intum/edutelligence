@@ -1966,6 +1966,80 @@ def test_replan_reconciles_a_late_reservation_that_spared_an_uncharged_entry(mon
     assert "org/small" not in app.state.ram_cache_in_plan_since
 
 
+def test_replan_keeps_the_floor_while_a_provisional_calibration_copy_runs(monkeypatch) -> None:
+    """A synchronous calibration copy is neither cached nor in the
+    background queue until it completes: on a zero-lane, all-uncalibrated
+    worker, its reservation alone must keep candidates non-empty, so the
+    empty-candidate path does not zero the floor and disable the
+    host-starvation checks for the duration of the copy. The margin must
+    stay active through admission, and the zero reading must still drive a
+    reclaim pass (that frees nothing while no copy has landed)."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(0.0))
+    cache = _FakeCache(sizes={"org/probe": _mb(48_000)})
+    cache.reserve_cache_use("org/probe")
+    app = _app(cache, _FakeRegistry({}), _FakeLaneManager({}), [])
+    try:
+        asyncio.run(worker_main._replan_ram_cache_once(app))
+    finally:
+        cache.release_cache_use("org/probe")
+
+    # The reserved resident enters the plan as unsleepable: the floor holds
+    # the margin (the copy path's brake stays on) and nothing is evicted.
+    assert cache.floor_mb == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
+    assert cache.reclaimed[-1] == []
+
+
+def test_replan_reconciles_again_when_a_late_reservation_releases_mid_pass(monkeypatch) -> None:
+    """The reconciliation snapshot can itself go stale: a late reservation
+    that released BEFORE the corrective reclaim leaves its oversized entry
+    evictable, but a stale `live` set would keep it. The pass must re-measure
+    with a fresh reservation/cache snapshot and evict the released entry
+    instead of finishing above the live budget."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+    registry = _FakeRegistry(
+        {
+            "org/small": _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=10_000.0),
+            "org/late": _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0),
+        }
+    )
+    sizes = {"org/small": _mb(8_000), "org/late": _mb(48_000)}
+    cache = _FakeCache(cached=["org/small", "org/late"], sizes=sizes)
+    app = _app(cache, registry, _FakeLaneManager({}), ["org/small", "org/late"])
+
+    original_reclaim = cache.reclaim
+    calls = 0
+
+    async def reclaim_with_late_reservation_then_release(keep: set[str]) -> list[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # The plan's reclaim: the calibration's executor thread lands
+            # between the protected snapshot and the eviction decision.
+            cache.reserve_cache_use("org/late")
+        result = await original_reclaim(keep)
+        if calls == 2:
+            # The corrective reclaim finished; the probe is done and
+            # releases the reservation AFTER it — before the loop's next
+            # measurement, so late is now evictable.
+            cache.release_cache_use("org/late")
+        return result
+
+    cache.reclaim = reclaim_with_late_reservation_then_release
+    try:
+        asyncio.run(worker_main._replan_ram_cache_once(app))
+    finally:
+        cache.release_cache_use("org/late")
+
+    # Pass 1: the reservation spared late, so the otherwise-fitting small is
+    # reclaimed. The reservation then releases; the loop re-measures with a
+    # fresh snapshot and reclaims the now-evictable oversized entry instead
+    # of finishing above the 30.4 GB budget.
+    assert cache.reclaimed == [[], ["org/small"], ["org/late"]]
+    assert cache.is_cached("org/late") is False
+    assert cache.is_cached("org/small") is False
+    assert cache.floor_mb == pytest.approx(60_000.0 + worker_main._host_ram_safety_margin_mb(512_000.0))
+
+
 # ── re-cache hold-down ────────────────────────────────────────────────────────
 
 
