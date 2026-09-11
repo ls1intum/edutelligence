@@ -59,6 +59,11 @@ export class WorkerGpuPanel implements OnChanges {
   private calibrateProvider: string | null = null;
   /** The resolved worker the last input change settled on. */
   private resolvedProvider: string | null = null;
+  /** Calibration attempt counter. Every start and every worker-change reset
+   *  advances it, so an answer only applies while its exact attempt is still
+   *  the current one — the worker name alone cannot tell two calibrations of
+   *  the same worker apart (A → B → A). */
+  private calibrateGeneration = 0;
 
   ngOnChanges(_changes: SimpleChanges): void {
     const resolved = this.resolvedActiveProvider;
@@ -72,6 +77,7 @@ export class WorkerGpuPanel implements OnChanges {
     // though activeProvider itself never changed.
     this.calibrateState.set({ kind: 'idle' });
     this.calibrateProvider = null;
+    this.calibrateGeneration += 1;
     this.resolvedProvider = resolved;
   }
 
@@ -194,16 +200,24 @@ export class WorkerGpuPanel implements OnChanges {
     const pid = this.activeProviderId;
     const active = this.resolvedActiveProvider;
     if (pid == null || active == null) return;
+    const generation = (this.calibrateGeneration += 1);
     this.calibrateProvider = active;
     this.calibrateState.set({ kind: 'loading' });
 
     try {
       const body = await this.statisticsService.calibrateUncalibrated(pid);
       // The operator can switch workers while the call is in flight — or the
-      // fallback worker can change under a null selection — and the answer
-      // belongs to the worker it was asked for, so a stale one is dropped
-      // rather than shown under the panel the operator is looking at now.
-      if (this.calibrateProvider !== active || this.resolvedActiveProvider !== active) return;
+      // fallback worker can change under a null selection, or a newer
+      // calibration of the very same worker can supersede this one (A → B →
+      // A) — and the answer belongs to the attempt it was made for, so a
+      // stale one is dropped rather than shown under the panel the operator
+      // is looking at now.
+      if (
+        generation !== this.calibrateGeneration ||
+        this.calibrateProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
       const count = typeof body?.count === 'number' ? body.count : 0;
       const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
       const message =
@@ -212,7 +226,12 @@ export class WorkerGpuPanel implements OnChanges {
           : `Calibrating ${count} model(s): ${models.join(', ')}`;
       this.calibrateState.set({ kind: 'success', message });
     } catch (err: unknown) {
-      if (this.calibrateProvider !== active || this.resolvedActiveProvider !== active) return;
+      if (
+        generation !== this.calibrateGeneration ||
+        this.calibrateProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
       const e = err as { status?: number; error?: { error?: string } };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.calibrateState.set({

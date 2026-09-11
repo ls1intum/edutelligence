@@ -17,10 +17,13 @@ describe('WorkerGpuPanel calibration message', () => {
   let panel: WorkerGpuPanel;
   let calibrateResult: { body?: unknown; error?: unknown };
   let settleCalibrate: (() => void) | null;
+  /** Settlers of every call, in order — settleCalibrate is the newest one. */
+  let calibrateSettlers: Array<() => void>;
 
   beforeEach(async () => {
     calibrateResult = {};
     settleCalibrate = null;
+    calibrateSettlers = [];
     await TestBed.configureTestingModule({
       imports: [WorkerGpuPanel],
       providers: [
@@ -29,8 +32,10 @@ describe('WorkerGpuPanel calibration message', () => {
           useValue: {
             calibrateUncalibrated: () =>
               new Promise((resolve, reject) => {
-                settleCalibrate = () =>
+                const settle = () =>
                   calibrateResult.error ? reject(calibrateResult.error) : resolve(calibrateResult.body);
+                calibrateSettlers.push(settle);
+                settleCalibrate = settle;
               }),
           },
         },
@@ -150,5 +155,41 @@ describe('WorkerGpuPanel calibration message', () => {
 
     // The answer belongs to w-a; w-b's panel stays idle.
     expect(panel.calibrateState().kind).toBe('idle');
+  });
+
+  it('drops a stale answer from an earlier calibration of the same worker', async () => {
+    // A → B → A: two calibrations of worker A with a switch in between. The
+    // provider guard cannot tell the attempts apart — both captured A — so
+    // only the per-attempt token keeps the first answer from replacing the
+    // second request's loading state.
+    const first = panel.handleCalibrateUncalibrated();
+    expect(panel.calibrateState().kind).toBe('loading');
+
+    switchTo('w-b');
+    expect(panel.calibrateState().kind).toBe('idle');
+    switchTo('w-a');
+    expect(panel.calibrateState().kind).toBe('idle');
+
+    const second = panel.handleCalibrateUncalibrated();
+    expect(panel.calibrateState().kind).toBe('loading');
+    expect(calibrateSettlers).toHaveLength(2);
+
+    // The first (stale) answer lands first — it belongs to the earlier
+    // attempt and must not touch the newer one's state.
+    calibrateResult.body = { count: 1, models: ['org/a'] };
+    calibrateSettlers[0]();
+    await first;
+
+    expect(panel.calibrateState().kind).toBe('loading');
+
+    // The second answer resolves it.
+    calibrateResult.body = { count: 2, models: ['org/a', 'org/b'] };
+    settleCalibrate?.();
+    await second;
+
+    expect(panel.calibrateState()).toEqual({
+      kind: 'success',
+      message: 'Calibrating 2 model(s): org/a, org/b',
+    });
   });
 });
