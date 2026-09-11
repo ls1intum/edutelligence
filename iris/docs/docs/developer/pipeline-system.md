@@ -22,13 +22,13 @@ For configuration rather than control flow, use [LLM configuration](../admin/llm
 
 `Pipeline` subclasses are callable and identify their model roles and variants through `PIPELINE_ID`, `ROLES`, `VARIANT_DEFS`, and optional `DEPENDENCIES`. The base class derives variant requirements from those declarations, fails fast when a subclass omits `__call__`, and provides token-usage aggregation for nested stages.
 
-`AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, and optional Memiris state. This lets hooks enrich one execution without introducing another top-level request contract.
+`AbstractAgentPipeline` carries one `AgentPipelineExecutionState` through the run. The state keeps the request DTO and selected variant together with the callback, filtered message history, resolved model, prompt, tools, partial-result sender, retrieval results, token usage, tracing context, a pending context switch, and optional Memiris state. This lets hooks enrich one execution without introducing another top-level request contract.
 
 | Extension category                       | Methods                                                                                                                      | Responsibility                                                                                                                                                             |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Required                                 | `get_tools()`, `build_system_message()`                                                                                      | Define the agent's callable tools and system prompt.                                                                                                                       |
 | Required for the shared memory contract  | `is_memiris_memory_creation_enabled()`, `get_memiris_tenant()`, `get_memiris_reference()`                                    | Decide whether the run participates in memory creation and provide its isolation/reference keys. These methods still return safe values when Memiris is disabled globally. |
-| Optional run customization               | `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                                   | Add behavior before execution, after execution, or after an individual agent step.                                                                                         |
+| Optional run customization               | `prepare_state()`, `pre_agent_hook()`, `post_agent_hook()`, `on_agent_step()`                                                | Resolve state that both the prompt and the tools depend on, or add behavior before execution, after execution, or after an individual agent step.                          |
 | Optional context/execution customization | `create_tracing_context()`, `get_agent_params()`, `get_history_limit()`, `should_stream_agent_response()`, `execute_agent()` | Customize metadata, executor arguments, retained history, streaming, or the execution strategy.                                                                            |
 
 Private helper methods implement the shared loop and should remain centralized in `AbstractAgentPipeline` rather than being copied into individual agents.
@@ -57,6 +57,17 @@ The FAQ ingestion/deletion and lecture-deletion routes deliberately do **not** u
 
 `ChatPipeline` is the shared top-level chat entry. Its `chat_mode` selects the appropriate course, exercise, lecture, text-exercise, or programming-exercise behavior; the selected mode determines prompts and tools rather than creating a second HTTP route. Code feedback is an internal helper used by applicable chat behavior, not another top-level callback pipeline.
 
+`IrisChatMode` distinguishes `COURSE_CHAT`, `LECTURE_CHAT`, `PROGRAMMING_EXERCISE_CHAT`, and `TEXT_EXERCISE_CHAT`. The mode describes the **active context** of the chat, and three mechanisms consume it: `chat_system_prompt.j2` renders mode-specific blocks from a shared base (see [Prompts](./prompts.md)), `chat_tool_providers.py` decides per tool whether the current mode and the data Artemis sent make that tool useful (see [Tools](./tools.md)), and feature gating limits memory creation and MCQ intent detection to `COURSE` and `LECTURE` mode. One `ChatPipeline` serves all modes on purpose: a pipeline per mode would duplicate the agent setup, the retrieval wiring, and the citation handling, and it would make context switching impossible, since a running pipeline cannot hand a chat to a different one. `IrisChatMode` mirrors the Artemis enum, so both sides must agree on the string values.
+
+### Context switching
+
+Because the mode lives on the request rather than in the pipeline choice, a chat can change its active context between messages while keeping its history. A chat context changes in one of two ways:
+
+- **The student switches it.** Artemis validates the target, persists a `CTXSWAP` marker message, and sends subsequent requests with the new `chat_mode` and the matching entity fields. Iris only has to interpret the marker it finds in the history.
+- **The agent switches it.** The agent calls the `switch_chat_context` tool, which validates the target against the course data on the DTO and records it in `state.pending_context_switch`. Tools never mutate the session themselves. `post_agent_hook()` attaches the recorded switch to the final result as `suggestedContext`, and Artemis validates it again, applies it, and writes the `CTXSWAP` marker. The session context changes from the next message onwards, but lecture retrieval already follows the pending switch inside the same run, so the agent can answer about the new lecture immediately.
+
+Both paths converge on the same marker, so the history stays uniform regardless of who initiated the switch. `AbstractAgentPipeline` treats markers in two places: `convert_iris_message_to_langchain_message()` renders them as a `[context_switch]` system message so the agent knows the topic changed, and `_collect_recent_messages()` drops everything up to and including the most recent marker so session-title generation reflects the current context instead of the previous one.
+
 ## Nested and internal pipelines
 
 The following helpers run under a parent pipeline and return their result to that parent:
@@ -67,6 +78,17 @@ The following helpers run under a parent pipeline and return their result to tha
 - Feature helpers: global-search intent classification and activity/confidence support.
 
 See the [RAG pipeline](./rag-pipeline.md) for the lecture/FAQ ingestion, retrieval, reranking, and citation sequence.
+
+## Extending chat behavior
+
+Most chat work does not need a new pipeline. A new capability for student chats belongs in one of these places:
+
+| Goal                                                     | Where it belongs                                                                                                                          |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Give the agent access to new data                        | A `create_tool_*` factory in `tools/` plus a `provide_*` function in `chat_tool_providers.py`                                             |
+| Change what the agent is told, or how it behaves         | A block in `pipeline/prompts/templates/chat_system_prompt.j2`                                                                             |
+| Add a new kind of context a chat can be attached to      | A member on `IrisChatMode`, the matching entity field on `ChatPipelineExecutionDTO`, a prompt block, and the corresponding Artemis change |
+| Post-process the answer (citations, titles, suggestions) | A `SubPipeline` invoked from `ChatPipeline.post_agent_hook()`                                                                             |
 
 ## Creating a New Pipeline
 
