@@ -282,15 +282,21 @@ jobs:
           NEW_PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
-          # Any other open PR on a logos/vllm-metal-<version> branch is an
-          # update PR for an older release. The [0-9] anchor keeps non-version
-          # branches untouched.
-          gh pr list --state open --limit 100 --json number,headRefName \
-            | jq -r --arg branch "$BRANCH" \
-                '.[]
-                 | select(.headRefName != $branch)
-                 | select(.headRefName | test("^logos/vllm-metal-[0-9][0-9a-z.]*$"))
-                 | .number' \
+          # Only this workflow's own PRs may be closed, and only ones for an
+          # OLDER release. The branch-name pattern alone is not enough on two
+          # counts: a human PR pushed into the same namespace would be closed
+          # and its branch deleted, and a manual dispatch pinning an older
+          # version would close the newer automated PR. Hence the author check
+          # and the version comparison.
+          gh pr list --state open --limit 100 --json number,headRefName,author \
+            | jq -r --arg branch "$BRANCH" --arg version "$VERSION" '
+                def ver: [splits("[.]") | tonumber?];
+                .[]
+                | select(.headRefName != $branch)
+                | select(.author.login == "github-actions[bot]" or .author.login == "app/github-actions")
+                | select(.headRefName | test("^logos/vllm-metal-[0-9][0-9a-z.]*$"))
+                | select((.headRefName | sub("^logos/vllm-metal-"; "") | ver) < ($version | ver))
+                | .number' \
             | while read -r pr; do
                 echo "Closing superseded update PR #$pr"
                 gh pr close "$pr" --delete-branch \

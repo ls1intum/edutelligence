@@ -18,9 +18,10 @@ Linux VM with no GPU passthrough, and Apple's own `container` framework has the
 same limitation. MLX inside a container silently falls back to the CPU.
 
 So the image built by CI is a **distribution artifact, never a runtime**:
-`bootstrap-macos.sh` pulls it, copies the payload out with `docker cp`, and the
-worker runs natively under launchd. Docker reached the same conclusion for
-their own vllm-metal backend in Docker Desktop 4.62.
+`bootstrap-macos.sh` pulls it straight from the registry over HTTPS, untars
+the payload out of its layers, and the worker runs natively under launchd. No
+container runtime is involved on the Mac at all. Docker reached the same
+conclusion for their own vllm-metal backend in Docker Desktop 4.62.
 
 Running natively is also what preserves orchestrator control. A native process
 can fork `vllm serve` subprocesses on command; a containerised worker could not
@@ -29,8 +30,8 @@ reach the host GPU to start them.
 ```
 CI (GitHub Actions)                    Mac (native)
 ┌────────────────────────┐            ┌─────────────────────────────────┐
-│ Dockerfile.mlx         │   pull     │ bootstrap-macos.sh              │
-│  → source only,        │ ─────────► │  docker create + docker cp      │
+│ Dockerfile.mlx         │   HTTPS    │ bootstrap-macos.sh              │
+│  → source only,        │ ─────────► │  registry pull + untar payload/ │
 │    no runtime          │            │   → ~/logos-workernode-mlx      │
 │                        │            │  install-macos.sh               │
 │ ghcr.io/ls1intum/      │            │   → ~/.venv-vllm-metal          │
@@ -527,9 +528,11 @@ startup log for `Excluding N uncalibrated model(s) from capabilities`.
 the working set or `max_buffer_length`. Lower `max_model_len`, use a smaller
 quantization, or raise `iogpu.wired_limit_mb`.
 
-**`docker pull` denied.** The GHCR package is private until someone flips it to
-public once (Package settings → Change visibility). Until then:
-`echo $GITHUB_TOKEN | docker login ghcr.io -u <user> --password-stdin`
+**`Could not obtain a pull token` / manifest fetch fails.** The bootstrap
+pulls anonymously, which only works while the GHCR package is public (Package
+settings → Change visibility). For a private package, fetch the token with
+credentials instead:
+`curl -u <user>:$GITHUB_TOKEN "https://ghcr.io/token?scope=repository:ls1intum/logos-workernode-mlx:pull"`
 
 ---
 
@@ -575,8 +578,11 @@ is the one that does (below).
 
 Keep vllm-metal current. It moves fast and dev builds are published daily —
 but upstream prunes old dev releases, so the pin is the **stable** cut:
-v0.29.0 is the current stable release; the *Sizing* measurements were
-taken on v0.28.0, which it supersedes. Qwen3.8 support landed in 08/2026,
+v0.29.0 is the current stable release. Note that the two measurement sets in
+this document come from different runtimes: the *Sizing* table was measured on
+vllm-metal 0.3.0.dev20260826 (a 36 GB M3 Pro), the *Embedding models* profile
+on v0.29.0 (a 32 GB M2 Pro). Re-measure on the runtime you actually deploy
+rather than mixing them. Qwen3.8 support landed in 08/2026,
 and 0.2.0 could not serve it at all; embedding models need 0.29.0.
 
 **The bump is automated.** `.github/workflows/logos_update-vllm-metal.yml`

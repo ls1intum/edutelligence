@@ -71,13 +71,22 @@ assert_safe_target() {
         *) die "$label must be an absolute path, got '$path' — refusing to delete." ;;
     esac
     # Canonicalize so symlinks and '..' cannot smuggle the target elsewhere.
-    # The directory may legitimately be gone already; resolve the parent then.
+    # The directory may legitimately be gone already; resolve the deepest
+    # existing ancestor then and re-append the rest. This function must ALWAYS
+    # print a path or die: returning success silently left the caller with an
+    # empty variable, and the `pgrep -f "$METAL_VENV/bin/vllm"` below then
+    # degraded to the substring "/bin/vllm", which matches unrelated vLLM
+    # processes anywhere on the machine.
     if [ -d "$path" ]; then
         resolved="$(cd "$path" 2>/dev/null && pwd -P)" || die "Cannot resolve $label ('$path')."
     else
-        parent="$(dirname "$path")"
-        [ -d "$parent" ] || return 0   # nothing there at all, nothing to guard
-        resolved="$(cd "$parent" 2>/dev/null && pwd -P)/$(basename "$path")"
+        local missing="" probe="$path"
+        while [ "$probe" != "/" ] && [ ! -d "$probe" ]; do
+            missing="$(basename "$probe")${missing:+/$missing}"
+            probe="$(dirname "$probe")"
+        done
+        resolved="$(cd "$probe" 2>/dev/null && pwd -P)" || die "Cannot resolve $label ('$path')."
+        resolved="${resolved%/}/$missing"
     fi
     case "$resolved" in
         /|/Users|/Users/*/|/System*|/Library*|/Applications*|/bin*|/usr*|/etc*|/var*|/opt|/opt/homebrew*)
@@ -175,13 +184,27 @@ if [ -d "$INSTALL_ROOT" ]; then
     if [ "$KEEP_CACHE" -eq 1 ] && [ -d "$INSTALL_ROOT/cache" ]; then
         log "Removing $INSTALL_ROOT (keeping cache/)"
         # Move the cache aside rather than deleting around it: a find -delete
-        # over a 15 GB tree is slow and easy to get wrong.
+        # over a 15 GB tree is slow and easy to get wrong. The window between
+        # the two moves is the risky part — an interrupt there would strand
+        # tens of GB in a temp directory the operator never hears about — so
+        # the staged copy is put back on any abnormal exit until the final
+        # move has succeeded.
         staged="$(mktemp -d "${TMPDIR:-/tmp}/logos-mlx-cache.XXXXXX")"
+        restore_cache() {
+            [ -d "$staged/cache" ] || return 0
+            warn "Interrupted — restoring the staged cache to $INSTALL_ROOT/cache"
+            mkdir -p "$INSTALL_ROOT"
+            mv "$staged/cache" "$INSTALL_ROOT/cache" 2>/dev/null \
+                || warn "  could not restore it automatically; it is in $staged/cache"
+            rmdir "$staged" 2>/dev/null || true
+        }
+        trap 'restore_cache' EXIT INT TERM
         mv "$INSTALL_ROOT/cache" "$staged/cache"
         rm -rf "$INSTALL_ROOT"
         mkdir -p "$INSTALL_ROOT"
         mv "$staged/cache" "$INSTALL_ROOT/cache"
         rmdir "$staged"
+        trap - EXIT INT TERM
         log "  kept $INSTALL_ROOT/cache"
     else
         log "Removing $INSTALL_ROOT"
@@ -206,7 +229,10 @@ if [ "$KEEP_POWER" -eq 0 ]; then
     if [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" = "1" ]; then
         log "Restoring sleep defaults (sudo)"
         sudo pmset -a disablesleep 0 || warn "Could not restore disablesleep — run: sudo pmset -a disablesleep 0"
-        sudo pmset -c sleep 10 displaysleep 10 disksleep 10 powernap 1 \
+        # Mirror every knob bootstrap-macos.sh turns off, standby and
+        # autopoweroff included — leaving those at 0 keeps the deeper
+        # power-saving states disabled long after the worker is gone.
+        sudo pmset -c sleep 10 displaysleep 10 disksleep 10 standby 1 autopoweroff 1 powernap 1 \
             || warn "Could not restore AC sleep settings — check 'pmset -g custom'"
     fi
 fi

@@ -117,9 +117,30 @@ log "vllm-metal venv:   $METAL_VENV"
 # IS pinned is everything the installer executes or installs — the installer,
 # its lib.sh, the vLLM core wheel and the vllm-metal wheel (tag + sha256, see
 # above) — and the installer is patched to consume the verified copies.
+# Skipping on "a vllm exists" alone is what made a version bump undeployable:
+# an existing 0.28 venv took the skip path, the floor check below then failed,
+# and because bootstrap-macos.sh boots the agent out before running this, the
+# documented upgrade command left the node offline until someone deleted the
+# venv by hand. Compare against the pin instead of merely testing for presence,
+# and rebuild when they differ — upstream's installer creates the venv with
+# --clear, but an explicit removal keeps a half-written venv from being
+# reused.
+installed_metal_version() {
+    [ -x "$METAL_VENV/bin/python" ] || return 1
+    "$METAL_VENV/bin/python" -c 'import importlib.metadata as m; print(m.version("vllm-metal"))' 2>/dev/null
+}
+metal_needs_install=1
 if [ -x "$METAL_VENV/bin/vllm" ]; then
-    log "vllm-metal already present — skipping install"
-else
+    current_metal="$(installed_metal_version || true)"
+    if [ "$current_metal" = "$VLLM_METAL_MIN_VERSION" ]; then
+        log "vllm-metal $current_metal already present — skipping install"
+        metal_needs_install=0
+    else
+        log "vllm-metal ${current_metal:-unknown} is installed but this worker pins $VLLM_METAL_MIN_VERSION — rebuilding the venv"
+        rm -rf "$METAL_VENV"
+    fi
+fi
+if [ "$metal_needs_install" -eq 1 ]; then
     log "Installing vllm-metal into $METAL_VENV (this downloads several GB)…"
     # The verified artifacts are staged in a directory of their own; the
     # installer gets a plain temp FILE, not a directory. That matters: if a
@@ -264,14 +285,21 @@ if [ -n "$PYTHON_BIN" ]; then
     [ "$minor" -ge "$WORKER_PYTHON_MIN_MINOR" ] || die \
         "LOGOS_PYTHON=$PYTHON_BIN is Python 3.$minor; this worker needs 3.$WORKER_PYTHON_MIN_MINOR or newer."
 else
-    # Newest first. macOS always has /usr/bin/python3 (Command Line Tools,
-    # 3.9), and Homebrew only symlinks a bare `python3` for its current default
-    # formula — so a machine with just `brew install python@3.14` has no
-    # `python3` of its own and the bare name resolves to Apple's 3.9. Picking
-    # it silently is what produced a venv that failed much later, at import
-    # time, with an unrelated-looking pydantic error. Hence: every candidate is
+    # Preferred version first, NOT newest first. python3.13 is what
+    # bootstrap-macos.sh installs and what this worker is tested against;
+    # picking the newest interpreter present would rebuild the venv onto an
+    # untested Python the moment someone installs a newer one for unrelated
+    # reasons — and the rebuild branch below would do it on every run.
+    # Newer versions are still accepted when nothing preferred is installed.
+    #
+    # macOS always has /usr/bin/python3 (Command Line Tools, 3.9), and Homebrew
+    # only symlinks a bare `python3` for its current default formula — so a
+    # machine with just `brew install python@3.14` has no `python3` of its own
+    # and the bare name resolves to Apple's 3.9. Picking it silently is what
+    # produced a venv that failed much later, at import time, with an
+    # unrelated-looking pydantic error. Hence: every candidate is
     # version-checked, and there is no unchecked fallback.
-    for candidate in python3.14 python3.13 python3.12 python3; do
+    for candidate in python3.13 python3.12 python3.14 python3.15 python3; do
         command -v "$candidate" >/dev/null 2>&1 || continue
         resolved="$(command -v "$candidate")"
         minor="$(python_minor "$resolved")"
