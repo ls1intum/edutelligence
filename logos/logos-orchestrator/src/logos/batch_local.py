@@ -318,16 +318,22 @@ async def _execute_lines(
         )
 
         async def _heartbeat(chunk_task=chunk_task):
-            # Refresh the lease while the lines run. A None answer is the
+            # Refresh the lease while the lines run. A None answer — or a
+            # check that failed, which fails closed the same way, because a
+            # heartbeat that cannot confirm the lease cannot keep it — is the
             # lease being gone: stop this runner before it checkpoints or
             # finalizes, and cancel the in-flight lines so the new holder's
             # run of them is not billed twice.
             while not lost.is_set():
                 await asyncio.sleep(heartbeat_interval)
-                with DBManager() as db:
-                    still = db.update_local_batch_progress(
-                        batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
-                    )
+                try:
+                    with DBManager() as db:
+                        still = db.update_local_batch_progress(
+                            batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
+                        )
+                except Exception:  # noqa: BLE001 - the batch resumes from its checkpoint
+                    logger.exception("Lease heartbeat failed for batch %s", batch.get("upstream_id"))
+                    still = None
                 if still is None:
                     lost.set()
                     chunk_task.cancel()
@@ -347,6 +353,13 @@ async def _execute_lines(
             lost.set()
             if not heartbeat_task.done():
                 heartbeat_task.cancel()
+            # Await the cleanup so the heartbeat cannot outlive the chunk: an
+            # unawaited, uncancelled task would keep refreshing a lease this
+            # runner is done with.
+            try:
+                await heartbeat_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - its state is in `lost`
+                pass
         checkpoint: List[Dict[str, Any]] = []
         for line, outcome in zip(chunk, results):
             if isinstance(outcome, BaseException):

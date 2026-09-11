@@ -56,23 +56,16 @@
             <column name="execution" type="TEXT" defaultValue="provider">
                 <constraints nullable="false"/>
             </column>
-            <!-- The key that created the object. Kept for attribution; access
-                 is decided on team_id, matching how job results are scoped. -->
-            <column name="api_key_id" type="INTEGER">
-                <constraints foreignKeyName="fk_batch_objects_api_key"
-                             references="api_keys(id)"
-                             deleteCascade="false"/>
-            </column>
-            <column name="team_id" type="INTEGER">
-                <constraints foreignKeyName="fk_batch_objects_team"
-                             references="teams(id)"
-                             deleteCascade="false"/>
-            </column>
-            <column name="user_id" type="INTEGER">
-                <constraints foreignKeyName="fk_batch_objects_user"
-                             references="users(id)"
-                             deleteCascade="false"/>
-            </column>
+            <!-- Attribution (key, team, user) lives on the raw-SQL foreign
+                 keys at the bottom of this file: SET NULL, not the default
+                 RESTRICT, because the existing deletion paths remove keys,
+                 users and teams physically and a retained batch must not
+                 keep them. The Liquibase XML of this version cannot express
+                 SET NULL on a column constraint, so they are raw SQL, like
+                 the 000 schema. The object survives its owners, unattributed. -->
+            <column name="api_key_id" type="INTEGER"/>
+            <column name="team_id" type="INTEGER"/>
+            <column name="user_id" type="INTEGER"/>
             <!-- For a batch: the input file it was created from, so the
                  reconciler can attribute rows even when the client deleted
                  its own bookkeeping. NULL for files. -->
@@ -147,9 +140,19 @@
             -- Listing a team's own objects (GET /v1/batches, GET /v1/files).
             CREATE INDEX IF NOT EXISTS idx_batch_objects_team
                 ON batch_objects(team_id, kind, created_at DESC);
+
+            -- The attribution foreign keys (see the column comments above).
+            ALTER TABLE batch_objects
+                ADD CONSTRAINT fk_batch_objects_api_key FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL,
+                ADD CONSTRAINT fk_batch_objects_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL,
+                ADD CONSTRAINT fk_batch_objects_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL;
         ]]></sql>
         <rollback>
             <sql>
+                ALTER TABLE batch_objects
+                    DROP CONSTRAINT IF EXISTS fk_batch_objects_api_key,
+                    DROP CONSTRAINT IF EXISTS fk_batch_objects_team,
+                    DROP CONSTRAINT IF EXISTS fk_batch_objects_user;
                 DROP INDEX IF EXISTS uq_batch_objects_upstream;
                 DROP INDEX IF EXISTS idx_batch_objects_unsettled;
                 DROP INDEX IF EXISTS idx_batch_objects_runnable;

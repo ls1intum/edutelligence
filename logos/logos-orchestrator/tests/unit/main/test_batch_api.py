@@ -623,16 +623,27 @@ class _FakeDB:
 
     def record_batch_provider_state(self, upstream_id, body):
         # The production sync stores the status and the result fields the
-        # answer carries on the ownership row the listing renders.
+        # answer carries on the ownership row the listing renders: the
+        # counts come from the nested request_counts object.
         status = body.get("status") if isinstance(body, dict) else None
         self.status_updates.append((upstream_id, status))
         row = self.owned.get(("batch", upstream_id))
         if row is not None and isinstance(body, dict):
             if isinstance(status, str):
                 row["status"] = status
-            for field in ("output_file_id", "error_file_id", "total_requests", "completed_requests", "failed_requests"):
+            for field in ("output_file_id", "error_file_id"):
                 if body.get(field) is not None:
                     row[field] = body[field]
+            counts = body.get("request_counts")
+            if isinstance(counts, dict):
+                for column, field in (
+                    ("total_requests", "total"),
+                    ("completed_requests", "completed"),
+                    ("failed_requests", "failed"),
+                ):
+                    value = counts.get(field)
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        row[column] = value
 
     def delete_batch_object(self, batch_object_id):
         self.deleted.append(batch_object_id)
@@ -740,7 +751,7 @@ def _patch_env(monkeypatch, db, upstream, auth=None):
         seen.append(request)
         return upstream(request)
 
-    monkeypatch.setattr(batch_api, "authenticate_api_key", lambda headers: auth or _auth())
+    monkeypatch.setattr(batch_api, "authenticate_batch_api_key", lambda headers: auth or _auth())
     monkeypatch.setattr(batch_api, "DBManager", lambda: db)
     monkeypatch.setattr(batch_api, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     return seen
@@ -1015,9 +1026,8 @@ def test_a_provider_batch_listing_carries_what_the_last_poll_saw(monkeypatch):
                 "status": "completed",
                 "output_file_id": "file-out",
                 "error_file_id": "file-err",
-                "total_requests": 2,
-                "completed_requests": 1,
-                "failed_requests": 1,
+                # The shape the provider reports progress in.
+                "request_counts": {"total": 2, "completed": 1, "failed": 1},
             },
         ),
     )
@@ -1267,7 +1277,7 @@ def test_an_unauthenticated_request_never_reaches_the_upstream(monkeypatch):
     def reject(headers):
         raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
 
-    monkeypatch.setattr(batch_api, "authenticate_api_key", reject)
+    monkeypatch.setattr(batch_api, "authenticate_batch_api_key", reject)
 
     resp = client.post("/v1/batches", json={"input_file_id": "file-own"})
 
@@ -2507,6 +2517,92 @@ def test_a_lease_lost_mid_chunk_cancels_the_lines_and_writes_nothing(monkeypatch
             {
                 "id": 2005,
                 "upstream_id": "batch_m",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+        )
+    )
+
+    assert result is None
+    assert executed == []  # the lines were cancelled before they finished
+    assert "checkpoints" not in stored
+    assert "finish" not in stored
+    assert "content" not in stored
+
+
+def test_a_heartbeat_that_fails_cancels_the_lines_and_writes_nothing(monkeypatch):
+    # The heartbeat fails closed, not just on a lost lease but when the check
+    # itself cannot run: a runner that cannot confirm its lease cannot keep
+    # it, so it cancels the in-flight lines and stops — the batch resumes
+    # from its checkpoint under whoever claims it next, and this one
+    # checkpoints nothing and finalizes nothing.
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_LEASE_TTL_S", 0.6)  # heartbeat every 0.2 s
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        await asyncio.sleep(0.5)  # longer than the heartbeat interval
+        executed.append(1)
+        return {"status_code": 200, "data": {}}
+
+    stored = {}
+
+    class _HeartbeatFailsDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a"), _local_line("b"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            # The write before the chunk still runs; the heartbeat mid-chunk
+            # hits a database that is gone. Counted in the closure: every
+            # ``with DBManager()`` opens a fresh instance.
+            stored["progress_calls"] = stored.get("progress_calls", 0) + 1
+            if stored["progress_calls"] == 1:
+                return False
+            raise RuntimeError("the ledger connection dropped")
+
+        def save_local_batch_lines(self, object_id, runner_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            return {"log-id": 700}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
+            stored["finish"] = kwargs
+            return True
+
+    monkeypatch.setattr(batch_local, "DBManager", _HeartbeatFailsDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    result = asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2006,
+                "upstream_id": "batch_hb",
                 "input_file_id": "file-in",
                 "api_key_id": 11,
                 "team_id": OWN_TEAM,

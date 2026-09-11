@@ -2668,9 +2668,11 @@ class DBManager:
 
         The listing is served from this record, not from the provider, so the
         fields it cannot render — the result file a terminal answer names and
-        the running request counts — must be stored with the status.
-        ``COALESCE`` keeps what an earlier poll stored when a later answer
-        omits a field.
+        the running request counts — must be stored with the status. The
+        counts travel under the nested ``request_counts`` object the provider
+        reports progress in (the older flat fields are accepted as a
+        fallback). ``COALESCE`` keeps what an earlier poll stored when a
+        later answer omits a field.
         """
         if not isinstance(body, dict):
             return
@@ -2679,11 +2681,20 @@ class DBManager:
             value = body.get(field)
             return value if isinstance(value, str) and value else None
 
-        def _count(field: str) -> Optional[int]:
-            value = body.get(field)
+        def _count(source: Dict[str, Any], field: str) -> Optional[int]:
+            value = source.get(field)
             if isinstance(value, bool) or not isinstance(value, int):
                 return None
             return max(value, 0)
+
+        counts = body.get("request_counts")
+        if not isinstance(counts, dict):
+            # The older Batch API shape reports the same three numbers flat.
+            counts = {
+                "total": body.get("total_requests"),
+                "completed": body.get("completed_requests"),
+                "failed": body.get("failed_requests"),
+            }
 
         status = body.get("status")
         if not isinstance(status, str):
@@ -2707,9 +2718,9 @@ class DBManager:
                 "status": status,
                 "output_file_id": _text("output_file_id"),
                 "error_file_id": _text("error_file_id"),
-                "total_requests": _count("total_requests"),
-                "completed_requests": _count("completed_requests"),
-                "failed_requests": _count("failed_requests"),
+                "total_requests": _count(counts, "total"),
+                "completed_requests": _count(counts, "completed"),
+                "failed_requests": _count(counts, "failed"),
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         )

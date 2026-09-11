@@ -83,18 +83,7 @@ def _resolve_batch_credential(credential: str) -> Optional[Dict[str, Any]]:
         return db.get_api_key_by_id(api_key_id)
 
 
-def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
-    logos_key = _resolve_logos_key(headers)
-    with DBManager() as db:
-        row = db.get_api_key_by_value(logos_key)
-    if row is None:
-        # A key value that is not a key value: try the scoped credential the
-        # batch proxy exchanges for the key (the raw value never reaches the
-        # Batch API over the internal hop).
-        row = _resolve_batch_credential(logos_key)
-    if row is None:
-        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
-
+def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
     k_type = row["key_type"]
     if hasattr(k_type, "value"):
         k_type = k_type.value
@@ -116,3 +105,33 @@ def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
         # can fall back to the policy-level priority.
         default_priority=row.get("default_priority") or 0,
     )
+
+
+def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
+    logos_key = _resolve_logos_key(headers)
+    with DBManager() as db:
+        row = db.get_api_key_by_value(logos_key)
+    if row is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+    return _auth_context_from_key_row(row)
+
+
+def authenticate_batch_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
+    """Auth for the Batch API, which also takes the scoped credential.
+
+    The credential resolves to the key's own row here and nowhere else: it is
+    a batch-only bearer (the webservice exchanges it for the key instead of
+    sending the raw value over the internal hop), and the global key auth
+    must keep refusing it, or it would open ordinary inference — and, for an
+    admin-owned key, the role-gated routes — for its whole TTL.
+    """
+    logos_key = _resolve_logos_key(headers)
+    with DBManager() as db:
+        row = db.get_api_key_by_value(logos_key)
+    if row is None:
+        # A key value that is not a key value: try the scoped credential the
+        # batch proxy exchanged for the key.
+        row = _resolve_batch_credential(logos_key)
+    if row is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+    return _auth_context_from_key_row(row)

@@ -44,7 +44,7 @@ import httpx
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from logos.auth import AuthContext, authenticate_api_key
+from logos.auth import AuthContext, authenticate_batch_api_key
 from logos.batch_local import local_batch_object, local_file_object, new_object_id, parse_request_lines, run_local_batch
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.billing.budget import check_monthly_budget
@@ -1445,7 +1445,9 @@ async def handle_batch_api_request(request: Request) -> Response:
         raise_openai_error(404, f"No Batch API route at {request.url.path!r}", code="unknown_batch_route")
 
     headers = dict(request.headers)
-    auth = authenticate_api_key(headers)
+    # The Batch API — and only it — resolves the scoped credential; every
+    # other route authenticates with key values alone.
+    auth = authenticate_batch_api_key(headers)
 
     request_id = secrets.token_urlsafe(16)
     log_id: Optional[int] = None

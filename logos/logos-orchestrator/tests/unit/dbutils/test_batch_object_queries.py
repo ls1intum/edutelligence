@@ -453,9 +453,8 @@ def test_a_provider_answer_syncs_the_fields_the_listing_cannot_render():
             "status": "completed",
             "output_file_id": "file-out",
             "error_file_id": "file-err",
-            "total_requests": 2,
-            "completed_requests": 1,
-            "failed_requests": 1,
+            # The shape the provider reports progress in: a nested object.
+            "request_counts": {"total": 2, "completed": 1, "failed": 1},
         },
     )
 
@@ -481,9 +480,17 @@ def test_a_provider_answer_without_the_fields_binds_nulls_not_empty_values():
     assert params["failed_requests"] is None
 
 
+def test_the_older_flat_count_fields_are_accepted_as_a_fallback():
+    db = _db()
+    db.record_batch_provider_state("batch_1", {"total_requests": 2, "completed_requests": 1, "failed_requests": 1})
+
+    params = _params_of(db.session.execute.call_args)
+    assert (params["total_requests"], params["completed_requests"], params["failed_requests"]) == (2, 1, 1)
+
+
 def test_a_non_numeric_provider_count_is_not_bound_as_a_count():
     db = _db()
-    db.record_batch_provider_state("batch_1", {"total_requests": "a lot", "completed_requests": True})
+    db.record_batch_provider_state("batch_1", {"request_counts": {"total": "a lot", "completed": True}})
 
     params = _params_of(db.session.execute.call_args)
     assert params["total_requests"] is None

@@ -149,9 +149,20 @@ def test_a_scoped_batch_credential_resolves_to_the_keys_own_row(monkeypatch):
     # the pipeline as the key.
     fake, credential = _patch_credential_db(monkeypatch, _api_key_row("lg-secret-value"))
 
-    ctx = auth.authenticate_api_key({"logos_key": credential})
+    ctx = auth.authenticate_batch_api_key({"logos_key": credential})
 
     assert fake.seen_by_id == 5
+    assert ctx.key_value == "lg-secret-value"
+    assert ctx.api_key_id == 5
+
+
+def test_the_batch_path_still_accepts_the_plain_key_value(monkeypatch):
+    # Scripts call the Batch API with the key itself; the credential is an
+    # addition for the internal proxy, not a replacement.
+    _patch_db(monkeypatch, _api_key_row("lg-secret-value"))
+
+    ctx = auth.authenticate_batch_api_key({"logos_key": "lg-secret-value"})
+
     assert ctx.key_value == "lg-secret-value"
     assert ctx.api_key_id == 5
 
@@ -163,13 +174,28 @@ def test_a_dead_or_tampered_credential_is_a_401_like_any_bad_key(monkeypatch):
     # row lookup is what kills it, at presentation time.
     fake.row = None
     with pytest.raises(HTTPException) as exc:
-        auth.authenticate_api_key({"logos_key": credential})
+        auth.authenticate_batch_api_key({"logos_key": credential})
     assert exc.value.status_code == 401
 
     # A credential no one here signed: it never reaches the key lookup.
     fake.row = _api_key_row("lg-secret-value")
     fake.seen_by_id = None
     with pytest.raises(HTTPException) as exc:
-        auth.authenticate_api_key({"logos_key": credential + "x"})
+        auth.authenticate_batch_api_key({"logos_key": credential + "x"})
     assert exc.value.status_code == 401
+    assert fake.seen_by_id is None
+
+
+def test_the_global_key_auth_refuses_a_batch_credential(monkeypatch):
+    # The credential is a batch-only bearer: every other route authenticates
+    # with key values alone, so it must 401 there — otherwise it would open
+    # ordinary inference (and, for an admin-owned key, the role-gated routes)
+    # for its whole TTL.
+    fake, credential = _patch_credential_db(monkeypatch, _api_key_row("lg-secret-value"))
+
+    with pytest.raises(HTTPException) as exc:
+        auth.authenticate_api_key({"logos_key": credential})
+
+    assert exc.value.status_code == 401
+    # It is not even resolved: the global path does not know about it.
     assert fake.seen_by_id is None
