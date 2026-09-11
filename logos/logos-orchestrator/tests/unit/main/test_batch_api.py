@@ -930,6 +930,37 @@ def test_a_key_that_lost_the_provider_cannot_run_its_file_at_the_provider(monkey
     assert seen == []
 
 
+def test_a_model_available_only_on_another_provider_does_not_authorise_the_stored_one(monkeypatch):
+    # The link on the stored provider was removed; the same model is still
+    # permitted through a second provider. That does not authorise spending
+    # the stored provider's shared credential on a model its link no longer
+    # serves — the re-check is scoped to the provider the file lives on.
+    second_provider = {
+        **OPENAI_PROVIDER,
+        "id": 9,
+        "name": "openai-two",
+        "base_url": "https://api.second.example.com/v1",
+        "api_key": "sk-second",
+    }
+    second_deployment = {**OPENAI_DEPLOYMENTS[0], "provider_id": 9}
+    db = _FakeDB(
+        [OPENAI_PROVIDER, second_provider],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+        key_permissions={11: {"providers": [OPENAI_PROVIDER, second_provider], "deployments": [second_deployment]}},
+    )
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "batch_1"}))
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "model_not_permitted"
+    assert seen == []
+
+
 def test_a_key_over_budget_cannot_start_a_batch(monkeypatch):
     db = _FakeDB(
         [OPENAI_PROVIDER],
@@ -2223,6 +2254,55 @@ def test_a_local_batch_line_must_be_a_post(monkeypatch):
     upload = client.post(
         "/v1/files",
         files={"file": ("batch.jsonl", _jsonl(get_line), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    assert upload.status_code == 200
+    file_id = upload.json()["id"]
+
+    created = client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "invalid_batch_line"
+    assert db.local_batches == {}
+
+
+def test_a_local_batch_requires_an_explicit_endpoint(monkeypatch):
+    # The endpoint is what the batch object advertises; a default would let a
+    # file's lines run under an endpoint nobody asked for.
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_local_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    file_id = upload.json()["id"]
+
+    created = client.post("/v1/batches", json={"input_file_id": file_id, "completion_window": "24h"})
+
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "invalid_request_error"
+    assert db.local_batches == {}
+
+
+def test_a_local_batch_line_requires_an_explicit_method(monkeypatch):
+    # The runner would treat an unmarked line as a POST; the contract says so
+    # explicitly instead, so a line without a method is refused.
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+
+    line = {
+        "custom_id": "one",
+        "url": "/v1/chat/completions",
+        "body": {"model": "qwen3-32b", "messages": [{"role": "user", "content": "hi"}]},
+    }
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(line), "application/jsonl")},
         data={"purpose": "batch"},
     )
     assert upload.status_code == 200

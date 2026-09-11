@@ -1344,7 +1344,9 @@ def _assert_still_permitted(
     uploading key after its links were revoked — would run the file's
     previously authorised models through the shared provider credential. Both
     halves are therefore asked again at creation: the provider the file lives
-    on, and every model the file row recorded.
+    on, and every model the file row recorded *on that provider* — a model the
+    key may still run through a different permitted provider does not authorise
+    spending this one's credential on a link the stored provider no longer has.
     """
     candidates = db.get_batch_provider_candidates(auth.api_key_id)
     if not any(int(row["id"]) == int(provider["id"]) for row in candidates):
@@ -1353,7 +1355,10 @@ def _assert_still_permitted(
             f"This key may no longer use provider {provider.get('name')!r}, which holds this file.",
             code="batch_provider_not_authorized",
         )
-    permitted = {str(row["model_name"]).lower() for row in db.get_batch_model_deployments(auth.api_key_id)}
+    permitted = {
+        str(row["model_name"]).lower()
+        for row in db.get_batch_model_deployments(auth.api_key_id, provider_id=int(provider["id"]))
+    }
     missing = sorted(str(name) for name in (input_file.get("models") or []) if str(name).lower() not in permitted)
     if missing:
         raise_openai_error(
@@ -1374,7 +1379,9 @@ def _local_batch_contract(content: bytes, json_body: Dict[str, Any]) -> str:
     the lines' own urls while the batch object advertises the endpoint it was
     created with. Returns the endpoint to store on the batch.
     """
-    endpoint = str(json_body.get("endpoint") or "/v1/chat/completions")
+    endpoint = json_body.get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint:
+        raise_openai_error(400, "A batch needs an 'endpoint'.", code="invalid_request_error")
     wanted = _request_endpoint(endpoint)
     if wanted not in _BATCH_REQUEST_ENDPOINTS:
         raise_openai_error(
@@ -1388,7 +1395,13 @@ def _local_batch_contract(content: bytes, json_body: Dict[str, Any]) -> str:
 
     for number, line in enumerate(parse_request_lines(content), start=1):
         method = line.get("method")
-        if method is not None and str(method).upper() != "POST":
+        if method is None:
+            raise_openai_error(
+                400,
+                f"Line {number} has no 'method'; batch lines are POST requests.",
+                code="invalid_batch_line",
+            )
+        if str(method).upper() != "POST":
             raise_openai_error(
                 400,
                 f"Line {number} uses method {method!r}; batch lines are POST requests.",

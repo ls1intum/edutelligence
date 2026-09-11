@@ -7,10 +7,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
@@ -41,13 +43,16 @@ public class ProviderService {
     private final ProviderRepository providerRepository;
     private final ModelProviderRepository modelProviderRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final JdbcTemplate jdbc;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
-                           OrchestratorNotificationService orchestratorNotificationService) {
+                           OrchestratorNotificationService orchestratorNotificationService,
+                           JdbcTemplate jdbc) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.jdbc = jdbc;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
@@ -128,6 +133,20 @@ public class ProviderService {
     public Map<String, Object> deleteProvider(Integer providerId) {
         if (!providerRepository.existsById(providerId)) {
             throw new IllegalArgumentException("Provider not found: " + providerId);
+        }
+        // Deleting the provider cascades its batch_objects rows away. For a
+        // batch that still runs upstream — or finished there without its
+        // usage being booked yet — that would leave the job unreachable and
+        // its spend unbillable, so the deletion waits for it. Settled
+        // records are safe to cascade: the job is terminal and metered.
+        Long unsettled = jdbc.queryForObject(
+            "SELECT count(*) FROM batch_objects WHERE kind = 'batch' AND provider_id = ? AND settled_at IS NULL",
+            Long.class, providerId);
+        if (unsettled != null && unsettled > 0) {
+            throw new ConflictException(
+                "Provider " + providerId + " still has " + unsettled
+                    + " batch(es) running or not yet settled; they must finish and be metered "
+                    + "before the provider can be deleted.");
         }
         providerRepository.deleteById(providerId);
         orchestratorNotificationService.notifyRefresh(false);

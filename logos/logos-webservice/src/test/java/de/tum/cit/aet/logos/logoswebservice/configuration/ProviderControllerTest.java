@@ -3,6 +3,7 @@ package de.tum.cit.aet.logos.logoswebservice.configuration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -38,6 +39,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 class ProviderControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
     // Mocked so the price refresh triggered by connect_model_provider does not
     // reach the live litellm catalog during tests.
@@ -154,6 +156,47 @@ class ProviderControllerTest {
                 .content("{\"provider_id\":6001}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").value("Deleted Provider."));
+    }
+
+    @Test
+    void deleteProvider_refusedWhileABatchStillRunsOrOwesItsSettlement() throws Exception {
+        // The upstream job outlives the providers table: cascading the
+        // ownership row away would make it unreachable and its spend
+        // unbillable, so the deletion is refused until it is settled.
+        jdbc.update(
+            "INSERT INTO batch_objects (kind, upstream_id, provider_id, team_id, execution, status, created_at, updated_at) "
+                + "VALUES ('batch', 'batch_delete_guard', 6001, 2001, 'provider', 'in_progress', now(), now())");
+        try {
+            mvc.perform(post("/logosdb/delete_provider")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"provider_id\":6001}"))
+               .andExpect(status().isConflict())
+               .andExpect(jsonPath("$.detail").value(containsString("not yet settled")));
+        } finally {
+            jdbc.update("DELETE FROM batch_objects WHERE upstream_id = 'batch_delete_guard'");
+        }
+    }
+
+    @Test
+    void deleteProvider_allowedOnceTheBatchesAreSettled() throws Exception {
+        // A terminal, metered batch is safe to cascade away with the
+        // provider: nothing runs on it any more and its spend is booked.
+        jdbc.update(
+            "INSERT INTO batch_objects (kind, upstream_id, provider_id, team_id, execution, status, settled_at, created_at, updated_at) "
+                + "VALUES ('batch', 'batch_delete_settled', 6001, 2001, 'provider', 'completed', now(), now(), now())");
+        try {
+            mvc.perform(post("/logosdb/delete_provider")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"provider_id\":6001}"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.result").value("Deleted Provider."));
+        } finally {
+            // The cascade removed the settled row with the provider, so this
+            // only covers a failed run where the provider still exists.
+            jdbc.update("DELETE FROM batch_objects WHERE upstream_id = 'batch_delete_settled'");
+        }
     }
 
     @Test
