@@ -1468,7 +1468,12 @@ def _reserve_and_admit_calibration_copy(
     pass (e.g. unresponsive lanes stretching the pass past its wait)
     leaves the floor stale — both admission checks fail open against a
     zero floor — so the copy is never admitted in that case and this
-    calibration falls back to the source HF_HOME instead of aborting.
+    calibration falls back to the source HF_HOME. When the target was
+    ALREADY cached before the call, the failed pass says nothing about
+    the resident tree, so that fallback is subject to the same
+    confirmed-safety requirement as the rejection fallback below: the
+    probe proceeds from source only once the entry is gone or the host
+    is at/above a just-established floor, and aborts otherwise.
     """
     if not cache_use_reserved[0]:
         model_cache.reserve_cache_use(model)
@@ -1490,10 +1495,7 @@ def _reserve_and_admit_calibration_copy(
         if not _floor_ok:
             # Stale/unknown floor: admit NOTHING. This run reads the
             # source HF_HOME (no tmpfs bytes), so the provisional
-            # copy-only reservation is released again. Nothing was
-            # admitted and no rejection happened, so there is no
-            # resident tree to reconcile — the probe may proceed from
-            # source.
+            # copy-only reservation is released again.
             model_cache.release_cache_use(model)
             cache_use_reserved[0] = False
             logger.warning(
@@ -1502,6 +1504,17 @@ def _reserve_and_admit_calibration_copy(
                 "source for the rest of this calibration",
                 model,
             )
+            if model_cache.is_cached(model):
+                # The target was cached BEFORE this call: the failed pass
+                # either never ran or ran while this reservation protected
+                # the entry, so it says nothing about the resident tree.
+                # The same confirmed-safety requirement as the rejection
+                # fallback applies — the probe may proceed from source
+                # only once the entry is gone or the host is at/above a
+                # just-established floor.
+                _blocked = _reconcile_ram_cache_after_source_fallback(model_cache, establish_host_ram_floor, model)
+                if _blocked is not None:
+                    return None, _blocked
             return None, None
     hf_home = model_cache.ensure_cached_sync(model) or None
     if hf_home:

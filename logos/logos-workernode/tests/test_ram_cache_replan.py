@@ -2399,6 +2399,56 @@ def test_source_fallback_blocks_the_probe_when_another_reference_keeps_the_entry
     assert cache_use_reserved[0] is False
 
 
+def test_failed_first_escalation_blocks_the_probe_for_a_preexisting_cached_entry(monkeypatch) -> None:
+    """Regression: when the INITIAL floor escalation fails, the target may
+    already have been cached before this call. The failed pass either never
+    ran or ran while this reservation protected the entry, so it says
+    nothing about the resident tree — releasing the reservation and
+    proceeding from source would stack a disk load onto a host the
+    below-floor resident tree is already pushing under the floor. The
+    confirmed-safety reconciliation/abort of the rejection fallback must
+    apply here too whenever the entry remains cached after the release.
+
+    (The not-pre-cached case — the usual first calibration — has nothing
+    to reconcile and still proceeds from source: see
+    test_calibration_copy_admission_is_blocked_when_the_floor_escalation_fails.)
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(20_000.0))
+    cache = _FakeCache(
+        cached=["org/probe"],
+        sizes={"org/probe": _mb(48_000)},
+        host_available_mb=20_000.0,
+    )
+    # A previous tick established the floor; the 20 GB host is below it
+    # with the 48 GB entry resident.
+    cache.set_host_ram_floor_mb(worker_main._host_ram_safety_margin_mb(512_000.0))
+    cache_use_reserved = [False]
+    calls = 0
+
+    def broken_escalation() -> bool:
+        nonlocal calls
+        calls += 1
+        # The re-plan pass times out every time (unresponsive lanes).
+        return False
+
+    hf, blocked = calibration._reserve_and_admit_calibration_copy(
+        cache,
+        "org/probe",
+        cache_use_reserved=cache_use_reserved,
+        establish_host_ram_floor=broken_escalation,
+    )
+
+    # Blocked: the pre-existing below-floor entry is still resident and
+    # neither escalation pass could confirm its removal or headroom — so
+    # the source probe does not start.
+    assert hf is None
+    assert blocked is not None
+    assert cache.is_cached("org/probe") is True
+    assert calls == 2
+    assert cache_use_reserved[0] is False
+    assert "org/probe" not in cache.cache_use_reservations()
+
+
 def test_replan_reconciles_again_when_a_late_reservation_releases_mid_pass(monkeypatch) -> None:
     """The reconciliation snapshot can itself go stale: a late reservation
     that released BEFORE the corrective reclaim leaves its oversized entry
