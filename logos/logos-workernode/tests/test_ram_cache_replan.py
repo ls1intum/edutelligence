@@ -1506,6 +1506,44 @@ def test_replan_recaches_when_ram_frees_up(monkeypatch) -> None:
     assert cache.recache_calls == [["org/big"]]
 
 
+def test_replan_does_not_recache_a_synchronous_calibration_copy_spanning_the_hold_down(monkeypatch) -> None:
+    """Regression [high]: a synchronous calibration copy that outlives the
+    re-cache hold-down must not be re-queued by a periodic pass.
+
+    While calibration sits inside ensure_cached_sync(), the model is neither
+    cached nor in the background queue — its cache-use reservation is the
+    only mark of the in-flight copy. Before the reservation joined the
+    re-cache busy set, a pass after the 180 s hold-down queued it anyway;
+    the async worker holds no per-model lock the sync path takes, and both
+    copy implementations rmtree and rename the same <model>.partial tree,
+    so the second writer would delete the first copy's in-flight tree
+    (torn cache).
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(300_000.0))
+
+    # No lanes, no capabilities: the in-flight copy's reservation is the
+    # model's only representation — it enters the plan as an unsleepable
+    # resident, the zero-lane / all-uncalibrated worker shape.
+    sizes = {"org/probe": _mb(48_000)}
+    cache = _FakeCache(sizes=sizes)
+    cache.reserve_cache_use("org/probe")
+    lanes = _FakeLaneManager({})
+    app = _app(cache, _FakeRegistry({}), lanes, [])
+    # The hold-down deadline was first stamped long ago (back-dated): the
+    # copy started before this pass, and the stamp is never moved.
+    hold = worker_main.RAM_CACHE_RECACHE_HOLD_SECONDS
+    app.state.ram_cache_in_plan_since["org/probe"] = time.monotonic() - hold - 1.0
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    # The copy is admitted by the plan (its bytes are charged, the floor
+    # holds its share), yet the pass must not queue a second writer for the
+    # same partial tree.
+    assert cache.is_cached("org/probe") is False
+    assert cache.reclaimed[-1] == []
+    assert cache.recache_calls == []
+
+
 def test_replan_never_evicts_a_model_a_live_lane_reads(monkeypatch) -> None:
     """The live lane's entry survives whatever the budget says — and its
     bytes are charged against the budget: the protected 48 GB big against

@@ -1034,7 +1034,8 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     #    on the FIRST admitting pass and never moved again, so the reactive
     #    add/sleep/restart re-plans that also run this function cannot
     #    accelerate the deadline into an immediate re-copy;
-    #  * no re-queue of what the worker already owns (queued or in flight) —
+    #  * no re-queue of what a writer already owns (background queue, the
+    #    background worker, or an in-flight synchronous calibration copy) —
     #    the enqueue would be a no-op, but the log line would not.
     in_plan_since: dict[str, float] = app.state.ram_cache_in_plan_since
     order = set(plan.order)
@@ -1043,7 +1044,14 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
         in_plan_since.setdefault(m, now)
     for m in [m for m in in_plan_since if m not in order]:
         del in_plan_since[m]
-    busy = model_cache.pending_or_caching()
+    # A synchronous calibration copy is neither cached nor in the background
+    # queue while it runs — only its cache-use reservation marks it. Without
+    # that reservation in the busy set, a copy that outlives the re-cache
+    # hold-down is re-queued below: the async worker holds no per-model lock
+    # the sync path takes, and both copy implementations rmtree and rename
+    # the same <model>.partial tree, so the second writer would delete the
+    # first copy's in-flight tree and publish a torn cache.
+    busy = model_cache.pending_or_caching() | model_cache.cache_use_reservations()
     recache = [
         m
         for m in plan.order
