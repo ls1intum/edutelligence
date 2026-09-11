@@ -1016,7 +1016,11 @@ async def reconcile_batches_once() -> int:
             db.update_batch_object_status(str(owner["upstream_id"]), status)
         if status in TERMINAL_BATCH_STATES:
             if status == "failed":
-                _learn_batch_ineligibility(provider, owner.get("input_file_id"), _provider_error_text(body))
+                # The unsettled-batches query does not carry the input file id,
+                # so take it from the provider's answer, as settlement does —
+                # otherwise a failure nobody polled could never teach.
+                input_file_id = body.get("input_file_id") or owner.get("input_file_id")
+                _learn_batch_ineligibility(provider, input_file_id, _provider_error_text(body))
             settled += await settle_batch(provider, owner, body)
     return settled
 

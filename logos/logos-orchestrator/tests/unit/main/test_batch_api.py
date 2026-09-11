@@ -1340,6 +1340,67 @@ async def test_the_reconciler_settles_a_batch_nobody_polled(monkeypatch):
     assert ("status", "batch_1", "completed") in settling.rows
 
 
+@pytest.mark.asyncio
+async def test_a_failed_batch_nobody_polled_teaches_the_next_file_to_run_in_logos(monkeypatch):
+    # A batch the client never polls is the reconciler's to find, and its
+    # failure must teach the routing there as well as on the client's own
+    # poll: the unsettled-batches query does not carry the input file id, so
+    # the learning takes it from the provider's answer.
+    class _ReconcileDB(_FakeDB):
+        def get_unsettled_batches(self, limit=50):
+            # Shaped as the query selects it: no input_file_id.
+            return [
+                {
+                    "id": 77,
+                    "upstream_id": "batch_1",
+                    "provider_id": 7,
+                    "api_key_id": 11,
+                    "team_id": OWN_TEAM,
+                    "user_id": 13,
+                    "status": "in_progress",
+                }
+            ]
+
+    db = _ReconcileDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-in"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+    )
+    monkeypatch.setattr(batch_api, "DBManager", lambda: db)
+
+    def upstream(request):
+        if request.url.path.endswith("/batches/batch_1"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "batch_1",
+                    "status": "failed",
+                    "input_file_id": "file-in",
+                    "error": {"message": "The model 'gpt-4.1' is not supported on the batch SKU."},
+                },
+            )
+        return httpx.Response(404, json={"error": "no such object"})
+
+    monkeypatch.setattr(batch_api, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
+
+    await reconcile_batches_once()
+
+    # The failure named the model, so only that model is recorded — and the
+    # record is what the next upload reads.
+    assert [record[:2] for record in db.eligibility_records] == [(7, 25)]
+
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "file-abc"}))
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    assert upload.status_code == 200
+    assert upload.json()["logos_execution"] == "logos"
+    # The learned routing kept the file out of the provider entirely.
+    assert seen == []
+
+
 def test_a_dated_model_name_falls_back_to_the_configured_model():
     index = {"gpt-4.1": 25, "gpt-41": 25, "gpt-4.1-mini": 24}
     assert batch_api._model_id_for(index, "gpt-4.1-2025-04-14") == 25
