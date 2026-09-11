@@ -1855,6 +1855,73 @@ class CapacityPlanner:
         """
         self.__dict__.get("_lane_action_failure", {}).pop(self._lane_key(provider_id, lane_id), None)
 
+    def manual_load_admission_rejection(self, provider_id: int, model_name: str) -> Optional[str]:
+        """Why a manual load must not be admitted now, or None if it may run.
+
+        The claim, not just the check, is what makes this atomic on the event
+        loop: the endpoint asks before it answers 202, and the marker it sets
+        when it answers None is what a second click for the same model meets —
+        a 409 the operator reads now, instead of a 202 whose background task
+        no-ops minutes later. ``load_lane_manually`` releases the marker when
+        the attempt settles, so a retry after a finished attempt is admitted
+        again.
+
+        A same-model load the planner is already bringing up is refused the
+        same way: the operator's click is redundant while it is minutes from
+        serving, and answering 202 for it would leave the operator's poll
+        waiting on an outcome the planner's run owns.
+        """
+        store = self.__dict__.setdefault("_manual_load_admission", {})
+        if (provider_id, model_name) in store:
+            return "A load of this model is already in flight on this worker"
+        if any(model.lower() == model_name.lower() for model in self._inflight_load_models(provider_id).values()):
+            return "A load of this model is already in flight on this worker"
+        store[(provider_id, model_name)] = True
+        return None
+
+    def _release_manual_load_admission(self, provider_id: int, model_name: str) -> None:
+        """Give up the admission marker when an attempt settles.
+
+        The marker blocks every other admission of the same model while it
+        lasts, so exactly one attempt runs per marker — a blind pop cannot
+        drop a newer attempt's marker. A release without an admission (a
+        direct call) is a no-op.
+        """
+        self.__dict__.get("_manual_load_admission", {}).pop((provider_id, model_name), None)
+
+    def _settle_manual_load_outcome(self, provider_id: int, model_name: str, lane_id: str, confirmed: bool) -> None:
+        """Publish the terminal state of a manual load whose outcome rides on
+        this lane.
+
+        The manual path records "running" before dispatch — against its own
+        lane, or against the lane of a same-model load already in flight when
+        the operator's click was a no-op (see ``_load_lane_manually``). The
+        entry belongs to the lane it names, so this only settles it when that
+        lane's outcome is in: a load of the same model on another lane must
+        not close it (the planner's failure must not pre-empt the operator's
+        own load, which may still be waiting for the lane lock). Only
+        lane-named entries are touched — the endpoint's lane-less "running"
+        placeholder is replaced with the attempt's own lane before dispatch —
+        and only "running" ones, so the manual path and the executor (which
+        settles every load outcome, planner's included) may both call this:
+        the second is a no-op.
+        """
+        entry = self.get_manual_load_outcome(provider_id, model_name)
+        if entry is None or entry.get("status") != "running":
+            return
+        if entry.get("lane_id") != lane_id:
+            return
+        if confirmed:
+            self.record_manual_load_outcome(provider_id, model_name, "succeeded", lane_id=lane_id)
+            return
+        # The executor recorded a human-readable reason for every failure mode
+        # it knows; fall back to a generic one if this one did not (a new
+        # branch that forgot it).
+        reason = self.get_lane_action_failure(provider_id, lane_id)
+        if reason is None:
+            reason = "the load was not confirmed by the worker"
+        self.record_manual_load_outcome(provider_id, model_name, "failed", lane_id=lane_id, reason=reason)
+
     def _reconcile_load_failures(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
         """Keep the load-failure state in step with the lanes a worker reports.
 
@@ -6538,6 +6605,17 @@ class CapacityPlanner:
         return None
 
     async def load_lane_manually(self, provider_id: int, model_name: str) -> bool:
+        """The endpoint-facing wrapper: releases the admission marker when the
+        attempt settles, whatever its outcome, so a retry is admitted again.
+        The marker is what a second click for the same model meets while this
+        runs (see manual_load_admission_rejection).
+        """
+        try:
+            return await self._load_lane_manually(provider_id, model_name)
+        finally:
+            self._release_manual_load_admission(provider_id, model_name)
+
+    async def _load_lane_manually(self, provider_id: int, model_name: str) -> bool:
         """Operator-initiated load ("Load lane" in the statistics UI).
 
         Runs on the planner's own execution path rather than dispatching
@@ -6602,21 +6680,31 @@ class CapacityPlanner:
             self.record_manual_load_outcome(provider_id, model_name, "failed", reason=rejection)
             return False
 
-        # A load of this model already in flight on this worker: a second
-        # click, or the planner deciding the same model while the first copy
-        # is still minutes from serving. Its lane is not in the report yet,
-        # so the pick below would hand out the next free suffix and place a
-        # second copy of the very model the operator is already waiting for.
-        if any(model.lower() == model_name.lower() for model in self._inflight_load_models(provider_id).values()):
-            # Deliberately no outcome record: the in-flight load (this click's
-            # first copy, or a planner one) owns the entry and will write the
-            # final state. Overwriting "running" with a no-op here would make
-            # the UI drop its waiting note while the load is still going.
+        # A load of this model already in flight on this worker. The
+        # endpoint's admission check answers this case 409 before any task
+        # exists, so what reaches this backstop is the planner starting the
+        # same model between the admission and now. Its lane is not in the
+        # report yet, so the pick below would hand out the next free suffix
+        # and place a second copy of the very model the operator is already
+        # waiting for.
+        in_flight = self._inflight_load_models(provider_id)
+        same_model_lane = next(
+            (lane_id for lane_id, model in in_flight.items() if model.lower() == model_name.lower()), None
+        )
+        if same_model_lane is not None:
+            # Ride the in-flight load's lane: it owns the outcome, and the
+            # executor settles the "running" entry for whatever load of this
+            # model that lane is bringing up — a planner failure included,
+            # which otherwise never reached the operator's poll. Re-asserting
+            # the entry over an identical one (a manual first copy) changes
+            # nothing the UI sees; over a stale terminal it restarts the
+            # waiting note the new click belongs to.
             logger.info(
                 "Manual load of %s on worker=%s is a no-op: a load of the model is already in flight",
                 model_name,
                 provider_id,
             )
+            self.record_manual_load_outcome(provider_id, model_name, "running", lane_id=same_model_lane)
             return False
 
         excluded: set[str] = set()
@@ -6709,18 +6797,12 @@ class CapacityPlanner:
                     confirmed = await self._execute_action_with_confirmation(
                         action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
                     )
-                    if confirmed:
-                        self.record_manual_load_outcome(provider_id, model_name, "succeeded", lane_id=lane_id)
-                    else:
-                        # The executor recorded a human-readable reason for
-                        # every failure mode it knows; fall back to a generic
-                        # one if this one did not (a new branch that forgot it).
-                        reason = self.get_lane_action_failure(provider_id, lane_id)
-                        if reason is None:
-                            reason = "the load was not confirmed by the worker"
-                        self.record_manual_load_outcome(
-                            provider_id, model_name, "failed", lane_id=lane_id, reason=reason
-                        )
+                    # The executor's wrapper already settled the outcome for a
+                    # real run; this call is what settles it when the executor
+                    # was stood in for (the tests) and keeps the manual path
+                    # self-contained. Idempotent: settled entries are not
+                    # "running" anymore.
+                    self._settle_manual_load_outcome(provider_id, model_name, lane_id, confirmed)
                     return confirmed
             logger.warning(
                 "Manual load of %s on worker=%s: no free lane id after re-reading the runtime",
@@ -8025,7 +8107,20 @@ class CapacityPlanner:
         """Execute action and wait for worker status to confirm expected state.
 
         Returns True if confirmed, False if timeout.
+
+        Every load outcome — a manual one, a planned one, a cold load —
+        passes through this point, so this is also where a manual outcome
+        riding on the lane (see _settle_manual_load_outcome) learns its
+        terminal state: a failure of a planner-owned load of the model must
+        reach the operator's poll as well.
         """
+        confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds)
+        if action.action == "load":
+            self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, confirmed)
+        return confirmed
+
+    async def _execute_action_core(self, action: CapacityPlanAction, timeout_seconds: float = 60.0) -> bool:
+        """The executor proper; see _execute_action_with_confirmation."""
         logger.info(
             "Executing capacity action: %s on lane %s (model=%s, worker=%s) — %s",
             action.action,
@@ -8319,6 +8414,14 @@ class CapacityPlanner:
                         action.lane_id,
                     )
                     self._release_load_lane_id(action.provider_id, action.lane_id)
+                    # A load skipped because its lane already exists is a load
+                    # that already happened: for a manual outcome riding on
+                    # this lane, the operator's goal is met — the same reading
+                    # the manual path's own lane-exists no-op applies.
+                    if (self._runtime_lane_model(action.provider_id, action.lane_id) or "").lower() == (
+                        action.model_name or ""
+                    ).lower():
+                        self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, True)
                     return False
                 # Estimate VRAM and atomically reserve
                 _estimated_load_vram = self._estimate_action_vram(action, _profile, _capacity) if _capacity else 0.0

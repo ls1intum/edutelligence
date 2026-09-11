@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from logos.capacity.capacity_planner import CapacityPlanner
+from logos.sdi.models import CapacityPlanAction
 
 # logos/__init__ aliases itself to logos.main, which breaks the plain
 # `import logos.capacity...` attribute chain; the module object comes from
@@ -267,9 +268,10 @@ def test_lane_already_present_records_success_without_dispatch():
 
 
 def test_second_click_does_not_overwrite_the_inflight_outcome():
-    """While the first load is in flight, a second click is a no-op — and must
-    not stomp the "running" entry it waits on: overwriting it with a no-op
-    would make the UI drop its note while the load is still going."""
+    """While the first load is in flight, a second attempt is a no-op — it
+    re-asserts the "running" entry on the in-flight lane, which must come out
+    identical to the one it waits on: a different status or lane would make
+    the UI drop (or mis-attribute) its note while the load is still going."""
     planner = _planner()
     # A live claim of the first replica (owner None counts as live).
     planner._inflight_load_lane_ids = {1: {"planner-org_model-a": ("org/model-a", None)}}
@@ -296,3 +298,165 @@ def test_lane_exists_no_op_does_not_overwrite_a_running_entry():
 
     outcome = planner.get_manual_load_outcome(1, "org/model-a")
     assert outcome["status"] == "running"
+
+
+# ── admission: atomic before the 202 ─────────────────────────────────────
+
+
+def test_admission_is_atomic_a_second_click_meets_the_marker():
+    planner = _planner()
+
+    assert planner.manual_load_admission_rejection(1, "org/model-a") is None
+    # A different model is unaffected by the claim.
+    assert planner.manual_load_admission_rejection(1, "org/model-b") is None
+    # The second click for the same model is refused while the first is
+    # admitted — a 409 the operator reads, not a 202 whose task no-ops later.
+    assert planner.manual_load_admission_rejection(1, "org/model-a") == (
+        "A load of this model is already in flight on this worker"
+    )
+
+
+def test_admission_refuses_a_planner_inflight_load_of_the_same_model():
+    """A load the planner is already bringing up owns the operator's waiting
+    time: answering 202 would start a poll with no manual attempt behind it."""
+    planner = _planner()
+    # A live claim of the second replica by the planner's demand path.
+    planner._inflight_load_lane_ids = {1: {"planner-org_model-a-2": ("org/model-a", None)}}
+
+    assert planner.manual_load_admission_rejection(1, "org/model-a") == (
+        "A load of this model is already in flight on this worker"
+    )
+    assert planner.manual_load_admission_rejection(1, "org/model-b") is None
+
+
+def test_a_settled_attempt_releases_its_admission():
+    planner = _planner()
+    planner._build_load_params = MagicMock(return_value={})
+
+    async def execute(action, timeout_seconds=None):
+        return True
+
+    planner._execute_action_with_confirmation = execute
+
+    assert planner.manual_load_admission_rejection(1, "org/model-a") is None
+    assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is True
+
+    # The attempt is over — a retry is admitted again.
+    assert planner.manual_load_admission_rejection(1, "org/model-a") is None
+
+
+# ── the planner-owned failure ────────────────────────────────────────────
+
+
+def test_a_planner_owned_inflight_failure_reaches_the_manual_outcome():
+    """The reported hole: the click is admitted, then the planner starts the
+    same model; the background task no-ops into the planner's load. When that
+    load fails, the executor's settlement must turn the manual outcome
+    terminal — otherwise the operator's poll waits on a failure only the
+    planner's log knows about, until the poll's cap.
+    """
+    planner = _planner()
+    planner._build_load_params = MagicMock(return_value={})
+
+    # The click is admitted while nothing is in flight ...
+    assert planner.manual_load_admission_rejection(1, "org/model-a") is None
+    # ... and the planner starts the same model in the meantime.
+    planner._inflight_load_lane_ids = {1: {"planner-org_model-a-2": ("org/model-a", None)}}
+
+    # The background task meets it: a no-op riding the planner's lane.
+    assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "running"
+    assert outcome["lane_id"] == "planner-org_model-a-2"
+
+    # The planner's load fails; its executor run settles the entry.
+    reason = "not enough free VRAM for this model: it needs ~48.4 GB in total."
+    planner.record_lane_action_failure(1, "planner-org_model-a-2", reason)
+    planner._settle_manual_load_outcome(1, "org/model-a", "planner-org_model-a-2", False)
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == reason
+    assert outcome["lane_id"] == "planner-org_model-a-2"
+
+
+def _load_action(lane_id: str = "planner-org_model-a") -> CapacityPlanAction:
+    return CapacityPlanAction(
+        action="load",
+        provider_id=1,
+        lane_id=lane_id,
+        model_name="org/model-a",
+        reason="planner demand",
+    )
+
+
+def test_the_executor_settles_a_manual_outcome_riding_on_its_lane():
+    """The wrapper around the executor is what publishes the terminal state —
+    for a planner-owned load, nothing else ever calls the settlement."""
+    planner = _planner()
+    planner.record_manual_load_outcome(1, "org/model-a", "running", lane_id="planner-org_model-a")
+    reason = "the worker rejected the load: no feasible GPU subset"
+
+    async def core(action, timeout_seconds=60.0):
+        planner.record_lane_action_failure(action.provider_id, action.lane_id, reason)
+        return False
+
+    planner._execute_action_core = core
+    assert asyncio.run(planner._execute_action_with_confirmation(_load_action())) is False
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "failed"
+    assert outcome["reason"] == reason
+
+
+def test_the_executor_settles_a_confirmed_load_as_success():
+    planner = _planner()
+    planner.record_manual_load_outcome(1, "org/model-a", "running", lane_id="planner-org_model-a")
+
+    async def core(action, timeout_seconds=60.0):
+        return True
+
+    planner._execute_action_core = core
+    assert asyncio.run(planner._execute_action_with_confirmation(_load_action())) is True
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "succeeded"
+    assert outcome["lane_id"] == "planner-org_model-a"
+
+
+def test_a_load_of_the_same_model_on_another_lane_does_not_settle():
+    """The operator's own load may still be waiting for the lane lock while a
+    planner copy fails elsewhere: the outcome belongs to its own lane, and
+    the other one must not pre-empt it."""
+    planner = _planner()
+    planner.record_manual_load_outcome(1, "org/model-a", "running", lane_id="planner-org_model-a")
+
+    async def core(action, timeout_seconds=60.0):
+        return False
+
+    planner._execute_action_core = core
+    asyncio.run(planner._execute_action_with_confirmation(_load_action("planner-org_model-a-2")))
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "running"
+    assert outcome["lane_id"] == "planner-org_model-a"
+
+
+def test_the_lane_less_endpoint_placeholder_is_not_settled_by_any_load():
+    """The endpoint records "running" before the attempt knows its lane. That
+    placeholder is replaced with the attempt's own lane before dispatch, so a
+    load finishing in between must not settle it: the attempt may still be
+    on its way to its executor."""
+    planner = _planner()
+    planner.record_manual_load_outcome(1, "org/model-a", "running")
+
+    async def core(action, timeout_seconds=60.0):
+        return False
+
+    planner._execute_action_core = core
+    asyncio.run(planner._execute_action_with_confirmation(_load_action()))
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "running"
+    assert "lane_id" not in outcome

@@ -706,6 +706,17 @@ async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Req
     if rejection is not None:
         raise HTTPException(status_code=409, detail=rejection)
 
+    # Admit before answering 202: the check-and-claim is atomic on the event
+    # loop, so a second click for the same model — or a load the planner is
+    # already bringing up — meets the marker now and gets a 409 the operator
+    # reads, instead of a 202 whose background task no-ops later and whose
+    # outcome the operator's poll would have to wait on. A refused click must
+    # not touch the recorded outcome either: it would reset a previous
+    # attempt's terminal state with no task left to settle it.
+    admission_rejection = _main._capacity_planner.manual_load_admission_rejection(data.provider_id, model)
+    if admission_rejection is not None:
+        raise HTTPException(status_code=409, detail=admission_rejection)
+
     # Record "running" BEFORE answering, not only once the background task
     # gets to it: the UI starts polling load_status as soon as it sees the 202,
     # and a gap between the two would let it read the previous attempt's

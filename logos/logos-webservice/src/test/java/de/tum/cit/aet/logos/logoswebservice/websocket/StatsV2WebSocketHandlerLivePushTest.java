@@ -168,6 +168,27 @@ class StatsV2WebSocketHandlerLivePushTest {
     }
 
     @Test
+    void a_stale_day_with_a_fresh_generation_is_not_a_current_window() {
+        // The interleaving the generation guard must survive: the delta reads
+        // the day before set_vram_day runs, the generation after it — the old
+        // day paired with the change's fresh generation. That snapshot must
+        // not pass the current-window check, whatever the query fetched for
+        // it; with the generation read first, it is the only pairing the
+        // capture order cannot produce.
+        StatsV2WebSocketHandler.SessionState state = new StatsV2WebSocketHandler.SessionState();
+        // The window has moved to day2 at generation 2.
+        state.vramDay = "2026-09-02";
+        state.vramCursor = 200;
+        state.vramDayGeneration = 2;
+
+        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(2, "2026-09-01", state)).isFalse();
+        // A coherent snapshot of the window the state is in still passes.
+        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(2, "2026-09-02", state)).isTrue();
+        // And the fully stale snapshot of the moved-out window does not.
+        assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(1, "2026-09-01", state)).isFalse();
+    }
+
+    @Test
     void a_live_update_reaches_the_viewer_as_a_requests_push() throws Exception {
         connectAndInit();
 

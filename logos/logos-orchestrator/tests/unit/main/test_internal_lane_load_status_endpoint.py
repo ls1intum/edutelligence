@@ -119,6 +119,7 @@ async def test_add_lane_records_running_before_answering(monkeypatch):
     monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     planner = MagicMock()
     planner.manual_load_rejection_reason.return_value = None
+    planner.manual_load_admission_rejection.return_value = None
 
     async def _load(provider_id: int, model_name: str) -> bool:
         return True
@@ -133,6 +134,9 @@ async def test_add_lane_records_running_before_answering(monkeypatch):
         _make_request("Bearer correct-secret"),
     )
 
+    # Admitted before the "running" record: a refused click must not reset a
+    # previous attempt's terminal state with no task left to settle it.
+    planner.manual_load_admission_rejection.assert_called_once_with(7, "org/model-a")
     # Recorded synchronously, before the 202 goes out — not by the task.
     planner.record_manual_load_outcome.assert_called_once_with(7, "org/model-a", "running")
     planner.load_lane_manually.assert_called_once_with(7, "org/model-a")
