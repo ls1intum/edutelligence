@@ -103,7 +103,9 @@ fi
 # than letting the installer bootstrap it — that bootstrap is a curl|sh of
 # bytes we do not verify.
 command -v uv >/dev/null 2>&1 || die "uv not found — install it first (brew install uv), then re-run."
-command -v python3 >/dev/null 2>&1 || die "python3 not found — needed to verify and patch the installer and to create the worker venv (brew install python@3.12)."
+# Any python3 will do for the patch step below (it only rewrites text); the
+# worker venv has a real version floor and picks its own interpreter later.
+command -v python3 >/dev/null 2>&1 || die "python3 not found — needed to verify and patch the installer (brew install python@3.13)."
 
 log "Install root:      $INSTALL_ROOT"
 log "vllm-metal venv:   $METAL_VENV"
@@ -241,17 +243,68 @@ print(f"  {info.get('device_name')} — {budget:.1f} GiB GPU budget, "
 PYCHECK
 
 # ── 2. Worker virtualenv ─────────────────────────────────────────────────────
+# The floor is 3.12: the worker's own dependencies are fine further back, but
+# pydantic v2 evaluates `bool | None` annotations at import, which needs 3.10+,
+# and 3.12 is what the rest of this installer is built around.
+WORKER_PYTHON_MIN_MINOR=12
+
+# Print the minor version of a CPython 3.x interpreter, or nothing if it is not
+# a usable python3 at all.
+python_minor() {
+    "$1" -c 'import sys; print(sys.version_info[1] if sys.version_info[0] == 3 else "")' 2>/dev/null
+}
+
 WORKER_VENV="$INSTALL_ROOT/.venv"
 PYTHON_BIN="${LOGOS_PYTHON:-}"
-if [ -z "$PYTHON_BIN" ]; then
-    for candidate in python3.12 python3.13 python3; do
-        if command -v "$candidate" >/dev/null 2>&1; then PYTHON_BIN="$(command -v "$candidate")"; break; fi
+if [ -n "$PYTHON_BIN" ]; then
+    # An explicit LOGOS_PYTHON is honoured but still checked — a stale value is
+    # exactly as fatal as a bad auto-pick, and much more surprising.
+    minor="$(python_minor "$PYTHON_BIN")"
+    [ -n "$minor" ] || die "LOGOS_PYTHON=$PYTHON_BIN is not a usable python3."
+    [ "$minor" -ge "$WORKER_PYTHON_MIN_MINOR" ] || die \
+        "LOGOS_PYTHON=$PYTHON_BIN is Python 3.$minor; this worker needs 3.$WORKER_PYTHON_MIN_MINOR or newer."
+else
+    # Newest first. macOS always has /usr/bin/python3 (Command Line Tools,
+    # 3.9), and Homebrew only symlinks a bare `python3` for its current default
+    # formula — so a machine with just `brew install python@3.14` has no
+    # `python3` of its own and the bare name resolves to Apple's 3.9. Picking
+    # it silently is what produced a venv that failed much later, at import
+    # time, with an unrelated-looking pydantic error. Hence: every candidate is
+    # version-checked, and there is no unchecked fallback.
+    for candidate in python3.14 python3.13 python3.12 python3; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        resolved="$(command -v "$candidate")"
+        minor="$(python_minor "$resolved")"
+        [ -n "$minor" ] && [ "$minor" -ge "$WORKER_PYTHON_MIN_MINOR" ] || continue
+        PYTHON_BIN="$resolved"
+        break
     done
 fi
-[ -n "$PYTHON_BIN" ] || die "No python3 found. Install one (e.g. brew install python@3.12)."
+[ -n "$PYTHON_BIN" ] || die "No Python 3.$WORKER_PYTHON_MIN_MINOR+ found.
+macOS ships only Python 3.9 (/usr/bin/python3), which cannot run this worker.
+Install a supported one and re-run:
 
-log "Worker venv:       $WORKER_VENV  (from $PYTHON_BIN)"
-"$PYTHON_BIN" -m venv "$WORKER_VENV" 2>/dev/null || true
+  brew install python@3.13
+
+Homebrew creates a versioned 'python3.13' binary; this installer finds it on
+PATH. Use LOGOS_PYTHON=/path/to/python3.13 to point at a specific interpreter."
+
+log "Worker venv:       $WORKER_VENV  (from $PYTHON_BIN, Python 3.$(python_minor "$PYTHON_BIN"))"
+
+# `python -m venv` on an existing directory does NOT replace bin/python when it
+# already exists — it only adds the version-suffixed name. A venv first created
+# with 3.9 therefore keeps launching 3.9 after a re-run with a newer
+# interpreter, while pyvenv.cfg claims the new version. Recreate instead of
+# patching over it whenever the interpreter on disk is not the one we want.
+if [ -x "$WORKER_VENV/bin/python" ]; then
+    have="$(python_minor "$WORKER_VENV/bin/python")"
+    want="$(python_minor "$PYTHON_BIN")"
+    if [ "$have" != "$want" ]; then
+        log "  existing venv runs Python 3.${have:-?}, rebuilding it for 3.$want"
+        rm -rf "$WORKER_VENV"
+    fi
+fi
+"$PYTHON_BIN" -m venv "$WORKER_VENV"
 "$WORKER_VENV/bin/python" -m pip install --quiet --upgrade pip
 "$WORKER_VENV/bin/python" -m pip install --quiet -r "$INSTALL_ROOT/requirements.txt"
 

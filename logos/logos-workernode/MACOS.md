@@ -51,14 +51,22 @@ CI (GitHub Actions)                    Mac (native)
 |---|---|
 | macOS | 15 (Sequoia) or later |
 | CPU | Apple Silicon (arm64) — Rosetta Python cannot load MLX |
-| Python | 3.12+, native arm64 |
-| Docker | only to fetch and unpack the artifact |
+| Python | 3.12 or newer — **installed by the bootstrap** |
+| Homebrew, git, uv | **installed by the bootstrap** |
+| Docker | not needed |
 | vllm-metal | ≥ 0.29.0 — Qwen3.8 needs ≥ 0.28.0, embedders need 0.29.0 |
 | RAM | see the sizing table below |
+
+macOS ships Python 3.9, which cannot run this worker (pydantic v2 evaluates
+`bool | None` annotations at import, which needs 3.10+). The bootstrap installs
+a supported interpreter itself and the installer refuses anything older, rather
+than building a venv that fails later with an unrelated-looking import error.
 
 ---
 
 ## Install
+
+On a freshly installed Mac this is the only step:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/ls1intum/edutelligence/main/logos/logos-workernode/scripts/bootstrap-macos.sh
@@ -66,9 +74,28 @@ chmod +x bootstrap-macos.sh
 ./bootstrap-macos.sh
 ```
 
-This pulls the image, extracts it to `~/logos-workernode-mlx`, installs
-vllm-metal into `~/.venv-vllm-metal`, and registers the launchd agent. It is
-idempotent — re-run it to deploy a new version.
+It installs its own prerequisites (Homebrew, git, uv, `python@3.13` — each
+skipped when already present), fetches the distribution image, extracts it to
+`~/logos-workernode-mlx`, installs vllm-metal into `~/.venv-vllm-metal`,
+registers the launchd agent, and disables sleep so the machine keeps serving
+with the lid closed. Expect two password prompts: Homebrew and `pmset` both
+need `sudo`.
+
+It is idempotent — **re-running it is also the upgrade path**. Operator state
+(`config.yml`, `.env`, `data/`, `logs/`, `cache/`) is preserved; only code and
+runtime are replaced.
+
+| Flag | Effect |
+|---|---|
+| `--no-deps` | Skip the Homebrew/git/uv/python step, for machines whose toolchain is managed by Ansible or MDM |
+| `--no-power-settings` | Leave sleep behaviour alone |
+| `<image-ref>` | Install a specific tag instead of `:latest`, e.g. a PR build |
+
+**No container runtime is involved.** The image is never started — Metal does
+not exist inside containers — so the bootstrap pulls it straight from the
+registry over HTTPS with an anonymous token and untars the `payload/` directory
+out of its layers. That keeps Docker Desktop, a GUI application with a licence
+dialog on first launch, off a machine meant to run headless.
 
 The chat templates packaged with the image are merged into
 `~/logos-workernode-mlx/chat-templates` (where the agent points
@@ -76,6 +103,24 @@ The chat templates packaged with the image are merged into
 copied in, files you added or edited yourself are never overwritten. A
 template referenced in `config.yml` therefore works out of the box after the
 first bootstrap — no hand-seeding.
+
+### Register the node
+
+The worker needs a provider entry in Logos before it can connect. Create it in
+the Logos UI (*Providers → add*, type `logosnode`) and copy the worker key it
+returns.
+
+The privacy level is not a formality — pick it by where the machine physically
+stands and who can touch it:
+
+| Level | When |
+|---|---|
+| `LOCAL` | Your own datacentre or server room |
+| `THIRD_PARTY_HARDWARE` | Someone else's Mac, e.g. a personal laptop |
+
+A Metal lane is a **native process on that machine**, so whoever operates it
+can attach a debugger or read its logs. `LOCAL` in the router's privacy
+ordering means "our datacentre", not "not a cloud" — see *Privacy* below.
 
 Then fill in credentials and start:
 
@@ -202,13 +247,60 @@ launchctl bootout "gui/$(id -u)/de.tum.logos.workernode"        # stop
 
 The worker is a **LaunchAgent**, not a LaunchDaemon. Daemons run outside a login
 session and do not reliably get GPU access, which would quietly demote every
-lane to the CPU. On an unattended machine, enable auto-login (System Settings →
-Users & Groups → Automatic login) and keep the session alive:
+lane to the CPU. The tradeoff: the account has to be logged in for the agent to
+run at all.
+
+On an unattended machine enable auto-login (System Settings → Users & Groups →
+Automatic login). **With FileVault enabled, auto-login is unavailable** — the
+disk unlock *is* the login — so after every reboot someone has to unlock the
+machine physically before the node comes back. Two ways out:
+
+- Turn FileVault off. Reasonable for a machine in a locked server room, a
+  deliberate decision anywhere else.
+- Keep FileVault and use `sudo fdesetup authrestart` for planned reboots: it
+  unlocks the next boot once, so a remote restart does not strand the node.
+  It does not help after a power cut.
+
+### Sleep must stay off
+
+A MacBook idles into sleep within minutes and takes the node offline with it;
+closing the lid does it immediately. `bootstrap-macos.sh` configures this
+already — verify with `pmset -g | grep SleepDisabled` (must print `1`). To set
+it by hand:
 
 ```bash
-sudo pmset -a disablesleep 1
-caffeinate -dimsu &
+sudo pmset -a disablesleep 1     # covers the closed lid, which the timers below do not
+sudo pmset -c sleep 0 displaysleep 0 disksleep 0 standby 0 autopoweroff 0 powernap 0
 ```
+
+`disablesleep` is the load-bearing one: the per-source timers only govern idle
+sleep, not the lid switch.
+
+---
+
+## Uninstall
+
+```bash
+~/logos-workernode-mlx/scripts/uninstall-macos.sh
+```
+
+Prints what it is about to delete and asks before doing it. Removes the launchd
+agent, the install root (including `config.yml`, `.env` and the model cache),
+the vllm-metal venv and the pulled image, then restores the sleep defaults so a
+decommissioned laptop does not sit awake until the battery is flat.
+
+| Flag | Effect |
+|---|---|
+| `--keep-cache` | Preserve `<install root>/cache` — 15 GB per 8B model that would otherwise be re-downloaded |
+| `--keep-power-settings` | Leave sleep disabled |
+| `--yes` | No confirmation prompt |
+
+It deliberately leaves `~/.cache/huggingface`, Homebrew, uv and Python alone:
+the worker keeps its models under the install root, so anything in a shared
+cache belongs to someone else's work.
+
+The provider entry in Logos is server-side state — remove it in the UI too, or
+it lingers as a permanently disconnected node.
 
 ---
 
@@ -470,21 +562,40 @@ That is why `MetalVllmProcessHandle` builds its own command line instead of
 filtering the CUDA one, and why `tests/test_metal_process.py` cross-checks the
 generated flags against the *installed* vllm-metal whenever the suite runs on a
 Mac. `logos_update-vllm.yml` only touches `Dockerfile`, not `Dockerfile.mlx`,
-so automated vLLM bumps do not reach this path.
+so automated vLLM bumps do not reach this path — `logos_update-vllm-metal.yml`
+is the one that does (below).
 
 Keep vllm-metal current. It moves fast and dev builds are published daily —
 but upstream prunes old dev releases, so the pin is the **stable** cut:
 v0.29.0 is the current stable release; the *Sizing* measurements were
 taken on v0.28.0, which it supersedes. Qwen3.8 support landed in 08/2026,
-and 0.2.0 could not serve it at all; embedding models need 0.29.0. To upgrade,
-pick the stable release to move to, download its `install.sh`, its
-`scripts/lib.sh`, its release wheel, and the vLLM core wheel it names (the
-tag in `.github/vllm-release-tag.commit` at that release), compute the four
-SHA256s, and update `VLLM_METAL_REF` **and all four checksums** together in
-`install-macos.sh` (bump `VLLM_METAL_MIN_VERSION` if the new floor applies),
-re-check the four patch patterns against the new installer, and re-run the
-script — it is idempotent. Do not pipe a fetched installer into bash:
-verify the checksum first, as the installer now does for itself.
+and 0.2.0 could not serve it at all; embedding models need 0.29.0.
+
+**The bump is automated.** `.github/workflows/logos_update-vllm-metal.yml`
+runs daily (and on demand, with an optional version input): it picks the newest
+stable vllm-metal release, downloads its `install.sh`, its `scripts/lib.sh`,
+its release wheel and the vLLM core wheel it names, recomputes all four
+SHA256s, re-verifies that the four exact-string patch patterns still match
+exactly once each, updates `VLLM_METAL_REF`, the wheel names and URLs and
+`VLLM_METAL_MIN_VERSION` together, and opens a PR. If a patch pattern no
+longer matches, it fails loudly instead of opening a PR that would produce a
+half-patched installer — that case needs a human.
+
+To do it by hand, the same steps apply: download those four artifacts from the
+target tag, compute the SHA256s, update `VLLM_METAL_REF` **and all checksums**
+together in `install-macos.sh`, bump `VLLM_METAL_MIN_VERSION` if the new floor
+applies, re-check the patch patterns, and re-run the script — it is idempotent.
+Do not pipe a fetched installer into bash: verify the checksum first, as the
+installer now does for itself.
+
+Note that `install.sh` and `scripts/lib.sh` are frequently byte-identical
+across tags (they were between v0.28.0 and v0.29.0), so two of the four
+checksums often do not change. Confirm that by recomputing them — never assume
+it.
+
+Upgrading a node that is already deployed is just a re-run of
+`bootstrap-macos.sh`: it fetches the current image, replaces the code and the
+runtime, and leaves `config.yml`, `.env`, `data/`, `logs/` and `cache/` alone.
 
 Two things to re-check after an upgrade, both of which changed between 0.2.0
 and 0.3.0.dev: the `VLLM_METAL_*` names in `MetalConfig`

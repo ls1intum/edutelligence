@@ -1,0 +1,298 @@
+name: Logos - Update vllm-metal
+
+# The Mac (MLX) worker's counterpart to "Logos - Update vLLM". That workflow
+# bumps a single pip pin in the CUDA Dockerfile; this one has to move a whole
+# pinned artifact set in logos-workernode/scripts/install-macos.sh: the release
+# tag, both wheel names, both wheel URLs, three sha256 values and the version
+# floor. It also re-verifies the four exact-string patch patterns that script
+# applies to upstream's installer — if upstream reworded one of those lines, a
+# bumped pin would produce a half-patched installer, which is precisely what
+# the fail-loud patching exists to prevent. That case needs a human, so the
+# workflow fails instead of opening a PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      vllm-metal-version:
+        type: string
+        description: "vllm-metal version to pin (e.g. v0.29.0). Leave empty for the latest stable release."
+        default: ""
+  schedule:
+    # Daily rather than hourly: unlike the PyPI check this run downloads two
+    # wheels (~30 MB) to checksum them, and vllm-metal cuts stable releases far
+    # less often than vLLM publishes to PyPI.
+    - cron: "41 4 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-vllm-metal:
+    runs-on: ubuntu-latest
+    env:
+      INSTALLER: logos/logos-workernode/scripts/install-macos.sh
+      MACOS_DOC: logos/logos-workernode/MACOS.md
+      UPSTREAM: vllm-project/vllm-metal
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Same rationale as logos_update-vllm.yml: use the PAT when
+          # configured so the push and PR are attributed to a real user and CI
+          # triggers on the auto-created PR.
+          token: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+
+      - name: Determine target version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.vllm-metal-version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_VERSION" ]; then
+            RAW="$INPUT_VERSION"
+          else
+            # Stable only. Upstream publishes dev builds daily and prunes them
+            # later, so a dev pin rots into a 404 — exclude prereleases and
+            # drafts, and require a plain vX.Y.Z tag.
+            RAW=$(gh release list --repo "$UPSTREAM" --limit 30 \
+                    --json tagName,isPrerelease,isDraft \
+                  | jq -r '[.[] | select(.isPrerelease == false and .isDraft == false)
+                              | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
+                           | .[0].tagName // ""')
+          fi
+          if [ -z "$RAW" ]; then
+            echo "::error::Could not determine a stable vllm-metal release"
+            exit 1
+          fi
+          TAG="${RAW#v}"; TAG="v$TAG"          # normalize to a leading single "v"
+          VERSION="${TAG#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$RAW' is not a stable vllm-metal version (expected vX.Y.Z)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch=logos/vllm-metal-$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Target vllm-metal: $TAG"
+
+      - name: Check whether an update is needed
+        id: check
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(sed -nE 's/^VLLM_METAL_REF="(v[0-9][0-9a-z.]*)"$/\1/p' "$INSTALLER")
+          if [ -z "$CURRENT" ]; then
+            echo "::error::Could not read VLLM_METAL_REF from $INSTALLER"
+            exit 1
+          fi
+          echo "Current pin: $CURRENT"
+          if [ "$CURRENT" = "$TAG" ]; then
+            echo "Already pinned to $TAG — nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "Branch $BRANCH already exists — update PR is already open/pending."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch and checksum the pinned artifacts
+        id: artifacts
+        if: steps.check.outputs.needed == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+
+          METAL_WHEEL="vllm_metal-${VERSION}-cp312-cp312-macosx_15_0_arm64.whl"
+          curl -fsSL "https://raw.githubusercontent.com/${UPSTREAM}/${TAG}/install.sh"       -o "$work/install.sh"
+          curl -fsSL "https://raw.githubusercontent.com/${UPSTREAM}/${TAG}/scripts/lib.sh"   -o "$work/lib.sh"
+          curl -fsSL "https://github.com/${UPSTREAM}/releases/download/${TAG}/${METAL_WHEEL}" -o "$work/$METAL_WHEEL"
+
+          # The vLLM core wheel version is not always equal to the vllm-metal
+          # version. Upstream's installer derives it from a release lookup; the
+          # release notes name it, and .github/vllm-release-tag.commit records
+          # it at the tag. Try that file first, fall back to the vllm-metal
+          # version (they have matched so far, e.g. 0.29.0 <-> 0.29.0).
+          VLLM_TAG=$(curl -fsSL "https://raw.githubusercontent.com/${UPSTREAM}/${TAG}/.github/vllm-release-tag.commit" 2>/dev/null | tr -d ' \n\r' || true)
+          case "$VLLM_TAG" in
+            v[0-9]*) : ;;
+            *) VLLM_TAG="v$VERSION" ;;
+          esac
+          VLLM_VERSION="${VLLM_TAG#v}"
+          CORE_WHEEL="vllm-${VLLM_VERSION}+cpu-cp312-cp312-macosx_11_0_arm64.whl"
+          CORE_URL="https://github.com/vllm-project/vllm/releases/download/${VLLM_TAG}/vllm-${VLLM_VERSION}%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl"
+          if ! curl -fsSL "$CORE_URL" -o "$work/$CORE_WHEEL"; then
+            echo "::error::Could not download the vLLM core wheel for $VLLM_TAG ($CORE_URL). Upstream may have changed how the core wheel is named or which release it comes from."
+            exit 1
+          fi
+
+          {
+            echo "installer_sha=$(sha256sum "$work/install.sh"        | cut -d' ' -f1)"
+            echo "lib_sha=$(sha256sum       "$work/lib.sh"            | cut -d' ' -f1)"
+            echo "metal_wheel=$METAL_WHEEL"
+            echo "metal_sha=$(sha256sum     "$work/$METAL_WHEEL"      | cut -d' ' -f1)"
+            echo "core_wheel=$CORE_WHEEL"
+            echo "core_url=$CORE_URL"
+            echo "core_sha=$(sha256sum      "$work/$CORE_WHEEL"       | cut -d' ' -f1)"
+            echo "vllm_version=$VLLM_VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "installer_path=$work/install.sh" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the patch patterns still match
+        if: steps.check.outputs.needed == 'true'
+        env:
+          INSTALLER_PATH: ${{ steps.artifacts.outputs.installer_path }}
+        run: |
+          set -euo pipefail
+          # install-macos.sh rewrites four exact statements in upstream's
+          # installer to consume the locally verified artifacts. Each must
+          # occur exactly once; the installer aborts otherwise. Checking here
+          # means a reworded upstream line surfaces as a failed workflow run
+          # with a diff to look at, not as a broken install on someone's Mac.
+          python3 - "$INSTALLER_PATH" "$INSTALLER" <<'PY'
+          import re, sys
+
+          upstream = open(sys.argv[1], encoding="utf-8").read()
+          ours = open(sys.argv[2], encoding="utf-8").read()
+
+          # Pull the patterns out of install-macos.sh itself rather than
+          # duplicating them here — two copies would drift.
+          patterns = re.findall(r"^pin\(\n\s*('''|\"\"\"|')(.*?)\1,", ours, re.S | re.M)
+          literals = [p[1] for p in patterns]
+          if len(literals) != 4:
+              sys.exit(f"expected 4 patch patterns in install-macos.sh, found {len(literals)}")
+
+          bad = False
+          for lit in literals:
+              count = upstream.count(lit)
+              head = lit.strip().splitlines()[0][:80]
+              print(f"  {count}x  {head}")
+              if count != 1:
+                  bad = True
+          if bad:
+              sys.exit(
+                  "\nAt least one patch pattern no longer matches exactly once against "
+                  "upstream's installer.\nUpstream reworded a line install-macos.sh "
+                  "rewrites; bump the pin by hand and update the patterns together."
+              )
+          print("\nAll four patch patterns match exactly once.")
+          PY
+
+      - name: Update the pins
+        if: steps.check.outputs.needed == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          A_INSTALLER_SHA: ${{ steps.artifacts.outputs.installer_sha }}
+          A_LIB_SHA: ${{ steps.artifacts.outputs.lib_sha }}
+          A_METAL_WHEEL: ${{ steps.artifacts.outputs.metal_wheel }}
+          A_METAL_SHA: ${{ steps.artifacts.outputs.metal_sha }}
+          A_CORE_WHEEL: ${{ steps.artifacts.outputs.core_wheel }}
+          A_CORE_URL: ${{ steps.artifacts.outputs.core_url }}
+          A_CORE_SHA: ${{ steps.artifacts.outputs.core_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, sys
+
+          path = os.environ["INSTALLER"]
+          src = open(path, encoding="utf-8").read()
+
+          subs = [
+              (r'^VLLM_METAL_REF=".*"$',              f'VLLM_METAL_REF="{os.environ["TAG"]}"'),
+              (r'^VLLM_METAL_INSTALLER_SHA256=".*"$', f'VLLM_METAL_INSTALLER_SHA256="{os.environ["A_INSTALLER_SHA"]}"'),
+              (r'^VLLM_METAL_LIB_SHA256=".*"$',       f'VLLM_METAL_LIB_SHA256="{os.environ["A_LIB_SHA"]}"'),
+              (r'^VLLM_METAL_WHEEL_NAME=".*"$',       f'VLLM_METAL_WHEEL_NAME="{os.environ["A_METAL_WHEEL"]}"'),
+              (r'^VLLM_METAL_WHEEL_SHA256=".*"$',     f'VLLM_METAL_WHEEL_SHA256="{os.environ["A_METAL_SHA"]}"'),
+              (r'^VLLM_CORE_WHEEL_NAME=".*"$',        f'VLLM_CORE_WHEEL_NAME="{os.environ["A_CORE_WHEEL"]}"'),
+              (r'^VLLM_CORE_WHEEL_URL=".*"$',         f'VLLM_CORE_WHEEL_URL="{os.environ["A_CORE_URL"]}"'),
+              (r'^VLLM_CORE_WHEEL_SHA256=".*"$',      f'VLLM_CORE_WHEEL_SHA256="{os.environ["A_CORE_SHA"]}"'),
+              (r'^VLLM_METAL_MIN_VERSION=".*"$',      f'VLLM_METAL_MIN_VERSION="{os.environ["VERSION"]}"'),
+          ]
+          for pattern, replacement in subs:
+              src, n = re.subn(pattern, replacement, src, count=1, flags=re.M)
+              if n != 1:
+                  sys.exit(f"::error::Could not update {pattern!r} in {path}")
+
+          open(path, "w", encoding="utf-8").write(src)
+          print(f"Updated 9 pins in {path}")
+          PY
+          git diff -- "$INSTALLER"
+
+      - name: Create branch, commit and pull request
+        id: pr
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          VLLM_VERSION: ${{ steps.artifacts.outputs.vllm_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$INSTALLER"
+          git commit -m "\`Logos\`: Update vllm-metal to $TAG"
+          git push -u origin "$BRANCH"
+          PR_URL=$(gh pr create \
+            --title "\`Logos\`: Update vllm-metal to $TAG" \
+            --body "## Motivation
+
+          Keep the Apple Silicon worker's inference stack current: bump the pinned vllm-metal release to [$TAG](https://github.com/vllm-project/vllm-metal/releases/tag/$TAG), which vendors vLLM $VLLM_VERSION.
+
+          ## Description
+
+          Updates the pinned artifact set in \`$INSTALLER\` — release tag, both wheel names and URLs, all three SHA256 values and \`VLLM_METAL_MIN_VERSION\`. Every checksum was recomputed from the artifacts actually downloaded at that tag; identical values are possible (upstream's \`install.sh\` and \`scripts/lib.sh\` are frequently byte-identical across tags) and were verified, not assumed.
+
+          The four exact-string patch patterns \`install-macos.sh\` applies to upstream's installer were re-checked against the new release and each still matches exactly once — that check is what keeps a reworded upstream line from producing a half-patched installer.
+
+          ## Review notes
+
+          Not covered automatically, worth a look at the release notes:
+
+          - **\`VLLM_METAL_*\` environment names** — \`MetalConfig\` builds its lane environment from these, and they have been renamed before.
+          - **Emitted vLLM flags** — \`tests/test_metal_process.py\` cross-checks them against the installed vllm-metal, but only when the suite runs on a Mac.
+          - **Deployed nodes are not updated by this PR.** Re-run \`bootstrap-macos.sh\` on each Mac worker after it merges; the version floor asserts the new minimum on every run.
+
+          ---
+          *This PR was created automatically by the \`Logos - Update vllm-metal\` workflow.*")
+          echo "Created $PR_URL"
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Close superseded update PRs
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          NEW_PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          set -euo pipefail
+          # Any other open PR on a logos/vllm-metal-<version> branch is an
+          # update PR for an older release. The [0-9] anchor keeps non-version
+          # branches untouched.
+          gh pr list --state open --limit 100 --json number,headRefName \
+            | jq -r --arg branch "$BRANCH" \
+                '.[]
+                 | select(.headRefName != $branch)
+                 | select(.headRefName | test("^logos/vllm-metal-[0-9][0-9a-z.]*$"))
+                 | .number' \
+            | while read -r pr; do
+                echo "Closing superseded update PR #$pr"
+                gh pr close "$pr" --delete-branch \
+                  --comment "Superseded by $NEW_PR_URL — a newer vllm-metal release is available."
+              done
