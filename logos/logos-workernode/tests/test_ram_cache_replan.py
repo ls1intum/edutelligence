@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import logos_worker_node.calibration as calibration
 import logos_worker_node.lane_manager as lane_mod
 import logos_worker_node.main as worker_main
 from logos_worker_node.lane_manager import LaneManager
@@ -2027,6 +2028,67 @@ def test_calibration_copy_admission_sees_the_reestablished_floor(monkeypatch) ->
     # closed instead of open.
     assert cache.floor_at_ensure_cached == pytest.approx(worker_main._host_ram_safety_margin_mb(512_000.0))
     assert hf == str(Path("/fake/tmpfs"))
+
+
+def test_calibration_copy_admission_is_blocked_when_the_floor_escalation_fails() -> None:
+    """The floor escalation is MANDATORY for RAM-cache admission: when
+    establish_host_ram_floor cannot establish the floor — a timed-out or
+    failed re-plan pass, i.e. the floor is still the stale zero both
+    admission checks fail open against — the probe must admit NO copy at
+    all: no ensure_cached_sync call, no lingering reservation, and the
+    source HF_HOME for the rest of the calibration instead of a copy that
+    eats the safety margin."""
+    cache = _FakeCache(sizes={"org/probe": _mb(48_000)})
+    # The stale zero floor an earlier empty-candidate tick left behind.
+    cache.set_host_ram_floor_mb(0.0)
+    ensure_cached_calls = 0
+    original_ensure_cached_sync = cache.ensure_cached_sync
+
+    def counting_ensure_cached_sync(model: str) -> str:  # noqa: ANN001
+        nonlocal ensure_cached_calls
+        ensure_cached_calls += 1
+        return original_ensure_cached_sync(model)
+
+    cache.ensure_cached_sync = counting_ensure_cached_sync
+
+    # Timed-out pass: the callback returns False.
+    cache_use_reserved = [False]
+    hf = calibration._reserve_and_admit_calibration_copy(
+        cache,
+        "org/probe",
+        cache_use_reserved=cache_use_reserved,
+        establish_host_ram_floor=lambda: False,
+    )
+    assert hf is None
+    assert ensure_cached_calls == 0
+    assert cache_use_reserved[0] is False
+    assert "org/probe" not in cache.cache_use_reservations()
+
+    # Failed pass: the callback raises.
+    def broken_floor() -> bool:
+        raise TimeoutError("re-plan pass timed out")
+
+    hf = calibration._reserve_and_admit_calibration_copy(
+        cache,
+        "org/probe",
+        cache_use_reserved=cache_use_reserved,
+        establish_host_ram_floor=broken_floor,
+    )
+    assert hf is None
+    assert ensure_cached_calls == 0
+    assert cache_use_reserved[0] is False
+    assert "org/probe" not in cache.cache_use_reservations()
+
+    # Control: a pass that completed (True) admits the copy as before.
+    hf = calibration._reserve_and_admit_calibration_copy(
+        cache,
+        "org/probe",
+        cache_use_reserved=cache_use_reserved,
+        establish_host_ram_floor=lambda: True,
+    )
+    assert hf == str(Path("/fake/tmpfs"))
+    assert ensure_cached_calls == 1
+    assert cache_use_reserved[0] is True
 
 
 def test_replan_reconciles_again_when_a_late_reservation_releases_mid_pass(monkeypatch) -> None:

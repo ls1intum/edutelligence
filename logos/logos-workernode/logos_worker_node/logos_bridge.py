@@ -1713,7 +1713,7 @@ class LogosBridgeClient:
                 # it every 2s and bails immediately.
                 loop = asyncio.get_running_loop()
 
-                def _establish_host_ram_floor_for_probe() -> None:
+                def _establish_host_ram_floor_for_probe() -> bool:
                     # The probe reserves its tmpfs entry on the executor
                     # thread and immediately admits a synchronous copy, with
                     # no re-plan tick in between: run one re-plan pass for
@@ -1721,18 +1721,41 @@ class LogosBridgeClient:
                     # wait, so the floor (sleep reserve + safety margin) is
                     # established before ensure_cached_sync's admission
                     # checks could fail open against a stale zero floor.
+                    # Return True only once the pass has completed and set
+                    # the floor: a re-plan can legitimately exceed this
+                    # wait (sleeping_model_counts probes the live lanes
+                    # sequentially with a five-second HTTP timeout each),
+                    # and a timed-out or failed pass leaves the floor
+                    # stale — the probe must then admit NO RAM-cache copy
+                    # (it falls back to the source HF_HOME) rather than
+                    # check the stale floor.
+                    fut = None
                     try:
                         from logos_worker_node.main import _replan_ram_cache_once  # noqa: PLC0415
 
-                        asyncio.run_coroutine_threadsafe(
+                        fut = asyncio.run_coroutine_threadsafe(
                             _replan_ram_cache_once(self._app),
                             loop,
-                        ).result(timeout=30.0)
+                        )
+                        fut.result(timeout=30.0)
+                        return True
                     except Exception:  # noqa: BLE001
+                        # Cancel the pass if it has not started; a pass
+                        # already running cannot be interrupted from here,
+                        # and its eventual completion is a normal re-plan
+                        # tick (the probe's own reservation keeps its
+                        # entry protected meanwhile).
+                        if fut is not None:
+                            fut.cancel()
                         logger.warning(
-                            "[Calibration] host-RAM floor escalation before " "the synchronous calibration copy failed",
+                            "[Calibration] host-RAM floor escalation before "
+                            "the synchronous calibration copy did not "
+                            "complete successfully — the probe will load "
+                            "from the source instead of admitting a RAM "
+                            "cache copy",
                             exc_info=True,
                         )
+                        return False
 
                 try:
                     result = await loop.run_in_executor(
