@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -120,6 +121,70 @@ class BatchServiceTest {
         // The raw key value is in neither request.
         assertThat(seenHeaders.values()).doesNotContain(RAW_KEY);
         assertThat(seenBodies.values()).noneSatisfy(body -> assertThat(body).contains(RAW_KEY));
+    }
+
+    @Test
+    void a_slow_upload_does_not_carry_its_aged_credential_into_the_creation() throws IOException {
+        // The upload may itself take most of the credential's life; the
+        // creation that follows it must present a fresh exchange, not the one
+        // the upload already aged out — or it 401s after the file was stored,
+        // leaving the file behind with no batch to spend it on.
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicInteger exchanges = new AtomicInteger();
+        Map<String, String> keys = new ConcurrentHashMap<>();
+        server.createContext("/internal/batch_credentials", exchange -> {
+            String credential = exchanges.getAndIncrement() == 0 ? "bc1.aged" : "bc1.fresh";
+            byte[] body = ("{\"credential\":\"" + credential + "\",\"expires_in\":300}").getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/v1/files", exchange -> {
+            keys.put("files-logos-key", exchange.getRequestHeaders().getFirst("logos_key"));
+            byte[] body = "{\"id\":\"file-1\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/v1/batches", exchange -> {
+            keys.put("batches-logos-key", exchange.getRequestHeaders().getFirst("logos_key"));
+            // The credential the upload used is expired by the time the creation goes out.
+            if ("bc1.aged".equals(exchange.getRequestHeaders().getFirst("logos_key"))) {
+                byte[] body = "{\"error\":{\"message\":\"the credential is no longer valid\"}}"
+                    .getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(401, body.length);
+                exchange.getResponseBody().write(body);
+                exchange.close();
+                return;
+            }
+            byte[] body = "{\"id\":\"batch_1\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            ApiKeyRepository repository = mock(ApiKeyRepository.class);
+            ApiKey key = keyOwnedBy(1, 5);
+            when(repository.findById(5)).thenReturn(Optional.of(key));
+            BatchService service = service(new RestTemplateConfig().batchRestTemplate(), repository,
+                "http://127.0.0.1:" + server.getAddress().getPort(), "internal");
+
+            BatchService.ProxiedResponse response = service.createBatch(1, 5, "batch.jsonl",
+                "{\"custom_id\":\"one\"}".getBytes(StandardCharsets.UTF_8), "/v1/chat/completions", "24h", "auto");
+
+            assertThat(response.status()).isEqualTo(200);
+            // The upload carried the first exchange; the creation the fresh one.
+            assertThat(keys.get("files-logos-key")).isEqualTo("bc1.aged");
+            assertThat(keys.get("batches-logos-key")).isEqualTo("bc1.fresh");
+            assertThat(exchanges.get()).isEqualTo(2);
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test

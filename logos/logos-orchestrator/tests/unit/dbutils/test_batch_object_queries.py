@@ -441,3 +441,50 @@ def test_a_refusal_is_recorded_per_model_and_truncated():
     assert (params["pid"], params["mid"]) == (7, 25)
     assert len(params["detail"]) == 500
     assert isinstance(params["now"], datetime.datetime)
+
+
+def test_a_provider_answer_syncs_the_fields_the_listing_cannot_render():
+    # The listing is served from the ownership row, not from the provider, so
+    # the result file and the running counts must be stored with the status.
+    db = _db()
+    db.record_batch_provider_state(
+        "batch_1",
+        {
+            "status": "completed",
+            "output_file_id": "file-out",
+            "error_file_id": "file-err",
+            "total_requests": 2,
+            "completed_requests": 1,
+            "failed_requests": 1,
+        },
+    )
+
+    params = _params_of(db.session.execute.call_args)
+    assert params["upstream_id"] == "batch_1"
+    assert params["status"] == "completed"
+    assert (params["output_file_id"], params["error_file_id"]) == ("file-out", "file-err")
+    assert (params["total_requests"], params["completed_requests"], params["failed_requests"]) == (2, 1, 1)
+
+
+def test_a_provider_answer_without_the_fields_binds_nulls_not_empty_values():
+    # The statement's COALESCE is what keeps an earlier poll's result file
+    # when a later answer omits it: the bound values are the nulls.
+    db = _db()
+    db.record_batch_provider_state("batch_1", {"status": "in_progress"})
+
+    params = _params_of(db.session.execute.call_args)
+    assert params["status"] == "in_progress"
+    assert params["output_file_id"] is None
+    assert params["error_file_id"] is None
+    assert params["total_requests"] is None
+    assert params["completed_requests"] is None
+    assert params["failed_requests"] is None
+
+
+def test_a_non_numeric_provider_count_is_not_bound_as_a_count():
+    db = _db()
+    db.record_batch_provider_state("batch_1", {"total_requests": "a lot", "completed_requests": True})
+
+    params = _params_of(db.session.execute.call_args)
+    assert params["total_requests"] is None
+    assert params["completed_requests"] is None

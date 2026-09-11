@@ -2641,7 +2641,12 @@ class DBManager:
         return [dict(row) for row in row_set.all()]
 
     def update_batch_object_status(self, upstream_id: str, status: Optional[str]) -> None:
-        """Store the status a poll just reported for a batch."""
+        """Store the status a poll just reported for a batch.
+
+        A missing status only stamps the check (``updated_at``): the
+        unsettled-batches window leads with the least recently checked, and a
+        check that could not run must rotate its batch to the back of it.
+        """
         self.session.execute(
             text(
                 """
@@ -2653,6 +2658,58 @@ class DBManager:
             {
                 "upstream_id": upstream_id,
                 "status": status,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def record_batch_provider_state(self, upstream_id: str, body: Dict[str, Any]) -> None:
+        """Sync the state a provider answer reports for one of Logos' batches.
+
+        The listing is served from this record, not from the provider, so the
+        fields it cannot render — the result file a terminal answer names and
+        the running request counts — must be stored with the status.
+        ``COALESCE`` keeps what an earlier poll stored when a later answer
+        omits a field.
+        """
+        if not isinstance(body, dict):
+            return
+
+        def _text(field: str) -> Optional[str]:
+            value = body.get(field)
+            return value if isinstance(value, str) and value else None
+
+        def _count(field: str) -> Optional[int]:
+            value = body.get(field)
+            if isinstance(value, bool) or not isinstance(value, int):
+                return None
+            return max(value, 0)
+
+        status = body.get("status")
+        if not isinstance(status, str):
+            status = None
+        self.session.execute(
+            text(
+                """
+                UPDATE batch_objects
+                SET status = COALESCE(:status, status),
+                    output_file_id = COALESCE(:output_file_id, output_file_id),
+                    error_file_id = COALESCE(:error_file_id, error_file_id),
+                    total_requests = COALESCE(:total_requests, total_requests),
+                    completed_requests = COALESCE(:completed_requests, completed_requests),
+                    failed_requests = COALESCE(:failed_requests, failed_requests),
+                    updated_at = :now
+                WHERE kind = 'batch' AND upstream_id = :upstream_id
+                """
+            ),
+            {
+                "upstream_id": upstream_id,
+                "status": status,
+                "output_file_id": _text("output_file_id"),
+                "error_file_id": _text("error_file_id"),
+                "total_requests": _count("total_requests"),
+                "completed_requests": _count("completed_requests"),
+                "failed_requests": _count("failed_requests"),
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         )
@@ -2718,14 +2775,20 @@ class DBManager:
         self.session.commit()
 
     def get_unsettled_batches(self, limit: int = 50) -> list[Dict[str, Any]]:
-        """Batches whose usage has not been booked yet, oldest first."""
+        """Batches whose usage has not been booked yet, least recently checked first.
+
+        The least recently checked lead the window, not the oldest created:
+        the reconciler stamps every batch it has looked at, so one that is
+        still moving at the provider rotates to the back and a queue of fifty
+        that never finish cannot starve the batches behind them.
+        """
         rows = self.session.execute(
             text(
                 """
                 SELECT id, upstream_id, provider_id, api_key_id, team_id, user_id, status
                 FROM batch_objects
                 WHERE kind = 'batch' AND settled_at IS NULL AND execution = 'provider'
-                ORDER BY created_at
+                ORDER BY updated_at
                 LIMIT :limit
                 """
             ),

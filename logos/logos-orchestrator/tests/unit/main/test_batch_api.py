@@ -621,6 +621,19 @@ class _FakeDB:
     def update_batch_object_status(self, upstream_id, status):
         self.status_updates.append((upstream_id, status))
 
+    def record_batch_provider_state(self, upstream_id, body):
+        # The production sync stores the status and the result fields the
+        # answer carries on the ownership row the listing renders.
+        status = body.get("status") if isinstance(body, dict) else None
+        self.status_updates.append((upstream_id, status))
+        row = self.owned.get(("batch", upstream_id))
+        if row is not None and isinstance(body, dict):
+            if isinstance(status, str):
+                row["status"] = status
+            for field in ("output_file_id", "error_file_id", "total_requests", "completed_requests", "failed_requests"):
+                if body.get(field) is not None:
+                    row[field] = body[field]
+
     def delete_batch_object(self, batch_object_id):
         self.deleted.append(batch_object_id)
         for key, row in list(self.owned.items()):
@@ -980,6 +993,45 @@ def test_a_listing_is_answered_from_logos_own_record(monkeypatch):
     assert [item["id"] for item in resp.json()["data"]] == ["batch_mine"]
     assert resp.json()["data"][0]["status"] == "completed"
     assert seen == []
+
+
+def test_a_provider_batch_listing_carries_what_the_last_poll_saw(monkeypatch):
+    # The listing does not ask the provider for each row — it renders what
+    # the last poll stored. A provider batch that finished must therefore
+    # show its result file and its counts, or a client polling only the
+    # listing can neither offer the download nor the progress.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("batch", "batch_p"): _remote(77, OWN_TEAM, upstream_id="batch_p", status="in_progress")},
+    )
+    _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(
+            200,
+            json={
+                "id": "batch_p",
+                "status": "completed",
+                "output_file_id": "file-out",
+                "error_file_id": "file-err",
+                "total_requests": 2,
+                "completed_requests": 1,
+                "failed_requests": 1,
+            },
+        ),
+    )
+    monkeypatch.setattr(batch_api, "_schedule_settlement", lambda *args: None)
+
+    assert client.get("/v1/batches/batch_p").status_code == 200  # the poll that stores the state
+
+    listed = client.get("/v1/batches")
+    assert listed.status_code == 200
+    entry = listed.json()["data"][0]
+    assert entry["status"] == "completed"
+    assert entry["output_file_id"] == "file-out"
+    assert entry["error_file_id"] == "file-err"
+    assert entry["request_counts"] == {"total": 2, "completed": 1, "failed": 1}
 
 
 def test_polling_records_the_status_and_settles_a_finished_batch(monkeypatch):
@@ -1347,6 +1399,48 @@ def _files_upstream(request):
     return httpx.Response(404, json={"error": "no such file"})
 
 
+class _StarvedWindow:
+    """The unsettled-batches window, shaped as the query returns it: the
+    least recently checked first, capped at the limit.
+
+    ``PROVIDERLESS`` is the provider id of the batch whose provider row is
+    gone — the check on that one cannot run at all.
+    """
+
+    PROVIDERLESS = 999
+
+    def __init__(self, count):
+        self.providerless = set()
+        self.rotated = set()
+        self.seen = set()
+        self.stamp = count
+        self.stamps = {f"batch_{n}": n for n in range(1, count + 1)}
+
+    def touched(self, upstream_id):
+        # What the check stamp is, without the upstream call having happened.
+        self.stamp += 1
+        self.stamps[upstream_id] = self.stamp
+
+    def checked(self, upstream_id):
+        self.seen.add(upstream_id)
+        self.touched(upstream_id)
+
+    def take(self, limit):
+        due = sorted(self.stamps, key=lambda upstream_id: self.stamps[upstream_id])[:limit]
+        return [
+            {
+                "id": 100 + int(upstream_id.split("_", 1)[1]),
+                "upstream_id": upstream_id,
+                "provider_id": self.PROVIDERLESS if upstream_id in self.providerless else 7,
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+            for upstream_id in due
+        ]
+
+
 @pytest.mark.asyncio
 async def test_settlement_books_one_usage_row_per_result(monkeypatch):
     db = _SettlingDB()
@@ -1461,8 +1555,8 @@ async def test_the_reconciler_settles_a_batch_nobody_polled(monkeypatch):
         def get_batch_provider(self, provider_id):
             return OPENAI_PROVIDER
 
-        def update_batch_object_status(self, upstream_id, status):
-            settling.rows.append(("status", upstream_id, status))
+        def record_batch_provider_state(self, upstream_id, body):
+            settling.rows.append(("state", upstream_id, body.get("status")))
 
         def claim_batch_for_settlement(self, batch_object_id, lease_seconds=1800):
             return settling.claim_batch_for_settlement(batch_object_id, lease_seconds)
@@ -1492,7 +1586,85 @@ async def test_the_reconciler_settles_a_batch_nobody_polled(monkeypatch):
     monkeypatch.setattr(batch_api, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
 
     assert await reconcile_batches_once() == 2
-    assert ("status", "batch_1", "completed") in settling.rows
+    assert ("state", "batch_1", "completed") in settling.rows
+    assert settling.settled == 1
+
+
+@pytest.mark.asyncio
+async def test_the_reconciler_does_not_starve_later_batches_behind_the_first_fifty(monkeypatch):
+    # The window is the least recently checked fifty. A queue of batches that
+    # is still moving at the provider must rotate to the back after its check
+    # — and so must one whose check cannot run — or the batch behind the
+    # first fifty is never looked at and never settled.
+    settling = _SettlingDB()
+    window = _StarvedWindow(51)  # one batch behind the window
+    window.providerless.add("batch_7")
+
+    class _ReconcileDB(_SettlingDB):
+        def get_unsettled_batches(self, limit=50):
+            return window.take(limit)
+
+        def get_batch_provider(self, provider_id):
+            return None if provider_id == window.PROVIDERLESS else OPENAI_PROVIDER
+
+        def record_batch_provider_state(self, upstream_id, body):
+            window.checked(upstream_id)
+            settling.rows.append(("state", upstream_id, body.get("status")))
+
+        def update_batch_object_status(self, upstream_id, status):
+            assert status is None  # a rotation is a pure stamp
+            window.rotated.add(upstream_id)
+            window.touched(upstream_id)
+
+        def claim_batch_for_settlement(self, batch_object_id, lease_seconds=1800):
+            return settling.claim_batch_for_settlement(batch_object_id, lease_seconds)
+
+        def release_batch_settlement(self, batch_object_id):
+            settling.release_batch_settlement(batch_object_id)
+
+        def mark_batch_settled(self, batch_object_id):
+            settling.mark_batch_settled(batch_object_id)
+
+        def get_api_key_logging_context(self, api_key_id):
+            return settling.get_api_key_logging_context(api_key_id)
+
+        def get_provider_model_deployments(self, provider_id):
+            return settling.get_provider_model_deployments(provider_id)
+
+        def record_batch_usage(self, rows, chunk_size=500):
+            return settling.record_batch_usage(rows)
+
+    monkeypatch.setattr(batch_api, "DBManager", _ReconcileDB)
+
+    def upstream(request):
+        if request.url.path.startswith("/v1/batches/"):
+            number = int(request.url.path.rsplit("/", 1)[1].split("_", 1)[1])
+            if number == 51:  # the one behind the window is already finished
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "batch_51",
+                        "status": "completed",
+                        "output_file_id": "file-out",
+                        "input_file_id": "file-in",
+                    },
+                )
+            return httpx.Response(200, json={"id": f"batch_{number}", "status": "in_progress"})
+        return _files_upstream(request)
+
+    monkeypatch.setattr(batch_api, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
+
+    assert await reconcile_batches_once() == 0
+    # The first pass looked at the first fifty — batch_51 is behind them,
+    # and batch_7's check could not run at all (its provider row is gone).
+    assert "batch_51" not in window.seen
+    assert window.rotated == {"batch_7"}
+    assert settling.settled == 0
+
+    # What was looked at rotated to the back, so the second pass reaches the
+    # finished batch that the first one could not see.
+    assert await reconcile_batches_once() == 2
+    assert "batch_51" in window.seen
     assert settling.settled == 1
 
 
@@ -1788,6 +1960,35 @@ def test_a_named_provider_keeps_the_refused_creation_refused(monkeypatch):
     assert resp.status_code == 400
     assert db.local_batches == {}
     assert db.stored_files == {}
+    assert [request.method for request in seen] == ["POST"]
+
+
+def test_a_refusal_that_is_not_a_model_error_is_not_rerun_locally(monkeypatch):
+    # The rerun answers "the provider cannot batch this model", nothing else:
+    # a quota or a window error is the provider's own answer, and converting
+    # it into a successful local batch would hide it from the caller.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM, models=["gpt-4.1"])},
+    )
+
+    def upstream(request):
+        return httpx.Response(400, json={"error": {"message": "You exceeded your current quota."}})
+
+    seen = _patch_env(monkeypatch, db, upstream)
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert resp.status_code == 400
+    assert db.local_batches == {}
+    assert db.stored_files == {}
+    # The refusal neither taught the routing (it is not a model error) nor
+    # reran the job: the creation went out once, and nothing else happened.
+    assert db.eligibility_records == []
     assert [request.method for request in seen] == ["POST"]
 
 

@@ -1032,6 +1032,7 @@ async def reconcile_batches_once() -> int:
     for owner in pending:
         provider = providers.get(owner["provider_id"])
         if not provider:
+            _rotate_unsettled_batch_out_of_the_window(owner)
             continue
         operation = BatchOperation(
             resource="batches",
@@ -1042,11 +1043,12 @@ async def reconcile_batches_once() -> int:
         try:
             response = await forward_batch_operation(provider, operation)
         except HTTPException:
+            _rotate_unsettled_batch_out_of_the_window(owner)
             continue
         body = _response_json(response) or {}
         status = body.get("status")
         with DBManager() as db:
-            db.update_batch_object_status(str(owner["upstream_id"]), status)
+            db.record_batch_provider_state(str(owner["upstream_id"]), body)
         if status in TERMINAL_BATCH_STATES:
             if status == "failed":
                 # The unsettled-batches query does not carry the input file id,
@@ -1056,6 +1058,21 @@ async def reconcile_batches_once() -> int:
                 _learn_batch_ineligibility(provider, input_file_id, _provider_error_text(body))
             settled += await settle_batch(provider, owner, body)
     return settled
+
+
+def _rotate_unsettled_batch_out_of_the_window(owner: Dict[str, Any]) -> None:
+    """Mark an uncheckable batch as seen, so the window can move on.
+
+    The unsettled-batches window leads with the least recently checked. A
+    batch whose check could not run — its provider row is gone, or the
+    upstream refused the call — must not keep its place in it, or every
+    batch behind it waits on every pass.
+    """
+    try:
+        with DBManager() as db:
+            db.update_batch_object_status(str(owner["upstream_id"]), None)
+    except Exception:  # noqa: BLE001 - the next pass simply takes the same window
+        logger.debug("Could not rotate unsettled batch %s out of the window", owner.get("upstream_id"))
 
 
 async def batch_reconciler_loop() -> None:
@@ -1150,8 +1167,10 @@ def _listing_response(db: DBManager, auth: AuthContext, operation: BatchOperatio
 def _remote_object_summary(row: Dict[str, Any], kind: str) -> Dict[str, Any]:
     """What Logos knows about an object the provider holds.
 
-    A listing reports the status of the last poll; retrieving the object
-    individually asks the provider and is authoritative.
+    A listing reports the last poll's view — status, and for a batch its
+    result file and running counts, stored with the status when the provider
+    last answered for it; retrieving the object individually asks the
+    provider and is authoritative.
     """
     created_at = row.get("created_at")
     summary = {
@@ -1164,6 +1183,16 @@ def _remote_object_summary(row: Dict[str, Any], kind: str) -> Dict[str, Any]:
     if kind == "batch":
         summary["status"] = row.get("status")
         summary["input_file_id"] = row.get("input_file_id")
+        # Without these a finished provider batch would never show its result
+        # download and a running one its progress: the listing does not ask
+        # the provider for each row, it renders what the last poll stored.
+        summary["output_file_id"] = row.get("output_file_id")
+        summary["error_file_id"] = row.get("error_file_id")
+        summary["request_counts"] = {
+            "total": int(row.get("total_requests") or 0),
+            "completed": int(row.get("completed_requests") or 0),
+            "failed": int(row.get("failed_requests") or 0),
+        }
     return summary
 
 
@@ -1517,13 +1546,20 @@ async def handle_batch_api_request(request: Request) -> Response:
             and json_body.get("input_file_id")
         ):
             _learn_batch_ineligibility(provider, json_body.get("input_file_id"), error_text)
-            # In auto mode the refusal is not the answer: the provider just
-            # said it cannot batch this file's models, so the same file is run
-            # here instead, and the first request still ends in a batch. A
-            # provider that was named or forced keeps the refusal — that is
-            # what it asked for.
+            # In auto mode only the model-availability refusal is not the
+            # answer: the provider just said it cannot batch this file's
+            # models, so the same file is run here instead, and the first
+            # request still ends in a batch. Every other refusal — a quota,
+            # a window, an upstream of its own — is the provider's answer,
+            # not a reason to re-run the job locally, so the same gate that
+            # limits the learning limits the rerun. A provider that was
+            # named or forced keeps the refusal — that is what it asked for.
             execution = _header(headers, BATCH_EXECUTION_HEADER).lower()
-            if execution not in {"provider", "logos"} and not _header(headers, BATCH_PROVIDER_HEADER):
+            if (
+                _looks_like_batch_model_error(error_text)
+                and execution not in {"provider", "logos"}
+                and not _header(headers, BATCH_PROVIDER_HEADER)
+            ):
                 rerun = await _rerun_refused_creation_locally(provider, json_body, auth)
                 if rerun is not None:
                     return rerun
@@ -1668,7 +1704,7 @@ async def _register_upstream_object(
         status = payload.get("status")
         try:
             with DBManager() as db:
-                db.update_batch_object_status(str(operation.resource_id), status)
+                db.record_batch_provider_state(str(operation.resource_id), payload)
                 # A terminal response is what names the result file (and the
                 # error file). Register both for the batch's owner now: they
                 # appear in the provider's list for every key that may use the

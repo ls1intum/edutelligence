@@ -228,7 +228,13 @@ public class BatchService {
         body.put("completion_window", completionWindow != null && !completionWindow.isBlank()
             ? completionWindow : "24h");
 
-        HttpHeaders createHeaders = headers(credential, execution);
+        // The upload may have spent most of the credential's life — the
+        // orchestrator's own budget for it is the same five minutes the
+        // credential gets — so the creation asks for a fresh exchange.
+        // Presenting the aged one would 401 after the file was already
+        // stored, leaving it behind with no batch to spend it on.
+        String createCredential = batchCredentialOwnedBy(userId, apiKeyId);
+        HttpHeaders createHeaders = headers(createCredential, execution);
         createHeaders.setContentType(MediaType.APPLICATION_JSON);
         return exchange(HttpMethod.POST, "/v1/batches", new HttpEntity<>(body, createHeaders));
     }
