@@ -1,0 +1,765 @@
+import json
+import threading
+from collections import OrderedDict
+from typing import Dict, List, Optional, Tuple
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import StrOutputParser
+from weaviate import WeaviateClient
+from weaviate.classes.query import Filter
+from weaviate.util import generate_uuid5
+
+from iris.common.logging_config import get_logger
+from iris.config import settings
+from iris.domain.data.course_memory_dto import CourseMemoryEntryDTO
+from iris.domain.ingestion.course_memory_ingestion_dto import (
+    CourseMemoryIngestionExecutionDTO,
+)
+
+from ..common.pipeline_enum import PipelineEnum
+from ..domain.variant.variant import Variant
+from ..ingestion.abstract_ingestion import AbstractIngestion
+from ..llm import CompletionArguments, LlmRequestHandler
+from ..llm.langchain import IrisLangchainChatModel
+from ..llm.llm_configuration import LlmConfigurationError, resolve_model
+from ..pipeline.prompts.course_memory_prompts import (
+    course_memory_extraction_system_prompt,
+)
+from ..pipeline.shared.utils import REDACTED_ANSWER_PLACEHOLDER
+from ..tracing import observe
+from ..vector_database.course_memory_schema import (
+    CourseMemorySchema,
+    init_course_memory_schema,
+)
+from ..vector_database.database import batch_update_lock
+from ..web.status.course_memory_ingestion_status_callback import (
+    CourseMemoryIngestionStatus,
+)
+from . import Pipeline
+
+logger = get_logger(__name__)
+
+# Ordering of the operations on one thread is decided by Artemis, not here. Every
+# ingestion and every thread-scoped retraction carries a monotonic per-thread
+# ``version``; the stored object keeps the highest one it has seen and anything older
+# is ignored. A retraction does not remove the object but turns it into a tombstone
+# (``deleted=True``) that keeps its version, so an ingestion accepted before the
+# retraction — however late its extraction finishes, and whichever order the two
+# webhooks arrived in — finds a newer version and gives up instead of re-inserting the
+# retracted answer into an empty slot. The same rule orders two ingestions: an older
+# extraction can no longer overwrite the entry a newer edit produced.
+#
+# Compare-and-write happens under this lock, which makes it atomic against a
+# concurrent operation on the same key within this process. Across Pyris replicas
+# only the single-object write is atomic, so the window in which two replicas can
+# race is the read-compare-write of one object — no longer the whole extraction.
+_write_coordination_lock = threading.Lock()
+
+# The in-process counters below cover the two scopes that cannot be versioned per
+# thread: a channel purge and a course purge address many threads whose keys are not
+# known up front, so they cannot leave a tombstone per thread. An ingestion samples the
+# counters when its request is accepted and, under the lock, refuses to write if a
+# purge bumped them in the meantime. Bounded because the naive dict grew one entry per
+# purged scope for the lifetime of the process.
+_GENERATION_CACHE_SIZE = 10_000
+
+
+class _DeleteGenerations:
+    """Bounded LRU of monotonic delete counters, keyed per scope.
+
+    Deliberately not thread-safe on its own: every access is made under
+    ``_write_coordination_lock``, which is also what makes the
+    sample-then-compare in :meth:`CourseMemoryIngestionPipeline.upsert` atomic
+    against a concurrent purge.
+    """
+
+    def __init__(self, max_entries: int = _GENERATION_CACHE_SIZE):
+        self._counters: OrderedDict[str, int] = OrderedDict()
+        self._max_entries = max_entries
+
+    def get(self, key: str) -> int:
+        """Current counter for ``key``; 0 when nothing was ever deleted for it."""
+        generation = self._counters.get(key, 0)
+        if generation:
+            self._counters.move_to_end(key)
+        return generation
+
+    def bump(self, key: str) -> int:
+        """Increment and return the counter for ``key``, evicting the oldest entries."""
+        generation = self._counters.pop(key, 0) + 1
+        self._counters[key] = generation
+        while len(self._counters) > self._max_entries:
+            self._counters.popitem(last=False)
+        return generation
+
+
+# A channel purge cannot address the per-thread versions (its keys are not known up
+# front), so it bumps a per-channel counter instead and ingestions check it. Without
+# it, an ingestion in flight when a channel is deleted or made private re-inserts its
+# entry afterwards, and content from a channel the course can no longer read keeps
+# being served (req. 5).
+_channel_delete_generation = _DeleteGenerations()
+# And one scope up again, for a whole course being deleted: an ingestion accepted just
+# before the course went away would otherwise leave an entry nothing can ever retract.
+_course_delete_generation = _DeleteGenerations()
+
+
+def _channel_key(conversation_id: str, course_id: int) -> str:
+    return f"{course_id}:{conversation_id}"
+
+
+def _course_key(course_id: int) -> str:
+    return str(course_id)
+
+
+def _current_channel_delete_generation(conversation_id: str, course_id: int) -> int:
+    with _write_coordination_lock:
+        return _channel_delete_generation.get(_channel_key(conversation_id, course_id))
+
+
+def _current_course_delete_generation(course_id: int) -> int:
+    with _write_coordination_lock:
+        return _course_delete_generation.get(_course_key(course_id))
+
+
+def _deterministic_uuid(post_id: str, course_id: int) -> str:
+    """Stable UUID for a (course, thread) pair, enabling upsert/dedup.
+
+    Keyed on the thread root rather than the answer message so a thread with
+    several resolving answers — or one whose answer is later corrected — yields a
+    single canonical entry instead of near-duplicates competing in hybrid search.
+    """
+    return generate_uuid5(f"{course_id}:{post_id}")
+
+
+def _stored_version(obj) -> int:
+    """Version recorded on a fetched object; 0 for entries written before versioning
+    existed (or when there is no object), so anything Artemis sends counts as newer."""
+    if obj is None:
+        return 0
+    return int(obj.properties.get(CourseMemorySchema.VERSION.value) or 0)
+
+
+def _is_tombstone(obj) -> bool:
+    return obj is not None and bool(
+        obj.properties.get(CourseMemorySchema.DELETED.value)
+    )
+
+
+def _tombstone_properties(existing, post_id: str, course_id: int, version: int) -> dict:
+    """Properties of a retracted entry: no content, but the keys a purge filters on.
+
+    ``conversation_id`` is copied from the entry being retracted when there is one, so
+    a later channel purge still finds and removes the tombstone; a thread that never
+    had an entry leaves it empty, and the course purge covers it by ``course_id``.
+    """
+    previous = existing.properties if existing is not None else {}
+    return {
+        CourseMemorySchema.QUESTION.value: "",
+        CourseMemorySchema.ANSWER.value: "",
+        CourseMemorySchema.COURSE_ID.value: course_id,
+        CourseMemorySchema.POST_ID.value: post_id,
+        CourseMemorySchema.MESSAGE_ID.value: "",
+        CourseMemorySchema.CONVERSATION_ID.value: previous.get(
+            CourseMemorySchema.CONVERSATION_ID.value
+        )
+        or "",
+        CourseMemorySchema.SOURCE.value: "",
+        CourseMemorySchema.VERIFIED_AT.value: "",
+        CourseMemorySchema.VERIFIED_BY.value: "",
+        CourseMemorySchema.VERSION.value: version,
+        CourseMemorySchema.DELETED.value: True,
+    }
+
+
+def _truncate(text: str, limit: int = 160) -> str:
+    """Shorten text for log lines; answers routinely run to several paragraphs."""
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+class CourseMemoryDeleter:
+    """Removes course memory entries, at thread, channel or course scope.
+
+    Deliberately separate from :class:`CourseMemoryIngestionPipeline` and holding
+    nothing but the Weaviate collection. Retraction is the half of this feature
+    that must not depend on an LLM being reachable: building the ingestion
+    pipeline resolves both a chat and an embedding model, so on a deployment
+    where those are missing or misconfigured, ingestion would keep working while
+    every delete failed — entries would accumulate and could never be taken back.
+    Deleting resolves no model at all.
+    """
+
+    def __init__(self, client: WeaviateClient):
+        self.collection = init_course_memory_schema(client)
+
+    @classmethod
+    def for_collection(cls, collection) -> "CourseMemoryDeleter":
+        """Build a deleter around an already-initialised collection."""
+        deleter = object.__new__(cls)
+        deleter.collection = collection
+        return deleter
+
+    def delete_for_thread(self, post_id: str, course_id: int, version: int) -> bool:
+        """Retract the entry for a (course, thread) pair by writing a tombstone.
+
+        Called when the thread stops being resolved in Artemis — the resolving
+        answer was un-marked or deleted, or the thread itself was removed (Artemis
+        then sends the maximum version, since nothing legitimate can follow a
+        deleted thread).
+
+        The object is not removed but replaced by a tombstone carrying ``version``.
+        An ingestion of the same thread that was accepted earlier but finishes
+        later finds a newer version and is dropped, instead of re-inserting the
+        retracted answer into an empty slot. A retraction that is itself older than
+        the stored state is ignored: Artemis has since re-resolved the thread, and
+        that newer state wins. Equal versions apply the retraction, so a thread
+        deletion that raced the last ingestion still ends up retracted. Tombstones
+        are inert — retrieval filters them out — and a later re-resolution with a
+        higher version overwrites them in place.
+        """
+        obj_uuid = _deterministic_uuid(post_id, course_id)
+        try:
+            with _write_coordination_lock, batch_update_lock:
+                existing = self.collection.query.fetch_object_by_id(obj_uuid)
+                stored_version = _stored_version(existing)
+                if existing is not None and stored_version > version:
+                    logger.info(
+                        "Ignoring stale course memory retraction for thread %s: "
+                        "version %s is older than the stored version %s",
+                        post_id,
+                        version,
+                        stored_version,
+                    )
+                    return True
+                tombstone = _tombstone_properties(existing, post_id, course_id, version)
+                if existing is not None:
+                    self.collection.data.replace(uuid=obj_uuid, properties=tombstone)
+                else:
+                    self.collection.data.insert(uuid=obj_uuid, properties=tombstone)
+            logger.info(
+                "Retracted course memory for thread %s (version %s)", post_id, version
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error("Error deleting course memory: %s", e, exc_info=True)
+            return False
+
+    def delete_for_conversation(self, conversation_id: str, course_id: int) -> bool:
+        """Delete every entry mined from a channel.
+
+        Called when the channel is deleted in Artemis or stops being public. Channel
+        eligibility is only checked when an entry is written, so without this an entry
+        would keep being served after its source stopped being readable by the course.
+
+        Unlike :meth:`delete_for_thread` this cannot leave a versioned tombstone per
+        thread — the keys are not known up front — so it bumps a per-channel counter
+        instead. An ingestion accepted before the purge sampled the old value and is
+        refused at write time (see :meth:`CourseMemoryIngestionPipeline.upsert`), which
+        keeps content from a deleted or newly private channel from being re-inserted
+        after the purge. Tombstones of the channel's threads go with the entries.
+        """
+        try:
+            with _write_coordination_lock, batch_update_lock:
+                _channel_delete_generation.bump(
+                    _channel_key(conversation_id, course_id)
+                )
+                result = self.collection.data.delete_many(
+                    where=Filter.by_property(
+                        CourseMemorySchema.CONVERSATION_ID.value
+                    ).equal(conversation_id)
+                    & Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(
+                        course_id
+                    )
+                )
+            logger.info(
+                "Deleted %s course memory entries for channel %s in course %s",
+                getattr(result, "successful", "?"),
+                conversation_id,
+                course_id,
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Error deleting course memory for channel %s: %s",
+                conversation_id,
+                e,
+                exc_info=True,
+            )
+            return False
+
+    def delete_for_course(self, course_id: int) -> bool:
+        """Delete every entry of a course, for the course being deleted in Artemis.
+
+        Course deletion removes all of its conversations in one bulk statement, so
+        Artemis has no channel ids left to purge one by one; without a course-scoped
+        filter every entry of that course would stay in Weaviate forever, with no
+        Artemis object left that could ever ask for its removal.
+
+        Bumps the course-scoped counter for the same reason the channel purge bumps
+        its own: an ingestion accepted before this purge must not write afterwards.
+        """
+        try:
+            with _write_coordination_lock, batch_update_lock:
+                _course_delete_generation.bump(_course_key(course_id))
+                result = self.collection.data.delete_many(
+                    where=Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(
+                        course_id
+                    )
+                )
+            logger.info(
+                "Deleted %s course memory entries for course %s",
+                getattr(result, "successful", "?"),
+                course_id,
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Error deleting course memory for course %s: %s",
+                course_id,
+                e,
+                exc_info=True,
+            )
+            return False
+
+
+class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
+    """Ingests verified Q/A pairs into the CourseMemory collection.
+
+    Runs an LLM extraction over the full thread to produce a canonical
+    question/answer pair, embeds only the question, and upserts keyed on
+    ``postId`` so tutor corrections and additional resolving answers overwrite
+    the thread's existing entry in place. Writes are ordered by the Artemis
+    operation version carried in the payload: the latest state Artemis dispatched
+    always wins, whatever order the webhooks were accepted or finished in.
+    """
+
+    PIPELINE_ID = "course_memory_ingestion_pipeline"
+    ROLES = {"chat", "embedding"}
+    VARIANT_DEFS = [
+        ("default", "Default", "Default course memory ingestion variant."),
+    ]
+
+    def __init__(
+        self,
+        client: WeaviateClient,
+        dto: Optional[CourseMemoryIngestionExecutionDTO],
+        callback: CourseMemoryIngestionStatus,
+        variant: Variant,
+        local: bool = False,
+    ):
+        super().__init__(implementation_id=self.PIPELINE_ID)
+        self.client = client
+        self.collection = init_course_memory_schema(client)
+        self.dto = dto
+        self.callback = callback
+        # Retrieval (BaseRetrieval) always resolves its embedding with
+        # local=False; pin ingestion to the same environment so both sides
+        # embed into the same vector space regardless of the LLM selection.
+        embedding_model = variant.model("embedding", False)
+        chat_model = variant.model("chat", local)
+        self._warn_on_embedding_mismatch(embedding_model)
+        self.llm_embedding = LlmRequestHandler(embedding_model)
+        request_handler = LlmRequestHandler(model_id=chat_model)
+        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        self.llm = IrisLangchainChatModel(
+            request_handler=request_handler, completion_args=completion_args
+        )
+        self.pipeline = self.llm | StrOutputParser()
+        self.tokens = []
+
+    @staticmethod
+    def _warn_on_embedding_mismatch(ingestion_embedding_model: str):
+        """Warn when ingestion and retrieval would embed with different models.
+
+        The cosine-certainty gate in retrieval is only meaningful when stored
+        and query vectors come from the same embedding model.
+        """
+        try:
+            retrieval_embedding_model = resolve_model(
+                "course_memory_retrieval_pipeline", "default", "embedding", local=False
+            )
+        except LlmConfigurationError:
+            return
+        if retrieval_embedding_model != ingestion_embedding_model:
+            logger.warning(
+                "Course memory embedding mismatch: ingestion uses '%s' but "
+                "retrieval uses '%s'. Stored and query vectors will live in "
+                "different vector spaces, breaking the similarity gate. Align "
+                "the 'embedding' entries of course_memory_ingestion_pipeline "
+                "and course_memory_retrieval_pipeline in llm_configuration.",
+                ingestion_embedding_model,
+                retrieval_embedding_model,
+            )
+
+    @classmethod
+    def channel_delete_generation_for(cls, conversation_id: str, course_id: int) -> int:
+        """Current channel delete counter, for sampling at webhook accept time.
+
+        The webhook returns 202 and hands the work to a background thread, so a
+        channel purge accepted later can still run first. Sampling the counter when
+        the request is *accepted* — rather than when the worker happens to be
+        scheduled — makes the ordering follow the requests, not the scheduler.
+        """
+        return _current_channel_delete_generation(conversation_id, course_id)
+
+    @classmethod
+    def course_delete_generation_for(cls, course_id: int) -> int:
+        """Current course delete counter, for sampling at webhook accept time.
+
+        Course-scoped counterpart of :meth:`channel_delete_generation_for`. The
+        course being deleted is the one scope from which no later retraction is
+        possible at all — there is no Artemis object left to trigger one — so an
+        ingestion accepted before the purge must be the one to give up.
+        """
+        return _current_course_delete_generation(course_id)
+
+    @observe(name="Course Memory Ingestion Pipeline")
+    def __call__(
+        self,
+        start_channel_delete_gen: Optional[int] = None,
+        start_course_delete_gen: Optional[int] = None,
+    ) -> bool:
+        """Run the ingestion.
+
+        ``start_channel_delete_gen`` and ``start_course_delete_gen`` are the
+        channel- and course-scoped purge counters sampled by the caller when the
+        request was accepted; omitted, they are sampled here instead. Ordering
+        against other operations on the same thread needs no sampling: it is
+        decided by the version Artemis put in the payload.
+        """
+        try:
+            # Kill-switch: disabling course memory must stop writes, not just
+            # reads. (Deletion stays available so operators can purge entries
+            # while the feature is off.)
+            if not settings.course_memory.enabled:
+                logger.info(
+                    "Course memory is disabled, skipping ingestion for thread %s in course %s",
+                    self.dto.post_id,
+                    self.dto.course_id,
+                )
+                self.callback.finish()
+                return True
+
+            # Only ingest from public channels (req. 5). Defense-in-depth: Artemis
+            # should only emit public-channel events.
+            if not self.dto.is_public_channel:
+                logger.info(
+                    "Skipping course memory ingestion for thread %s in course %s: not a public channel",
+                    self.dto.post_id,
+                    self.dto.course_id,
+                )
+                self.callback.finish()
+                return True
+
+            # Snapshot the purge counters before the slow extraction so a purge
+            # arriving during it can be detected at write time (see upsert).
+            if start_channel_delete_gen is None:
+                start_channel_delete_gen = _current_channel_delete_generation(
+                    self.dto.conversation_id, self.dto.course_id
+                )
+            if start_course_delete_gen is None:
+                start_course_delete_gen = _current_course_delete_generation(
+                    self.dto.course_id
+                )
+
+            self.callback.update()
+            question, answer = self.extract_qa()
+            # Makes the merge of several resolvesPost messages observable without
+            # querying Weaviate.
+            logger.info(
+                "Course memory extraction for thread %s produced question=%r answer=%r",
+                self.dto.post_id,
+                _truncate(question),
+                _truncate(answer),
+            )
+
+            self.callback.update()
+            self.upsert(
+                question,
+                answer,
+                start_channel_delete_gen=start_channel_delete_gen,
+                start_course_delete_gen=start_course_delete_gen,
+            )
+            self.callback.finish(tokens=self.tokens)
+            logger.info(
+                "Course memory ingestion finished for thread %s (triggered by message %s, version %s)",
+                self.dto.post_id,
+                self.dto.message_id,
+                self.dto.version,
+            )
+            return True
+        except Exception as e:
+            logger.error("Error ingesting course memory: %s", e, exc_info=True)
+            self.callback.fail(
+                f"Failed to ingest course memory: {e}",
+                exception=e,
+                tokens=self.tokens,
+            )
+            return False
+
+    @observe(name="Course Memory: Q/A Extraction")
+    def extract_qa(self) -> Tuple[str, str]:
+        """Extract the canonical question and verified answer from the thread.
+
+        When a tutor signed off on specific wording in the dashboard (``IRIS_AUTO``
+        and ``IRIS_CORRECTED``, which the DTO requires to carry ``existing_answer``),
+        that text is used verbatim and only the question is derived from the thread.
+        """
+        thread_text = self._format_thread()
+        # Pass the transcript as a plain human message, not a prompt template:
+        # thread content routinely contains braces (code snippets) that an
+        # f-string template would misread as variables and fail on. The system
+        # prompt likewise contains a literal JSON example with braces.
+        messages = [
+            SystemMessage(content=course_memory_extraction_system_prompt),
+            HumanMessage(content=thread_text),
+        ]
+        response = self.pipeline.invoke(messages)
+        if self.llm.tokens is not None:
+            self._append_tokens(
+                self.llm.tokens, PipelineEnum.IRIS_COURSE_MEMORY_INGESTION
+            )
+
+        # A verbatim answer is present whenever a tutor signed off on specific
+        # wording in the dashboard — whether they edited the draft first
+        # (IRIS_CORRECTED) or approved it unchanged (IRIS_AUTO). Storing the
+        # extractor's paraphrase in the latter case would re-serve, as
+        # tutor-verified, text the tutor never actually saw. The extraction still
+        # runs, because the *question* is only ever derived from the thread.
+        has_verbatim_answer = bool(self.dto.existing_answer)
+        try:
+            question, extracted_answer = self._parse_extraction(response)
+        except ValueError:
+            # For corrections the tutor's answer is already at hand — don't fail
+            # the whole correction on a malformed extraction; fall back to the
+            # thread's root post as a best-effort question.
+            root_question = self._root_post_content()
+            if has_verbatim_answer and root_question:
+                logger.warning(
+                    "Q/A extraction unparseable for message %s with a verbatim "
+                    "answer; "
+                    "falling back to the thread root post as the question",
+                    self.dto.message_id,
+                )
+                return root_question, self.dto.existing_answer
+            raise
+
+        if has_verbatim_answer:
+            return question, self.dto.existing_answer
+
+        return question, extracted_answer
+
+    def _root_post_content(self) -> str:
+        """Content of the thread's first message (the original question), if any."""
+        if self.dto.thread and self.dto.thread[0].content:
+            return self.dto.thread[0].content.strip()
+        return ""
+
+    @staticmethod
+    def _parse_extraction(response: str) -> Tuple[str, str]:
+        """Parse the strict-JSON extraction output defensively."""
+        text = response.strip()
+        if text.startswith("```"):
+            # Strip markdown code fences if the model added them anyway.
+            text = text.strip("`")
+            if text.lstrip().lower().startswith("json"):
+                text = text.lstrip()[4:]
+        try:
+            data = json.loads(text)
+            question = str(data["question"]).strip()
+            answer = str(data["answer"]).strip()
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise ValueError(
+                f"Could not parse Q/A extraction output as JSON: {e}"
+            ) from e
+        if not question or not answer:
+            raise ValueError("Q/A extraction produced an empty question or answer")
+        return question, answer
+
+    # Tag applied to every message Artemis flagged as verified/resolving, so the
+    # extractor knows which messages to synthesize the answer from.
+    VERIFIED_ANSWER_TAG = "VERIFIED ANSWER"
+
+    @staticmethod
+    def _is_verified(message) -> bool:
+        """Whether Artemis flagged this message as (part of) the verified answer.
+
+        Stated explicitly by the sender — never inferred from ``id``. Artemis
+        draws post and answer ids from two tables with independent sequences, so
+        a root post and one of its answers routinely share a number; matching on
+        it used to tag the student's question as the verified answer.
+        """
+        return message.is_verified_answer or message.resolves_post
+
+    def _format_thread(self) -> str:
+        """Render the thread as an ordered, role-tagged transcript.
+
+        Every flagged message is tagged as a verified answer so the extractor can
+        pick them out among ordinary replies. On long threads only
+        ``context_message_limit`` messages are kept, but the root post (the
+        original question) and all flagged messages are always retained.
+
+        Messages whose author opted out of AI keep their slot but carry the shared
+        placeholder instead of their text, so the transcript still reads in order
+        without their words ever reaching the model.
+        """
+        thread = self._truncate_thread(self.dto.thread)
+        lines = []
+        for message in thread:
+            role = message.author_role or "unknown"
+            if message.is_iris_draft:
+                role = f"{role} (iris draft)"
+            marker = (
+                f" — {self.VERIFIED_ANSWER_TAG}" if self._is_verified(message) else ""
+            )
+            content = (
+                REDACTED_ANSWER_PLACEHOLDER if message.redacted else message.content
+            )
+            lines.append(f"[{role}{marker}]: {content}")
+        return "\n".join(lines)
+
+    def _truncate_thread(self, thread):
+        """Cap the thread at ``context_message_limit`` messages.
+
+        Always keeps the root post and every flagged message; the rest of the
+        budget is filled from the most recent tail. Returns the original thread
+        unchanged when no limit applies. Note the flagged messages are kept even
+        if they alone exceed the limit — dropping one would silently discard part
+        of the verified answer.
+        """
+        limit = settings.course_memory.context_message_limit
+        if not limit or limit <= 0 or limit >= len(thread):
+            return thread
+        keep = {0}
+        for i, message in enumerate(thread):
+            if self._is_verified(message):
+                keep.add(i)
+        for i in range(len(thread) - 1, -1, -1):
+            if len(keep) >= limit:
+                break
+            keep.add(i)
+        return [thread[i] for i in sorted(keep)]
+
+    def upsert(
+        self,
+        question: str,
+        answer: str,
+        start_channel_delete_gen: Optional[int] = None,
+        start_course_delete_gen: Optional[int] = None,
+    ):
+        """Embed the question and insert/replace the entry keyed on postId.
+
+        The write is ordered by ``dto.version``: if the stored object — a live
+        entry or a tombstone — already carries an equal or higher version, this
+        ingestion is stale (a retraction or a newer edit overtook it) and is
+        skipped, so the latest state Artemis dispatched always wins. A tombstone
+        with a lower version is overwritten: the thread was re-resolved.
+
+        ``start_channel_delete_gen`` / ``start_course_delete_gen`` are the
+        channel- and course-scoped purge counter snapshots taken before extraction;
+        if either was bumped since, the write is skipped so a concurrent purge of
+        the whole channel or course is not undone by this now-stale ingestion.
+        """
+        vec = self.llm_embedding.embed(question)
+        entry = CourseMemoryEntryDTO(
+            question=question,
+            answer=answer,
+            course_id=self.dto.course_id,
+            post_id=self.dto.post_id,
+            message_id=self.dto.message_id,
+            conversation_id=self.dto.conversation_id,
+            source=self.dto.source,
+            verified_at=self.dto.verified_at,
+            verified_by=self.dto.verified_by,
+            version=self.dto.version,
+        )
+        obj_uuid = _deterministic_uuid(self.dto.post_id, self.dto.course_id)
+        props = entry.to_properties()
+        # Outer lock serialises this write against a concurrent operation on the
+        # same key; inner batch lock is the shared Weaviate write guard.
+        with _write_coordination_lock:
+            channel_key = _channel_key(self.dto.conversation_id, self.dto.course_id)
+            if (
+                start_channel_delete_gen is not None
+                and _channel_delete_generation.get(channel_key)
+                != start_channel_delete_gen
+            ):
+                logger.info(
+                    "Skipping course memory write for thread %s: channel %s was "
+                    "purged during ingestion",
+                    self.dto.post_id,
+                    self.dto.conversation_id,
+                )
+                return
+            if (
+                start_course_delete_gen is not None
+                and _course_delete_generation.get(_course_key(self.dto.course_id))
+                != start_course_delete_gen
+            ):
+                logger.info(
+                    "Skipping course memory write for thread %s: course %s was "
+                    "purged during ingestion",
+                    self.dto.post_id,
+                    self.dto.course_id,
+                )
+                return
+            with batch_update_lock:
+                existing = self.collection.query.fetch_object_by_id(obj_uuid)
+                if existing is not None:
+                    stored_version = _stored_version(existing)
+                    if stored_version >= self.dto.version:
+                        logger.info(
+                            "Ignoring stale course memory ingestion for thread %s: "
+                            "version %s is not newer than the stored version %s "
+                            "(%s)",
+                            self.dto.post_id,
+                            self.dto.version,
+                            stored_version,
+                            "tombstone" if _is_tombstone(existing) else "live entry",
+                        )
+                        return
+                    self.collection.data.replace(
+                        uuid=obj_uuid, properties=props, vector=vec
+                    )
+                    logger.info(
+                        "Replaced course memory %s for thread %s (source=%s, "
+                        "version %s -> %s)",
+                        "tombstone" if _is_tombstone(existing) else "entry",
+                        self.dto.post_id,
+                        self.dto.source.value,
+                        stored_version,
+                        self.dto.version,
+                    )
+                else:
+                    self.collection.data.insert(
+                        uuid=obj_uuid, properties=props, vector=vec
+                    )
+                    logger.info(
+                        "Inserted course memory entry for thread %s (source=%s, version %s)",
+                        self.dto.post_id,
+                        self.dto.source.value,
+                        self.dto.version,
+                    )
+
+    def delete_for_thread(self, post_id: str, course_id: int, version: int) -> bool:
+        """Delegate to :class:`CourseMemoryDeleter`; see it for the semantics."""
+        return CourseMemoryDeleter.for_collection(self.collection).delete_for_thread(
+            post_id, course_id, version
+        )
+
+    def delete_for_conversation(self, conversation_id: str, course_id: int) -> bool:
+        """Delegate to :class:`CourseMemoryDeleter`; see it for the semantics."""
+        return CourseMemoryDeleter.for_collection(
+            self.collection
+        ).delete_for_conversation(conversation_id, course_id)
+
+    def delete_for_course(self, course_id: int) -> bool:
+        """Delegate to :class:`CourseMemoryDeleter`; see it for the semantics."""
+        return CourseMemoryDeleter.for_collection(self.collection).delete_for_course(
+            course_id
+        )
+
+    def chunk_data(self, path: str) -> List[Dict[str, str]]:
+        """Not applicable: course memory entries are not chunked."""
+        return []
