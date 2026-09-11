@@ -1260,3 +1260,76 @@ async def test_background_copy_waits_for_an_inflight_synchronous_copy(ram_cache_
     assert sync_copy_calls == 1
     assert async_copy_calls == 0
     await cache.stop_background_caching()
+
+
+async def test_abandoned_timeout_releases_the_lock_when_the_writer_lands_after_giving_up(ram_cache_env, monkeypatch):
+    """Regression [high] (the cancellation-propagation interleaving): the
+    writer's release lands AFTER the sync path's timeout cleanup has
+    returned, so the abandoned acquisition — whose cancellation the old
+    future.cancel() could not prove to have reached before the lock was
+    handed out — acquires the lock on the way out. With cancel(), the task
+    then completes with the destination already cancelled, its result is
+    discarded, and no release branch runs; only the completion callback
+    releases it. Later writers must still complete: a worker-side
+    ensure_cached, a fresh synchronous calibration copy, and reclaim all
+    take the same per-model lock, so a wedged lock hangs every one of
+    them."""
+    monkeypatch.setattr("logos_worker_node.model_cache.SYNC_BACKGROUND_WAIT_TIMEOUT_S", 0.2)
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    copy_calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_copy(model_name):
+        nonlocal copy_calls
+        copy_calls += 1
+        started.set()
+        await release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    sync_copy_calls = 0
+
+    def sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model", slow_copy)
+    monkeypatch.setattr(cache, "_copy_model_sync", sync_copy)
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    cache.start_background_caching([model])
+    await started.wait()  # the worker holds the writer lock while copying
+
+    result: list[str] = []
+    thread = threading.Thread(target=lambda: result.append(cache.ensure_cached_sync(model)))
+    thread.start()
+    # The sync path times out on the (shortened) lock wait and serves from
+    # the source while the worker still owns the model.
+    assert await asyncio.to_thread(thread.join, 30) is None
+    assert result[0] == str(Path(ram_cache_env["source_hf"]).parent)
+    assert sync_copy_calls == 0
+
+    # The writer's release lands AFTER the timeout cleanup has returned: the
+    # abandoned acquisition is still queued and takes the lock as the
+    # worker's copy completes — the interleaving cancel() could not order
+    # against.
+    release.set()
+    for _ in range(100):
+        if cache.is_cached(model):
+            break
+        await asyncio.sleep(0.05)
+    assert cache.is_cached(model)
+
+    # Later writers must still complete (the wait_for bounds turn a wedged
+    # lock into a failure instead of a hang).
+    assert await asyncio.wait_for(cache.ensure_cached(model), 10) == ram_cache_env["tmpfs"]
+    assert await asyncio.wait_for(asyncio.to_thread(cache.ensure_cached_sync, model), 10) == ram_cache_env["tmpfs"]
+    assert await asyncio.wait_for(cache.reclaim(set()), 10) == [model]
+    await cache.stop_background_caching()

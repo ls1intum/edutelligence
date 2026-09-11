@@ -1113,10 +1113,14 @@ class ModelRamCache:
         the source. A missing worker loop means no background worker was
         ever started, so nothing can own the writer: proceed lock-free.
 
-        A timed-out acquisition is cancelled (or released, if it completed
-        in the meantime): left queued it would take the lock once the
-        worker's copy finished, with no owner left to release it,
-        permanently wedging every later ensure_cached/reclaim for the model.
+        A timed-out acquisition is abandoned with a completion callback
+        rather than cancelled: cancel() only marks the cross-thread
+        destination, and a task that acquires the lock after the destination
+        is already cancelled completes with its result discarded — a lock
+        held forever, wedging every later ensure_cached/reclaim for the
+        model. The callback instead releases whatever lock the acquisition
+        eventually returns, whether that is immediately (it finished racing
+        the timeout) or only once the worker's copy finally lands.
         """
         loop = self._worker_loop
         if loop is None:
@@ -1135,14 +1139,21 @@ class ModelRamCache:
             # the source instead of starting a competing copy. result()
             # discarding the future does NOT stop the acquisition: it is
             # still queued behind the lock's waiters and would take the lock
-            # later with nobody left to release it. Cancel it; if it
-            # completed in the meantime (cancel returns False), it already
-            # holds the lock, so release the one we are not going to use.
-            try:
-                if not future.cancel():
-                    self._release_writer_lock_sync(future.result(timeout=0))
-            except Exception:  # noqa: BLE001
-                pass
+            # later with nobody left to release it. Keep it running — do
+            # NOT cancel it (a task that acquires the lock after the
+            # destination is cancelled completes with its result discarded,
+            # and no release branch runs) — and let the completion callback
+            # release whatever it eventually returns.
+            def _release_abandoned_acquisition(done_future) -> None:
+                try:
+                    abandoned_lock = done_future.result()
+                except BaseException:  # noqa: BLE001
+                    # Failed, or cancelled with a dying loop: it never
+                    # acquired the lock, so there is nothing to release.
+                    return
+                self._release_writer_lock_sync(abandoned_lock)
+
+            future.add_done_callback(_release_abandoned_acquisition)
             logger.warning(
                 "Model %s: could not take the per-model writer lock for the "
                 "synchronous copy (background attempt in flight after %.0fs, "
