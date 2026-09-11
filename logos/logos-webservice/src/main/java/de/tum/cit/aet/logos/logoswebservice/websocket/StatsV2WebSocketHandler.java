@@ -43,14 +43,16 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
 
     // The vram window a session is looking at: the selected day (null =
-    // today), the cursor into it, and the provider connection-state baseline.
-    // One immutable reference so a transition (init, set_vram_day) is a single
-    // atomic swap and the tick thread's snapshot is a single atomic read —
-    // transition and snapshot can never disagree. Separate volatile fields
-    // (however ordered) cannot guarantee that: the writer can always pause
-    // between the generation bump and the day write, letting the tick capture
-    // a fresh generation with the stale day.
-    record VramWindow(String day, int cursor, String metaSig) {}
+    // today), the cursor into it, the provider connection-state baseline, and
+    // whether the window's init — the full-day payload that establishes the
+    // viewer's baseline — has gone out. One immutable reference so a
+    // transition (init, set_vram_day) is a single atomic swap and the tick
+    // thread's snapshot is a single atomic read — transition and snapshot can
+    // never disagree. Separate volatile fields (however ordered) cannot
+    // guarantee that: the writer can always pause between the generation bump
+    // and the day write, letting the tick capture a fresh generation with the
+    // stale day.
+    record VramWindow(String day, int cursor, String metaSig, boolean baselineSent) {}
 
     // Package-private, with its fields, so the unit test can pin the
     // isCurrentVramWindow predicate on a real state instance.
@@ -61,7 +63,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // The current vram window; swapped atomically on every change. The
         // reference identity is the generation: any earlier snapshot is stale
         // the moment it is swapped out, whatever the writer paused on.
-        final AtomicReference<VramWindow> vramWindow = new AtomicReference<>(new VramWindow(null, 0, ""));
+        final AtomicReference<VramWindow> vramWindow = new AtomicReference<>(new VramWindow(null, 0, "", false));
 
         // The user-selected window. The live delta slide advances only the end
         // to "now"; the start stays anchored where the preset put it.
@@ -214,7 +216,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
         Object dayObj = msg.get("vram_day");
         state.vramWindow.set(new VramWindow(
-            (dayObj instanceof String s && !s.isBlank()) ? s : null, 0, ""));
+            (dayObj instanceof String s && !s.isBlank()) ? s : null, 0, "", false));
 
         Object tdObj = msg.get("timeline_deltas");
         state.deltaEnabled = tdObj == null || coerceBool(tdObj, true);
@@ -303,7 +305,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private void handleSetVramDay(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         Object dayObj = msg.get("day");
         if (dayObj instanceof String s && !s.isBlank()) {
-            state.vramWindow.set(new VramWindow(s, 0, ""));
+            state.vramWindow.set(new VramWindow(s, 0, "", false));
             pushVramInit(session, state);
         }
     }
@@ -378,7 +380,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // window change swapped the reference meanwhile, that window's
             // init is responsible for the push — the stale baseline is
             // dropped together with the stale payload.
-            if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), cursor, vramMetaSig(payload)))) {
+            if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), cursor, vramMetaSig(payload), true))) {
                 send(session, Map.of("type", "vram_init", "payload", payload));
             }
         } catch (Exception e) {
@@ -396,6 +398,14 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // never send previous-day samples or overwrite the new day's
             // cursor and connection-state baseline.
             VramWindow window = state.vramWindow.get();
+            // A window whose init has not gone out yet is not consumable:
+            // init and the first delta after a day change query the same
+            // (day, cursor 0) and race for the write-back — whichever loses
+            // the compareAndSet drops its push, and a delta winning that race
+            // would owe the viewer a full-day "init" that never comes. The
+            // init runs on the websocket thread the moment the window moves,
+            // so the next tick already sees the baseline.
+            if (!window.baselineSent()) return;
             String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
             Map<String, Object> payload = vramService.getVramStats(day, window.cursor());
             Object sid = payload.get("last_snapshot_id");
@@ -409,7 +419,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String metaSig = vramMetaSig(payload);
             boolean metaChanged = !metaSig.equals(window.metaSig());
             if (hasNewSamples || nextCursor != window.cursor() || metaChanged) {
-                if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), nextCursor, metaSig))) {
+                if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), nextCursor, metaSig, window.baselineSent()))) {
                     send(session, Map.of("type", "vram_delta", "payload", payload));
                 }
             }

@@ -168,6 +168,48 @@ class StatsV2WebSocketHandlerLivePushTest {
     }
 
     @Test
+    void a_delta_cannot_preempt_the_init_of_a_day_change() throws Exception {
+        // Stop the tick scheduler: the test drives the two threads' steps
+        // itself, in the interleaving order.
+        handler.shutdown();
+
+        String day1 = "2026-09-01";
+        String day2 = "2026-09-02";
+        when(vramService.getVramStats(day1, 0)).thenReturn(vramPayload(100, "connected"));
+
+        handler.afterConnectionEstablished(session);
+        handler.handleMessage(session, new TextMessage("{\"action\":\"init\",\"vram_day\":\"" + day1 + "\"}"));
+        clearInvocations(session);
+
+        StatsV2WebSocketHandler.SessionState state = (StatsV2WebSocketHandler.SessionState)
+            ((Map<?, ?>) ReflectionTestUtils.getField(handler, "states")).get(session.getId());
+
+        // set_vram_day has swapped in the fresh window, and its init captured
+        // that window and is in its query. The tick thread's delta runs
+        // against the very same window while that query is in flight: it must
+        // not consume the window's baseline — if it won the write-back, the
+        // init would lose its compareAndSet and the viewer would get a
+        // "delta" where the full-day "init" the day change owes it never
+        // comes.
+        state.vramWindow.set(new StatsV2WebSocketHandler.VramWindow(day2, 0, "", false));
+        when(vramService.getVramStats(day2, 0)).thenAnswer(inv -> {
+            ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
+            return vramPayload(200, "offline");
+        });
+        ReflectionTestUtils.invokeMethod(handler, "pushVramInit", session, state);
+
+        // The init went out as an init — not shadowed by a delta — and left
+        // the window baseline-established for the next tick's deltas.
+        assertThat(state.vramWindow.get().cursor()).isEqualTo(200);
+        assertThat(state.vramWindow.get().baselineSent()).isTrue();
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, atLeastOnce()).sendMessage(captor.capture());
+        assertThat(captor.getAllValues())
+            .anyMatch(m -> m.getPayload().contains("\"type\":\"vram_init\""))
+            .noneMatch(m -> m.getPayload().contains("\"type\":\"vram_delta\""));
+    }
+
+    @Test
     void a_stale_day_with_a_fresh_generation_is_not_a_current_window() {
         // The interleaving the separate volatile fields had to survive — the
         // delta reads the day before set_vram_day runs, the generation after
@@ -175,7 +217,7 @@ class StatsV2WebSocketHandlerLivePushTest {
         // reference, so a snapshot either is the current window or it is
         // not, whatever the writer paused on and whatever the query fetched.
         StatsV2WebSocketHandler.SessionState state = new StatsV2WebSocketHandler.SessionState();
-        StatsV2WebSocketHandler.VramWindow stale = new StatsV2WebSocketHandler.VramWindow("2026-09-01", 100, "connected");
+        StatsV2WebSocketHandler.VramWindow stale = new StatsV2WebSocketHandler.VramWindow("2026-09-01", 100, "connected", true);
         state.vramWindow.set(stale);
 
         // A snapshot of the window the state is in passes.
@@ -183,7 +225,7 @@ class StatsV2WebSocketHandlerLivePushTest {
 
         // The window moves to day2: the old snapshot is stale the moment it
         // is swapped out, whatever the in-flight day1 query fetched for it.
-        StatsV2WebSocketHandler.VramWindow current = new StatsV2WebSocketHandler.VramWindow("2026-09-02", 200, "offline");
+        StatsV2WebSocketHandler.VramWindow current = new StatsV2WebSocketHandler.VramWindow("2026-09-02", 200, "offline", true);
         state.vramWindow.set(current);
         assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(state, stale)).isFalse();
         // A coherent snapshot of the window the state is in still passes.
@@ -192,7 +234,7 @@ class StatsV2WebSocketHandlerLivePushTest {
         // paused between its capture and its write-back loses the
         // compareAndSet against the writer's transition.
         assertThat(StatsV2WebSocketHandler.isCurrentVramWindow(
-            state, new StatsV2WebSocketHandler.VramWindow("2026-09-02", 0, ""))).isFalse();
+            state, new StatsV2WebSocketHandler.VramWindow("2026-09-02", 0, "", false))).isFalse();
     }
 
     @Test

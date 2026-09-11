@@ -819,4 +819,35 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     await pendingB;
     expect(panel.unloadingLaneId()).toBeNull();
   });
+
+  it('does not let an A → B → A attempt settle the newer attempt on the same lane', async () => {
+    // Lane ids are per-worker, so the same id can exist on two workers: an
+    // A → B → A sequence re-uses both the provider and the lane name of the
+    // older attempt for a newer one, and matching on that pair would let the
+    // older attempt settle the newer one's signal and error.
+    const first = panel.handleUnload('planner-foo');
+    switchTo('gpu-02');
+    const onOther = panel.handleUnload('planner-foo');
+    unloadSettlers[1]();
+    await onOther;
+    expect(panel.unloadingLaneId()).toBeNull();
+
+    switchTo('gpu-01');
+    const second = panel.handleUnload('planner-foo');
+    expect(panel.unloadingLaneId()).toBe('planner-foo');
+
+    // The first attempt settles last — on the worker it started on, with the
+    // same lane name the newer attempt now holds.
+    unloadSettlers[0]();
+    await first;
+
+    // It must not have cleared the newer attempt's signal or written into
+    // its error.
+    expect(panel.unloadingLaneId()).toBe('planner-foo');
+    expect(panel.unloadError()).toBeNull();
+
+    unloadSettlers[2]();
+    await second;
+    expect(panel.unloadingLaneId()).toBeNull();
+  });
 });

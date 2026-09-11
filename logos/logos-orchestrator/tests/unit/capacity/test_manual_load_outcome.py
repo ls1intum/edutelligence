@@ -300,6 +300,27 @@ def test_lane_exists_no_op_does_not_overwrite_a_running_entry():
     assert outcome["status"] == "running"
 
 
+def test_lane_exists_no_op_settles_the_lane_less_endpoint_placeholder():
+    """The endpoint records a lane-less "running" when it answers 202, and the
+    attempt replaces it with its own lane only right before dispatch. When the
+    claimed id already holds the model, the attempt no-ops without dispatching
+    — no executor will ever settle the placeholder, so the no-op itself must
+    resolve it: the lane exists, the operator's goal is met, and leaving the
+    entry would pin the UI note at "Loading" for the outcome TTL."""
+    planner = _planner()
+    planner._execute_action_with_confirmation = MagicMock()
+    planner._lane_exists_in_runtime = MagicMock(return_value=True)
+    planner._runtime_lane_model = MagicMock(return_value="org/model-a")
+    planner.record_manual_load_outcome(1, "org/model-a", "running")
+
+    assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
+    planner._execute_action_with_confirmation.assert_not_called()
+
+    outcome = planner.get_manual_load_outcome(1, "org/model-a")
+    assert outcome["status"] == "succeeded"
+    assert outcome["lane_id"] == "planner-org_model-a"
+
+
 # ── admission: atomic before the 202 ─────────────────────────────────────
 
 

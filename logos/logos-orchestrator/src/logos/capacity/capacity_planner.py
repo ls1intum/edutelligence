@@ -6737,13 +6737,22 @@ class CapacityPlanner:
                                 provider_id,
                                 lane_id,
                             )
-                            # The model is loaded — the operator's goal is met.
-                            # Report it as success so the UI note resolves; but
-                            # not over a "running" entry: a concurrent attempt
-                            # for this same lane may still be executing and
-                            # owns the final state.
+                            # The model is loaded — the operator's goal is met,
+                            # so the UI note resolves as success. The hold-back
+                            # is a "running" entry that *names a lane*: it
+                            # belongs to a dispatch still executing, and that
+                            # dispatch's executor settles it. The exception is
+                            # the endpoint's lane-less "running" placeholder:
+                            # it is this attempt's own, and this attempt is
+                            # about to return without dispatching, so no
+                            # executor will ever settle it — leaving it would
+                            # pin the note at "Loading" for the outcome TTL
+                            # although the lane is already serving.
                             current = self.get_manual_load_outcome(provider_id, model_name)
-                            if not (current and current.get("status") == "running"):
+                            held_by_dispatch = (
+                                bool(current) and current.get("status") == "running" and "lane_id" in current
+                            )
+                            if not held_by_dispatch:
                                 self.record_manual_load_outcome(provider_id, model_name, "succeeded", lane_id=lane_id)
                             return False
                         logger.info(
