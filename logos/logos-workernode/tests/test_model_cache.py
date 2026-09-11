@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -1066,3 +1068,178 @@ def test_disabled_cache_treats_cache_use_reservations_as_noop():
     cache.release_cache_use("org/m")
     cache.release_cache_use("org/m")
     assert cache.cache_use_reservations() == set()
+
+
+# ---------------------------------------------------------------------------
+# Writer-lock coordination between the sync (calibration) and async
+# (background worker) copy paths — one per-model lock, one writer at a time
+# ---------------------------------------------------------------------------
+
+
+async def test_ensure_cached_sync_waits_for_an_inflight_background_copy(ram_cache_env, monkeypatch):
+    """Regression [high] (background-first interleaving): when the background
+    worker already owns the model's copy — here, actively copying it — the
+    synchronous calibration path must not start a second writer for the same
+    <model>.partial tree (both implementations delete, write and rename it).
+    It waits for the existing attempt through the per-model writer lock,
+    then serves the completed copy."""
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    copy_calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_copy(model_name):
+        nonlocal copy_calls
+        copy_calls += 1
+        started.set()
+        await release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    sync_copy_calls = 0
+
+    def sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model", slow_copy)
+    monkeypatch.setattr(cache, "_copy_model_sync", sync_copy)
+    # Deterministic admission: zero tmpfs size zeroes the safety floor, so
+    # the worker admits the copy no matter how full the test disk is (the
+    # real mount is 400 GB of a 503 GB host; a nearly-full test disk would
+    # otherwise make the worker reject before the copy starts).
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    cache.start_background_caching([model])
+    await started.wait()  # the worker holds the writer lock while copying
+
+    result: list[str] = []
+    thread = threading.Thread(target=lambda: result.append(cache.ensure_cached_sync(model)))
+    thread.start()
+    # The sync path enters while the background copy is in flight: it must
+    # wait for the existing attempt, not write a second partial tree.
+    release.set()
+    assert await asyncio.to_thread(thread.join, 30) is None
+    hf_home = result[0]
+
+    assert hf_home == ram_cache_env["tmpfs"]
+    assert cache.is_cached(model)
+    assert copy_calls == 1
+    assert sync_copy_calls == 0
+    await cache.stop_background_caching()
+
+
+async def test_ensure_cached_sync_serves_from_source_when_the_worker_outlives_the_wait(ram_cache_env, monkeypatch):
+    """Regression [high] (background-first interleaving, timeout bound): when
+    the worker's copy outlives SYNC_BACKGROUND_WAIT_TIMEOUT_S, the sync path
+    gives up waiting and serves from the source — it must not start its own
+    copy behind the worker's back."""
+    monkeypatch.setattr("logos_worker_node.model_cache.SYNC_BACKGROUND_WAIT_TIMEOUT_S", 0.2)
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    copy_calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_copy(model_name):
+        nonlocal copy_calls
+        copy_calls += 1
+        started.set()
+        await release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    sync_copy_calls = 0
+
+    def sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model", slow_copy)
+    monkeypatch.setattr(cache, "_copy_model_sync", sync_copy)
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    cache.start_background_caching([model])
+    await started.wait()  # the worker holds the writer lock while copying
+
+    result: list[str] = []
+    thread = threading.Thread(target=lambda: result.append(cache.ensure_cached_sync(model)))
+    thread.start()
+    # The sync path must give up after the (short) wait while the worker
+    # still owns the model, and must not start a competing copy.
+    assert await asyncio.to_thread(thread.join, 30) is None
+    hf_home = result[0]
+    release.set()
+
+    assert hf_home == str(Path(ram_cache_env["source_hf"]).parent)
+    assert sync_copy_calls == 0
+    assert copy_calls == 1  # the worker's attempt is the only copy
+    await cache.stop_background_caching()
+
+
+async def test_background_copy_waits_for_an_inflight_synchronous_copy(ram_cache_env, monkeypatch):
+    """The single per-model writer lock in the other direction: the async
+    path (background worker / lane) must not start a copy while a
+    synchronous calibration copy owns the model — it waits for the writer
+    lock and then serves the completed copy."""
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    # The worker exists before any calibration can run in the app; the sync
+    # path takes the writer lock on its loop only when the worker exists.
+    cache.start_background_caching([])
+    started = threading.Event()
+    release = threading.Event()
+    sync_copy_calls = 0
+
+    def slow_sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        started.set()
+        release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    async_copy_calls = 0
+
+    async def async_copy(model_name):
+        nonlocal async_copy_calls
+        async_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model_sync", slow_sync_copy)
+    monkeypatch.setattr(cache, "_copy_model", async_copy)
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    thread = threading.Thread(target=lambda: cache.ensure_cached_sync(model))
+    thread.start()
+    # Blocking wait in a worker thread: the sync copy takes the writer lock
+    # ON this loop, so the loop must keep running while we wait for it.
+    assert await asyncio.to_thread(started.wait, 10)  # the sync copy holds the writer lock
+
+    path_task = asyncio.create_task(cache.ensure_cached(model))
+    # The async path enters while the sync copy is in flight: it must wait
+    # for the lock, not write a second partial tree.
+    release.set()
+    hf_home = await path_task
+    assert await asyncio.to_thread(thread.join, 10) is None
+
+    assert hf_home == ram_cache_env["tmpfs"]
+    assert cache.is_cached(model)
+    assert sync_copy_calls == 1
+    assert async_copy_calls == 0
+    await cache.stop_background_caching()

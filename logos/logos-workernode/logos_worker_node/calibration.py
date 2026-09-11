@@ -1474,6 +1474,14 @@ def _reserve_and_admit_calibration_copy(
     confirmed-safety requirement as the rejection fallback below: the
     probe proceeds from source only once the entry is gone or the host
     is at/above a just-established floor, and aborts otherwise.
+
+    The admission itself is serialized with the background cache worker
+    through the per-model writer lock inside ``ensure_cached_sync`` (see
+    ModelRamCache): if the worker already owns this model's copy — queued
+    or in flight when the calibration started — the sync path waits for
+    that attempt instead of starting a second writer for the same
+    <model>.partial tree, and on a timed-out wait falls back to the
+    source.
     """
     if not cache_use_reserved[0]:
         model_cache.reserve_cache_use(model)

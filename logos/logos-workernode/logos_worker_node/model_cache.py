@@ -13,7 +13,10 @@ every weight file twice, once as a blob and once as the snapshot entry
 pointing at it, for exactly double the RAM.
 
 Partial copies use a ``.partial`` suffix and are renamed atomically on
-completion to avoid serving incomplete data.
+completion to avoid serving incomplete data. Both copy implementations
+(the async background worker and the synchronous calibration path) delete,
+write and rename that same tree, so writer ownership of a model is a
+single per-model lock: only its holder may copy.
 """
 
 from __future__ import annotations
@@ -40,6 +43,13 @@ _SAFETY_MARGIN_RATIO = 0.10  # keep ≥10% tmpfs free
 # multi-GB weights into the small tmpfs and ENOSPC. 10 MB cleanly separates
 # manifests/tokenizers (KB to low-MB) from any real weight shard.
 _BULK_FILE_THRESHOLD_BYTES = 10 * 1024 * 1024
+
+# How long ensure_cached_sync blocks on the per-model writer lock while the
+# background worker holds it (its copy in flight) before giving up and
+# serving from the source. A single-model rsync runs for minutes, not tens
+# of minutes — the bound keeps a wedged worker from holding a calibration
+# session hostage.
+SYNC_BACKGROUND_WAIT_TIMEOUT_S = 1800.0
 
 
 def _hf_model_dir_name(model_name: str) -> str:
@@ -228,6 +238,12 @@ class ModelRamCache:
         self._completion_events: dict[str, asyncio.Event] = {}
         self._caching_now: str | None = None
         self._caching_task: asyncio.Task | None = None
+        # The event loop the background worker runs on, captured when the
+        # worker starts (start_background_caching / wait_for_cached).
+        # ensure_cached_sync runs in executor threads and drives the
+        # per-model writer lock on that loop (run_coroutine_threadsafe) so
+        # it never races the worker's in-flight copy.
+        self._worker_loop: asyncio.AbstractEventLoop | None = None
 
         # Reference-counted cache-use reservations, model -> outstanding use.
         # Calibration reads a model's tmpfs entry (ensure_cached_sync + vLLM
@@ -486,7 +502,32 @@ class ModelRamCache:
 
         Returns the HF_HOME path to use: tmpfs cache path if successfully cached,
         source path if not (space exhausted, model not found, or copy failed).
+
+        Writer ownership is shared with the background worker through the
+        per-model lock: if the worker already has this model queued or in
+        flight, the lock wait blocks until its attempt ends instead of
+        starting a second writer for the same <model>.partial tree (both
+        copy implementations delete, write and rename that tree); on a
+        timed-out or unreachable wait the model is served from the source.
         """
+        may_copy, writer_lock = self._writer_lock_for_sync_copy(model_name)
+        if not may_copy:
+            logger.warning(
+                "Model %s: the background cache attempt owns the model — "
+                "loading from source instead of starting a competing copy",
+                model_name,
+            )
+            return str(self._source_hub.parent)
+        try:
+            return self._ensure_cached_sync(model_name)
+        finally:
+            if writer_lock is not None:
+                self._release_writer_lock_sync(writer_lock)
+
+    def _ensure_cached_sync(self, model_name: str) -> str:
+        """The admission + copy body of ensure_cached_sync, with the
+        per-model writer lock held by the wrapper (lock-free when no
+        background worker exists to race)."""
         if model_name in self._cached_models:
             cached = self._cache_hub / _hf_model_dir_name(model_name)
             if cached.exists():
@@ -725,6 +766,10 @@ class ModelRamCache:
         """
         # Coerce to a fresh list because the caller may reuse the input.
         wanted = [m for m in models if isinstance(m, str) and m.strip()]
+        try:
+            self._worker_loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - called from a thread
+            pass
         if self._cache_queue_event is None:
             self._cache_queue_event = asyncio.Event()
         for m in wanted:
@@ -782,6 +827,7 @@ class ModelRamCache:
         """
         if self.is_cached(model_name):
             return True
+        self._worker_loop = asyncio.get_running_loop()
         if self._cache_queue_event is None:
             self._cache_queue_event = asyncio.Event()
         event = self._enqueue(model_name, priority=True)
@@ -1038,6 +1084,73 @@ class ModelRamCache:
             if model_name not in self._locks:
                 self._locks[model_name] = asyncio.Lock()
             return self._locks[model_name]
+
+    async def _acquire_model_writer_lock(self, model_name: str) -> asyncio.Lock:
+        """Fetch AND acquire the per-model writer lock.
+
+        Driven from non-loop threads via asyncio.run_coroutine_threadsafe
+        (see _writer_lock_for_sync_copy): holding it is what makes the
+        synchronous copy and the background worker's ensure_cached mutually
+        exclusive writers for the model's .partial tree.
+        """
+        lock = await self._get_model_lock(model_name)
+        await lock.acquire()
+        return lock
+
+    async def _release_model_writer_lock(self, lock: asyncio.Lock) -> None:
+        lock.release()
+
+    def _writer_lock_for_sync_copy(self, model_name: str) -> tuple[bool, asyncio.Lock | None]:
+        """Take the per-model writer lock for a synchronous copy.
+
+        Returns ``(may_copy, lock)``. ``lock`` is non-None exactly when it
+        was taken and must be released via ``_release_writer_lock_sync``.
+        ``may_copy`` is False when the call cannot own the writer without
+        racing the background worker: the worker held the lock past
+        SYNC_BACKGROUND_WAIT_TIMEOUT_S (its copy still in flight), the call
+        runs ON the worker loop (blocking would deadlock it), or the loop
+        died underneath the wait — in all of those the caller serves from
+        the source. A missing worker loop means no background worker was
+        ever started, so nothing can own the writer: proceed lock-free.
+        """
+        loop = self._worker_loop
+        if loop is None:
+            return True, None
+        try:
+            if asyncio.get_running_loop() is loop:
+                return False, None
+        except RuntimeError:
+            pass  # non-loop thread: the normal calibration shape
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._acquire_model_writer_lock(model_name), loop)
+            return True, future.result(timeout=SYNC_BACKGROUND_WAIT_TIMEOUT_S)
+        except Exception:  # noqa: BLE001
+            # Timed out (the worker's copy is still in flight) or the loop
+            # died: writer ownership is unproven, so the caller serves from
+            # the source instead of starting a competing copy.
+            logger.warning(
+                "Model %s: could not take the per-model writer lock for the "
+                "synchronous copy (background attempt in flight after %.0fs, "
+                "or the worker loop is gone)",
+                model_name,
+                SYNC_BACKGROUND_WAIT_TIMEOUT_S,
+            )
+            return False, None
+
+    def _release_writer_lock_sync(self, lock: asyncio.Lock) -> None:
+        """Release a writer lock taken by ``_writer_lock_for_sync_copy``.
+
+        Fire-and-forget on the worker loop: releasing must not depend on
+        the loop still being alive at copy end, and a lost release can only
+        make a later sync copy take the safe source path after its timeout.
+        """
+        loop = self._worker_loop
+        if loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._release_model_writer_lock(lock), loop)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not schedule the writer-lock release (loop gone)")
 
     async def _copy_model(self, model_name: str) -> bool:
         """Copy model directory into tmpfs using rsync.
