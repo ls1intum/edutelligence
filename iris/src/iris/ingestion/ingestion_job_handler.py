@@ -17,7 +17,15 @@ class IngestionJobHandler:
 
     def add_job(
         self, process: Thread, course_id: int, lecture_id: int, lecture_unit_id: int
-    ):
+    ) -> bool:
+        """Register and start a job for a lecture unit, unless one is already running for it.
+
+        Returns ``True`` when the thread was started, ``False`` when the job was skipped as a
+        duplicate. Callers that track the run elsewhere (the pull worker's lease table) must only
+        register it when this returns ``True``: a started thread is the only one that will run,
+        heartbeat and terminate, so tracking a skipped duplicate would leave a run that never
+        progresses and whose lease is never renewed.
+        """
         self.semaphore.acquire()
         try:
             old_thread = None
@@ -35,11 +43,12 @@ class IngestionJobHandler:
                     lecture_id,
                     lecture_unit_id,
                 )
-                return
+                return False
 
             self.job_list.setdefault(course_id, {}).setdefault(lecture_id, {})[
                 lecture_unit_id
             ] = process
             process.start()
+            return True
         finally:
             self.semaphore.release()

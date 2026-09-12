@@ -46,6 +46,8 @@ from iris.vector_database.write_retry import (
 )
 from iris.web.routers.webhooks import lecture_visibility_webhook
 
+_ROW_UUID = "33333333-3333-3333-3333-333333333333"
+
 
 def visibility_dto() -> LectureUnitVisibilityUpdateDTO:
     return LectureUnitVisibilityUpdateDTO.model_validate(
@@ -452,6 +454,7 @@ def test_full_page_ingestion_data_carries_preserved_visibility():
         lecture_unit_id=10,
         course_id=30,
         attachment_version=4,
+        ingestion_run_id="run-x",
     )
 
     result = create_page_data(
@@ -511,12 +514,17 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
         LectureUnitSchema.VIDEO_LINK.value: "stale-video-link",
     }
     pipeline.lecture_unit_collection.query.fetch_objects.return_value.objects = [
-        SimpleNamespace(properties=stored_properties)
+        SimpleNamespace(uuid=_ROW_UUID, properties=stored_properties)
     ]
+    pipeline.lecture_unit_collection.data.insert.return_value = _ROW_UUID
+    pipeline.lecture_unit_collection.data.delete_many.return_value = SimpleNamespace(
+        failed=0, matches=0, successful=0
+    )
     lecture_unit = SimpleNamespace(
         course_id=30,
         course_name="Course",
         course_description="Description",
+        course_language="en",
         lecture_id=20,
         lecture_name="Lecture",
         lecture_unit_id=10,
@@ -525,6 +533,14 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
         video_link="https://video.example/fresh",
         base_url="https://artemis.example",
         lecture_unit_summary="",
+        content_fingerprint=None,
+        ingestion_run_id="run-x",
+        expected_chunk_counts_json=None,
+        pdf_page_count=3,
+        pipeline_version=1,
+        quality_score=None,
+        quality_flags_json=None,
+        content_unchanged=False,
     )
 
     with (
@@ -575,12 +591,17 @@ def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_starte
         LectureUnitSchema.RELEASE_DATE.value: None,
     }
     pipeline.lecture_unit_collection.query.fetch_objects.return_value = SimpleNamespace(
-        objects=[SimpleNamespace(properties=new_properties)]
+        objects=[SimpleNamespace(uuid=_ROW_UUID, properties=new_properties)]
+    )
+    pipeline.lecture_unit_collection.data.insert.return_value = _ROW_UUID
+    pipeline.lecture_unit_collection.data.delete_many.return_value = SimpleNamespace(
+        failed=0, matches=0, successful=0
     )
     lecture_unit = SimpleNamespace(
         course_id=30,
         course_name="Course",
         course_description="Description",
+        course_language="en",
         lecture_id=20,
         lecture_name="Lecture",
         lecture_unit_id=10,
@@ -589,6 +610,14 @@ def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_starte
         video_link="",
         base_url="https://artemis.example",
         lecture_unit_summary="",
+        content_fingerprint=None,
+        ingestion_run_id="run-x",
+        expected_chunk_counts_json=None,
+        pdf_page_count=3,
+        pipeline_version=1,
+        quality_score=None,
+        quality_flags_json=None,
+        content_unchanged=False,
     )
 
     with (
@@ -627,6 +656,7 @@ def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fail
         course_id=30,
         course_name="Course",
         course_description="Description",
+        course_language="en",
         lecture_id=20,
         lecture_name="Lecture",
         lecture_unit_id=10,
@@ -635,6 +665,14 @@ def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fail
         video_link="",
         base_url="https://artemis.example",
         lecture_unit_summary="",
+        content_fingerprint=None,
+        ingestion_run_id="run-x",
+        expected_chunk_counts_json=None,
+        pdf_page_count=3,
+        pipeline_version=1,
+        quality_score=None,
+        quality_flags_json=None,
+        content_unchanged=False,
     )
 
     with (
@@ -696,11 +734,25 @@ def test_concurrent_visibility_property_add_is_treated_as_idempotent(
         SimpleNamespace(name=LectureUnitPageChunkSchema.COURSE_LANGUAGE.value),
         SimpleNamespace(name=LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value),
     ]
-    collection.config.get.side_effect = [
+    scripted_responses = [
         SimpleNamespace(properties=existing_properties),
         SimpleNamespace(properties=[]),
         SimpleNamespace(properties=[SimpleNamespace(name=property_name)]),
     ]
+    # After the scripted concurrent-add race, every later ledger/stamp property
+    # check finds its property already present.
+    all_present = SimpleNamespace(
+        properties=[
+            SimpleNamespace(name=schema_property.value)
+            for schema_enum in (LectureUnitPageChunkSchema, LectureUnitSegmentSchema)
+            for schema_property in schema_enum
+        ]
+    )
+
+    def next_response(*_args, **_kwargs):
+        return scripted_responses.pop(0) if scripted_responses else all_present
+
+    collection.config.get.side_effect = next_response
     collection.config.add_property.side_effect = WeaviateInvalidInputError(
         "property already exists"
     )
