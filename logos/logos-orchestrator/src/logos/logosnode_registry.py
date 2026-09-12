@@ -1270,6 +1270,15 @@ class LogosNodeRuntimeRegistry:
                 try:
                     event = await asyncio.wait_for(stream_queue.get(), timeout=read_timeout)
                 except asyncio.TimeoutError as exc:
+                    # A read clamped to the deadline's remaining time fires
+                    # when the wall is reached, not when the worker went
+                    # idle: that is the budget's absolute deadline expiring,
+                    # and it must keep its identity — a spent deadline must
+                    # not be same-lane-retried as a flaky worker. A read that
+                    # ran the full idle bound with the deadline still ahead
+                    # is the worker going quiet.
+                    if deadline_at is not None and time.monotonic() >= deadline_at:
+                        raise RetryDeadlineExceeded("stream execution passed its retry deadline") from exc
                     raise LogosNodeOfflineError("Stream timeout waiting for worker response") from exc
                 event_type = event.get("type")
                 if event_type == "stream_start":

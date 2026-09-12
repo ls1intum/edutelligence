@@ -264,6 +264,61 @@ async def test_chunks_cannot_push_the_stream_past_the_deadline():
     await _drain_pending_tasks()
 
 
+@pytest.mark.asyncio
+async def test_a_deadline_reached_during_a_blocked_read_keeps_its_identity():
+    """When the wall is crossed while a read is still blocked (the read was
+    clamped to the remaining time), the failure must stay
+    ``RetryDeadlineExceeded``, not be rewrapped as a worker-offline timeout:
+    the pre-token loop treats the two differently — a spent deadline is not
+    same-lane-retried, a flaky worker is."""
+    import time
+
+    from logos.errors import RetryDeadlineExceeded
+
+    registry, websocket = _registry_with_session()
+    stream = registry.send_stream_command(
+        PROVIDER_ID,
+        "infer_stream",
+        {"lane_id": "lane-a"},
+        timeout_seconds=30,  # an idle bound the deadline reaches first
+        deadline_at=time.monotonic() + 0.3,
+    )
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    # No chunk is ever fed: the read stays blocked until the clamped deadline
+    # fires.
+    with pytest.raises(RetryDeadlineExceeded):
+        await asyncio.wait_for(consumer, timeout=2)
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_an_idle_read_with_the_deadline_ahead_still_reports_the_worker_offline():
+    """The deadline clamp must not steal a genuine idle timeout: a read that
+    runs the full idle bound while the deadline is still far ahead is the
+    worker going quiet, and stays a ``LogosNodeOfflineError`` — which the
+    pre-token loop is allowed to same-lane-retry."""
+    import time
+
+    from logos.logosnode_registry import LogosNodeOfflineError
+
+    registry, websocket = _registry_with_session()
+    stream = registry.send_stream_command(
+        PROVIDER_ID,
+        "infer_stream",
+        {"lane_id": "lane-a"},
+        timeout_seconds=1,  # the idle bound fires well before the deadline
+        deadline_at=time.monotonic() + 60,
+    )
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    # No chunk is fed: the idle bound fires first, with the deadline still
+    # far ahead.
+    with pytest.raises(LogosNodeOfflineError):
+        await asyncio.wait_for(consumer, timeout=5)
+    await _drain_pending_tasks()
+
+
 # ---------------------------------------------------------------------------
 # A lane can answer with an error status instead of tokens
 #
