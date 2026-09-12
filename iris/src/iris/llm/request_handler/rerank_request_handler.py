@@ -75,18 +75,15 @@ class RerankRequestHandler(RequestHandler):
             map(lambda x: getattr(x, content_field_name), valid_documents)
         )
 
-        cohere_client = self.llm_manager.get_llm_by_id(self.model_id)
+        reranker = self.llm_manager.get_llm_by_id(self.model_id)
 
         try:
-            _, reranked_results, _ = cohere_client.rerank(
+            response = reranker.rerank(
                 query=query,
                 documents=document_contents,
                 top_n=top_n,
             )
-            ranked_documents = []
-            for result in reranked_results[1]:
-                ranked_documents.append(valid_documents[result.index])
-            return ranked_documents
+            return [valid_documents[item.index] for item in response.results]
         except Exception as e:
             logger.warning(
                 "Reranking failed, disabling for subsequent calls. "
