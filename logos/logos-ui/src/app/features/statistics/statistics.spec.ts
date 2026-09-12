@@ -212,4 +212,51 @@ describe('Statistics scope options', () => {
     expect(page.component.filterUserId()).toBe(7);
     expect(page.ws.setScope.mock.calls.length).toBe(scopesBefore);
   });
+
+  it('discards a stale response when the operator zooms into a custom range', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 6, 23, 50, 0, 0));
+
+    // Same shape as the preset-pick race, one different move: the range
+    // changes by zooming, and the in-flight request for the range the
+    // operator zoomed away from must be superseded by it.
+    let releaseStale: (value: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] }) => void =
+      () => {};
+    const stale = new Promise<{ teams: FeedFilterOption[]; requesters: FeedFilterOption[] }>(
+      (resolve) => {
+        releaseStale = resolve;
+      },
+    );
+    const fresh: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] } = {
+      teams: [{ id: 1, label: 'Team One', requestCount: 3 }],
+      requesters: [{ id: 7, label: 'User Seven', requestCount: 5 }],
+    };
+    let first = true;
+    const getScopeOptions = vi.fn(() => (first ? (first = false, stale) : Promise.resolve(fresh)));
+    const page = await pageAt(getScopeOptions);
+    fixture = page.fx;
+
+    page.component.setCustomRange({
+      start: new Date(2026, 8, 6, 12, 0),
+      end: new Date(2026, 8, 6, 13, 0),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(page.component.feedUsers()).toEqual(fresh.requesters);
+    expect(page.component.feedTeams()).toEqual(fresh.teams);
+
+    page.component.setUserFilter('7');
+    await Promise.resolve();
+    await Promise.resolve();
+    const scopesBefore = page.ws.setScope.mock.calls.length;
+
+    releaseStale({ teams: [], requesters: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.component.feedUsers()).toEqual(fresh.requesters);
+    expect(page.component.feedTeams()).toEqual(fresh.teams);
+    expect(page.component.filterUserId()).toBe(7);
+    expect(page.ws.setScope.mock.calls.length).toBe(scopesBefore);
+  });
 });

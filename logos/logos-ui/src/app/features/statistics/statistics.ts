@@ -1099,17 +1099,29 @@ export class Statistics implements OnInit, OnDestroy {
     this.customRange.set(range);
     this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // The zoomed window holds a different set of requesters and teams than
+    // the range it replaces — and the call supersedes whatever request is
+    // still in flight for the range the operator zoomed away from, so that
+    // stale response can no longer replace the new list or clear a requester
+    // it does not contain.
+    void this.loadScopeOptions();
   }
 
   clearCustomRange(): void {
     // Back on a preset, the period is resolved from the calendar again —
     // from *now*, so the anchor that marks the period on screen moves with
-    // it. (Every preset and offset change funnels through here.)
+    // it. (Every preset and offset change funnels through here — and the
+    // "back to a preset" button calls this directly, so the dropdown reload
+    // has to live here, not in the callers.)
     this.rangeAnchorMs.set(Date.now());
     this.customRange.set(null);
     this.resetZoomCounter.update((c) => c + 1);
     this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // Same reason as in setCustomRange: the preset range is a different list
+    // than the custom window it replaces, and the in-flight request for that
+    // window must be superseded.
+    void this.loadScopeOptions();
   }
 
   setPreset(p: TimePreset): void {
@@ -1117,16 +1129,12 @@ export class Statistics implements OnInit, OnDestroy {
     this.offset.set(0);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
-    // The dropdowns list what the range holds, so a different range is a
-    // different list — and possibly one the current selection is not in.
-    void this.loadScopeOptions();
   }
 
   setOffset(o: number): void {
     this.offset.set(o);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
-    void this.loadScopeOptions();
   }
 
   /**
