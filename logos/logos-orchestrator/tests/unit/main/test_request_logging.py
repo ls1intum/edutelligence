@@ -152,6 +152,7 @@ def _make_pipeline(
             status=None,
             timeout=None,
             deadline_at=None,
+            emit_recovery_frames=True,
         ):  # noqa: ARG002
             if on_headers:
                 on_headers(stream_headers or {})

@@ -66,6 +66,7 @@ class Executor:
         status: Optional[StreamingExecutionStatus] = None,
         timeout: Optional[float] = None,
         deadline_at: Optional[float] = None,
+        emit_recovery_frames: bool = True,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming HTTP request and yield response chunks.
@@ -90,6 +91,14 @@ class Executor:
                 deadline is enforced on the chunk loop itself (see
                 ``_until_deadline``), where a spent deadline raises
                 ``RetryDeadlineExceeded`` however often the upstream sends.
+            emit_recovery_frames: Whether to append the best-effort
+                Chat Completions recovery frames (a new error frame plus
+                ``data: [DONE]``) when a transport failure lands after the
+                first byte. A caller whose client speaks a different dialect
+                — the /v1/responses streamer, which must end the stream in a
+                ``response.failed`` event the executor cannot build without
+                the accumulated response — passes ``False`` and takes the
+                error back to emit its own terminal.
 
         Yields:
             Upstream response bytes without reconstructing their framing.
@@ -147,14 +156,21 @@ class Executor:
                             yield chunk
                 except Exception as exc:
                     # Before the first byte, propagate the failure so the caller
-                    # can still return an HTTP error. Afterwards, append only
-                    # protocol-compatible recovery frames; non-SSE streams
-                    # terminate without introducing foreign framing.
+                    # can still return an HTTP error. Afterwards the bytes are
+                    # unretractable: record the failure, then either append
+                    # protocol-compatible recovery frames or hand the error
+                    # back to a caller that owns its own terminal; non-SSE
+                    # streams terminate without introducing foreign framing.
                     logger.error(f"Mid-stream error from {url}: {exc}")
                     if not yielded_bytes:
                         raise
                     if status is not None:
                         status.error = str(exc)
+                    if not emit_recovery_frames:
+                        # The caller ends the stream in its own dialect — the
+                        # Chat Completions frame it would receive here is
+                        # protocol noise to it.
+                        raise
                     if not is_sse:
                         return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})

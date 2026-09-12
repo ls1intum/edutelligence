@@ -1039,6 +1039,62 @@ async def test_logosnode_pre_token_failure_comes_back_as_json_error(retry_env):
     assert status_is_retryable(response.status_code)
 
 
+async def test_pre_token_deadline_is_not_retried_on_the_same_lane(retry_env):
+    """A spent execution deadline is not the just-woken race the same-lane
+    pre-token retry exists for: the wall this request may run until has
+    passed, so re-pulling the lane — backoff sleep and all — could only spend
+    time that is no longer there. It must surface on the first attempt."""
+    from logos.errors import RetryDeadlineExceeded
+
+    opened = []
+
+    async def deadline_send_stream_command(**kwargs):  # noqa: ARG001
+        opened.append(kwargs)
+        raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+        yield b""  # unreachable; makes this an async generator
+
+    retry_env.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=deadline_send_stream_command),
+        raising=False,
+    )
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    retry_env.setattr(main, "_pipeline", _FakePipeline([_fail_result("unused")]), raising=False)
+    # Same-lane retries are available: the deadline must still stop the loop
+    # after the first attempt instead of burning them (and their backoff).
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 3)
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", 1.0)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-pretoken-deadline",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+
+    # A pre-stream JSON error, and the stream was opened exactly once: a
+    # same-lane retry would have opened it again after each backoff sleep.
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+    assert len(opened) == 1
+
+
 def _fake_deadline_env(retry_env, deadline_s=10.0, backoff_s=4.0):
     """A RetryBudget on a fake clock plus a fake asyncio.sleep that advances
     it, so a retry loop can be driven with real backoff in zero wall time."""
@@ -1404,9 +1460,17 @@ async def test_a_retry_stream_passes_the_absolute_deadline_to_the_cloud(retry_en
 
     class _RecordingStreamingExecutor:
         async def execute_streaming(
-            self, url, headers, payload, on_headers=None, status=None, timeout=None, deadline_at=None
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
         ):
-            calls.append({"timeout": timeout, "deadline_at": deadline_at})
+            calls.append({"timeout": timeout, "deadline_at": deadline_at, "emit_recovery_frames": emit_recovery_frames})
             if on_headers:
                 on_headers({"content-type": "text/event-stream"})
             yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
@@ -1446,3 +1510,97 @@ async def test_a_retry_stream_passes_the_absolute_deadline_to_the_cloud(retry_en
     assert calls[0]["timeout"] == 9.0
     # ...and the absolute deadline, enforced on the chunk loop.
     assert calls[0]["deadline_at"] == budget.deadline_at
+
+
+@pytest.mark.asyncio
+async def test_cloud_responses_deadline_ends_the_stream_in_a_failed_event(retry_env):
+    """A /v1/responses cloud stream that hits its deadline after bytes are out
+    must end in a ``response.failed`` event — not the Chat Completions error
+    frame + ``[DONE]`` a Responses client does not recognise. The streamer
+    tells the executor not to emit that framing and builds the terminal
+    itself, completing the created envelope under the next sequence number."""
+    import json
+
+    from logos.errors import RetryDeadlineExceeded
+
+    created = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {"id": "resp_1", "status": "in_progress", "model": "m-test", "output": []},
+    }
+    delta = {"type": "response.output_text.delta", "sequence_number": 1, "delta": "Hi"}
+    created_chunk = b"event: response.created\n" + b"data: " + json.dumps(created).encode() + b"\n\n"
+    delta_chunk = b"event: response.output_text.delta\n" + b"data: " + json.dumps(delta).encode() + b"\n\n"
+
+    calls = []
+
+    class _DeadlineExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):  # noqa: ARG002
+            calls.append({"emit_recovery_frames": emit_recovery_frames})
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield created_chunk
+            yield delta_chunk
+            # The absolute deadline fires after the first bytes — the error the
+            # real executor hands back when emit_recovery_frames is False.
+            raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _DeadlineExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/responses",
+            anthropic_dialect=None,
+            model_name="stub-model",
+        ),
+        {"model": "test-model", "input": "hi"},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-responses-deadline", "provider_type": "cloud"},
+        request_path="/v1/responses",
+    )
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+
+    # The streamer told the executor not to emit Chat Completions framing...
+    assert calls[0]["emit_recovery_frames"] is False
+    # ...the partial content was still forwarded...
+    assert b'"delta": "Hi"' in body
+    # ...and the stream ends in the Responses terminal, not [DONE].
+    assert b"[DONE]" not in body
+    frames = [frame for frame in body.split(b"\n\n") if frame.startswith(b"event: response.failed")]
+    assert len(frames) == 1
+    data_line = next(line for line in frames[0].split(b"\n") if line.startswith(b"data:"))
+    failed = json.loads(data_line[len(b"data: ") :])
+    assert failed["type"] == "response.failed"
+    assert failed["sequence_number"] == 2  # one past the last event read
+    resp = failed["response"]
+    # The created envelope the client already read, now failed — not a
+    # skeleton.
+    assert resp["id"] == "resp_1"
+    assert resp["model"] == "m-test"
+    assert resp["status"] == "failed"
+    assert resp["error"]["message"] == "stream execution passed its retry deadline"

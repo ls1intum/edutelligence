@@ -60,7 +60,7 @@ from logos.dbutils.types import (
     infer_cloud_provider_type,
     normalize_provider_type,
 )
-from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
+from logos.errors import RetryDeadlineExceeded, UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
 from logos.live_stream import (
     _STRUCTURED_DELTA_KEYS,
@@ -2289,10 +2289,14 @@ async def _streaming_response(
                     # An upstream error status (429/5xx) is not the just-woken
                     # race this same-lane retry exists for: the lane answered,
                     # so re-pulling it cannot help. Surface it so the internal
-                    # retry can re-dispatch to another lane instead. The
-                    # failure still counts as pre-token: only metadata was
-                    # held back, nothing was committed.
-                    if attempt < attempts - 1 and not isinstance(e, UpstreamStreamError):
+                    # retry can re-dispatch to another lane instead. A spent
+                    # execution deadline is the same in a stronger sense: the
+                    # wall this request may run until has passed, so re-pulling
+                    # the lane — backoff sleep and all — can only spend the
+                    # time that is no longer there. The failure still counts
+                    # as pre-token: only metadata was held back, nothing was
+                    # committed.
+                    if attempt < attempts - 1 and not isinstance(e, (UpstreamStreamError, RetryDeadlineExceeded)):
                         logger.warning(
                             "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
                             attempt + 1,
@@ -2618,6 +2622,10 @@ async def _streaming_response(
     else:
         stream_timeout_s = None
         stream_deadline_at = None
+    # A /v1/responses client ends its stream in a ``response.failed`` event,
+    # not the Chat Completions error frame + ``[DONE]`` the executor would
+    # append — so for that path the executor hands the mid-stream error back
+    # and the streamer below emits the dialect-correct terminal.
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
         headers,
@@ -2626,6 +2634,7 @@ async def _streaming_response(
         status=stream_status,
         timeout=stream_timeout_s,
         deadline_at=stream_deadline_at,
+        emit_recovery_frames=not is_responses_path(request_path or ""),
     )
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
@@ -2738,11 +2747,30 @@ async def _streaming_response(
                         yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
             # synthetic error frame without corrupting its protocol — in the
-            # dialect the client is reading, which is Anthropic's whenever the
-            # response was being translated.
+            # dialect the client is reading: Anthropic's when the response was
+            # being translated, the Responses API's for /v1/responses, and
+            # Chat Completions' otherwise.
             if anthropic_stream:
                 for client_chunk in anthropic_stream.error(str(exc)):
                     yield client_chunk
+            elif is_responses_path(request_path or ""):
+                # A /v1/responses client reads ``event: response.*`` frames:
+                # its terminal failure is a ``response.failed`` event, and the
+                # Chat Completions error frame plus ``[DONE]`` below is
+                # protocol noise to it. The event completes the created
+                # envelope the client read, under the next sequence number;
+                # only a stream that failed before either arrived needs the id
+                # fallback.
+                failed_event = stream_log.failed_response_event(str(exc)) or {
+                    "type": "response.failed",
+                    "response": {
+                        "id": f"resp_{request_id or 'unknown'}",
+                        "object": "response",
+                        "status": "failed",
+                        "error": {"code": "server_error", "message": str(exc)},
+                    },
+                }
+                yield sse("response.failed", failed_event)
             elif upstream_media_type == "text/event-stream":
                 import json as _json
 

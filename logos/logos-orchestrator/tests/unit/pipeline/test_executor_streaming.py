@@ -401,3 +401,84 @@ async def test_chunks_cannot_push_the_stream_past_the_deadline(monkeypatch):
     # recovery frames, like every other mid-stream transport error.
     assert b"passed its retry deadline" in body
     assert body.endswith(b"data: [DONE]\n\n")
+
+
+async def test_a_recovery_disabled_stream_hands_the_mid_stream_error_back(monkeypatch):
+    """With emit_recovery_frames=False the executor does not append the Chat
+    Completions error frame + [DONE]: the caller's client speaks a dialect
+    for which those frames are protocol noise, and it owns the terminal. The
+    failure is recorded on the status and the error is handed back."""
+    partial = b'data: {"type":"response.output_text.delta","delta":"par'
+    install_response(
+        monkeypatch,
+        FakeResponse(
+            [partial, RuntimeError("connection reset")],
+            headers={"content-type": "text/event-stream"},
+        ),
+    )
+
+    status = StreamingExecutionStatus()
+    chunks = []
+    with pytest.raises(RuntimeError, match="connection reset"):
+        async for chunk in Executor().execute_streaming(
+            "https://provider.test/v1/responses",
+            {},
+            {"model": "test-model"},
+            status=status,
+            emit_recovery_frames=False,
+        ):
+            chunks.append(chunk)
+
+    # Only the partial upstream bytes came back — no recovery frame was
+    # appended by the executor.
+    assert b"".join(chunks) == partial
+    assert b"[DONE]" not in b"".join(chunks)
+    assert status.error == "connection reset"
+
+
+async def test_a_deadline_cut_stream_with_recovery_disabled_propagates_the_deadline(monkeypatch):
+    """The same wall, recovery disabled: the deadline is what a /v1/responses
+    streamer takes back so it can end the stream in a response.failed event,
+    so the executor must raise it instead of appending Chat Completions
+    framing."""
+
+    class DripResponse:
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+        stop_after = time.monotonic() + 1.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aread(self):
+            return b""
+
+        async def aiter_bytes(self):
+            while time.monotonic() < self.stop_after:
+                await asyncio.sleep(0.02)
+                yield b"data: {}\n\n"
+
+    install_response(monkeypatch, DripResponse())
+
+    status = StreamingExecutionStatus()
+    t0 = time.monotonic()
+    chunks = []
+    with pytest.raises(RetryDeadlineExceeded):
+        async for chunk in Executor().execute_streaming(
+            "https://provider.test/v1/responses",
+            {},
+            {"model": "test-model"},
+            status=status,
+            deadline_at=t0 + 0.15,
+            emit_recovery_frames=False,
+        ):
+            chunks.append(chunk)
+    body = b"".join(chunks)
+
+    # The wall is recorded and raised; no recovery frame was appended.
+    assert status.error == "stream execution passed its retry deadline"
+    assert b"[DONE]" not in body
+    assert b"passed its retry deadline" not in body
