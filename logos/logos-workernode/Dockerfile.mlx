@@ -1,0 +1,65 @@
+# =============================================================================
+# Logos Worker Node — Apple Silicon / MLX distribution image
+#
+#   docker build -f Dockerfile.mlx -t logos-workernode-mlx .
+#
+# THIS IMAGE IS NEVER RUN. It is a transport container, not a runtime.
+#
+# Why
+# ───
+# Metal cannot be passed through to a container. Docker Desktop on macOS runs a
+# Linux VM with no GPU passthrough, and Apple's own `container` framework has
+# the same limitation — MLX inside a container falls back to the CPU, which
+# defeats the entire point. Docker hit this with their own vllm-metal backend
+# (Docker Desktop 4.62) and solved it the same way this image does: ship the
+# payload as an OCI artifact, extract it on the host, and run natively.
+#
+# So the worker process runs directly on macOS under launchd. That is also what
+# preserves full orchestrator control: a native process can fork `vllm serve`
+# with subprocess exactly as the CUDA worker does, so add_lane / delete_lane /
+# reconfigure_lane keep working unchanged. A containerised worker could not.
+#
+# How it is consumed
+# ──────────────────
+#   scripts/bootstrap-macos.sh   pulls this image, `docker create` + `docker cp`
+#                                the payload to /opt/logos-workernode-mlx, then
+#                                runs install-macos.sh and (re)starts launchd.
+#
+# Registry: ghcr.io (public), NOT Harbor. The Mac must be able to pull without
+# holding Harbor credentials. Note that a GHCR package is private on first
+# push — flip it to public once under Package settings → Change visibility.
+#
+# Platform: linux/arm64. The payload is pure Python and shell, so the
+# architecture is almost irrelevant, but matching the Mac avoids Docker Desktop
+# emulating a foreign image just to copy files out of it.
+# =============================================================================
+
+FROM alpine:3.22
+
+# Alpine rather than scratch purely so the image can be opened and inspected
+# (`docker run --rm -it <image> sh`) when a bootstrap goes wrong.
+
+LABEL org.opencontainers.image.title="Logos Worker Node (Apple Silicon / MLX)"
+LABEL org.opencontainers.image.description="Distribution artifact — extract on a Mac and run natively; do not run as a container."
+LABEL org.opencontainers.image.source="https://github.com/ls1intum/edutelligence"
+
+# /payload is what bootstrap-macos.sh copies out; keeping it under one
+# directory means the copy is a single `docker cp` with no path juggling.
+WORKDIR /payload
+
+COPY logos_worker_node/ ./logos_worker_node/
+COPY tools/ ./tools/
+COPY scripts/ ./scripts/
+COPY requirements.txt ./requirements.txt
+COPY config.example.mlx.yml ./config.example.mlx.yml
+COPY chat-templates/ ./chat-templates/
+
+RUN chmod +x ./scripts/*.sh
+
+# Guard: fail the build if the payload is missing its entrypoint module, so a
+# COPY that silently matched nothing cannot ship a broken artifact.
+RUN test -f ./logos_worker_node/main.py \
+    && test -f ./scripts/install-macos.sh \
+    && test -f ./requirements.txt
+
+CMD ["/bin/sh", "-c", "echo 'This image is a distribution artifact, not a runtime. Extract it with scripts/bootstrap-macos.sh on an Apple Silicon Mac — Metal is not available inside containers.' >&2; exit 1"]

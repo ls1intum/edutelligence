@@ -273,6 +273,7 @@ class TestUpstreamErrorForwarding:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
         )
 
         async def fake_process(req):
@@ -330,6 +331,7 @@ class TestUpstreamErrorForwarding:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
         )
 
         async def fake_process(req):
@@ -381,6 +383,7 @@ class TestUpstreamErrorForwarding:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
         )
 
         async def fake_process(req):
@@ -440,6 +443,7 @@ class TestStreamingErrors:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
         )
 
         async def fake_process(req):
