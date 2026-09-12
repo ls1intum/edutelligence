@@ -32,6 +32,9 @@ from iris.domain.status.rewriting_status_update_dto import (
 )
 from iris.domain.status.run_state_dto import RunStateEnum, StatusErrorDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.struggle_intervention_status_update_dto import (
+    StruggleInterventionStatusUpdateDTO,
+)
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
@@ -49,6 +52,27 @@ class StatusCallback:
     # tokens, activities, and identity fields such as the lecture-unit id) are
     # intentionally excluded so they keep accumulating across updates.
     _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = ("result", "display_page_numbers")
+
+    # Backoff between retries of a delivery-critical frame, in seconds.
+    _RETRY_BACKOFF_S: tuple[int, ...] = (1, 2, 4)
+
+    def _send_payload_with_backoff(
+        self, payload: dict[str, Any], attempts: int
+    ) -> bool:
+        """Send a payload, retrying up to ``attempts`` times with backoff.
+
+        A frame Artemis must not lose (the chat answer, a terminal decision) is worth a second and a
+        third try; everything else is sent once, because a heartbeat that fails is superseded by the
+        next one anyway and retrying it only delays the pipeline.
+        """
+        for attempt in range(attempts):
+            if self._send_status_payload(payload):
+                return True
+            if attempt < attempts - 1:
+                time.sleep(
+                    self._RETRY_BACKOFF_S[min(attempt, len(self._RETRY_BACKOFF_S) - 1)]
+                )
+        return False
 
     def __init__(self, url: str, run_id: str, status: StatusUpdateDTO):
         self.url = url
@@ -530,3 +554,54 @@ class AutonomousTutorCallback(StatusCallback):
             run_id,
             AutonomousTutorPipelineStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
+
+
+class StruggleInterventionCallback(StatusCallback):
+    """Status callback for the proactive struggle-intervention pipeline."""
+
+    def __init__(self, run_id: str, base_url: str):
+        url = f"{base_url}/{self.api_url}/struggle-intervention/runs/{run_id}/status"
+        super().__init__(
+            url,
+            run_id,
+            StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        )
+        self._trailing_finish_seen = False
+
+    # Attempts (with backoff) for the terminal frame, matching the chat callback's
+    # delivery-critical sends.
+    _TERMINAL_RETRY_ATTEMPTS = 3
+
+    def on_status_update(self) -> bool:
+        """Post the current status, retrying the terminal frame.
+
+        The terminal frame is the only thing Artemis ever learns about this run: it carries the
+        decision, and it is what completes the student's in-flight request. ``finish`` marks the
+        run terminal before it posts and this callback absorbs the pipeline's trailing finish, so
+        nothing behind it would try again. One 5xx or one restart landing on this POST would drop
+        the hint and leave the client waiting for its own timeout.
+        """
+        if not self._terminal_sent:
+            return super().on_status_update()
+        return self._send_payload_with_backoff(
+            self._serialize_status(), self._TERMINAL_RETRY_ATTEMPTS
+        )
+
+    def _reject_after_terminal(self, operation: str) -> None:
+        """Absorb the one trailing finish this pipeline's shape produces.
+
+        post_agent_hook owns the terminal frame here: it finishes the decision itself, or fails
+        a help request that came back unusable. AbstractAgentPipeline then closes every run with
+        a finish of its own, which arrives after that and is rejected. It is structural, not an
+        anomaly, so it must not reach Sentry on every single run. Exactly one is absorbed; a
+        second one, and every rejected fail or update, stays an anomaly and is reported.
+        """
+        if operation == "finish" and not self._trailing_finish_seen:
+            self._trailing_finish_seen = True
+            logger.debug(
+                "Absorbed the trailing finish for run %s; the pipeline had already sent its "
+                "terminal frame",
+                self.run_id,
+            )
+            return
+        super()._reject_after_terminal(operation)

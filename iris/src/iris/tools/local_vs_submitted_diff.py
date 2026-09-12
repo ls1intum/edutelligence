@@ -1,0 +1,90 @@
+"""Tool that diffs the student's live working copy against the last submitted code."""
+
+import difflib
+from typing import Callable, Optional
+
+from ..domain.data.programming_submission_dto import ProgrammingSubmissionDTO
+from ..web.status.status_update import StatusCallback
+
+_NO_CHANGES = "No code changes since the last submission (current working copy == submitted code)."
+_UNAVAILABLE = (
+    "The last submitted code could not be read, so a diff of the working copy against it "
+    "is unavailable (do not assume the live code equals the submitted code)."
+)
+
+
+def create_tool_local_vs_submitted_diff(
+    submission: Optional[ProgrammingSubmissionDTO], callback: StatusCallback
+) -> Callable[[], str]:
+    """
+    Create a tool that shows a unified diff of the student's local changes since the last submission.
+
+    Args:
+        submission: Programming submission data. `submitted_repository` holds the committed (last
+            submitted build) version of the code files the student changed locally; `repository` holds
+            the current live working copy.
+        callback: Kept for tool-factory signature parity; progress is reported by the
+            activity system, not by this tool.
+
+    Returns:
+        Function that returns the unified diff (submitted -> local) of the changed code files.
+    """
+    del callback
+
+    def local_vs_submitted_diff() -> str:
+        """
+        # Local vs Submitted Diff Tool
+
+        ## Purpose
+        Show what CODE the student changed in their CURRENT (live) working copy SINCE the last
+        SUBMITTED build (`get_feedbacks` and `get_submission_details` reflect that last build).
+        Two uses:
+        - Focus: the code region (method / function) the diff touches is what the student is
+          actively working on RIGHT NOW.
+        - Fix check: it shows whether a fix is already present in the live code even if it has not
+          been submitted / re-tested yet.
+
+        ## Key Points
+        - "No code changes" means the current working copy equals the last submitted code -- but only
+          when the submitted code was actually readable. If it could not be read, this tool says so
+          explicitly; never treat that as proof the live code equals the submitted code.
+        - Only content changes to code files are shown. A renamed file or a live copy that was not
+          sent can surface as an all-removed hunk; do NOT infer a real deletion from an all-removed
+          hunk alone -- treat it as ambiguous for focus inference, not as a deletion.
+
+        Returns:
+            str: A unified diff (submitted -> local), a "no changes" note, or an "unavailable" note.
+        """
+        if submission is None or not submission.submitted_repository_available:
+            return _UNAVAILABLE
+        if not submission.submitted_repository:
+            return _NO_CHANGES
+        live = submission.repository or {}
+        parts = []
+        for path, submitted in submission.submitted_repository.items():
+            local = live.get(path, "")
+            # keepends, because the line terminator is part of the change: with it stripped,
+            # "code" and "code\n" compare equal and a file that differs is reported as
+            # unchanged.
+            diff = difflib.unified_diff(
+                submitted.splitlines(keepends=True),
+                local.splitlines(keepends=True),
+                fromfile=f"submitted/{path}",
+                tofile=f"local/{path}",
+            )
+            # A line that carries no terminator would otherwise run into the next one and
+            # render as "-code+code". difflib does not close that gap itself, so the standard
+            # unified-diff marker does it here, exactly as git writes it.
+            diff_text = "".join(
+                (
+                    line
+                    if line.endswith(("\n", "\r"))
+                    else f"{line}\n\\ No newline at end of file\n"
+                )
+                for line in diff
+            )
+            if diff_text:
+                parts.append(diff_text)
+        return "\n\n".join(parts) if parts else _NO_CHANGES
+
+    return local_vs_submitted_diff
