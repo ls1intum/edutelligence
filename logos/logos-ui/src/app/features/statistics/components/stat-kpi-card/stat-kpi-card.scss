@@ -55,6 +55,16 @@
   line-height: var(--line-height-tight);
 }
 
+// The right slot is projected content, a flex item of this row. Its floor
+// must be zero: a card narrower than value + gap + slot would otherwise let
+// the slot keep the width of whatever it draws (a 92px sparkline, a run of
+// lane bars) and the drawing runs into the card border. With the floor at
+// zero the slot yields its width to the value, and the drawing inside scales
+// (sparkline) or clips (lane bars) to the space it is given.
+.kpi-row-2 ::ng-deep [kpiRight] {
+  min-width: 0;
+}
+
 // Row 3: hint slot
 .kpi-row-3 {
   // Uses .kpi-sub styling via projection
