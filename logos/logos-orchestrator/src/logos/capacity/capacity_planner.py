@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
+from logos.pipeline.latency_store import LatencyStore
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.models import CapacityPlanAction, LaneSchedulerSignals, ModelProfile
 from logos.terminal_logging import (
@@ -36,8 +37,6 @@ from logos.terminal_logging import (
     render_section,
     wrap_plain,
 )
-
-from logos.pipeline.latency_store import LatencyStore
 
 from .demand_tracker import DemandTracker
 from .host_ram_ledger import HostRamLedger

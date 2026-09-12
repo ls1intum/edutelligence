@@ -456,9 +456,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         return scored
 
-    def _record_scheduling_metrics(
-        self, model_id: int, provider_id: int, ettft: "EttftEstimate"
-    ) -> None:
+    def _record_scheduling_metrics(self, model_id: int, provider_id: int, ettft: "EttftEstimate") -> None:
         """Record per-decision scheduling metrics for the selected candidate."""
         model = self._logosnode.get_model_name(model_id, provider_id) or str(model_id)
         provider = self._logosnode.get_provider_name(provider_id) or str(provider_id)

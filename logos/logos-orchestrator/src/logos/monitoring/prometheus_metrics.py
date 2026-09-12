@@ -406,9 +406,7 @@ def record_ettft_outcome(
 
     if not (math.isfinite(estimate_s) and math.isfinite(actual_ttft_s)):
         return
-    ETTFT_ACCURACY_SECONDS.labels(provider=provider, tier=tier).observe(
-        abs(estimate_s - actual_ttft_s)
-    )
+    ETTFT_ACCURACY_SECONDS.labels(provider=provider, tier=tier).observe(abs(estimate_s - actual_ttft_s))
 
 
 def record_ettft_components(
