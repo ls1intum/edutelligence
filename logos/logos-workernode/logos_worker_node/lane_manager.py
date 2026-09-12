@@ -432,13 +432,21 @@ class LaneManager:
         capabilities_models: list[str],
         hf_home: str,
         cache_root: str = "",
+        gguf_quants: dict[str, str] | None = None,
     ) -> list[str]:
         """Check which capabilities_models are available locally.
 
         For each model, checks the HF hub cache, the direct model path under
         the models path, and (when given) the direct model path under the
-        cache root. Returns a list of models that could NOT be found (warnings
-        only, doesn't block startup).
+        cache root. A GGUF model whose serve target is concrete — an explicit
+        ``repo:quant`` / ``repo/file.gguf`` reference, or a bare GGUF
+        repository (whose served quant is its operator pin from *gguf_quants*,
+        else the one auto-selected from the cached listing, exactly as the
+        lane's spec resolution decides) — is checked for that quant or file,
+        complete, in the active snapshot, because a partial snapshot of the
+        same repository does not prove it loadable.
+        Returns a list of models that could NOT be found (warnings only,
+        doesn't block startup).
 
         ``hf_home``/``cache_root`` come from the caller's resolved storage
         layout — the same directory the lane processes download into — rather
@@ -448,17 +456,65 @@ class LaneManager:
         """
         import os
 
+        from logos_worker_node import gguf  # noqa: PLC0415 — single cache-dir key
+
         missing = []
         models_path = self._global_config.models_path
         for model_name in capabilities_models:
-            # Check HF cache (transformers style: models--org--name)
-            hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
+            # Check HF cache (transformers style: models--org--name). Keyed on
+            # the bare repo id so a GGUF reference (repo:quant / repo/file.gguf)
+            # lands in the same directory the prefetch fills.
+            hf_cache_dir = os.path.join(hf_home, "hub", gguf.hf_cache_dir_name(model_name))
             # Check direct model path (ollama-style models dir, and — on
             # backends with their own cache root — a model dir placed there)
             checked = [os.path.join(models_path, model_name)]
             if cache_root:
                 checked.append(os.path.join(cache_root, model_name))
-            if not os.path.isdir(hf_cache_dir) and not any(os.path.isdir(p) for p in checked):
+            # What the cache must prove for this capability: the concrete
+            # reference the lane serves with (explicit references name it, a
+            # bare GGUF repository its pinned — else auto-selected — quant),
+            # or None when a plain directory check decides.
+            served_ref = gguf.gguf_capability_target(hf_home, model_name, (gguf_quants or {}).get(model_name, ""))
+            if served_ref is not None:
+                # A repository directory is not proof the model can load: Hugging
+                # Face snapshots can be partial (the prefetch stores only the
+                # quants its models selected), so the reference must resolve to
+                # its concrete quant or file — complete, in one path — and find
+                # THAT in the active snapshot. A cache holding only a different
+                # quant, or an unfinished shard family, of the same repo must
+                # stay missing, or the prefetch never downloads what the lane
+                # serves and the lane fails offline. A local directory
+                # reference is proven by the directory itself (the path
+                # without the embedded quant suffix), which is the whole
+                # check a host path can offer.
+                if gguf.is_gguf_ref_cached(hf_home, served_ref) is not True:
+                    missing.append(model_name)
+                    if gguf.is_local_gguf_file_ref(served_ref):
+                        logger.warning(
+                            "Capability model '%s' not available locally: the local "
+                            "file %s is missing. Ensure the model is present "
+                            "on the host before it can be loaded.",
+                            model_name,
+                            served_ref,
+                        )
+                    elif (local_dir := gguf.local_dir_path_of(served_ref)) is not None:
+                        logger.warning(
+                            "Capability model '%s' not available locally: its local "
+                            "directory %s is missing. Ensure the model is present "
+                            "on the host before it can be loaded.",
+                            model_name,
+                            local_dir,
+                        )
+                    else:
+                        logger.warning(
+                            "Capability model '%s' not available locally: its selected "
+                            "quant or file is not present in the cache (checked %s and %s). "
+                            "Ensure the model is downloaded before it can be loaded.",
+                            model_name,
+                            hf_cache_dir,
+                            ", ".join(checked),
+                        )
+            elif not os.path.isdir(hf_cache_dir) and not any(os.path.isdir(p) for p in checked):
                 missing.append(model_name)
                 logger.warning(
                     "Capability model '%s' not found locally (checked %s and %s). "

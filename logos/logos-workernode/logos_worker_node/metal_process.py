@@ -340,10 +340,15 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             env["HF_TOKEN"] = hf_token
 
         cache_root_dir = self._resolve_persistent_cache_root(self._global_config)
-        if self.hf_home_override:
-            env["HF_HOME"] = self.hf_home_override
-        elif "HF_HOME" not in os.environ:
-            env["HF_HOME"] = self._resolve_hf_home(cache_root_dir)
+        # A blank or whitespace-only HF_HOME counts as unset (the same rule
+        # gguf.effective_hf_home applies when the lane resolves model
+        # references), so the child always loads from the root the
+        # resolution above consulted instead of inheriting a blank value
+        # that Hugging Face would resolve to a different default location.
+        hf_home = (self.hf_home_override or "").strip() or os.environ.get("HF_HOME", "").strip()
+        if not hf_home:
+            hf_home = self._resolve_hf_home(cache_root_dir)
+        env["HF_HOME"] = hf_home
 
         # vLLM's own cache root still applies (tokenizer/config artifacts),
         # even though nothing torch-compiles on this backend.
