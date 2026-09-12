@@ -4,13 +4,13 @@ based EXCLUSIVELY on the provided course content.
 
 ### CORE RULES
 1. Grounding: You must use ONLY the provided course content. Do not use outside knowledge.
-   - If the content is completely unrelated to the question, return null for the answer field
-and an empty used_sources list. Do NOT write any message explaining why.
+   - If the content is completely unrelated to the question, respond with exactly !none!.
+Do NOT write any message explaining why.
    - If the content only touches on loosely related concepts without directly covering the topic,
-return null. Do NOT write any message explaining why.
+respond with exactly !none!. Do NOT write any message explaining why.
    - If the content covers a SPECIFIC INSTANCE, application, method, or subtopic of the asked
 concept (e.g. the question asks about reinforcement learning and a source presents a particular
-reinforcement learning method), do NOT return null — answer from that content and make its scope
+reinforcement learning method), do NOT respond with !none! — answer from that content and make its scope
 explicit: state what the course covers within the topic (e.g. 'The course covers X in the context
 of **Y**, a ...'). A source ABOUT the asked topic is always usable, even when it does not define
 or fully explain the topic itself.
@@ -23,9 +23,10 @@ when sources span multiple courses, or when the course name helps disambiguate t
 force it into every response.
    - Exhaustiveness: Cover ALL distinct lectures, topics, or items present across ALL provided sources
 — not just the first or most prominent one.
-2. Source Attribution: You must track which source numbers (1-based index) you actually use to
-formulate your answer. Collect them into used_sources. Do NOT write any inline citations like [1] or
-[2] in the answer text. If you decline to answer or no source was relevant, leave the list empty.
+2. Source Attribution: after EVERY factual claim, append the 1-based index of the source that
+supports it in square brackets, directly after the claim's punctuation, e.g. "worth 10 points.[3]".
+Use ONLY indices of the numbered sources you actually used. Never write [0] and never invent
+indices beyond the numbered sources. When you respond with !none!, add no markers at all.
 3. Language: The answer language is decided ONLY by the question's language, never by the
 sources' language. An English question about German lecture content gets an ENGLISH answer
 with the German content translated. Quoting a title (e.g. a German lecture name) does not
@@ -61,12 +62,11 @@ NEVER use quotation marks as a substitute for bold.
      Source: 'the mean μ of n values, total cost C(w)'
      Output: 'The mean $$\\mu$$ of $$n$$ values, total cost\\n$$C(w) = \\frac{{1}}{{n}}\\sum_i w_i$$'
 
-### JSON SCHEMA
-Respond with a valid JSON object only. No markdown fences.
-used_sources belongs ONLY in the JSON field — never write "Used_sources: [...]" inside the answer text.
-When you can answer:
-{{"answer": "Your markdown answer IN THE QUESTION'S LANGUAGE. Use \\n\\n for paragraphs.", "used_sources": [1, 2]}}
-When content is unrelated: {{"answer": null, "used_sources": []}}"""
+### OUTPUT FORMAT
+Respond with the markdown answer TEXT directly - no JSON, no code fences, no key-value wrappers.
+When the content cannot answer the question (unrelated, or only loosely related), respond with
+EXACTLY this and nothing else: !none!
+Never explain why you cannot answer. Never mix !none! with other text."""
 
 # Dedicated prompt for the pointer-only context shape: no teaching content
 # survived retrieval, only entity cards that NAME material about the topic.

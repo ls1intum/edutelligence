@@ -113,6 +113,105 @@ def _location_label(source: LectureSearchResultDTO) -> str:
     return f"Slide {page}"
 
 
+_CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+# Literal the model outputs INSTEAD of an answer when the sources cannot answer
+# the question (plain-text contract; measured 8/8 discipline on nano).
+_NO_ANSWER_SENTINEL = "!none!"
+
+
+class _SentinelGateStreamHandler:
+    """Buffer streamed deltas until the output can no longer be the !none!
+    sentinel, so a no-answer run never flashes text at the student. Same
+    pattern as the chat guide's ok-sentinel gate. ``None`` deltas (provider
+    retry) reset the stream downstream as well once streaming started."""
+
+    def __init__(self, downstream):
+        self._downstream = downstream
+        self._buffer = ""
+        self._streaming = False
+
+    def __call__(self, delta):
+        if delta is None:
+            self._buffer = ""
+            if self._streaming:
+                self._downstream(None)
+            return
+        if self._streaming:
+            self._downstream(delta)
+            return
+        self._buffer += delta
+        stripped = self._buffer.strip()
+        if stripped.startswith(_NO_ANSWER_SENTINEL):
+            return  # it IS the sentinel — never stream it
+        if _NO_ANSWER_SENTINEL.startswith(stripped):
+            return  # could still become the sentinel — keep holding
+        self._downstream(self._buffer)
+        self._buffer = ""
+        self._streaming = True
+
+
+def sanitize_citation_markers(
+    answer: str | None, num_sources: int
+) -> tuple[str | None, set[int]]:
+    """Validate inline citation markers; return (answer, cited 0-based indices).
+
+    The answer LLM appends sentence-level markers like ``[2]`` after the claim
+    each source supports. This keeps every in-range marker, DROPS out-of-range
+    ones (a hallucinated ``[9]`` over 5 sources must not reach a student), and
+    collapses immediately repeated markers (``[1][1]`` -> ``[1]``). Chains of
+    DISTINCT adjacent markers (``[1][2][3]``) are the model citing several
+    sources for one claim and are preserved; the client groups them visually.
+
+    An answer without markers passes through untouched, which is the
+    compatibility path: rendering falls back to the unattributed card.
+    """
+    if not answer:
+        return answer, set()
+    cited: set[int] = set()
+    # (last kept index, end offset of the current marker run) in original
+    # string coordinates; a removed marker extends the run so [1][9][1]
+    # still collapses to [1] once [9] is gone.
+    run: list = [None, -1]
+
+    def _replace(match: re.Match) -> str:
+        index = int(match.group(1))
+        contiguous = match.start() == run[1]
+        run[1] = match.end()
+        if not contiguous:
+            run[0] = None
+        if not 1 <= index <= num_sources:
+            return ""
+        if run[0] == index:
+            return ""
+        run[0] = index
+        cited.add(index - 1)
+        return match.group(0)
+
+    sanitized = _CITATION_MARKER_RE.sub(_replace, answer)
+    return sanitized, cited
+
+
+def renumber_citation_markers(
+    answer: str | None, old_to_new: dict[int, int]
+) -> str | None:
+    """Rewrite marker numbers after the used-sources filter.
+
+    Markers reference the numbered CONTEXT (1..N over all grounded sources),
+    but the response returns only the used sources, so ``[4]`` must become the
+    position of that source in the returned list. Unknown numbers are stripped
+    defensively; sanitation has already removed them in the normal flow.
+    """
+    if not answer:
+        return answer
+
+    def _replace(match: re.Match) -> str:
+        new = old_to_new.get(int(match.group(1)))
+        return f"[{new}]" if new is not None else ""
+
+    return _CITATION_MARKER_RE.sub(_replace, answer)
+
+
 def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     """Parse the answer LLM's raw output into (answer, used 0-based indices).
 
@@ -123,6 +222,10 @@ def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[i
     answer, used_indices = _extract_answer(raw, num_sources)
     if answer:
         answer = _HEADER_ECHO_RE.sub("", answer)
+    answer, cited_indices = sanitize_citation_markers(answer, num_sources)
+    # A cited source is a used source even when the model forgot to list it —
+    # and inline markers count as grounding for the suppression guard below.
+    used_indices = used_indices | cited_indices
     answer = _sanitize_and_suppress(answer, used_indices)
     return answer, used_indices
 
@@ -133,6 +236,9 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     trailing "Used_sources: [..]" line (recovering attribution), raw text
     with all sources as the last resort."""
     cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+    # Plain-text contract: the sentinel is the honest "cannot answer" state.
+    if cleaned.rstrip(".").strip().casefold() == _NO_ANSWER_SENTINEL:
+        return None, set()
     parsed = _try_parse_json(cleaned)
     if parsed is None:
         # Salvage: the JSON envelope may be embedded in surrounding prose.
@@ -176,11 +282,16 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
         )
         return answer, used_indices
 
-    logger.warning(
-        "[global-search] outcome=parse_failed raw_len=%d raw=%r — "
-        "returning raw text as answer with all sources",
+    # Plain-text answer with inline markers: the markers ARE the attribution
+    # (the caller unions them in); attaching all sources here would overrule
+    # them with the whole pool.
+    if _CITATION_MARKER_RE.search(cleaned):
+        return cleaned or None, set()
+
+    logger.info(
+        "[global-search] outcome=plain_text_no_markers raw_len=%d — "
+        "returning text with all sources attached",
         len(raw),
-        raw[:300],
     )
     return cleaned or None, set(range(num_sources))
 
@@ -267,9 +378,10 @@ class GlobalSearchPipeline(SubPipeline):
             embedding_model,
         )
 
-        answer_completion_args = CompletionArguments(
-            response_format="JSON", max_tokens=600
-        )
+        # Plain-text output (markers carry the attribution, !none! carries the
+        # no-answer state) — a JSON envelope would make streamed partials
+        # unrenderable fragments.
+        answer_completion_args = CompletionArguments(max_tokens=600)
         self.answer_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=answer_model),
             completion_args=answer_completion_args,
@@ -321,6 +433,7 @@ class GlobalSearchPipeline(SubPipeline):
         access_context: AccessContext | None = None,
         entity_candidates: list[EntityCandidateDTO] | None = None,
         course_ids: list[int] | None = None,
+        stream_handler=None,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
@@ -368,20 +481,22 @@ class GlobalSearchPipeline(SubPipeline):
             )
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
-        # Retrieval outcome decides the task: pointer-tier sources were
-        # admitted from below the floor because nothing answers the question,
-        # so there is nothing to answer FROM, only material to direct the
-        # student TO. An above-floor entity card is a real answer source (its
-        # details often ARE the answer) and stays with the grounded prompt.
-        all_pointers = all(
-            isinstance(s, EntitySourceDTO) and s.via_pointer_tier
-            for s in grounded_sources
-        )
         raw = self._generate_answer(
-            query, grounded_sources, access_context, navigate=all_pointers
+            query,
+            grounded_sources,
+            access_context,
+            navigate=all_pointers,
+            stream_handler=stream_handler,
         )
         answer, used_indices = parse_answer_response(raw, len(grounded_sources))
         used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
+        # Markers referenced the context numbering; the response carries only
+        # the used sources, so renumber them onto the returned list.
+        ordered_used = sorted(used_indices)
+        answer = renumber_citation_markers(
+            answer,
+            {old + 1: new + 1 for new, old in enumerate(ordered_used)},
+        )
 
         # Null-to-navigate fallback: the grounded prompt answered null but
         # entity sources exist — retry once as navigation over just those.
@@ -528,8 +643,15 @@ class GlobalSearchPipeline(SubPipeline):
         grounded_sources: list["LectureSearchResultDTO | EntitySourceDTO"],
         access_context: AccessContext | None = None,
         navigate: bool = False,
+        stream_handler=None,
     ) -> str:
-        """Invoke the answer LLM on the numbered, metadata-tagged context."""
+        """Invoke the answer LLM on the numbered, metadata-tagged context.
+
+        With a ``stream_handler``, deltas stream through the sentinel gate so
+        partial answers reach the client while the model generates; markers in
+        partials stream raw and the client renders them progressively. The
+        terminal update still carries the sanitized, renumbered answer.
+        """
         context = "\n\n".join(
             f"[{i + 1}] {_source_label(s)}\n{s.snippet}"
             for i, s in enumerate(grounded_sources)
@@ -539,7 +661,17 @@ class GlobalSearchPipeline(SubPipeline):
         variables: dict[str, str] = {"context": context, "query": query}
         if not navigate:
             variables["today_line"] = _today_line(access_context)
-        raw = (prompt | self.answer_pipeline).invoke(variables)
+        # The navigate prompt answers in JSON, which cannot stream through the
+        # sentinel gate without leaking the envelope to the client, so only the
+        # grounded (plain-text) path streams.
+        if stream_handler is not None and not navigate:
+            self.answer_llm.completion_args.stream_handler = _SentinelGateStreamHandler(
+                stream_handler
+            )
+        try:
+            raw = (prompt | self.answer_pipeline).invoke(variables)
+        finally:
+            self.answer_llm.completion_args.stream_handler = None
         # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
         # exhausting max_tokens on reasoning and returning an empty message
         # (finish_reason=length) — the call returns WITHOUT an exception.
