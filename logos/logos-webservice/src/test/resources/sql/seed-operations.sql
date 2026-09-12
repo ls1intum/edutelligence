@@ -22,7 +22,7 @@ VALUES
    '{"request_rate":2.5,"request_latency_ms":{"p50":420.0,"p95":690.0}}'::jsonb,
    TIMESTAMPTZ '2026-08-24 12:00:00+00');
 
-INSERT INTO ollama_provider_snapshots
+INSERT INTO provider_snapshots
   (id, provider_id, snapshot_ts, poll_success,
    total_vram_used_bytes, total_memory_bytes, free_memory_bytes,
    total_models_loaded, loaded_models, scheduler_signals)

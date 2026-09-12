@@ -22,7 +22,9 @@ import {
   applyTimeSeriesLabels,
   chooseDynamicBucketMs,
   chooseDynamicTargetBuckets,
+  extractProviderHostRamMb,
   extractProviderVramMb,
+  formatPercent,
   formatRangeLabel,
   formatTokenCount as formatTokenCountValue,
   normalizeFeedStatus,
@@ -417,6 +419,32 @@ export class Statistics implements OnInit, OnDestroy {
     };
   });
 
+  /**
+   * Host RAM across the online providers, parallel to allProviderVramSummary.
+   * A provider that does not report host RAM (an older worker, or a non-Linux
+   * host) is skipped rather than counted as 0 — adding it in would make the
+   * total visibly shrink every time such a node came online.
+   */
+  readonly allProviderRamSummary = computed(() => {
+    let totalMb = 0;
+    let usedMb = 0;
+    let freeMb = 0;
+    for (const [name, sample] of Object.entries(this.latestSampleByProvider())) {
+      if (!this._isProviderOnline(name)) continue;
+      const ram = extractProviderHostRamMb(sample);
+      if (!ram.reported) continue;
+      totalMb += ram.totalMb;
+      usedMb += ram.usedMb;
+      freeMb += ram.freeMb;
+    }
+    return {
+      reported: totalMb > 0,
+      usedGb: toGb(usedMb * BYTES_PER_MIB),
+      freeGb: toGb(freeMb * BYTES_PER_MIB),
+      totalGb: toGb(totalMb * BYTES_PER_MIB),
+    };
+  });
+
   readonly selectedProviderLanes = computed<Record<string, LaneSignalData>>(() => {
     const prov = this.selectedVramProvider();
     if (!prov) return {};
@@ -737,15 +765,15 @@ export class Statistics implements OnInit, OnDestroy {
 
   readonly coldStarts = computed(() => this.stats()?.totals.coldStarts ?? 0);
   readonly warmStarts = computed(() => this.stats()?.totals.warmStarts ?? 0);
-
-  readonly coldPct = computed(() => {
-    const cold = this.coldStarts();
-    const warm = this.warmStarts();
-    const denom = cold + warm;
-    return denom > 0 ? Math.round((cold / denom) * 100) : 0;
-  });
-
   readonly coldDenominator = computed(() => this.coldStarts() + this.warmStarts());
+
+  /**
+   * The cold-start share as the KPI card shows it: the exact percentage, so a
+   * rare share (694 of 317.265) reads 0.22% instead of a rounded "0%".
+   */
+  formatColdPct(): string {
+    return formatPercent(this.coldStarts(), this.coldDenominator());
+  }
 
   readonly sparkTotal = computed(() =>
     (this.stats()?.timeSeries ?? []).slice(-30).map((p) => p.total || 0),

@@ -6,6 +6,7 @@ typed in by hand, and the context window an upstream reported was thrown away
 measured.
 """
 
+import asyncio
 from typing import Any, Dict, List
 
 import pytest
@@ -28,6 +29,12 @@ LOGOS_LISTING = {
         # A cloud model on the upstream: catalogued, but it reports no window.
         {"id": "gpt-4.1-nano", "object": "model", "owned_by": "logos"},
     ],
+}
+
+# A plain OpenAI-compatible vendor: no Logos ownership marker, no window.
+HETZNER_LISTING = {
+    "object": "list",
+    "data": [{"id": "Qwen/Qwen3.8-27B", "object": "model", "owned_by": "hetzner"}],
 }
 
 
@@ -424,3 +431,120 @@ async def test_an_anthropic_upstream_is_discovered_with_its_own_conventions(monk
     assert seen["headers"]["anthropic-version"]
     assert seen["headers"]["x-api-key"] == "sk-ant"
     assert "Authorization" not in seen["headers"]
+
+
+@pytest.mark.asyncio
+async def test_a_nested_api_version_is_not_duplicated(monkeypatch):
+    """Hetzner's inference API lives under /api/v1, not /v1."""
+    seen = {}
+    service = _run(
+        monkeypatch,
+        [_provider(cloud_provider_type=None, base_url="https://inference.hetzner.com/api/v1")],
+        lambda url, headers: seen.update(url=url, headers=headers) or HETZNER_LISTING,
+    )
+    await service.run_once()
+
+    assert seen["url"] == "https://inference.hetzner.com/api/v1/models"
+    assert seen["headers"]["Authorization"] == "Bearer lg-secret"
+    assert DummyDB.instances[-1].synced[4] == ["Qwen/Qwen3.8-27B"]
+
+
+@pytest.mark.asyncio
+async def test_an_untyped_upstream_is_not_mistaken_for_a_logos_instance(monkeypatch):
+    """Only an all-"logos" listing may set the type; a vendor's must not."""
+    service = _run(
+        monkeypatch,
+        [_provider(cloud_provider_type=None)],
+        lambda url, headers: HETZNER_LISTING,
+    )
+    await service.run_once()
+
+    assert DummyDB.instances[-1].types == {}
+
+
+# ── out-of-band refresh ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_request_refresh_syncs_without_waiting_for_the_interval(monkeypatch):
+    """A provider added through the UI must not wait 15 minutes to be scraped."""
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+
+    service.request_refresh()
+    await service._refresh_task
+
+    assert DummyDB.instances[-1].synced[4]
+
+
+@pytest.mark.asyncio
+async def test_request_refresh_does_nothing_while_disabled(monkeypatch):
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+    service._enabled = False
+
+    service.request_refresh()
+
+    assert service._refresh_task is None
+    assert DummyDB.instances == []
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_edits_collapses_into_one_follow_up_pass(monkeypatch):
+    """Saving a form five times costs one extra sync, not five."""
+    passes = 0
+    release = asyncio.Event()
+
+    async def fetch(url, headers, client):  # noqa: ARG001
+        nonlocal passes
+        passes += 1
+        await release.wait()
+        return LOGOS_LISTING
+
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+    monkeypatch.setattr(cloud_model_sync, "fetch_models", fetch)
+
+    service.request_refresh()
+    await asyncio.sleep(0)  # let the first pass reach the upstream and block
+    for _ in range(4):
+        service.request_refresh()
+
+    release.set()
+    await service._refresh_task
+
+    assert passes == 2
+
+
+@pytest.mark.asyncio
+async def test_two_passes_never_write_the_catalogue_concurrently(monkeypatch):
+    """The interval loop and an out-of-band refresh must not interleave."""
+    concurrent = 0
+    peak = 0
+
+    async def fetch(url, headers, client):  # noqa: ARG001
+        nonlocal concurrent, peak
+        concurrent += 1
+        peak = max(peak, concurrent)
+        await asyncio.sleep(0)
+        concurrent -= 1
+        return LOGOS_LISTING
+
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+    monkeypatch.setattr(cloud_model_sync, "fetch_models", fetch)
+
+    await asyncio.gather(service.run_once(), service.run_once())
+
+    assert peak == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_a_refresh_still_in_flight(monkeypatch):
+    async def fetch(url, headers, client):  # noqa: ARG001
+        await asyncio.Event().wait()
+
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+    monkeypatch.setattr(cloud_model_sync, "fetch_models", fetch)
+
+    service.request_refresh()
+    await asyncio.sleep(0)
+    await service.stop()
+
+    assert service._refresh_task is None

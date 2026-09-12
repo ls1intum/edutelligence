@@ -7,10 +7,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
@@ -41,13 +43,16 @@ public class ProviderService {
     private final ProviderRepository providerRepository;
     private final ModelProviderRepository modelProviderRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final JdbcTemplate jdbc;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
-                           OrchestratorNotificationService orchestratorNotificationService) {
+                           OrchestratorNotificationService orchestratorNotificationService,
+                           JdbcTemplate jdbc) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.jdbc = jdbc;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
@@ -86,7 +91,10 @@ public class ProviderService {
         p.setApiKey(apiKey);
 
         p = providerRepository.save(p);
-        orchestratorNotificationService.notifyRefresh(false);
+        // A cloud provider is created empty: its models come from the orchestrator's
+        // /v1/models scrape. Ask for that pass now instead of leaving the operator
+        // looking at an empty list until the next interval tick.
+        orchestratorNotificationService.notifyRefresh(false, providerType == ProviderType.cloud);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("result", "Created Provider.");
@@ -115,7 +123,9 @@ public class ProviderService {
             p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         }
         providerRepository.save(p);
-        orchestratorNotificationService.notifyRefresh(false);
+        // Base URL, key and cloud type all change what the upstream lists, so a
+        // cloud provider is re-scraped on every edit.
+        orchestratorNotificationService.notifyRefresh(false, p.getProviderType() == ProviderType.cloud);
         return Map.of("result", "Updated Provider.");
     }
 
@@ -123,6 +133,27 @@ public class ProviderService {
     public Map<String, Object> deleteProvider(Integer providerId) {
         if (!providerRepository.existsById(providerId)) {
             throw new IllegalArgumentException("Provider not found: " + providerId);
+        }
+        // Lock the provider row before checking: inserting a batch_object
+        // takes a FOR KEY SHARE lock on the referenced row, so no concurrent
+        // registration can commit while the count and the delete run.
+        // Without it, a creation could land an unsettled batch between the
+        // count and the delete, and the cascade would erase its row while
+        // the upstream job keeps running.
+        jdbc.queryForObject("SELECT id FROM providers WHERE id = ? FOR UPDATE", Long.class, providerId);
+        // Deleting the provider cascades its batch_objects rows away. For a
+        // batch that still runs upstream — or finished there without its
+        // usage being booked yet — that would leave the job unreachable and
+        // its spend unbillable, so the deletion waits for it. Settled
+        // records are safe to cascade: the job is terminal and metered.
+        Long unsettled = jdbc.queryForObject(
+            "SELECT count(*) FROM batch_objects WHERE kind = 'batch' AND provider_id = ? AND settled_at IS NULL",
+            Long.class, providerId);
+        if (unsettled != null && unsettled > 0) {
+            throw new ConflictException(
+                "Provider " + providerId + " still has " + unsettled
+                    + " batch(es) running or not yet settled; they must finish and be metered "
+                    + "before the provider can be deleted.");
         }
         providerRepository.deleteById(providerId);
         orchestratorNotificationService.notifyRefresh(false);
@@ -196,7 +227,12 @@ public class ProviderService {
     private static ProviderType parseProviderType(String raw) {
         if (raw == null) return ProviderType.logosnode;
         String normalized = raw.toLowerCase();
-        if (List.of("node", "node_controller", "ollama", "logos_worker_node").contains(normalized)) {
+        if ("ollama".equals(normalized)) {
+            throw new IllegalArgumentException(
+                "provider_type 'ollama' is no longer supported: every worker lane runs vLLM. "
+                + "Use 'logosnode' for worker-backed providers.");
+        }
+        if (List.of("node", "node_controller", "logos_worker_node").contains(normalized)) {
             return ProviderType.logosnode;
         }
         try { return ProviderType.valueOf(normalized); }

@@ -2,6 +2,7 @@ import {
   Component,
   Input,
   OnChanges,
+  OnDestroy,
   SimpleChanges,
   inject,
   signal,
@@ -50,8 +51,7 @@ function ttftColor(secs: number): string {
  *
  * Returns null when the lane reports no running count (the line stays
  * hidden) and plain "a" while c is unknown (lane still starting up, or the
- * startup log not parsed yet). Ollama lanes keep their "Active" line and
- * never reach here.
+ * startup log not parsed yet).
  */
 function runningLabel(
   lane: Pick<LaneSignalData, 'requests_running' | 'num_parallel'>,
@@ -67,6 +67,74 @@ function runningLabel(
   // so clamp b to the guaranteed minimum instead of dipping below it.
   const b = Math.max(c, a + Math.floor(c * free));
   return b > c ? `${a} / ${b} (min. ${c})` : `${a} / ${b}`;
+}
+
+/** Lane states that do not count towards a model's live replica count. */
+const NOT_LIVE_STATES = new Set(['stopped', 'error']);
+
+/**
+ * Live lanes per model (keyed by the lower-cased, trimmed model name).
+ *
+ * Stopped and error lanes are not counted — they serve no requests — so the
+ * picker's badge agrees with what the capacity planner schedules: a model
+ * whose one lane is in error reads as not running, and loading it again
+ * allocates it a fresh lane id rather than the broken lane's.
+ */
+export function countLiveLanesByModel(
+  lanes: Record<string, LaneSignalData>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const lane of Object.values(lanes)) {
+    if (NOT_LIVE_STATES.has(lane.runtime_state)) continue;
+    const key = (lane.model ?? '').trim().toLowerCase();
+    if (!key) continue;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Models the "Load lane" picker still offers.
+ *
+ * Every provider model is offered, loaded or not: a model that already runs
+ * lanes on the node may take one more (multiple deployments of one model per
+ * node are supported), and the worker's own VRAM is the final word on
+ * whether the copy fits. The only model withheld is one whose load was just
+ * accepted and whose lane has not shown up in the status stream yet (that
+ * takes minutes) — offering it again would invite a second click on the very
+ * lane the first request is still bringing up.
+ */
+export function filterLoadableModels(
+  models: ProviderModel[],
+  acceptedModel: string | null,
+): ProviderModel[] {
+  const key = (acceptedModel ?? '').trim().toLowerCase();
+  return models.filter((m) => m.model_name && m.model_name.trim().toLowerCase() !== key);
+}
+
+/**
+ * Whether the "load accepted" note can go.
+ *
+ * The note is keyed to the lane ids the provider reported when the load was
+ * accepted, not to the model name: a model that already ran lanes keeps them
+ * reporting while the accepted copy is still minutes away, and those siblings
+ * must not end the note — that would re-offer the model before the lane it
+ * just asked for has shown up. The note drops only when a lane of the model
+ * appears under an id that was not among them: that lane is the accepted
+ * replica itself, in whatever state it reports (one that arrived is served
+ * by its own row now, one that landed in error is gone and may be offered
+ * again).
+ */
+export function acceptedModelIsResolved(
+  acceptedModel: string,
+  acceptedLaneIds: Iterable<string>,
+  lanes: Record<string, LaneSignalData>,
+): boolean {
+  const wanted = acceptedModel.trim().toLowerCase();
+  const snapshot = new Set(acceptedLaneIds);
+  return Object.entries(lanes).some(
+    ([laneId, lane]) => !snapshot.has(laneId) && (lane.model ?? '').trim().toLowerCase() === wanted,
+  );
 }
 
 export interface LaneRow {
@@ -110,8 +178,8 @@ export type LaneSleepAction = 'sleep' | 'wake' | null;
  * drains in-flight requests (mode="wait"), so on a busy lane the click would
  * block for as long as the drain takes — the panel offers the action only
  * where it takes effect immediately. Lanes whose backend has no sleep mode
- * (Ollama reports sleep_state "unsupported", a vLLM lane that never slept
- * reports "unknown") offer neither.
+ * (sleep mode disabled reports sleep_state "unsupported", a lane that never
+ * slept reports "unknown") offer neither.
  */
 export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   if (lane.sleep_state === 'sleeping') return 'wake';
@@ -127,7 +195,7 @@ export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './lane-health-panel.scss',
 })
-export class LaneHealthPanel implements OnChanges {
+export class LaneHealthPanel implements OnChanges, OnDestroy {
   @Input() lanesByProvider: Record<string, Record<string, LaneSignalData>> = {};
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
   @Input() selectedProvider: string | null = null;
@@ -151,11 +219,48 @@ export class LaneHealthPanel implements OnChanges {
   addError = signal<string | null>(null);
   /** Model whose background load was accepted and has not shown up as a lane yet. */
   acceptedModel = signal<string | null>(null);
+  /** Lane ids the provider reported when the load was accepted — the baseline
+   *  acceptedModelIsResolved() checks the stream against. */
+  private acceptedLaneIds: Set<string> | null = null;
   /** Fetched model lists, keyed by provider id — never shared across providers. */
   private readonly modelsByProvider = new Map<number, ProviderModel[]>();
   private readonly modelsInFlight = new Set<number>();
   /** Provider the currently visible picker state belongs to. */
   private pickerProviderId: number | null = null;
+
+  // ── Accepted-load outcome polling ────────────────────────────────────────
+  /**
+   * How often to ask for the outcome of an accepted background load. The
+   * load itself takes minutes; the question here is cheap and only interesting
+   * because a refusal in the background is otherwise a log line.
+   */
+  private static readonly LOAD_STATUS_POLL_INTERVAL_MS = 2500;
+  /**
+   * Hard stop for the outcome poll. A manual load gets the load command
+   * timeout (30 min) plus the confirmation polling of the same length that
+   * follows it, so the terminal outcome — a refusal, a confirmed lane, or a
+   * recorded timeout — is recorded no later than ~60 min plus lock wait
+   * after dispatch. The cap must outlive that, or it stops asking while a
+   * late failure is still in flight and the note hangs; well past it the
+   * live outcome is gone (planner restart, entry aged out) and the poll can
+   * only re-ask for the same "unknown". The lane-appearance check in
+   * ngOnChanges keeps owning the note from there on.
+   */
+  private static readonly LOAD_STATUS_POLL_CAP_MS = 65 * 60 * 1000;
+  /** Timer handle of the outcome poll; null while not polling. */
+  private loadStatusPoll: ReturnType<typeof setInterval> | null = null;
+  /** Provider the outcome poll belongs to — anything else is a stale poll. */
+  private loadStatusPollProviderId: number | null = null;
+  /** When the outcome poll must stop regardless of what it is told. */
+  private loadStatusPollDeadline = 0;
+  /**
+   * Generation of the polling session: every start bumps it, and each request
+   * captures its own at dispatch time. A response that only resolves after a
+   * newer session started (a retry of the same model) belongs to the old
+   * attempt — the provider/model guards cannot tell the two apart, so it is
+   * dropped instead of being applied to the new attempt's note.
+   */
+  private loadStatusPollGeneration = 0;
 
   get providerName(): string | null {
     return this.selectedProvider ?? Object.keys(this.lanesByProvider)[0] ?? null;
@@ -230,22 +335,28 @@ export class LaneHealthPanel implements OnChanges {
     return this.canUnload;
   }
 
-  /**
-   * Models that don't already have a lane (lanes are keyed by model name).
-   *
-   * A model whose load was accepted counts as taken until its lane shows up in
-   * the status stream, which takes minutes: leaving it selectable invites a
-   * second load of the very lane the first request is still bringing up.
-   */
-  get loadableModels(): ProviderModel[] {
+  /** Live lane count per model for the visible provider — see countLiveLanesByModel(). */
+  get liveLaneCounts(): Map<string, number> {
     const name = this.providerName;
     const lanes = name ? (this.lanesByProvider[name] ?? {}) : {};
-    const taken = new Set(Object.values(lanes).map((l) => (l.model ?? '').trim().toLowerCase()));
-    const accepted = this.acceptedModel();
-    if (accepted) taken.add(accepted.trim().toLowerCase());
-    return this.loadModels().filter(
-      (m) => m.model_name && !taken.has(m.model_name.trim().toLowerCase()),
-    );
+    return countLiveLanesByModel(lanes);
+  }
+
+  /**
+   * Models that may still be loaded on this provider.
+   *
+   * A model with live lanes stays offered — loading it adds another
+   * deployment on the node. An accepted load whose lane has not shown up in
+   * the status stream yet is withheld until it appears.
+   */
+  get loadableModels(): ProviderModel[] {
+    return filterLoadableModels(this.loadModels(), this.acceptedModel());
+  }
+
+  /** Live lanes the model already runs here — "(2 lanes)", null when none. */
+  laneCountLabel(modelName: string): string | null {
+    const count = this.liveLaneCounts.get(modelName.trim().toLowerCase()) ?? 0;
+    return count === 1 ? '(1 lane)' : count > 1 ? `(${count} lanes)` : null;
   }
 
   minKvPct(pct: number): number {
@@ -269,22 +380,48 @@ export class LaneHealthPanel implements OnChanges {
     return messageIn(e?.error) ?? `HTTP ${e?.status ?? 0}`;
   }
 
+  /**
+   * Monotonic attempt counters, one per action kind.
+   *
+   * (provider, lane id) is not a unique attempt identity: a lane id is
+   * per-worker and can collide across workers, and an A → B → A switch
+   * re-uses both the provider and the lane name for a *newer* attempt while
+   * the older one is still in flight — matching a finishing attempt on that
+   * pair would let it settle the newer attempt's signal and error. Every new
+   * attempt and every provider switch (which abandons the in-flight attempts)
+   * bumps the counter of its kind, so a settling attempt may touch the shared
+   * signal and error only while its counter is still the current one: then no
+   * newer attempt of the kind has started and no switch has happened since it
+   * began.
+   */
+  private unloadAttempt = 0;
+  private sleepAttempt = 0;
+  private wakeAttempt = 0;
+
   async handleUnload(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.unloadingLaneId() != null) return;
+    const attempt = ++this.unloadAttempt;
     this.unloadingLaneId.set(laneId);
     this.unloadError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.unloadLane(pid, laneId);
-      this.unloadingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // A newer attempt or a provider switch superseded this one while the call
+    // was in flight — see unloadAttempt. Only the latest attempt may settle
+    // the shared signal and error.
+    if (this.unloadAttempt === attempt) {
       this.unloadingLaneId.set(null);
-      const e = err as { status?: number };
+      if (failed === null) return;
+      const e = failed as { status?: number };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.unloadError.set('Action not available on this server yet.');
       } else {
-        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(err)}`);
+        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(failed)}`);
       }
     }
   }
@@ -292,30 +429,40 @@ export class LaneHealthPanel implements OnChanges {
   async handleSleep(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.sleepingLaneId() != null) return;
+    const attempt = ++this.sleepAttempt;
     this.sleepingLaneId.set(laneId);
     this.sleepWakeError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.sleepLane(pid, laneId);
-      this.sleepingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // Same ownership rule as handleUnload.
+    if (this.sleepAttempt === attempt) {
       this.sleepingLaneId.set(null);
-      this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, err));
+      if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, failed));
     }
   }
 
   async handleWake(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.wakingLaneId() != null) return;
+    const attempt = ++this.wakeAttempt;
     this.wakingLaneId.set(laneId);
     this.sleepWakeError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.wakeLane(pid, laneId);
-      this.wakingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // Same ownership rule as handleUnload.
+    if (this.wakeAttempt === attempt) {
       this.wakingLaneId.set(null);
-      this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, err));
+      if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, failed));
     }
   }
 
@@ -385,6 +532,12 @@ export class LaneHealthPanel implements OnChanges {
     this.selectedModel.set(null);
     this.addError.set(null);
     this.pickerProviderId = null;
+    // The outcome poll deliberately keeps running: the picker's Close button
+    // is not the end of an accepted load. The pending note stays up, and the
+    // poll is what will surface a background refusal minutes later — stopping
+    // it here would let such a refusal leave the note hanging indefinitely.
+    // It stops on its own when the attempt resolves, is superseded by a new
+    // one, the provider changes, it outlives the cap, or the panel is gone.
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -393,28 +546,156 @@ export class LaneHealthPanel implements OnChanges {
     // and submitting it would load a model onto a provider that never served it.
     if (changes['selectedProvider'] && this.pickerProviderId !== this.providerId) {
       this.closePicker();
+      // closePicker() no longer stops the outcome poll on its own (a plain
+      // Close must not kill it) — a provider change abandons the attempt, so
+      // stop it explicitly here.
+      this.stopLoadStatusPoll();
       this.loadModels.set([]);
       this.modelsLoading.set(false);
       this.acceptedModel.set(null);
+      this.acceptedLaneIds = null;
+      // Action feedback belongs to the worker it was reported on: an unload
+      // error or a still-spinning button from worker A must not sit under
+      // worker B's panel after the switch.
+      this.unloadError.set(null);
+      this.unloadingLaneId.set(null);
+      this.sleepWakeError.set(null);
+      this.sleepingLaneId.set(null);
+      this.wakingLaneId.set(null);
+      // The in-flight calls are abandoned as well: when they settle later,
+      // their counters no longer match, so they cannot touch the shared
+      // signal or error of the worker the operator is on now.
+      this.unloadAttempt++;
+      this.sleepAttempt++;
+      this.wakeAttempt++;
     }
     // The lane the operator asked for has arrived in the status stream — the
-    // row itself now reports its state, so the pending note has nothing to add.
+    // row itself now reports its state, so the pending note has nothing to
+    // add. Sibling lanes of the model do not count: the note is keyed to the
+    // lane ids present when the load was accepted, so it stays up until the
+    // accepted replica shows up under a fresh id of its own.
     const accepted = this.acceptedModel();
-    if (accepted !== null && changes['lanesByProvider'] && this.hasLaneFor(accepted)) {
-      this.acceptedModel.set(null);
+    const baseline = this.acceptedLaneIds;
+    if (accepted !== null && baseline !== null && changes['lanesByProvider']) {
+      const name = this.providerName;
+      if (
+        acceptedModelIsResolved(accepted, baseline, name ? (this.lanesByProvider[name] ?? {}) : {})
+      ) {
+        this.acceptedModel.set(null);
+        this.acceptedLaneIds = null;
+        this.stopLoadStatusPoll();
+      }
     }
-  }
-
-  private hasLaneFor(model: string): boolean {
-    const name = this.providerName;
-    const lanes = name ? (this.lanesByProvider[name] ?? {}) : {};
-    const wanted = model.trim().toLowerCase();
-    return Object.values(lanes).some((l) => (l.model ?? '').trim().toLowerCase() === wanted);
   }
 
   selectModel(event: Event): void {
     const value = (event.target as HTMLSelectElement).value;
     this.selectedModel.set(value || null);
+  }
+
+  /**
+   * Start asking for the outcome of an accepted background load.
+   *
+   * addLane's 202 only says "accepted", and the planner refuses some loads
+   * after the fact — not enough VRAM for a second replica, the worker
+   * rejected the command, the confirmation timed out. Until this poll existed,
+   * such a refusal was a log line and the pending note stayed up forever.
+   * While the note is up, the poll turns a recorded "failed" into an error
+   * (and re-offers the model) and a "succeeded" is noted as well; "running"
+   * and "unknown" leave everything as it is, because the lane-appearance
+   * check in ngOnChanges remains the primary exit for a load that arrives.
+   */
+  private startLoadStatusPoll(providerId: number, model: string): void {
+    this.stopLoadStatusPoll();
+    this.loadStatusPollProviderId = providerId;
+    this.loadStatusPollDeadline = Date.now() + LaneHealthPanel.LOAD_STATUS_POLL_CAP_MS;
+    const generation = (this.loadStatusPollGeneration += 1);
+    this.loadStatusPoll = setInterval(
+      () => this.pollLoadStatus(providerId, model, generation),
+      LaneHealthPanel.LOAD_STATUS_POLL_INTERVAL_MS
+    );
+  }
+
+  private stopLoadStatusPoll(): void {
+    if (this.loadStatusPoll != null) {
+      clearInterval(this.loadStatusPoll);
+      this.loadStatusPoll = null;
+    }
+    this.loadStatusPollProviderId = null;
+    this.loadStatusPollDeadline = 0;
+  }
+
+  private pollLoadStatus(providerId: number, model: string, generation: number): void {
+    // The note went away (lane appeared, operator acted) or the operator moved
+    // to another provider — this poll is stale, whatever the next answer says.
+    if (
+      this.loadStatusPollProviderId !== providerId ||
+      this.providerId !== providerId ||
+      this.acceptedModel()?.trim().toLowerCase() !== model.trim().toLowerCase()
+    ) {
+      this.stopLoadStatusPoll();
+      return;
+    }
+    if (Date.now() > this.loadStatusPollDeadline) {
+      // The orchestrator has long since resolved this load; keep the note,
+      // stop re-asking for an outcome that no longer exists.
+      this.stopLoadStatusPoll();
+      return;
+    }
+    this.statisticsService
+      .getLaneLoadStatus(providerId, model)
+      .then((outcome) => {
+        // A newer session (a retry of the same model) started while this
+        // request was in flight: the answer describes the old attempt, not
+        // the one whose note is up now. Drop it — and keep this session's
+        // timer running, since it belongs to the newer session.
+        if (generation !== this.loadStatusPollGeneration) return;
+        this.applyLoadStatus(outcome, model);
+      })
+      .catch((err: unknown) => {
+        if (generation !== this.loadStatusPollGeneration) return;
+        // A blip is fine — the next tick retries. 404/501 means the backend
+        // predates the load_status route, where the poll can never succeed:
+        // stop and fall back to the lane-appearance check.
+        const e = err as { status?: number };
+        if (e.status === 404 || e.status === 501) this.stopLoadStatusPoll();
+      });
+  }
+
+  /**
+   * Fold one load_status answer into the pending note.
+   *
+   * "failed" is the interesting one: the load is over, its reason is
+   * recorded, so the picker comes back with the error — exactly where a
+   * synchronous refusal lands — and the model is offered again. "succeeded"
+   * only stops the poll: the note stays until the lane actually shows up in
+   * the stream, so the model is not re-offered in the gap between the
+   * planner's record and the next status push. "running"/"unknown" change
+   * nothing.
+   */
+  private applyLoadStatus(
+    outcome: { status?: string; reason?: string },
+    model: string
+  ): void {
+    // The answer can land after the note already went away — apply nothing.
+    if (this.acceptedModel()?.trim().toLowerCase() !== model.trim().toLowerCase()) {
+      this.stopLoadStatusPoll();
+      return;
+    }
+    const status = (outcome.status ?? '').trim().toLowerCase();
+    if (status !== 'failed') {
+      if (status === 'succeeded') this.stopLoadStatusPoll();
+      return;
+    }
+    this.stopLoadStatusPoll();
+    this.acceptedModel.set(null);
+    this.acceptedLaneIds = null;
+    // The picker closed with the 202; reopen it so the reason sits next to
+    // the retry, like a synchronous refusal does.
+    this.openPicker();
+    this.addError.set(
+      `Loading ${model} failed: ${outcome.reason?.trim() || 'no reason was recorded'}`
+    );
   }
 
   async handleAddLane(): Promise<void> {
@@ -435,6 +716,15 @@ export class LaneHealthPanel implements OnChanges {
     }
     this.addingLane.set(true);
     this.addError.set(null);
+    // The orchestrator starts the background load before it answers 202, so a
+    // status update can report the new starting lane while this request is
+    // still in flight. The resolution baseline must be the lanes as they stood
+    // before the request went out: captured after the answer arrives, a fast
+    // stream would already contain the accepted lane, no update could ever
+    // see it as fresh, and the pending note (and the withheld model) would
+    // stay up indefinitely.
+    const name = this.providerName;
+    const preRequestLaneIds = new Set(Object.keys(name ? (this.lanesByProvider[name] ?? {}) : {}));
     try {
       await this.statisticsService.addLane(pid, model);
       this.addingLane.set(false);
@@ -443,6 +733,30 @@ export class LaneHealthPanel implements OnChanges {
       // background, which for a large model is minutes. Without a word here the
       // picker just closes and the operator cannot tell the request from a no-op.
       this.acceptedModel.set(model);
+      // Baseline for acceptedModelIsResolved(): the pre-request snapshot, so
+      // the accepted lane counts as fresh whatever the stream has shown since.
+      this.acceptedLaneIds = preRequestLaneIds;
+      // A fast stream may already have reported the accepted lane while this
+      // request was in flight: ngOnChanges ran with acceptedModel still null
+      // and could not resolve the note, and the next update might be minutes
+      // away (the lane only changes state when the load finishes). Re-check
+      // the resolution against the current stream right here, so a lane that
+      // is already visible clears the note (and re-offers the model)
+      // immediately instead of waiting for the next push.
+      if (
+        acceptedModelIsResolved(
+          model,
+          preRequestLaneIds,
+          name ? (this.lanesByProvider[name] ?? {}) : {},
+        )
+      ) {
+        this.acceptedModel.set(null);
+        this.acceptedLaneIds = null;
+      } else {
+        // The note stays up — put the outcome poll behind it, so a refusal in
+        // the background ends it with a reason instead of running away.
+        this.startLoadStatusPoll(pid, model);
+      }
     } catch (err: unknown) {
       this.addingLane.set(false);
       const e = err as { status?: number };
@@ -452,6 +766,10 @@ export class LaneHealthPanel implements OnChanges {
         this.addError.set(`Loading ${model} failed: ${this.failureDetail(err)}`);
       }
     }
+  }
+
+  ngOnDestroy(): void {
+    this.stopLoadStatusPoll();
   }
 }
 

@@ -13,7 +13,10 @@ every weight file twice, once as a blob and once as the snapshot entry
 pointing at it, for exactly double the RAM.
 
 Partial copies use a ``.partial`` suffix and are renamed atomically on
-completion to avoid serving incomplete data.
+completion to avoid serving incomplete data. Both copy implementations
+(the async background worker and the synchronous calibration path) delete,
+write and rename that same tree, so writer ownership of a model is a
+single per-model lock: only its holder may copy.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -39,6 +43,13 @@ _SAFETY_MARGIN_RATIO = 0.10  # keep ≥10% tmpfs free
 # multi-GB weights into the small tmpfs and ENOSPC. 10 MB cleanly separates
 # manifests/tokenizers (KB to low-MB) from any real weight shard.
 _BULK_FILE_THRESHOLD_BYTES = 10 * 1024 * 1024
+
+# How long ensure_cached_sync blocks on the per-model writer lock while the
+# background worker holds it (its copy in flight) before giving up and
+# serving from the source. A single-model rsync runs for minutes, not tens
+# of minutes — the bound keeps a wedged worker from holding a calibration
+# session hostage.
+SYNC_BACKGROUND_WAIT_TIMEOUT_S = 1800.0
 
 
 def _hf_model_dir_name(model_name: str) -> str:
@@ -196,7 +207,7 @@ class ModelRamCache:
             will be created underneath to mirror the HF cache layout.
         source_hf_hub_path:
             Original HF hub cache directory, e.g.
-            ``/usr/share/ollama/.ollama/models/.hf_cache/hub``.
+            ``/usr/share/logos/models/.hf_cache/hub``.
         max_size_bytes:
             Hard cap.  0 = auto-detect from tmpfs available space.
         """
@@ -227,6 +238,27 @@ class ModelRamCache:
         self._completion_events: dict[str, asyncio.Event] = {}
         self._caching_now: str | None = None
         self._caching_task: asyncio.Task | None = None
+        # The event loop the background worker runs on, captured when the
+        # worker starts (start_background_caching / wait_for_cached).
+        # ensure_cached_sync runs in executor threads and drives the
+        # per-model writer lock on that loop (run_coroutine_threadsafe) so
+        # it never races the worker's in-flight copy.
+        self._worker_loop: asyncio.AbstractEventLoop | None = None
+
+        # Reference-counted cache-use reservations, model -> outstanding use.
+        # Calibration reads a model's tmpfs entry (ensure_cached_sync + vLLM
+        # probes) with neither a lane handle nor a startup reservation, so the
+        # re-plan's live-lane protection set cannot see it; a reserved entry is
+        # unioned into that set instead (see cache_use_reservations).
+        self._cache_use_refs: dict[str, int] = {}
+        # Thread-safe guard for _cache_use_refs. A threading.Lock, not an
+        # asyncio one: reserve/release run in executor threads (calibration)
+        # while reclaim runs on the event loop. It serialises a reservation
+        # against reclaim's final per-model eviction decision — the `keep`
+        # set reclaim is handed is a snapshot taken BEFORE the reclaim
+        # started, so the live count re-checked under this guard in reclaim
+        # is what spares an entry reserved in the meantime (see reclaim).
+        self._cache_use_guard = threading.Lock()
 
         self._cache_hub.mkdir(parents=True, exist_ok=True)
         self._scan_existing()
@@ -266,9 +298,60 @@ class ModelRamCache:
             return False, 0
         return available - size_bytes < self._host_ram_floor_bytes, available
 
+    def host_ram_headroom_ok(self) -> bool:
+        """Whether the host is currently at or above the cache floor.
+
+        The size-0 admission question: nothing new would be written, the
+        existing residency just has to fit. Like the admission checks this
+        fails open on a zero floor or an unreadable /proc/meminfo — callers
+        must pair a True answer with a re-plan pass that has run since the
+        last reservation change, so the floor it compares against is live.
+        """
+        starves, _ = self._would_starve_host(0)
+        return not starves
+
     def cached_models(self) -> list[str]:
         """List models currently in the cache."""
         return sorted(self._cached_models)
+
+    def reserve_cache_use(self, model_name: str) -> None:
+        """Mark that a process is about to read *model_name*'s tmpfs entry.
+
+        The re-plan protects the entries of lanes that read the cache, but
+        calibration reads its entry with no lane handle and no startup
+        reservation, so without this its tree could be evicted mid-session.
+        Call before the first read, pair every call with exactly one
+        ``release_cache_use``. Reference-counted so overlapping uses (e.g. a
+        calibration session that re-runs) cannot un-reserve each other, and a
+        double release is a harmless no-op rather than corrupting the count.
+        Thread-safe: this runs in executor threads, and the guard also
+        serialises the count against reclaim's final eviction decision.
+        """
+        with self._cache_use_guard:
+            self._cache_use_refs[model_name] = self._cache_use_refs.get(model_name, 0) + 1
+
+    def release_cache_use(self, model_name: str) -> None:
+        """Drop one reservation taken by ``reserve_cache_use``.
+
+        A release with no matching reservation is ignored (the count is clamped
+        at zero) so an over-release cannot drive the count negative.
+        """
+        with self._cache_use_guard:
+            refs = self._cache_use_refs.get(model_name, 0)
+            if refs <= 1:
+                self._cache_use_refs.pop(model_name, None)
+            else:
+                self._cache_use_refs[model_name] = refs - 1
+
+    def cache_use_reservations(self) -> set[str]:
+        """Models with an outstanding ``reserve_cache_use``.
+
+        The RAM-cache re-plan unions this set into its protection set, so a
+        model being calibrated — whose entry it reads with no lane to hide
+        behind — is not reclaimed while the reservation is live.
+        """
+        with self._cache_use_guard:
+            return set(self._cache_use_refs)
 
     def model_size_bytes(self, model_name: str) -> int:
         """Bytes this model will occupy in the cache.
@@ -297,6 +380,30 @@ class ModelRamCache:
             if model_name in self._cached_models:
                 cached = self._cache_hub / _hf_model_dir_name(model_name)
                 if cached.exists():
+                    # The copy path below re-checks the floor before admitting
+                    # NEW bytes, but this entry is already resident in tmpfs —
+                    # it was cached under an earlier, smaller floor (or its
+                    # in-flight copy finished under one) and the re-plan may
+                    # since have raised the sleep reserve past it. The right
+                    # question is whether the host is ALREADY below the floor
+                    # with the entry in place (size 0: nothing to add), not
+                    # whether adding it would be. Serving the lane from an
+                    # over-floor entry would protect it (the lane reads it) and
+                    # leave the lane's first sleep short of planned host RAM,
+                    # so when the host is under the floor serve from disk
+                    # instead — which also leaves the entry evictable by the
+                    # re-plan.
+                    starves, host_available = self._would_starve_host(0)
+                    if starves:
+                        logger.warning(
+                            "Model %s: already cached but host RAM (%d MB) is below the "
+                            "%d MB sleep reserve — loading from disk so the lane's "
+                            "first sleep has planned host RAM",
+                            model_name,
+                            host_available // (1024 * 1024),
+                            self._host_ram_floor_bytes // (1024 * 1024),
+                        )
+                        return str(self._source_hub.parent)
                     logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                     return str(self._cache_hub.parent)
                 self._cached_models.discard(model_name)
@@ -349,6 +456,42 @@ class ModelRamCache:
             ok = await self._copy_model(model_name)
             if ok:
                 self._cached_models.add(model_name)
+                # The pre-copy check above is a snapshot: the re-plan runs on
+                # a tick and after every lane sleep, so the floor may have
+                # risen while this copy ran. Re-check the live floor with the
+                # entry now resident (size 0, as in the already-cached branch)
+                # — serving the lane from an over-floor entry would protect it
+                # (the lane reads it) and leave the lane's first sleep short of
+                # planned host RAM, so serve from disk instead.
+                starves, host_available = self._would_starve_host(0)
+                if starves:
+                    # The re-plan that raised the floor could not evict this
+                    # copy in flight — reclaim() skips _caching_now (the
+                    # worker owns the half-written tree) — and nothing
+                    # re-plans when the copy lands: clearing _caching_now only
+                    # fires the completion event, whose waiters then fall
+                    # back to disk while the tree sits in tmpfs and
+                    # _cached_models until the next 60 s tick, still eating
+                    # the sleep reserve a lane may sleep into. Only this
+                    # post-copy check can give the RAM back at once, so evict
+                    # the completed entry before returning (we hold the
+                    # per-model lock, the same protection reclaim evicts
+                    # under; a live calibration reservation spares it, as in
+                    # reclaim — the next re-plan pass drops it when the
+                    # session ends).
+                    with self._cache_use_guard:
+                        if self._cache_use_refs.get(model_name, 0) == 0:
+                            self.evict(model_name)
+                    logger.warning(
+                        "Model %s: copy finished but host RAM (%d MB) is below "
+                        "the %d MB sleep reserve — evicting the just-cached "
+                        "copy and loading from disk so the lane's first sleep "
+                        "has planned host RAM",
+                        model_name,
+                        host_available // (1024 * 1024),
+                        self._host_ram_floor_bytes // (1024 * 1024),
+                    )
+                    return str(self._source_hub.parent)
                 logger.info("Model %s: loading from tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
             logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
@@ -359,10 +502,50 @@ class ModelRamCache:
 
         Returns the HF_HOME path to use: tmpfs cache path if successfully cached,
         source path if not (space exhausted, model not found, or copy failed).
+
+        Writer ownership is shared with the background worker through the
+        per-model lock: if the worker already has this model queued or in
+        flight, the lock wait blocks until its attempt ends instead of
+        starting a second writer for the same <model>.partial tree (both
+        copy implementations delete, write and rename that tree); on a
+        timed-out or unreachable wait the model is served from the source.
         """
+        may_copy, writer_lock = self._writer_lock_for_sync_copy(model_name)
+        if not may_copy:
+            logger.warning(
+                "Model %s: the background cache attempt owns the model — "
+                "loading from source instead of starting a competing copy",
+                model_name,
+            )
+            return str(self._source_hub.parent)
+        try:
+            return self._ensure_cached_sync(model_name)
+        finally:
+            if writer_lock is not None:
+                self._release_writer_lock_sync(writer_lock)
+
+    def _ensure_cached_sync(self, model_name: str) -> str:
+        """The admission + copy body of ensure_cached_sync, with the
+        per-model writer lock held by the wrapper (lock-free when no
+        background worker exists to race)."""
         if model_name in self._cached_models:
             cached = self._cache_hub / _hf_model_dir_name(model_name)
             if cached.exists():
+                # Same floor re-check as the async path: an entry resident
+                # under an earlier, smaller floor must not be served once the
+                # re-plan has raised the sleep reserve past it (see
+                # ensure_cached).
+                starves, host_available = self._would_starve_host(0)
+                if starves:
+                    logger.warning(
+                        "Model %s: already cached but host RAM (%d MB) is below the "
+                        "%d MB sleep reserve — loading from disk so the lane's "
+                        "first sleep has planned host RAM",
+                        model_name,
+                        host_available // (1024 * 1024),
+                        self._host_ram_floor_bytes // (1024 * 1024),
+                    )
+                    return str(self._source_hub.parent)
                 logger.info("Model %s: already in tmpfs RAM cache", model_name)
                 return str(self._cache_hub.parent)
             self._cached_models.discard(model_name)
@@ -414,6 +597,26 @@ class ModelRamCache:
         ok = self._copy_model_sync(model_name)
         if ok:
             self._cached_models.add(model_name)
+            # Same post-copy re-check as the async path: the reserve may have
+            # risen while the copy ran (see ensure_cached). The evict is
+            # unconditional here — the only reservation that can be live on a
+            # tree this very call just wrote is the caller's own (calibration
+            # reserves before calling in), it is provisional, and it is being
+            # handed the source path, so nothing is reading the tree we
+            # remove.
+            starves, host_available = self._would_starve_host(0)
+            if starves:
+                self.evict(model_name)
+                logger.warning(
+                    "Model %s: copy finished but host RAM (%d MB) is below "
+                    "the %d MB sleep reserve — evicting the just-cached copy "
+                    "and loading from disk so the sleep reserve is free at "
+                    "once",
+                    model_name,
+                    host_available // (1024 * 1024),
+                    self._host_ram_floor_bytes // (1024 * 1024),
+                )
+                return str(self._source_hub.parent)
             logger.info("Model %s: cached to tmpfs RAM cache (sync)", model_name)
             return str(self._cache_hub.parent)
         logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
@@ -555,11 +758,18 @@ class ModelRamCache:
         ``apply_lanes`` immediately instead of blocking the lifespan
         startup hook on a multi-minute rsync sweep.
 
+        Called at startup, and again by the RAM-cache re-plan whenever host
+        RAM frees up (admitted models are extended onto the same queue).
+
         Subsequent calls extend the queue rather than replacing it — safe
         to invoke from anywhere once the worker is running.
         """
         # Coerce to a fresh list because the caller may reuse the input.
         wanted = [m for m in models if isinstance(m, str) and m.strip()]
+        try:
+            self._worker_loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - called from a thread
+            pass
         if self._cache_queue_event is None:
             self._cache_queue_event = asyncio.Event()
         for m in wanted:
@@ -590,7 +800,11 @@ class ModelRamCache:
                 self._cache_queue.appendleft(model_name)
                 logger.info("RAM cache: bumped %s to front of queue", model_name)
             return event
-        # Fresh enqueue.
+        # Fresh enqueue. The completion event may still be set from a
+        # *released* attempt (the re-plan dropped a queue entry and woke
+        # its waiters) — clear it so this attempt's waiters wait for the
+        # real completion, not the stale release.
+        event.clear()
         if priority:
             self._cache_queue.appendleft(model_name)
         else:
@@ -613,6 +827,7 @@ class ModelRamCache:
         """
         if self.is_cached(model_name):
             return True
+        self._worker_loop = asyncio.get_running_loop()
         if self._cache_queue_event is None:
             self._cache_queue_event = asyncio.Event()
         event = self._enqueue(model_name, priority=True)
@@ -701,7 +916,7 @@ class ModelRamCache:
                 total += _tree_size_bytes(target)
         return total
 
-    def reclaim(self, keep: set[str]) -> list[str]:
+    async def reclaim(self, keep: set[str]) -> list[str]:
         """Drop cached models outside *keep*, returning what was removed.
 
         The cache and vLLM's sleep_l1 both hold model weights in host RAM,
@@ -715,14 +930,85 @@ class ModelRamCache:
         waking from sleep_l2 re-reads its weights from whatever HF_HOME it
         was started with, and pulling that directory out from under it turns
         a wake into a failed lane.
+
+        Coordination with the background copy worker (reclaim now runs on a
+        60 s tick next to in-flight copies, not once at startup before any):
+
+        * the model being copied right now (``_caching_now``) is skipped —
+          the worker owns its tree, and a concurrent ``rmtree`` would tear a
+          half-written copy. The next pass sees the finished copy in
+          ``_cached_models`` and drops it then.
+        * each evicted model's per-model lock — the same one
+          ``ensure_cached`` holds during a copy — is held while its tree is
+          removed, so no copy of the same model can interleave with the
+          ``rmtree``.
+        * queue entries the plan no longer wants are dropped, and their
+          completion events released (a waiter then sees ``is_cached`` False
+          and falls back to disk immediately). Without this the worker would
+          finish copying a model the plan just rejected, and the next pass
+          would evict it again — evict/recopy thrash of tens of GB.
+        * ``keep`` is a SNAPSHOT the caller computed before this reclaim
+          started (main.py unions the live cache-use reservations into it
+          exactly once, up front), and the awaits in here let an
+          executor-thread calibration reserve this very entry AFTER that
+          snapshot and select the tmpfs path with ``ensure_cached_sync``.
+          The reference count is therefore re-checked live under
+          ``_cache_use_guard`` — held through the eviction, so a reservation
+          landing while the tree is being removed blocks until it is gone and
+          the probe's ``ensure_cached_sync`` re-copies (or falls back to
+          source) instead of reading a half-deleted entry — and a late
+          reservation spares the model instead of being torn out from under
+          the probe.
         """
         removed: list[str] = []
         for model_name in sorted(self._cached_models):
             if model_name in keep:
                 continue
-            self.evict(model_name)
-            removed.append(model_name)
+            if model_name == self._caching_now:
+                continue
+            lock = await self._get_model_lock(model_name)
+            async with lock:
+                # `keep` is the caller's pre-reclaim snapshot (see the
+                # docstring): a calibration may have reserved THIS entry
+                # since it was taken. Re-check the live count under the
+                # reservation guard, held through the eviction, so a
+                # reservation that landed after the snapshot blocks the
+                # rmtree instead of being torn out from under the probe.
+                with self._cache_use_guard:
+                    if self._cache_use_refs.get(model_name, 0) > 0:
+                        continue
+                    self._release_queue_entry(model_name)
+                    self.evict(model_name)
+                removed.append(model_name)
+        for model_name in [m for m in self._cache_queue if m not in keep]:
+            self._release_queue_entry(model_name)
         return removed
+
+    def _release_queue_entry(self, model_name: str) -> None:
+        """Drop *model_name* from the copy queue and release its waiters.
+
+        A released event means "the caching attempt finished"; ``is_cached``
+        is still False, so a waiter proceeds from disk instead of waiting
+        out its timeout.
+        """
+        if model_name in self._cache_queue:
+            self._cache_queue.remove(model_name)
+        event = self._completion_events.get(model_name)
+        if event is not None and not event.is_set():
+            event.set()
+
+    def pending_or_caching(self) -> set[str]:
+        """Models the background worker already owns: queued or in flight.
+
+        A model in here is on its way into the cache — re-queueing it is a
+        no-op and re-logging it is noise. The re-plan uses this to keep its
+        "re-caching N model(s)" line truthful while a copy is in flight
+        (``is_cached`` is False until the copy lands).
+        """
+        pending = set(self._cache_queue)
+        if self._caching_now is not None:
+            pending.add(self._caching_now)
+        return pending
 
     def get_effective_hf_home(self, model_name: str) -> str:
         """Return tmpfs-based HF_HOME if cached, else source HF_HOME."""
@@ -798,6 +1084,99 @@ class ModelRamCache:
             if model_name not in self._locks:
                 self._locks[model_name] = asyncio.Lock()
             return self._locks[model_name]
+
+    async def _acquire_model_writer_lock(self, model_name: str) -> asyncio.Lock:
+        """Fetch AND acquire the per-model writer lock.
+
+        Driven from non-loop threads via asyncio.run_coroutine_threadsafe
+        (see _writer_lock_for_sync_copy): holding it is what makes the
+        synchronous copy and the background worker's ensure_cached mutually
+        exclusive writers for the model's .partial tree.
+        """
+        lock = await self._get_model_lock(model_name)
+        await lock.acquire()
+        return lock
+
+    async def _release_model_writer_lock(self, lock: asyncio.Lock) -> None:
+        lock.release()
+
+    def _writer_lock_for_sync_copy(self, model_name: str) -> tuple[bool, asyncio.Lock | None]:
+        """Take the per-model writer lock for a synchronous copy.
+
+        Returns ``(may_copy, lock)``. ``lock`` is non-None exactly when it
+        was taken and must be released via ``_release_writer_lock_sync``.
+        ``may_copy`` is False when the call cannot own the writer without
+        racing the background worker: the worker held the lock past
+        SYNC_BACKGROUND_WAIT_TIMEOUT_S (its copy still in flight), the call
+        runs ON the worker loop (blocking would deadlock it), or the loop
+        died underneath the wait — in all of those the caller serves from
+        the source. A missing worker loop means no background worker was
+        ever started, so nothing can own the writer: proceed lock-free.
+
+        A timed-out acquisition is abandoned with a completion callback
+        rather than cancelled: cancel() only marks the cross-thread
+        destination, and a task that acquires the lock after the destination
+        is already cancelled completes with its result discarded — a lock
+        held forever, wedging every later ensure_cached/reclaim for the
+        model. The callback instead releases whatever lock the acquisition
+        eventually returns, whether that is immediately (it finished racing
+        the timeout) or only once the worker's copy finally lands.
+        """
+        loop = self._worker_loop
+        if loop is None:
+            return True, None
+        try:
+            if asyncio.get_running_loop() is loop:
+                return False, None
+        except RuntimeError:
+            pass  # non-loop thread: the normal calibration shape
+        future = asyncio.run_coroutine_threadsafe(self._acquire_model_writer_lock(model_name), loop)
+        try:
+            return True, future.result(timeout=SYNC_BACKGROUND_WAIT_TIMEOUT_S)
+        except Exception:  # noqa: BLE001
+            # Timed out (the worker's copy is still in flight) or the loop
+            # died: writer ownership is unproven, so the caller serves from
+            # the source instead of starting a competing copy. result()
+            # discarding the future does NOT stop the acquisition: it is
+            # still queued behind the lock's waiters and would take the lock
+            # later with nobody left to release it. Keep it running — do
+            # NOT cancel it (a task that acquires the lock after the
+            # destination is cancelled completes with its result discarded,
+            # and no release branch runs) — and let the completion callback
+            # release whatever it eventually returns.
+            def _release_abandoned_acquisition(done_future) -> None:
+                try:
+                    abandoned_lock = done_future.result()
+                except BaseException:  # noqa: BLE001
+                    # Failed, or cancelled with a dying loop: it never
+                    # acquired the lock, so there is nothing to release.
+                    return
+                self._release_writer_lock_sync(abandoned_lock)
+
+            future.add_done_callback(_release_abandoned_acquisition)
+            logger.warning(
+                "Model %s: could not take the per-model writer lock for the "
+                "synchronous copy (background attempt in flight after %.0fs, "
+                "or the worker loop is gone)",
+                model_name,
+                SYNC_BACKGROUND_WAIT_TIMEOUT_S,
+            )
+            return False, None
+
+    def _release_writer_lock_sync(self, lock: asyncio.Lock) -> None:
+        """Release a writer lock taken by ``_writer_lock_for_sync_copy``.
+
+        Fire-and-forget on the worker loop: releasing must not depend on
+        the loop still being alive at copy end, and a lost release can only
+        make a later sync copy take the safe source path after its timeout.
+        """
+        loop = self._worker_loop
+        if loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._release_model_writer_lock(lock), loop)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not schedule the writer-lock release (loop gone)")
 
     async def _copy_model(self, model_name: str) -> bool:
         """Copy model directory into tmpfs using rsync.
@@ -1041,11 +1420,26 @@ class _DisabledModelRamCache:
     def held_bytes(self) -> int:
         return 0
 
-    def reclaim(self, keep: set[str]) -> list[str]:  # noqa: ARG002
+    async def reclaim(self, keep: set[str]) -> list[str]:  # noqa: ARG002
         return []
+
+    def pending_or_caching(self) -> set[str]:
+        return set()
 
     def set_host_ram_floor_mb(self, floor_mb: float) -> None:  # noqa: ARG002
         pass
+
+    def host_ram_headroom_ok(self) -> bool:
+        return True
+
+    def reserve_cache_use(self, model_name: str) -> None:  # noqa: ARG002
+        pass
+
+    def release_cache_use(self, model_name: str) -> None:  # noqa: ARG002
+        pass
+
+    def cache_use_reservations(self) -> set[str]:
+        return set()
 
     def get_effective_hf_home(self, model_name: str) -> str:  # noqa: ARG002
         return ""
@@ -1062,7 +1456,7 @@ def create_model_cache(
     tmpfs_path:
         Value of ``LOGOS_TMPFS_CACHE_PATH`` env var.  Empty or None = disabled.
     hf_home:
-        Value of ``HF_HOME`` env var (e.g. ``/usr/share/ollama/.ollama/models/.hf_cache``).
+        Value of ``HF_HOME`` env var (e.g. ``/usr/share/logos/models/.hf_cache``).
     """
     if not tmpfs_path:
         return _DisabledModelRamCache()

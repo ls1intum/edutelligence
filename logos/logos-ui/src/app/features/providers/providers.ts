@@ -72,15 +72,30 @@ export class Providers implements OnInit {
 
   readonly providerTypeOptions: AppSelectOption[] = this.providerTypes.map((t) => ({ value: t, label: t }));
 
-  private readonly defaultCloudProviderType: CloudProviderType = 'azure';
+  // A cloud provider that is none of the named vendors — Hetzner, a vLLM
+  // gateway, any other OpenAI-compatible endpoint — is left untyped. That is
+  // not an omission: an untyped cloud provider is exactly the one the generic
+  // machinery handles, addressed at /v1/chat/completions with a plain
+  // "Authorization: Bearer" and discovered over GET /v1/models.
+  private readonly untypedCloudLabel = 'other (OpenAI-compatible)';
+
+  // Deliberately not 'azure'. Azure is the one type excluded from the generic
+  // /v1/models sync — it has its own control-plane discovery — so defaulting to
+  // it meant a provider saved without touching the field was scraped by
+  // neither path and silently stayed empty.
+  private readonly defaultCloudProviderType: CloudProviderType = 'none';
   private readonly defaultCloudPrivacyLevel: PrivacyLevel = 'CLOUD_IN_EU_BY_US_PROVIDER';
 
   private cloudProviderTypeOptionsFor(type: ProviderType): AppSelectOption[] {
-    const types =
-      type === 'logosnode'
-        ? this.cloudProviderTypes.filter((t) => t === 'none')
-        : this.cloudProviderTypes.filter((t) => t !== 'none');
-    return types.map((t) => ({ value: t, label: t }));
+    if (type === 'logosnode') {
+      // Never rendered — the field is hidden for a logosnode — but the value
+      // still has to resolve to something the backend maps to NULL.
+      return [{ value: 'none', label: 'none' }];
+    }
+    return [
+      { value: 'none', label: this.untypedCloudLabel },
+      ...this.cloudProviderTypes.filter((t) => t !== 'none').map((t) => ({ value: t, label: t })),
+    ];
   }
 
   private privacyLevelOptionsFor(type: ProviderType): AppSelectOption[] {
@@ -119,8 +134,12 @@ export class Providers implements OnInit {
       // dialog reopens or the type toggle is cycled.
       return { cloud: 'none', privacy: privacy === 'THIRD_PARTY_HARDWARE' ? privacy : 'LOCAL' };
     }
+    // 'none' is kept, not rewritten to a vendor. An untyped cloud provider is a
+    // legitimate configuration, and coercing it to 'azure' here meant merely
+    // opening the edit dialog on one and saving re-labelled it as Azure —
+    // which drops it out of the /v1/models sync it was relying on.
     return {
-      cloud: cloud === 'none' ? this.defaultCloudProviderType : cloud,
+      cloud,
       privacy: privacy === 'LOCAL' || privacy === 'THIRD_PARTY_HARDWARE' ? this.defaultCloudPrivacyLevel : privacy,
     };
   }

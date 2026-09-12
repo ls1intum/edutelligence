@@ -1,7 +1,22 @@
-.sparkline-svg {
-  display: inline-block;
+// The KPI card hands the sparkline whatever width is left after the value and
+// the gap — and in a card near its minimum that is less than the drawing's
+// natural 92px. The host therefore declares the natural width only as an
+// upper bound and may shrink, and the drawing fills the host it is given, so
+// a tight card scales the line down instead of letting it run into the card
+// border. The viewBox keeps the shape at any size.
+:host {
+  display: block;
   width: 92px;
-  height: 28px;
+  min-width: 0;
+}
+
+// The viewBox (0 0 92 28) carries the drawing's ratio, so a fluid width
+// keeps the shape at every size.
+.sparkline-svg {
+  display: block;
+  width: 100%;
+  max-width: 92px;
+  height: auto;
   overflow: visible;
 }
 
