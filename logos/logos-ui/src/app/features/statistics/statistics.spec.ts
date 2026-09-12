@@ -5,7 +5,7 @@ import { Statistics } from './statistics';
 import { StatsWebsocketService } from './services/stats-websocket.service';
 import { StatisticsService } from './services/statistics.service';
 
-import type { TimelineRequestConfig } from './statistics.models';
+import type { FeedFilterOption, TimelineRequestConfig } from './statistics.models';
 
 // The range the page shows is resolved from the calendar when it is picked,
 // and then it sits: the server deliberately keeps the start where the preset
@@ -17,34 +17,38 @@ import type { TimelineRequestConfig } from './statistics.models';
 // apply the moved range exactly like a picked one. These tests run the ticker
 // against a frozen clock and step it across a midnight the only way time can
 // step it.
+const wsSpy = () => ({
+  connect: vi.fn(),
+  disconnect: vi.fn(),
+  reconnect: vi.fn(),
+  setTimelineRange: vi.fn(),
+  setScope: vi.fn(),
+  setFeedStatus: vi.fn(),
+});
+
+/** Boot the page at the frozen clock and wire in the service spies. */
+async function pageAt(
+  getScopeOptions: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({
+    teams: [],
+    requesters: [],
+  }),
+) {
+  const ws = wsSpy();
+  await TestBed.configureTestingModule({
+    imports: [Statistics],
+    providers: [
+      { provide: StatsWebsocketService, useValue: ws },
+      { provide: StatisticsService, useValue: { getScopeOptions } },
+    ],
+  }).compileComponents();
+  const fx = TestBed.createComponent(Statistics);
+  const component = fx.componentInstance;
+  component.ngOnInit();
+  return { fx, component, ws, getScopeOptions };
+}
+
 describe('Statistics calendar rollover', () => {
   let fixture: ComponentFixture<Statistics> | undefined;
-
-  const wsSpy = () => ({
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    reconnect: vi.fn(),
-    setTimelineRange: vi.fn(),
-    setScope: vi.fn(),
-    setFeedStatus: vi.fn(),
-  });
-
-  /** Boot the page at the frozen clock and wire in the service spies. */
-  async function pageAt() {
-    const ws = wsSpy();
-    const getScopeOptions = vi.fn().mockResolvedValue({ teams: [], requesters: [] });
-    await TestBed.configureTestingModule({
-      imports: [Statistics],
-      providers: [
-        { provide: StatsWebsocketService, useValue: ws },
-        { provide: StatisticsService, useValue: { getScopeOptions } },
-      ],
-    }).compileComponents();
-    const fx = TestBed.createComponent(Statistics);
-    const component = fx.componentInstance;
-    component.ngOnInit();
-    return { fx, component, ws, getScopeOptions };
-  }
 
   afterEach(() => {
     fixture?.destroy();
@@ -143,5 +147,69 @@ describe('Statistics calendar rollover', () => {
     // A window the operator zoomed into is pinned where they put it; the
     // calendar moving underneath it is no reason to drag them out of it.
     expect(page.ws.setTimelineRange.mock.calls.length).toBe(rangesBefore);
+  });
+});
+
+describe('Statistics scope options', () => {
+  let fixture: ComponentFixture<Statistics> | undefined;
+
+  afterEach(() => {
+    fixture?.destroy();
+    fixture = undefined;
+    vi.useRealTimers();
+  });
+
+  it('discards a scope-options response a newer range and selection already superseded', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 6, 23, 50, 0, 0));
+
+    // The init request is the one the operator outlives: it resolves only
+    // after a range pick and a requester selection it does not know about.
+    let releaseStale: (value: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] }) => void =
+      () => {};
+    const stale = new Promise<{ teams: FeedFilterOption[]; requesters: FeedFilterOption[] }>(
+      (resolve) => {
+        releaseStale = resolve;
+      },
+    );
+    const fresh: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] } = {
+      teams: [{ id: 1, label: 'Team One', requestCount: 3 }],
+      requesters: [{ id: 7, label: 'User Seven', requestCount: 5 }],
+    };
+    // First request (the init one) is the one that outlives the operator;
+    // everything after it serves the fresh range. State-based rather than
+    // call-queued, so the test holds no matter how many init requests the
+    // test harness fires.
+    let first = true;
+    const getScopeOptions = vi.fn(() => (first ? (first = false, stale) : Promise.resolve(fresh)));
+    const page = await pageAt(getScopeOptions);
+    fixture = page.fx;
+
+    // The operator picks a range; the fresh response lands and the dropdowns
+    // list it.
+    page.component.setPreset('day');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(page.component.feedUsers()).toEqual(fresh.requesters);
+    expect(page.component.feedTeams()).toEqual(fresh.teams);
+
+    // ...and narrows to a requester the stale response would not recognise.
+    page.component.setUserFilter('7');
+    await Promise.resolve();
+    await Promise.resolve();
+    const scopesBefore = page.ws.setScope.mock.calls.length;
+
+    // The stale response lands last: empty lists, no user 7.
+    releaseStale({ teams: [], requesters: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // None of it may reach the page: the options of the current selection
+    // stand, the chosen requester stays chosen, and no scope is re-sent for
+    // lists that describe the previous range.
+    expect(page.component.feedUsers()).toEqual(fresh.requesters);
+    expect(page.component.feedTeams()).toEqual(fresh.teams);
+    expect(page.component.filterUserId()).toBe(7);
+    expect(page.ws.setScope.mock.calls.length).toBe(scopesBefore);
   });
 });

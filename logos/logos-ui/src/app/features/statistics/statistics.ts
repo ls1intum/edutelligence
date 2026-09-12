@@ -126,6 +126,12 @@ export class Statistics implements OnInit, OnDestroy {
   readonly filterUserId = signal<number | null>(null);
   readonly filterTeamId = signal<number | null>(null);
 
+  // Every loadScopeOptions bumps this; a response that resolves for an older
+  // value is stale — its range or team moved on while the request was in
+  // flight, and applying it would replace the options of the current
+  // selection and could clear a requester the fresh list does contain.
+  private scopeOptionsGeneration = 0;
+
   readonly filterActive = computed(
     () => this.filterUserId() !== null || this.filterTeamId() !== null,
   );
@@ -969,8 +975,18 @@ export class Statistics implements OnInit, OnDestroy {
   private async loadScopeOptions(): Promise<void> {
     const cfg = this.wsTimelineConfig();
     const teamId = this.filterTeamId();
+    // Claim this request before the await: any later range or team change
+    // bumps the counter and supersedes whatever this response still carries.
+    const generation = ++this.scopeOptionsGeneration;
     try {
       const options = await this.statisticsService.getScopeOptions(cfg.start, cfg.end, teamId);
+      if (generation !== this.scopeOptionsGeneration) {
+        // A newer request is in flight or already applied — its lists
+        // describe the selection on screen. This one describes the one
+        // before it, and neither its options nor its "the selected requester
+        // is gone" check may touch the current state.
+        return;
+      }
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
 
