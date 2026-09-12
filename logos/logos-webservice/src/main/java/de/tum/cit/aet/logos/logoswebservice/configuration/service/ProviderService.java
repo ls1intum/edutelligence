@@ -134,6 +134,13 @@ public class ProviderService {
         if (!providerRepository.existsById(providerId)) {
             throw new IllegalArgumentException("Provider not found: " + providerId);
         }
+        // Lock the provider row before checking: inserting a batch_object
+        // takes a FOR KEY SHARE lock on the referenced row, so no concurrent
+        // registration can commit while the count and the delete run.
+        // Without it, a creation could land an unsettled batch between the
+        // count and the delete, and the cascade would erase its row while
+        // the upstream job keeps running.
+        jdbc.queryForObject("SELECT id FROM providers WHERE id = ? FOR UPDATE", Long.class, providerId);
         // Deleting the provider cascades its batch_objects rows away. For a
         // batch that still runs upstream — or finished there without its
         // usage being booked yet — that would leave the job unreachable and

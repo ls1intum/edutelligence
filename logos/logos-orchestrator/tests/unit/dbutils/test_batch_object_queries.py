@@ -296,6 +296,26 @@ def test_registering_a_file_keeps_the_models_it_names():
     assert _params_of(db.session.execute.call_args)["models"] is None
 
 
+def test_a_registration_whose_id_another_provider_holds_is_refused():
+    # A fresh insert and an upsert of the same provider's row each touch
+    # exactly one row. A DO UPDATE that matches none means another provider
+    # already holds the id: the registration must fail closed — so the caller
+    # removes the provider object again — rather than overwrite or silently
+    # skip.
+    db = _db()
+    db.session.execute.return_value = MagicMock(rowcount=0)
+    with pytest.raises(RuntimeError, match="already held by another provider"):
+        db.register_batch_object(
+            kind="file", upstream_id="file-abc", provider_id=7, api_key_id=11, team_id=12, user_id=13
+        )
+    db.session.commit.assert_not_called()
+
+    # The same-provider upsert commits as before.
+    db.session.execute.return_value = MagicMock(rowcount=1)
+    db.register_batch_object(kind="file", upstream_id="file-abc", provider_id=7, api_key_id=11, team_id=12, user_id=13)
+    db.session.commit.assert_called_once()
+
+
 def test_the_registration_conflict_target_matches_the_migrated_index():
     # The unique index on batch_objects is on a COALESCE *expression*, not the
     # bare columns, and PostgreSQL can only infer an expression index when the

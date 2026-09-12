@@ -2542,8 +2542,14 @@ class DBManager:
         when the provider later shows it cannot batch one of them, the batch
         that named them is the evidence, and this list is what still says which
         models the file asked for.
+
+        An id is globally unique — a client supplies the id without the
+        provider that minted it, so one id may not name two objects. A row
+        another provider already holds therefore makes the upsert a no-op,
+        which this reports as an error; the caller then removes the provider
+        object again instead of letting the collision stand.
         """
-        self.session.execute(
+        result = self.session.execute(
             text(
                 """
                 INSERT INTO batch_objects
@@ -2551,16 +2557,16 @@ class DBManager:
                      input_file_id, status, models, created_at, updated_at)
                 VALUES (:kind, :upstream_id, :provider_id, :api_key_id, :team_id, :user_id,
                         :input_file_id, :status, CAST(:models AS JSONB), :now, :now)
-                -- The conflict target must mirror the uq_batch_objects_upstream
-                -- index expression (COALESCE, not the bare column: a Logos-run
-                -- object has no provider, and NULLs would compare as distinct) —
-                -- a bare-column target does not match an expression index and
-                -- the statement fails outright in PostgreSQL.
-                ON CONFLICT (COALESCE(provider_id, 0), kind, upstream_id)
+                -- The upsert only takes the row of the provider that minted
+                -- the id: when another provider already holds it the DO
+                -- UPDATE matches nothing (rowcount 0), and the caller turns
+                -- that into the unrecorded-ownership error.
+                ON CONFLICT (kind, upstream_id)
                 DO UPDATE SET status = COALESCE(EXCLUDED.status, batch_objects.status),
                               input_file_id = COALESCE(EXCLUDED.input_file_id, batch_objects.input_file_id),
                               models = COALESCE(EXCLUDED.models, batch_objects.models),
                               updated_at = EXCLUDED.updated_at
+                WHERE COALESCE(batch_objects.provider_id, 0) = COALESCE(EXCLUDED.provider_id, 0)
                 """
             ),
             {
@@ -2576,14 +2582,17 @@ class DBManager:
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         )
+        if result.rowcount == 0:
+            raise RuntimeError(f"batch object id {upstream_id!r} is already held by another provider")
         self.session.commit()
 
     def get_batch_object(self, kind: str, upstream_id: str) -> Optional[Dict[str, Any]]:
         """The ownership row for one id, or None when Logos never minted it.
 
-        Keyed by the id alone: a caller supplies an id, not a provider, and
-        this row is what says where the object lives — or that Logos runs it
-        itself.
+        The id is globally unique (one row per kind, across providers and
+        Logos itself), so the lookup is unambiguous: a caller supplies an id,
+        not a provider, and this row is what says where the object lives — or
+        that Logos runs it itself.
         """
         row = (
             self.session.execute(

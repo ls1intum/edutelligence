@@ -572,6 +572,12 @@ class _FakeDB:
         if self.fail_registration and self.fail_registration in (True, kwargs.get("kind")):
             raise RuntimeError("the database is down")
         self.registered.append(kwargs)
+        # Mirrors the production upsert: a row another provider already holds
+        # makes the DO UPDATE a no-op, which the registration reports as a
+        # failure rather than an overwrite.
+        existing = self.owned.get((kwargs["kind"], kwargs["upstream_id"]))
+        if existing is not None and int(existing.get("provider_id") or 0) != int(kwargs.get("provider_id") or 0):
+            raise RuntimeError("batch object id is already held by another provider")
         self.owned[(kwargs["kind"], kwargs["upstream_id"])] = {
             "id": 1,
             "team_id": kwargs["team_id"],
@@ -809,6 +815,32 @@ def test_file_upload_forwards_the_rewritten_file_and_records_ownership(monkeypat
     ]
     assert db.log_usage_kwargs["input_payload"]["requests"] == 1
     assert db.finalization["result_status"] == "success"
+
+
+def test_an_id_already_held_by_another_provider_is_not_reused(monkeypatch):
+    # A client supplies the id without the provider that minted it, so one id
+    # may not name objects at two providers: the registration is refused, the
+    # colliding object is removed from the provider again, and the first row
+    # stays exactly where it was.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-abc"): _remote(5, OWN_TEAM, provider_id=8)},
+    )
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "file-abc"}))
+
+    resp = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "batch_ownership_unrecorded"
+    assert db.owned[("file", "file-abc")]["provider_id"] == 8
+    # The colliding object is gone from the provider again, so it lingers
+    # nowhere: the upload went out once, its cleanup delete once.
+    assert [request.method for request in seen] == ["POST", "DELETE"]
 
 
 def test_an_unpermitted_model_never_reaches_the_upstream(monkeypatch):

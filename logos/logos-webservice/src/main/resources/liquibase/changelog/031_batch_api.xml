@@ -119,12 +119,14 @@
 
     <changeSet id="031-batch-objects-indexes" author="wasnertobias">
         <sql><![CDATA[
-            -- The lookup every lifecycle call makes: id + provider → owner.
-            -- COALESCE, not the bare column: a Logos-run object has no
-            -- provider, and NULLs would compare as distinct and let the same
-            -- id be minted twice.
+            -- The lookup every lifecycle call makes: id → owner. The id is
+            -- unique across providers and Logos itself, because a client
+            -- supplies the id without the provider that minted it: two rows
+            -- for one id would leave every later lifecycle call ambiguous.
+            -- The registration refuses a colliding id instead of storing a
+            -- second row, so the index is what enforces the contract.
             CREATE UNIQUE INDEX IF NOT EXISTS uq_batch_objects_upstream
-                ON batch_objects(COALESCE(provider_id, 0), kind, upstream_id);
+                ON batch_objects(kind, upstream_id);
 
             -- The reconciler's scan: forwarded batches that still owe a
             -- settlement. A Logos-run batch meters itself request by request.
