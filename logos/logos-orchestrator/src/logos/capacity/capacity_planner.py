@@ -943,7 +943,7 @@ class CapacityPlanner:
 
     def _refresh_latency_store_metrics(self) -> None:
         """Publish EWMA learned-latency gauges from the latency store."""
-        if self._latency_store is None:
+        if getattr(self, "_latency_store", None) is None:
             return
         try:
             rows = self._latency_store.snapshot_metrics(

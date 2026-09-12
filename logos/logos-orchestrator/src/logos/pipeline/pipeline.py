@@ -353,6 +353,7 @@ class RequestPipeline:
             classification_result=classification_result,
             request_path=request.request_path,
             request_id=request_id,
+            schedule_start_s=schedule_start_s,
         )
         if not ctx_result.success:
             return ctx_result
@@ -396,6 +397,7 @@ class RequestPipeline:
         classification_result: "_ClassificationResult",
         request_id: str,
         request_path: Optional[str] = None,
+        schedule_start_s: Optional[float] = None,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
         deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
@@ -479,7 +481,7 @@ class RequestPipeline:
         self,
         scheduling_result,
         request_id: str,
-        schedule_start_s: float | None = None,
+        schedule_start_s: Optional[float] = None,
     ) -> dict:
         stats = {
             "request_id": request_id,
