@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import logos.main as _main
 from logos.auth import AuthContext
+from logos.batch_credential import issue_batch_credential
 from logos.benchmarks.guidellm_runner import BENCHMARK_JOB_HEADER
 from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
 from logos.benchmarks.guidellm_runner import (
@@ -30,6 +31,7 @@ from logos.dbutils.dbrequest import (
     InternalBenchmarkRequest,
     InternalCalibrateRequest,
     InternalDeleteLaneRequest,
+    InternalLaneLoadStatusRequest,
     InternalSleepLaneRequest,
     InternalWakeLaneRequest,
     RefreshPipelineRequest,
@@ -271,6 +273,33 @@ async def internal_live_streams(request: Request):
     """
     _require_internal_secret(request)
     return {"streams": _live_streams.snapshot()}
+
+
+@router.post("/internal/batch_credentials", tags=["admin"])
+async def internal_batch_credentials(request: Request):
+    """A scoped credential for the batch proxy, in place of the user's key.
+
+    The Spring webservice proxies the UI's batch pages to the Batch API as
+    the caller's own key. The user's key is a long-lived secret and the
+    internal hop is plain HTTP in the shipped setup, so the webservice names
+    the key by id here (its ownership check already ran) and gets back a
+    short-lived credential bound to that one key. That credential — not the
+    key value — is what travels to the Batch API.
+    """
+    _require_internal_secret(request, disabled_detail="Internal batch credential endpoint disabled")
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    api_key_id = body.get("api_key_id") if isinstance(body, dict) else None
+    if isinstance(api_key_id, bool) or not isinstance(api_key_id, int):
+        raise HTTPException(status_code=400, detail="A batch credential needs an integer 'api_key_id'.")
+    with DBManager() as db:
+        row = db.get_api_key_by_id(api_key_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No such active API key: {api_key_id}.")
+    credential, expires_in = issue_batch_credential(api_key_id)
+    return {"credential": credential, "expires_in": expires_in}
 
 
 # How often the live-stream SSE connection checks for a changed snapshot. The
@@ -705,6 +734,23 @@ async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Req
     if rejection is not None:
         raise HTTPException(status_code=409, detail=rejection)
 
+    # Admit before answering 202: the check-and-claim is atomic on the event
+    # loop, so a second click for the same model — or a load the planner is
+    # already bringing up — meets the marker now and gets a 409 the operator
+    # reads, instead of a 202 whose background task no-ops later and whose
+    # outcome the operator's poll would have to wait on. A refused click must
+    # not touch the recorded outcome either: it would reset a previous
+    # attempt's terminal state with no task left to settle it.
+    admission_rejection = _main._capacity_planner.manual_load_admission_rejection(data.provider_id, model)
+    if admission_rejection is not None:
+        raise HTTPException(status_code=409, detail=admission_rejection)
+
+    # Record "running" BEFORE answering, not only once the background task
+    # gets to it: the UI starts polling load_status as soon as it sees the 202,
+    # and a gap between the two would let it read the previous attempt's
+    # "failed" entry and show a stale failure for the fresh click.
+    _main._capacity_planner.record_manual_load_outcome(data.provider_id, model, "running")
+
     # Loading a model takes minutes (the planner budgets 1800 s for the command),
     # far beyond any caller's HTTP read timeout, and holding a servlet thread
     # open that long per load is its own problem. So kick it off and return: the
@@ -718,6 +764,41 @@ async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Req
         status_code=202,
         content={"status": "accepted", "model": model, "provider_id": data.provider_id},
     )
+
+
+@router.post("/internal/logosnode/lanes/load_status", tags=["admin"])
+async def internal_logosnode_lane_load_status(data: InternalLaneLoadStatusRequest, request: Request):
+    """Outcome of the most recent manual load of a model, for the statistics UI.
+
+    The "Load lane" endpoint answers 202 and runs the load in the background,
+    where a refusal (no VRAM, worker rejection, ...) is currently only a log
+    line. The UI polls this endpoint while its "Loading …" note is up and
+    turns the note into the recorded error once the attempt is over.
+
+    ``status`` is ``"running" | "succeeded" | "failed" | "unknown"`` — unknown
+    means no manual load of this model is known to the planner (never clicked
+    here, the entry expired, or the orchestrator restarted in between), which
+    the UI must not render as a failure.
+    """
+    _require_internal_secret(request)
+
+    model = str(data.model or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    if _main._capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not ready")
+
+    # One shape for every answer — unknown included, with nulls — so the UI
+    # can read the fields without checking the status first.
+    outcome = _main._capacity_planner.get_manual_load_outcome(data.provider_id, model) or {}
+    return {
+        "status": outcome.get("status", "unknown"),
+        "model": model,
+        "provider_id": data.provider_id,
+        "lane_id": outcome.get("lane_id"),
+        "reason": outcome.get("reason"),
+        "updated_at": outcome.get("updated_at"),
+    }
 
 
 @router.post("/internal/logosnode/lanes/sleep", tags=["admin"])

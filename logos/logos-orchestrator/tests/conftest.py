@@ -205,6 +205,7 @@ sa = _make_module(
         "Float": _noop,
         "Boolean": _noop,
         "Numeric": _noop,
+        "LargeBinary": _noop,
         "Enum": _noop,
         "JSON": _noop,
         "TIMESTAMP": _noop,

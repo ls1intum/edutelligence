@@ -117,7 +117,7 @@ export class Shell {
   navSections = computed<NavSection[]>(() => {
     const role = this.auth.role();
     if (!role) return [];
-    const keyGatedPaths = ['/my-workspace', '/ai-tools'];
+    const keyGatedPaths = ['/my-workspace', '/ai-tools', '/batches'];
     // Keys can outlive team membership (orphaned key after removal), so both
     // must hold; this mirrors hasKeysGuard, which is the actual access boundary.
     const hasTeams = (this.auth.currentUser()?.teams.length ?? 0) > 0;

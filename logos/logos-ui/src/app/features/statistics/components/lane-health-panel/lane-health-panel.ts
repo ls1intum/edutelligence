@@ -2,6 +2,7 @@ import {
   Component,
   Input,
   OnChanges,
+  OnDestroy,
   SimpleChanges,
   inject,
   signal,
@@ -194,7 +195,7 @@ export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './lane-health-panel.scss',
 })
-export class LaneHealthPanel implements OnChanges {
+export class LaneHealthPanel implements OnChanges, OnDestroy {
   @Input() lanesByProvider: Record<string, Record<string, LaneSignalData>> = {};
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
   @Input() selectedProvider: string | null = null;
@@ -226,6 +227,40 @@ export class LaneHealthPanel implements OnChanges {
   private readonly modelsInFlight = new Set<number>();
   /** Provider the currently visible picker state belongs to. */
   private pickerProviderId: number | null = null;
+
+  // ── Accepted-load outcome polling ────────────────────────────────────────
+  /**
+   * How often to ask for the outcome of an accepted background load. The
+   * load itself takes minutes; the question here is cheap and only interesting
+   * because a refusal in the background is otherwise a log line.
+   */
+  private static readonly LOAD_STATUS_POLL_INTERVAL_MS = 2500;
+  /**
+   * Hard stop for the outcome poll. A manual load gets the load command
+   * timeout (30 min) plus the confirmation polling of the same length that
+   * follows it, so the terminal outcome — a refusal, a confirmed lane, or a
+   * recorded timeout — is recorded no later than ~60 min plus lock wait
+   * after dispatch. The cap must outlive that, or it stops asking while a
+   * late failure is still in flight and the note hangs; well past it the
+   * live outcome is gone (planner restart, entry aged out) and the poll can
+   * only re-ask for the same "unknown". The lane-appearance check in
+   * ngOnChanges keeps owning the note from there on.
+   */
+  private static readonly LOAD_STATUS_POLL_CAP_MS = 65 * 60 * 1000;
+  /** Timer handle of the outcome poll; null while not polling. */
+  private loadStatusPoll: ReturnType<typeof setInterval> | null = null;
+  /** Provider the outcome poll belongs to — anything else is a stale poll. */
+  private loadStatusPollProviderId: number | null = null;
+  /** When the outcome poll must stop regardless of what it is told. */
+  private loadStatusPollDeadline = 0;
+  /**
+   * Generation of the polling session: every start bumps it, and each request
+   * captures its own at dispatch time. A response that only resolves after a
+   * newer session started (a retry of the same model) belongs to the old
+   * attempt — the provider/model guards cannot tell the two apart, so it is
+   * dropped instead of being applied to the new attempt's note.
+   */
+  private loadStatusPollGeneration = 0;
 
   get providerName(): string | null {
     return this.selectedProvider ?? Object.keys(this.lanesByProvider)[0] ?? null;
@@ -345,22 +380,48 @@ export class LaneHealthPanel implements OnChanges {
     return messageIn(e?.error) ?? `HTTP ${e?.status ?? 0}`;
   }
 
+  /**
+   * Monotonic attempt counters, one per action kind.
+   *
+   * (provider, lane id) is not a unique attempt identity: a lane id is
+   * per-worker and can collide across workers, and an A → B → A switch
+   * re-uses both the provider and the lane name for a *newer* attempt while
+   * the older one is still in flight — matching a finishing attempt on that
+   * pair would let it settle the newer attempt's signal and error. Every new
+   * attempt and every provider switch (which abandons the in-flight attempts)
+   * bumps the counter of its kind, so a settling attempt may touch the shared
+   * signal and error only while its counter is still the current one: then no
+   * newer attempt of the kind has started and no switch has happened since it
+   * began.
+   */
+  private unloadAttempt = 0;
+  private sleepAttempt = 0;
+  private wakeAttempt = 0;
+
   async handleUnload(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.unloadingLaneId() != null) return;
+    const attempt = ++this.unloadAttempt;
     this.unloadingLaneId.set(laneId);
     this.unloadError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.unloadLane(pid, laneId);
-      this.unloadingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // A newer attempt or a provider switch superseded this one while the call
+    // was in flight — see unloadAttempt. Only the latest attempt may settle
+    // the shared signal and error.
+    if (this.unloadAttempt === attempt) {
       this.unloadingLaneId.set(null);
-      const e = err as { status?: number };
+      if (failed === null) return;
+      const e = failed as { status?: number };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.unloadError.set('Action not available on this server yet.');
       } else {
-        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(err)}`);
+        this.unloadError.set(`Unload of ${laneId} failed: ${this.failureDetail(failed)}`);
       }
     }
   }
@@ -368,30 +429,40 @@ export class LaneHealthPanel implements OnChanges {
   async handleSleep(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.sleepingLaneId() != null) return;
+    const attempt = ++this.sleepAttempt;
     this.sleepingLaneId.set(laneId);
     this.sleepWakeError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.sleepLane(pid, laneId);
-      this.sleepingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // Same ownership rule as handleUnload.
+    if (this.sleepAttempt === attempt) {
       this.sleepingLaneId.set(null);
-      this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, err));
+      if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Sleep', laneId, failed));
     }
   }
 
   async handleWake(laneId: string): Promise<void> {
     const pid = this.providerId;
     if (pid == null || this.wakingLaneId() != null) return;
+    const attempt = ++this.wakeAttempt;
     this.wakingLaneId.set(laneId);
     this.sleepWakeError.set(null);
 
+    let failed: unknown = null;
     try {
       await this.statisticsService.wakeLane(pid, laneId);
-      this.wakingLaneId.set(null);
     } catch (err: unknown) {
+      failed = err;
+    }
+    // Same ownership rule as handleUnload.
+    if (this.wakeAttempt === attempt) {
       this.wakingLaneId.set(null);
-      this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, err));
+      if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Wake', laneId, failed));
     }
   }
 
@@ -461,6 +532,12 @@ export class LaneHealthPanel implements OnChanges {
     this.selectedModel.set(null);
     this.addError.set(null);
     this.pickerProviderId = null;
+    // The outcome poll deliberately keeps running: the picker's Close button
+    // is not the end of an accepted load. The pending note stays up, and the
+    // poll is what will surface a background refusal minutes later — stopping
+    // it here would let such a refusal leave the note hanging indefinitely.
+    // It stops on its own when the attempt resolves, is superseded by a new
+    // one, the provider changes, it outlives the cap, or the panel is gone.
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -469,10 +546,28 @@ export class LaneHealthPanel implements OnChanges {
     // and submitting it would load a model onto a provider that never served it.
     if (changes['selectedProvider'] && this.pickerProviderId !== this.providerId) {
       this.closePicker();
+      // closePicker() no longer stops the outcome poll on its own (a plain
+      // Close must not kill it) — a provider change abandons the attempt, so
+      // stop it explicitly here.
+      this.stopLoadStatusPoll();
       this.loadModels.set([]);
       this.modelsLoading.set(false);
       this.acceptedModel.set(null);
       this.acceptedLaneIds = null;
+      // Action feedback belongs to the worker it was reported on: an unload
+      // error or a still-spinning button from worker A must not sit under
+      // worker B's panel after the switch.
+      this.unloadError.set(null);
+      this.unloadingLaneId.set(null);
+      this.sleepWakeError.set(null);
+      this.sleepingLaneId.set(null);
+      this.wakingLaneId.set(null);
+      // The in-flight calls are abandoned as well: when they settle later,
+      // their counters no longer match, so they cannot touch the shared
+      // signal or error of the worker the operator is on now.
+      this.unloadAttempt++;
+      this.sleepAttempt++;
+      this.wakeAttempt++;
     }
     // The lane the operator asked for has arrived in the status stream — the
     // row itself now reports its state, so the pending note has nothing to
@@ -488,6 +583,7 @@ export class LaneHealthPanel implements OnChanges {
       ) {
         this.acceptedModel.set(null);
         this.acceptedLaneIds = null;
+        this.stopLoadStatusPoll();
       }
     }
   }
@@ -495,6 +591,111 @@ export class LaneHealthPanel implements OnChanges {
   selectModel(event: Event): void {
     const value = (event.target as HTMLSelectElement).value;
     this.selectedModel.set(value || null);
+  }
+
+  /**
+   * Start asking for the outcome of an accepted background load.
+   *
+   * addLane's 202 only says "accepted", and the planner refuses some loads
+   * after the fact — not enough VRAM for a second replica, the worker
+   * rejected the command, the confirmation timed out. Until this poll existed,
+   * such a refusal was a log line and the pending note stayed up forever.
+   * While the note is up, the poll turns a recorded "failed" into an error
+   * (and re-offers the model) and a "succeeded" is noted as well; "running"
+   * and "unknown" leave everything as it is, because the lane-appearance
+   * check in ngOnChanges remains the primary exit for a load that arrives.
+   */
+  private startLoadStatusPoll(providerId: number, model: string): void {
+    this.stopLoadStatusPoll();
+    this.loadStatusPollProviderId = providerId;
+    this.loadStatusPollDeadline = Date.now() + LaneHealthPanel.LOAD_STATUS_POLL_CAP_MS;
+    const generation = (this.loadStatusPollGeneration += 1);
+    this.loadStatusPoll = setInterval(
+      () => this.pollLoadStatus(providerId, model, generation),
+      LaneHealthPanel.LOAD_STATUS_POLL_INTERVAL_MS
+    );
+  }
+
+  private stopLoadStatusPoll(): void {
+    if (this.loadStatusPoll != null) {
+      clearInterval(this.loadStatusPoll);
+      this.loadStatusPoll = null;
+    }
+    this.loadStatusPollProviderId = null;
+    this.loadStatusPollDeadline = 0;
+  }
+
+  private pollLoadStatus(providerId: number, model: string, generation: number): void {
+    // The note went away (lane appeared, operator acted) or the operator moved
+    // to another provider — this poll is stale, whatever the next answer says.
+    if (
+      this.loadStatusPollProviderId !== providerId ||
+      this.providerId !== providerId ||
+      this.acceptedModel()?.trim().toLowerCase() !== model.trim().toLowerCase()
+    ) {
+      this.stopLoadStatusPoll();
+      return;
+    }
+    if (Date.now() > this.loadStatusPollDeadline) {
+      // The orchestrator has long since resolved this load; keep the note,
+      // stop re-asking for an outcome that no longer exists.
+      this.stopLoadStatusPoll();
+      return;
+    }
+    this.statisticsService
+      .getLaneLoadStatus(providerId, model)
+      .then((outcome) => {
+        // A newer session (a retry of the same model) started while this
+        // request was in flight: the answer describes the old attempt, not
+        // the one whose note is up now. Drop it — and keep this session's
+        // timer running, since it belongs to the newer session.
+        if (generation !== this.loadStatusPollGeneration) return;
+        this.applyLoadStatus(outcome, model);
+      })
+      .catch((err: unknown) => {
+        if (generation !== this.loadStatusPollGeneration) return;
+        // A blip is fine — the next tick retries. 404/501 means the backend
+        // predates the load_status route, where the poll can never succeed:
+        // stop and fall back to the lane-appearance check.
+        const e = err as { status?: number };
+        if (e.status === 404 || e.status === 501) this.stopLoadStatusPoll();
+      });
+  }
+
+  /**
+   * Fold one load_status answer into the pending note.
+   *
+   * "failed" is the interesting one: the load is over, its reason is
+   * recorded, so the picker comes back with the error — exactly where a
+   * synchronous refusal lands — and the model is offered again. "succeeded"
+   * only stops the poll: the note stays until the lane actually shows up in
+   * the stream, so the model is not re-offered in the gap between the
+   * planner's record and the next status push. "running"/"unknown" change
+   * nothing.
+   */
+  private applyLoadStatus(
+    outcome: { status?: string; reason?: string },
+    model: string
+  ): void {
+    // The answer can land after the note already went away — apply nothing.
+    if (this.acceptedModel()?.trim().toLowerCase() !== model.trim().toLowerCase()) {
+      this.stopLoadStatusPoll();
+      return;
+    }
+    const status = (outcome.status ?? '').trim().toLowerCase();
+    if (status !== 'failed') {
+      if (status === 'succeeded') this.stopLoadStatusPoll();
+      return;
+    }
+    this.stopLoadStatusPoll();
+    this.acceptedModel.set(null);
+    this.acceptedLaneIds = null;
+    // The picker closed with the 202; reopen it so the reason sits next to
+    // the retry, like a synchronous refusal does.
+    this.openPicker();
+    this.addError.set(
+      `Loading ${model} failed: ${outcome.reason?.trim() || 'no reason was recorded'}`
+    );
   }
 
   async handleAddLane(): Promise<void> {
@@ -551,6 +752,10 @@ export class LaneHealthPanel implements OnChanges {
       ) {
         this.acceptedModel.set(null);
         this.acceptedLaneIds = null;
+      } else {
+        // The note stays up — put the outcome poll behind it, so a refusal in
+        // the background ends it with a reason instead of running away.
+        this.startLoadStatusPoll(pid, model);
       }
     } catch (err: unknown) {
       this.addingLane.set(false);
@@ -561,6 +766,10 @@ export class LaneHealthPanel implements OnChanges {
         this.addError.set(`Loading ${model} failed: ${this.failureDetail(err)}`);
       }
     }
+  }
+
+  ngOnDestroy(): void {
+    this.stopLoadStatusPoll();
   }
 }
 

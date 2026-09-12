@@ -24,9 +24,10 @@ def _payload(provider_id: int = 1, lane: dict | None = None):
     )
 
 
-def _planner(rejection: str | None = None) -> MagicMock:
+def _planner(rejection: str | None = None, admission: str | None = None) -> MagicMock:
     planner = MagicMock()
     planner.manual_load_rejection_reason.return_value = rejection
+    planner.manual_load_admission_rejection.return_value = admission
 
     async def _load(provider_id: int, model_name: str) -> bool:
         return True
@@ -89,6 +90,28 @@ async def test_returns_409_while_the_provider_is_calibrating(monkeypatch):
     assert exc_info.value.status_code == 409
     assert "calibrating" in exc_info.value.detail
     planner.load_lane_manually.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_returns_409_when_a_load_of_the_model_is_already_in_flight(monkeypatch):
+    """Admission is atomic: the check-and-claim happens before the 202, so a
+    second click — or a load the planner is already bringing up — is refused
+    where the operator can read it, instead of becoming a 202 whose
+    background task no-ops later. The refused click must also leave the
+    recorded outcome untouched: resetting it to "running" would strand the
+    UI's poll with no task left to settle it.
+    """
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+    planner = _planner(admission="A load of this model is already in flight on this worker")
+    monkeypatch.setattr(main_mod, "_capacity_planner", planner)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await internal_mod.internal_logosnode_add_lane(_payload(provider_id=7), _make_request("Bearer correct-secret"))
+
+    assert exc_info.value.status_code == 409
+    assert "in flight" in exc_info.value.detail
+    planner.load_lane_manually.assert_not_called()
+    planner.record_manual_load_outcome.assert_not_called()
 
 
 @pytest.mark.asyncio

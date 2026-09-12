@@ -26,6 +26,8 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
+from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
+from logos.batch_local import local_batch_runner_loop
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
     BENCHMARK_PHASE_HEADER,
@@ -33,6 +35,7 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_token,
 )
+from logos.billing.budget import check_monthly_budget
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
@@ -74,6 +77,7 @@ from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
     force_non_streaming_payload,
     is_audio_upload_path,
+    is_batch_api_path,
     is_multipart_payload,
     is_whisper_payload,
     metered_whisper_response_format,
@@ -113,6 +117,10 @@ from logos.timeouts import (
 
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
+# Settles batches that finished while nobody polled them (see logos.batch_api),
+# and runs the batches Logos executes itself (see logos.batch_local).
+_batch_reconciler_task = None
+_local_batch_runner_task = None
 _background_tasks: Set[asyncio.Task] = set()
 _benchmark_tasks: Set[asyncio.Task] = set()
 _benchmark_tasks_by_job: dict[int, asyncio.Task] = {}
@@ -783,9 +791,22 @@ async def lifespan(app: FastAPI):
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
 
+    # A client may fire a batch and never poll it to completion. Without this
+    # pass its cost would never be booked, so the ledger would understate what
+    # the provider actually charged.
+    global _batch_reconciler_task, _local_batch_runner_task
+    _batch_reconciler_task = asyncio.create_task(batch_reconciler_loop())
+    # Batches Logos runs itself: started here, and picked up again after a
+    # restart that interrupted one mid-file.
+    _local_batch_runner_task = asyncio.create_task(local_batch_runner_loop())
+
     yield
 
     # Shutdown logic
+    for batch_task in (_batch_reconciler_task, _local_batch_runner_task):
+        if batch_task:
+            batch_task.cancel()
+            await asyncio.gather(batch_task, return_exceptions=True)
     benchmark_tasks = list(_benchmark_tasks)
     for task in benchmark_tasks:
         task.cancel()
@@ -3346,6 +3367,12 @@ async def handle_sync_request(path: str, request: Request):
     priority is derived from the authenticated API key's default_priority
     (falling back to the policy-level priority inside the pipeline).
     """
+    # Batch API operations (file uploads, batch jobs) carry no model to
+    # classify or schedule, so they bypass the per-request pipeline and are
+    # forwarded to a Batch-capable cloud provider the key may use.
+    if is_batch_api_path(path):
+        return await handle_batch_api_request(request)
+
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
@@ -3512,46 +3539,13 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     return headers, None, body, client_ip, None
 
 
-def _check_budget_if_cloud(db: DBManager, auth: "AuthContext", is_cloud: bool, month_start: str) -> None:
-    """
-    Raise HTTPException(402) if this key/team is over its monthly budget.
-
-    Only cloud usage is metered (logosnode/local providers have no configured
-    token pricing in token_prices, so they always cost $0), so this is a
-    no-op when the request that actually got scheduled isn't routing to a
-    cloud provider at all. Called post-scheduling (see _execute_resource_mode)
-    with the real resolved provider type, not a guess from the permission list --
-    that's what lets this be exact for mixed cloud+local keys instead of only
-    for pure-type ones.
-    """
-    if not is_cloud:
-        return
-
-    key_type = getattr(auth, "key_type", "user")
-
-    if key_type == "application":
-        app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
-        if app_budget_limit is not None:
-            app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-            if app_used >= app_budget_limit:
-                raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
-    else:
-        if auth.team_id is not None:
-            team_info = db.get_team(auth.team_id)
-            if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                team_limit = team_info["team_monthly_budget_micro_cents"]
-                team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                if team_used >= team_limit:
-                    raise HTTPException(status_code=402, detail="Team monthly budget exceeded. Contact your admin.")
-
-        personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
-        if personal_limit is not None:
-            personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-            if personal_used >= personal_limit:
-                raise HTTPException(status_code=402, detail="Personal monthly budget exceeded.")
+# The budget guard lives in logos.billing.budget so the Batch API can apply the
+# same limits without importing main (which imports it). Kept bound here under
+# its original name: it is called above and patched by name in the tests.
+_check_budget_if_cloud = check_monthly_budget
 
 
-async def submit_job_request(path: str, request: Request) -> JSONResponse:
+async def submit_job_request(path: str, request: Request) -> Response:
     """
     Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
 
@@ -3560,11 +3554,17 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         request: Incoming FastAPI request containing headers/body.
 
     Returns:
-        202 Accepted with job id and status URL.
+        202 Accepted with job id and status URL — or the provider's
+        Batch API response when the path is a batch operation.
 
     Raises:
         HTTPException(400/401) on invalid payload or auth.
     """
+    # Same dispatch as the sync path: batch operations never become Logos
+    # jobs, they are forwarded to the provider's Batch API.
+    if is_batch_api_path(path):
+        return await handle_batch_api_request(request)
+
     # Auth with full context + initial logging
     headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
