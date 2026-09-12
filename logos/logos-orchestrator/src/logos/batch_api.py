@@ -1616,6 +1616,16 @@ async def handle_batch_api_request(request: Request) -> Response:
             response = await _register_upstream_object(
                 response, operation, provider, auth, owner, file_models=log_payload.get("models")
             )
+            # A mapped result file was addressed upstream by the provider's
+            # id; the object answer comes back named by it, so it is
+            # re-exposed under the id the client holds before it is returned.
+            if (
+                owner is not None
+                and owner.get("provider_object_id")
+                and operation.resource == "files"
+                and operation.suboperation != "content"
+            ):
+                response = _restore_exposed_file_id(response, owner)
             # A file the provider actually deleted is gone from Logos's books
             # as well: the ownership row would keep the dead id in the listing,
             # and a later creation naming it would pass the local ownership
@@ -1724,6 +1734,28 @@ def _register_result_files(
             )
             rewritten[field] = logos_id
     return rewritten
+
+
+def _restore_exposed_file_id(response: Response, owner: Dict[str, Any]) -> Response:
+    """Re-expose a mapped result file's answer under the id Logos gave out.
+
+    The file is addressed upstream by the provider's id, so the provider
+    names its object answer by it — but the client only holds Logos's id:
+    reusing the returned id for the download or the deletion would 404,
+    because ownership is keyed by Logos's id. The content suboperation is
+    the one answer that must not be touched: those bytes are the file
+    itself, not an object representation.
+    """
+    if response.status_code >= 400:
+        return response
+    payload = _response_json(response)
+    if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
+        return response
+    return JSONResponse(
+        content={**payload, "id": str(owner["upstream_id"])},
+        status_code=response.status_code,
+        media_type="application/json",
+    )
 
 
 async def _record_upstream_object(db: DBManager, register_kwargs: Dict[str, Any]) -> None:

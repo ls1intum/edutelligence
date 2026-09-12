@@ -1258,6 +1258,61 @@ def test_result_file_ids_are_deterministic_and_distinguish_the_providers():
     assert batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out").startswith("file-lg-")
 
 
+def _mapped_result_file_db():
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS)
+    output_id = batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out")
+    db.register_batch_object(
+        kind="file",
+        upstream_id=output_id,
+        provider_id=OPENAI_PROVIDER["id"],
+        api_key_id=11,
+        team_id=OWN_TEAM,
+        user_id=13,
+        provider_object_id="file-out",
+    )
+    return db, output_id
+
+
+def test_a_mapped_result_file_metadata_returns_the_exposed_id(monkeypatch):
+    # The forward addresses the provider by its own id, but the answer must
+    # come back named by the id the client holds: reusing a returned raw
+    # provider id for the download or the deletion would 404, because
+    # ownership is keyed by the Logos id.
+    db, output_id = _mapped_result_file_db()
+    seen = _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(
+            200, json={"id": "file-out", "object": "file", "filename": "results.jsonl", "bytes": 42}
+        ),
+    )
+
+    meta = client.get(f"/v1/files/{output_id}")
+
+    assert meta.status_code == 200
+    assert meta.json()["id"] == output_id
+    assert meta.json()["filename"] == "results.jsonl"
+    assert str(seen[0].url) == "https://api.openai.com/v1/files/file-out"
+
+
+def test_a_mapped_result_file_deletion_returns_the_exposed_id(monkeypatch):
+    db, output_id = _mapped_result_file_db()
+    seen = _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(200, json={"id": "file-out", "object": "file", "deleted": True}),
+    )
+
+    deleted = client.delete(f"/v1/files/{output_id}")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["id"] == output_id
+    assert deleted.json()["deleted"] is True
+    assert str(seen[0].url) == "https://api.openai.com/v1/files/file-out"
+    # The provider's file is gone, so Logos's own bookkeeping follows.
+    assert db.owned.get(("file", output_id)) is None
+
+
 def test_an_unfinished_batch_is_not_settled(monkeypatch):
     db = _FakeDB(
         [OPENAI_PROVIDER],
