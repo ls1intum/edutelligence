@@ -1,4 +1,13 @@
-import { Component, Input, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  Input,
+  OnChanges,
+  SimpleChanges,
+  inject,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { StatisticsService } from '../../services/statistics.service';
 import {
@@ -35,7 +44,7 @@ export function formatMb(mb: number): string {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './worker-gpu-panel.scss',
 })
-export class WorkerGpuPanel {
+export class WorkerGpuPanel implements OnChanges {
   @Input() providerLatestSamples: Record<string, VramV2Sample | null> = {};
   @Input() providerDevices: Record<string, DeviceInfo[]> = {};
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
@@ -45,6 +54,32 @@ export class WorkerGpuPanel {
   private statisticsService = inject(StatisticsService);
 
   calibrateState = signal<CalibrateState>({ kind: 'idle' });
+  /** Worker the in-flight calibrate call was started on — its answer must not
+   *  land under a worker the operator has moved on to. */
+  private calibrateProvider: string | null = null;
+  /** The resolved worker the last input change settled on. */
+  private resolvedProvider: string | null = null;
+  /** Calibration attempt counter. Every start and every worker-change reset
+   *  advances it, so an answer only applies while its exact attempt is still
+   *  the current one — the worker name alone cannot tell two calibrations of
+   *  the same worker apart (A → B → A). */
+  private calibrateGeneration = 0;
+
+  ngOnChanges(_changes: SimpleChanges): void {
+    const resolved = this.resolvedActiveProvider;
+    if (resolved === this.resolvedProvider) return;
+    // The state is the answer to an action on *one* worker: "Calibrating 2
+    // model(s): …" said on worker A means nothing under worker B's panel, so
+    // a worker change drops it instead of letting it hang around. Compared
+    // against the *resolved* worker, not the raw selection: with no explicit
+    // selection the panel falls back to the first provider, and that fallback
+    // can change on its own — a worker leaves the list or goes offline — even
+    // though activeProvider itself never changed.
+    this.calibrateState.set({ kind: 'idle' });
+    this.calibrateProvider = null;
+    this.calibrateGeneration += 1;
+    this.resolvedProvider = resolved;
+  }
 
   // Sorted providers: online-first, then alphabetical
   get providers(): string[] {
@@ -163,11 +198,26 @@ export class WorkerGpuPanel {
 
   async handleCalibrateUncalibrated(): Promise<void> {
     const pid = this.activeProviderId;
-    if (pid == null) return;
+    const active = this.resolvedActiveProvider;
+    if (pid == null || active == null) return;
+    const generation = (this.calibrateGeneration += 1);
+    this.calibrateProvider = active;
     this.calibrateState.set({ kind: 'loading' });
 
     try {
       const body = await this.statisticsService.calibrateUncalibrated(pid);
+      // The operator can switch workers while the call is in flight — or the
+      // fallback worker can change under a null selection, or a newer
+      // calibration of the very same worker can supersede this one (A → B →
+      // A) — and the answer belongs to the attempt it was made for, so a
+      // stale one is dropped rather than shown under the panel the operator
+      // is looking at now.
+      if (
+        generation !== this.calibrateGeneration ||
+        this.calibrateProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
       const count = typeof body?.count === 'number' ? body.count : 0;
       const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
       const message =
@@ -176,6 +226,12 @@ export class WorkerGpuPanel {
           : `Calibrating ${count} model(s): ${models.join(', ')}`;
       this.calibrateState.set({ kind: 'success', message });
     } catch (err: unknown) {
+      if (
+        generation !== this.calibrateGeneration ||
+        this.calibrateProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
       const e = err as { status?: number; error?: { error?: string } };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.calibrateState.set({
