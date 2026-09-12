@@ -194,6 +194,77 @@ async def test_cancellation_clears_the_pending_stream_entry():
 
 
 # ---------------------------------------------------------------------------
+# The absolute execution deadline
+#
+# ``timeout_seconds`` is a per-read idle bound: a worker that keeps streaming
+# can never trip it, so without the deadline a stream could run indefinitely
+# past the retry budget. The deadline is an absolute wall instead — checked
+# and clamped on every read, never reset by activity.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_spent_deadline_fails_the_stream_before_its_first_chunk():
+    import time
+
+    from logos.errors import RetryDeadlineExceeded
+
+    registry, websocket = _registry_with_session()
+    stream = registry.send_stream_command(
+        PROVIDER_ID,
+        "infer_stream",
+        {"lane_id": "lane-a"},
+        timeout_seconds=30,
+        deadline_at=time.monotonic() - 1.0,  # spent before the first read
+    )
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    with pytest.raises(RetryDeadlineExceeded):
+        await asyncio.wait_for(consumer, timeout=1)
+    await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_chunks_cannot_push_the_stream_past_the_deadline():
+    """The scenario an idle bound misses: a worker sending more often than
+    the idle timeout can ever fire. The stream must still stop at the
+    absolute deadline, however steadily the worker delivers."""
+    import time
+
+    from logos.errors import RetryDeadlineExceeded
+
+    registry, websocket = _registry_with_session()
+    deadline = time.monotonic() + 0.3
+    stream = registry.send_stream_command(
+        PROVIDER_ID,
+        "infer_stream",
+        {"lane_id": "lane-a"},
+        timeout_seconds=30,  # an idle bound the steady chunks never trip
+        deadline_at=deadline,
+    )
+    consumer = asyncio.ensure_future(stream.__anext__())
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+
+    received = []
+    deadline_hit = False
+    while time.monotonic() < deadline + 2.0:
+        await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"t"})
+        try:
+            received.append(await asyncio.wait_for(consumer, timeout=0.15))
+            consumer = asyncio.ensure_future(stream.__anext__())
+        except RetryDeadlineExceeded:
+            deadline_hit = True
+            break
+        except asyncio.TimeoutError:
+            continue  # the read is still open: feed it more to stay alive
+
+    assert deadline_hit, "the steady stream ran past its deadline"
+    assert received, "the stream delivered nothing before the wall"
+    await _drain_pending_tasks()
+
+
+# ---------------------------------------------------------------------------
 # A lane can answer with an error status instead of tokens
 #
 # The worker sends the status in stream_start, the error body as the following
@@ -904,12 +975,12 @@ def _responses_context() -> SimpleNamespace:
 
 _RESPONSES_CREATED = (
     b"event: response.created\n"
-    b'data: {"type": "response.created", "response": {"id": "resp_1", '
+    b'data: {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_1", '
     b'"status": "in_progress", "model": "test-model", "output": []}}\n\n'
 )
 _RESPONSES_DELTA = (
     b"event: response.output_text.delta\n"
-    b'data: {"type": "response.output_text.delta", "item_id": "item_1", '
+    b'data: {"type": "response.output_text.delta", "sequence_number": 1, "item_id": "item_1", '
     b'"output_index": 0, "content_index": 0, "delta": "Hi"}\n\n'
 )
 
@@ -920,7 +991,9 @@ async def test_a_responses_mid_stream_failure_emits_a_responses_failed_event(mon
     resume is available, the fallback frame must be the Responses terminal
     failure — a ``response.failed`` event, not the chat-completions error
     data frame plus ``[DONE]``, which a Responses client does not recognise
-    as its terminal failure protocol. The context is the real one:
+    as its terminal failure protocol. The event carries the full response
+    envelope the stream announced in ``response.created`` under the next
+    sequence number. The context is the real one:
     ``anthropic_dialect=None``."""
     from fastapi.responses import StreamingResponse
     from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
@@ -974,12 +1047,14 @@ async def test_a_responses_mid_stream_failure_emits_a_responses_failed_event(mon
     await _drain_pending_tasks()
 
     # The held envelope is replayed ahead of the content, then the failure
-    # arrives as the Responses terminal event — echoing the id the stream
-    # announced — and nothing after it.
+    # arrives as the Responses terminal event: the announced response
+    # envelope with its status flipped, the error attached, and the next
+    # sequence number — and nothing after it.
     assert body == (
         _RESPONSES_CREATED + _RESPONSES_DELTA + b"\n\n" + b"event: response.failed\n"
-        b'data: {"type": "response.failed", "response": {"id": "resp_1", "object": "response", '
-        b'"status": "failed", "error": {"code": "server_error", "message": "lane died"}}}\n\n'
+        b'data: {"type": "response.failed", "response": {"id": "resp_1", "status": "failed", '
+        b'"model": "test-model", "output": [], "error": {"code": "server_error", '
+        b'"message": "lane died"}}, "sequence_number": 2}\n\n'
     )
     assert b"[DONE]" not in body
 

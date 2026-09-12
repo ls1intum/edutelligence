@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
-from logos.errors import UpstreamStreamError
+from logos.errors import RetryDeadlineExceeded, UpstreamStreamError
 from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
@@ -1218,6 +1218,7 @@ class LogosNodeRuntimeRegistry:
         params: dict[str, Any] | None = None,
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
+        deadline_at: float | None = None,
     ) -> AsyncIterator[bytes]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         cmd_id = str(uuid.uuid4())
@@ -1254,8 +1255,20 @@ class LogosNodeRuntimeRegistry:
         error_body: list[bytes] = []
         try:
             while True:
+                # ``timeout_seconds`` is a per-read idle bound: a worker that
+                # keeps streaming can never trip it, so a stream could run
+                # indefinitely. ``deadline_at`` (the retry budget's absolute
+                # wall, monotonic) closes that: every read is clamped to the
+                # time left in it, and a spent deadline fails the stream
+                # before the next read, however often the worker sends.
+                read_timeout = max(1, timeout_seconds)
+                if deadline_at is not None:
+                    remaining = deadline_at - time.monotonic()
+                    if remaining <= 0:
+                        raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+                    read_timeout = min(read_timeout, remaining)
                 try:
-                    event = await asyncio.wait_for(stream_queue.get(), timeout=max(1, timeout_seconds))
+                    event = await asyncio.wait_for(stream_queue.get(), timeout=read_timeout)
                 except asyncio.TimeoutError as exc:
                     raise LogosNodeOfflineError("Stream timeout waiting for worker response") from exc
                 event_type = event.get("type")

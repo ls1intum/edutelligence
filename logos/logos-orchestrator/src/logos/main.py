@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 import codecs
+import copy
 import datetime
 import hmac
 import json
@@ -1392,6 +1393,13 @@ class _StreamingLogAccumulator:
     # synthetic ``response.failed`` terminal of a mid-flight failure, so a
     # Responses client can correlate the failure with the stream it read.
     responses_id: Optional[str] = None
+    # The Response object the stream announced in ``response.created`` — the
+    # full envelope a synthetic ``response.failed`` terminal completes, so
+    # the failure carries everything the client already saw, not a skeleton.
+    responses_created: Optional[Dict[str, Any]] = None
+    # The highest ``sequence_number`` seen on the stream. The synthetic
+    # terminal takes the next one, as the spec numbers its events.
+    responses_sequence: Optional[int] = None
     # Usage accumulated from an Anthropic Messages stream. Kept apart from
     # ``last_chunk`` because that stream ends on ``message_stop``, which carries
     # no usage and would otherwise erase the figures that arrived one event
@@ -1542,6 +1550,30 @@ class _StreamingLogAccumulator:
             response_payload["usage"] = usage
         return response_payload
 
+    def failed_response_event(self, message: str) -> Optional[Dict[str, Any]]:
+        """The synthetic ``response.failed`` terminal for a mid-flight failure.
+
+        A /v1/responses client has been reading numbered ``response.*``
+        events, and the terminal the protocol expects is the Response object
+        it saw in ``response.created`` — the full envelope, not a skeleton —
+        now failed, under the next sequence number. When the stream failed
+        before a created envelope arrived there is nothing to complete and
+        no sequence to continue, so the event degrades to the announced id
+        (or None when that too is absent and the caller keeps its fallback).
+        """
+        if self.responses_created:
+            response = copy.deepcopy(self.responses_created)
+        elif self.responses_id:
+            response = {"id": self.responses_id, "object": "response"}
+        else:
+            return None
+        response["status"] = "failed"
+        response["error"] = {"code": "server_error", "message": message}
+        event: Dict[str, Any] = {"type": "response.failed", "response": response}
+        if self.responses_sequence is not None:
+            event["sequence_number"] = self.responses_sequence + 1
+        return event
+
     def _consume_complete_lines(self) -> None:
         while "\n" in self.buffer:
             line, self.buffer = self.buffer.split("\n", 1)
@@ -1610,6 +1642,17 @@ class _StreamingLogAccumulator:
             response = blob.get("response")
             if isinstance(response, dict) and response.get("id"):
                 self.responses_id = str(response["id"])
+        # The spec numbers every event; the highest one seen is what a
+        # synthetic terminal must continue from. A resumed stream opens a
+        # new upstream response and can renumber from zero, so the numbers
+        # only ever move forward.
+        sequence = blob.get("sequence_number")
+        if isinstance(sequence, int) and (self.responses_sequence is None or sequence > self.responses_sequence):
+            self.responses_sequence = sequence
+        if event_type == "response.created":
+            response = blob.get("response")
+            if isinstance(response, dict):
+                self.responses_created = response
         if event_type == "response.output_text.delta":
             delta = blob.get("delta")
             if isinstance(delta, str):
@@ -4277,10 +4320,14 @@ async def _streaming_response(
             # or a mid-flight resume opens its stream after a failure has
             # been recorded, so the node's fixed stream window is clamped to
             # the time left in the retry deadline, while the initial dispatch
-            # keeps the full window.
+            # keeps the full window. The clamped read bound is still only an
+            # idle gap, so the absolute deadline goes along as well: a worker
+            # that keeps streaming cannot push the stream past it.
             stream_timeout_s = _LOGOSNODE_STREAM_TIMEOUT_SECONDS
+            deadline_at: Optional[float] = None
             if retry_budget is not None:
                 stream_timeout_s = retry_budget.execution_timeout_s(stream_timeout_s)
+                deadline_at = retry_budget.deadline_at
             return _logosnode_registry.send_stream_command(
                 provider_id=exec_ctx.provider_id,
                 action="infer_stream",
@@ -4290,6 +4337,7 @@ async def _streaming_response(
                     "request_path": request_path,
                 },
                 timeout_seconds=stream_timeout_s,
+                deadline_at=deadline_at,
             )
 
         async def _open_logosnode_stream(exec_ctx, exec_payload):
@@ -4569,20 +4617,21 @@ async def _streaming_response(
                                     # it. The context carries no dialect
                                     # marker — the resolver sets one only for
                                     # Messages requests — so the path
-                                    # decides, and the response id is echoed
-                                    # from the stream the client was reading.
-                                    yield sse(
-                                        "response.failed",
-                                        {
-                                            "type": "response.failed",
-                                            "response": {
-                                                "id": stream_log.responses_id or f"resp_{request_id or 'unknown'}",
-                                                "object": "response",
-                                                "status": "failed",
-                                                "error": {"code": "server_error", "message": str(e)},
-                                            },
+                                    # decides. The event completes the
+                                    # created envelope the client read, under
+                                    # the next sequence number; only a stream
+                                    # that failed before either arrived needs
+                                    # the id fallback.
+                                    failed_event = stream_log.failed_response_event(str(e)) or {
+                                        "type": "response.failed",
+                                        "response": {
+                                            "id": f"resp_{request_id or 'unknown'}",
+                                            "object": "response",
+                                            "status": "failed",
+                                            "error": {"code": "server_error", "message": str(e)},
                                         },
-                                    )
+                                    }
+                                    yield sse("response.failed", failed_event)
                                 else:
                                     _, openai_error = coerce_upstream_error(500, {"error": str(e)})
                                     yield f"data: {json.dumps(openai_error)}\n\n".encode()
@@ -4666,9 +4715,15 @@ async def _streaming_response(
     stream_status = StreamingExecutionStatus()
     # A retry's stream must not outlive the retry deadline: the previously
     # unbounded cloud stream is given the remaining time (a read bound, so a
-    # stalled stream fails fast) instead of running past the overall budget.
-    # The initial dispatch (no recorded failure) stays unbounded.
-    stream_timeout_s = retry_budget.execution_timeout_s(None) if retry_budget is not None else None
+    # stalled stream fails fast) and the absolute deadline, so a stream that
+    # keeps delivering cannot run past the overall budget either. The
+    # initial dispatch (no recorded failure) stays unbounded.
+    if retry_budget is not None:
+        stream_timeout_s = retry_budget.execution_timeout_s(None)
+        stream_deadline_at: Optional[float] = retry_budget.deadline_at
+    else:
+        stream_timeout_s = None
+        stream_deadline_at = None
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
         headers,
@@ -4676,6 +4731,7 @@ async def _streaming_response(
         on_headers=process_headers,
         status=stream_status,
         timeout=stream_timeout_s,
+        deadline_at=stream_deadline_at,
     )
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so

@@ -1,12 +1,14 @@
 """Regression tests for byte-preserving upstream streaming."""
 
+import asyncio
 import json
+import time
 
 import httpx
 import pytest
 from openai import OpenAI
 
-from logos.errors import UpstreamStreamError
+from logos.errors import RetryDeadlineExceeded, UpstreamStreamError
 from logos.pipeline.executor import Executor, StreamingExecutionStatus
 
 
@@ -320,3 +322,82 @@ async def test_openai_sdk_parses_responses_content_and_terminal_events(monkeypat
     assert events[0].delta == "OK"
     assert events[-1].type == "response.completed"
     assert events[-1].response.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# The absolute execution deadline
+#
+# The httpx timeout is a per-operation bound — the longest gap between chunks.
+# A stream that keeps delivering can never trip it, so a retry would run
+# indefinitely past its deadline; the deadline must be an absolute wall on the
+# whole execution instead.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_spent_deadline_fails_the_stream_before_the_first_byte(monkeypatch):
+    install_response(monkeypatch, FakeResponse([b"data: {}\n\n"]))
+
+    with pytest.raises(RetryDeadlineExceeded):
+        _ = [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "https://provider.test/v1/chat/completions",
+                {},
+                {"model": "test-model"},
+                deadline_at=time.monotonic() - 1.0,  # spent before the first read
+            )
+        ]
+
+
+async def test_chunks_cannot_push_the_stream_past_the_deadline(monkeypatch):
+    """The scenario a per-read bound misses: chunks arriving more often than
+    the read timeout can ever fire. The execution must still stop at the
+    absolute deadline, however steadily the upstream delivers."""
+
+    class DripResponse:
+        """Keeps delivering a chunk every 20 ms for well over a second."""
+
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+        stop_after = time.monotonic() + 1.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aread(self):
+            return b""
+
+        async def aiter_bytes(self):
+            while time.monotonic() < self.stop_after:
+                await asyncio.sleep(0.02)
+                yield b"data: {}\n\n"
+
+    install_response(monkeypatch, DripResponse())
+
+    status = StreamingExecutionStatus()
+    t0 = time.monotonic()
+    body = b"".join(
+        [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "https://provider.test/v1/chat/completions",
+                {},
+                {"model": "test-model"},
+                status=status,
+                deadline_at=t0 + 0.15,
+            )
+        ]
+    )
+    elapsed = time.monotonic() - t0
+
+    # The stream was cut at the wall, not at the end of the drip: without the
+    # deadline it would have run to the drip's own end a full second out.
+    assert elapsed < 0.8
+    assert status.error == "stream execution passed its retry deadline"
+    # After the first byte the failure is appended as protocol-compatible
+    # recovery frames, like every other mid-stream transport error.
+    assert b"passed its retry deadline" in body
+    assert body.endswith(b"data: [DONE]\n\n")

@@ -1323,3 +1323,126 @@ async def test_logosnode_retry_execution_clamps_the_infer_window(retry_env):
     # to the 6s left in the deadline.
     full_window = main._LOGOSNODE_INFER_TIMEOUT_SECONDS
     assert windows == [full_window, min(full_window, 6.0)]
+
+
+# ---------------------------------------------------------------------------
+# The absolute deadline reaches the stream execution
+#
+# A clamped per-read bound still only fails a STALLED stream: a worker (or
+# upstream) that keeps delivering can never trip it, so a retry would run
+# indefinitely past the deadline. The budget's absolute deadline must reach
+# the streamer as well, where it is enforced on every read.
+# ---------------------------------------------------------------------------
+
+
+def _retry_budget_one_failure_left():
+    """A budget with one failure recorded and a second of its ten-second
+    deadline already spent: this stream is the retry (or resume), not the
+    initial dispatch."""
+    from logos.pipeline.retry import RetryBudget
+
+    clock = {"t": 0.0}
+    budget = RetryBudget(max_attempts=3, deadline_s=10.0, now=lambda: clock["t"])
+    clock["t"] = 1.0
+    budget.record_failure(1)
+    return budget
+
+
+@pytest.mark.asyncio
+async def test_a_retry_stream_passes_the_absolute_deadline_to_the_node(retry_env):
+    """The node stream is opened with the budget's deadline, so a worker that
+    keeps streaming cannot push the retry past it."""
+    budget = _retry_budget_one_failure_left()
+    calls = []
+
+    async def fake_send_stream_command(**kwargs):
+        calls.append(kwargs)
+        yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    retry_env.setattr(
+        main, "_logosnode_registry", SimpleNamespace(send_stream_command=fake_send_stream_command), raising=False
+    )
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline = _FakePipeline([_ok_result()])
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, model_name="stub-model"
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-1", "provider_type": "logosnode"},
+        retry_budget=budget,
+    )
+    assert isinstance(response, StreamingResponse)
+
+    assert len(calls) == 1
+    # The idle bound is clamped to the 9s left (10s deadline, 1s elapsed)...
+    assert calls[0]["timeout_seconds"] == 9.0
+    # ...and the absolute deadline goes along, so the stream stops at it
+    # however often the worker sends.
+    assert calls[0]["deadline_at"] == budget.deadline_at
+
+
+@pytest.mark.asyncio
+async def test_a_retry_stream_passes_the_absolute_deadline_to_the_cloud(retry_env):
+    """The cloud stream gets the deadline the same way: the httpx timeout is
+    a per-operation bound, so only the absolute wall bounds the run."""
+    budget = _retry_budget_one_failure_left()
+    calls = []
+
+    class _RecordingStreamingExecutor:
+        async def execute_streaming(
+            self, url, headers, payload, on_headers=None, status=None, timeout=None, deadline_at=None
+        ):
+            calls.append({"timeout": timeout, "deadline_at": deadline_at})
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _RecordingStreamingExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            model_name="stub-model",
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-1", "provider_type": "cloud"},
+        retry_budget=budget,
+    )
+    assert isinstance(response, StreamingResponse)
+
+    assert len(calls) == 1
+    # The previously-unbounded cloud call gets the 9s left as its read bound...
+    assert calls[0]["timeout"] == 9.0
+    # ...and the absolute deadline, enforced on the chunk loop.
+    assert calls[0]["deadline_at"] == budget.deadline_at

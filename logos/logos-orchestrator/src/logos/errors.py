@@ -11,6 +11,7 @@ Shape::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -34,6 +35,19 @@ class UpstreamStreamError(Exception):
         super().__init__(f"Upstream returned HTTP {status_code}")
         self.status_code = status_code
         self.body = body
+
+
+class RetryDeadlineExceeded(asyncio.TimeoutError):
+    """The absolute execution deadline elapsed while the stream was running.
+
+    The per-read transport bounds fail a *stalled* stream; this fails a
+    stream that is still moving. A worker or upstream that keeps sending
+    frequently enough can never trip a per-read timeout, so the retry
+    deadline is enforced as an absolute wall on the whole execution —
+    checked and clamped on every read of the stream, never reset by
+    activity. The budget behind it is spent once this fires, so the request
+    ends in its error frame instead of being re-queued.
+    """
 
 
 # ── Status-code → OpenAI error type mapping ──────────────────────────────────

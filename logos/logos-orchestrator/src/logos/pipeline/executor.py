@@ -5,14 +5,16 @@ Backend execution - makes HTTP calls to AI providers.
 The Executor is a pure HTTP client that makes streaming or synchronous requests.
 """
 
+import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 import httpx
 
-from logos.errors import UpstreamStreamError, coerce_upstream_error
+from logos.errors import RetryDeadlineExceeded, UpstreamStreamError, coerce_upstream_error
 from logos.request_content import (
     force_non_streaming_payload,
     httpx_multipart_parts,
@@ -63,6 +65,7 @@ class Executor:
         on_response_start: Optional[Callable[[int, Dict[str, str]], None]] = None,
         status: Optional[StreamingExecutionStatus] = None,
         timeout: Optional[float] = None,
+        deadline_at: Optional[float] = None,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming HTTP request and yield response chunks.
@@ -81,6 +84,12 @@ class Executor:
                 proxy path and the initial dispatch) is unbounded; a retry
                 passes the time left in its deadline so a stalled stream cannot
                 run past the overall budget.
+            deadline_at: Optional absolute monotonic deadline for the whole
+                execution. The httpx timeout is a per-operation bound — a
+                stream that keeps delivering chunks can never trip it — so the
+                deadline is enforced on the chunk loop itself (see
+                ``_until_deadline``), where a spent deadline raises
+                ``RetryDeadlineExceeded`` however often the upstream sends.
 
         Yields:
             Upstream response bytes without reconstructing their framing.
@@ -132,7 +141,7 @@ class Executor:
                     # Preserve upstream byte framing. SSE uses blank lines to
                     # delimit events, and local providers may stream NDJSON;
                     # reconstructing either format line-by-line changes it.
-                    async for chunk in resp.aiter_bytes():
+                    async for chunk in self._until_deadline(resp.aiter_bytes(), deadline_at):
                         if chunk:
                             yielded_bytes = True
                             yield chunk
@@ -152,6 +161,32 @@ class Executor:
                     yield b"\n\n"
                     yield f"data: {json.dumps(error_body)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
+
+    @staticmethod
+    async def _until_deadline(chunks: AsyncIterator[bytes], deadline_at: Optional[float]) -> AsyncIterator[bytes]:
+        """Yield the stream's chunks, failing when the absolute deadline elapses.
+
+        The httpx timeout bounds the gap between chunks, not the run: a stream
+        that keeps delivering can never trip it and would run past the retry
+        deadline. The deadline is therefore checked and clamped on every read
+        of the whole iteration — a single absolute wall, never reset by
+        activity — and a spent one raises ``RetryDeadlineExceeded`` instead of
+        waiting out the next chunk.
+        """
+        iterator = chunks.__aiter__()
+        while True:
+            wait_s = None
+            if deadline_at is not None:
+                wait_s = deadline_at - time.monotonic()
+                if wait_s <= 0:
+                    raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+            try:
+                chunk = await asyncio.wait_for(iterator.__anext__(), timeout=wait_s)
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                raise RetryDeadlineExceeded("stream execution passed its retry deadline") from None
+            yield chunk
 
     async def execute_sync(
         self,
