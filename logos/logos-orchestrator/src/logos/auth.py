@@ -1,8 +1,9 @@
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
+from logos import batch_credential
 from logos.dbutils.dbmanager import DBManager
 
 
@@ -64,20 +65,34 @@ class AuthContext:
     local_rl: Optional[dict] = None
 
 
-def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
-    logos_key = _resolve_logos_key(headers)
+def _resolve_batch_credential(credential: str) -> Optional[Dict[str, Any]]:
+    """The key row a scoped batch credential names, or None.
+
+    The webservice's batch proxy authenticates with a short-lived credential
+    instead of the user's raw key value (see batch_credential): this turns it
+    back into the key's own row. The row lookup is what keeps it honest — a
+    key revoked after the credential was handed out stops working the moment
+    it is presented again.
+    """
+    if not isinstance(credential, str) or not credential.startswith(batch_credential.BATCH_CREDENTIAL_PREFIX):
+        return None
+    api_key_id = batch_credential.resolve_batch_credential(credential)
+    if api_key_id is None:
+        return None
     with DBManager() as db:
-        row = db.get_api_key_by_value(logos_key)
+        return db.get_api_key_by_id(api_key_id)
 
-    if row is None:
-        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
 
+def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
     k_type = row["key_type"]
     if hasattr(k_type, "value"):
         k_type = k_type.value
 
     return AuthContext(
-        key_value=logos_key,
+        # The key's own value, not what the header carried: for a scoped
+        # credential the header holds the credential, and the downstream
+        # (batch lines re-enter the pipeline as the key) needs the value.
+        key_value=row["key_value"],
         api_key_id=row["id"],
         api_key_name=row["name"],
         key_type=str(k_type),
@@ -90,3 +105,33 @@ def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
         # can fall back to the policy-level priority.
         default_priority=row.get("default_priority") or 0,
     )
+
+
+def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
+    logos_key = _resolve_logos_key(headers)
+    with DBManager() as db:
+        row = db.get_api_key_by_value(logos_key)
+    if row is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+    return _auth_context_from_key_row(row)
+
+
+def authenticate_batch_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
+    """Auth for the Batch API, which also takes the scoped credential.
+
+    The credential resolves to the key's own row here and nowhere else: it is
+    a batch-only bearer (the webservice exchanges it for the key instead of
+    sending the raw value over the internal hop), and the global key auth
+    must keep refusing it, or it would open ordinary inference — and, for an
+    admin-owned key, the role-gated routes — for its whole TTL.
+    """
+    logos_key = _resolve_logos_key(headers)
+    with DBManager() as db:
+        row = db.get_api_key_by_value(logos_key)
+    if row is None:
+        # A key value that is not a key value: try the scoped credential the
+        # batch proxy exchanged for the key.
+        row = _resolve_batch_credential(logos_key)
+    if row is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+    return _auth_context_from_key_row(row)

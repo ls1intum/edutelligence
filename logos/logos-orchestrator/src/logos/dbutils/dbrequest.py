@@ -93,6 +93,11 @@ class InternalAddLaneRequest(BaseModel):
     lane: dict[str, Any]
 
 
+class InternalLaneLoadStatusRequest(BaseModel):
+    provider_id: int
+    model: str
+
+
 class InternalSleepLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
