@@ -129,15 +129,49 @@ installed_metal_version() {
     [ -x "$METAL_VENV/bin/python" ] || return 1
     "$METAL_VENV/bin/python" -c 'import importlib.metadata as m; print(m.version("vllm-metal"))' 2>/dev/null
 }
+
+# Put the previous venv back if anything between the move and the successful
+# verification fails — a half-finished upgrade must not leave the node with no
+# runtime at all.
+rollback_stale_metal_venv() {
+    local rc="$1"
+    [ "$rc" -ne 0 ] || return 0
+    [ -n "${stale_metal_venv:-}" ] && [ -d "$stale_metal_venv" ] || return 0
+    warn "Install failed — restoring the previous vllm-metal venv"
+    rm -rf "$METAL_VENV"
+    mv "$stale_metal_venv" "$METAL_VENV" \
+        && warn "  restored $METAL_VENV (still the old version; re-run to retry the upgrade)" \
+        || warn "  could not restore it; the previous venv is in $stale_metal_venv"
+}
+trap 'rollback_stale_metal_venv $?' EXIT
 metal_needs_install=1
+stale_metal_venv=""
 if [ -x "$METAL_VENV/bin/vllm" ]; then
     current_metal="$(installed_metal_version || true)"
     if [ "$current_metal" = "$VLLM_METAL_MIN_VERSION" ]; then
         log "vllm-metal $current_metal already present — skipping install"
         metal_needs_install=0
     else
+        # Only the default location may be rebuilt automatically. Upstream's
+        # installer always creates ~/.venv-vllm-metal regardless of
+        # LOGOS_METAL_VENV (see the guard after the install below), so removing
+        # a custom venv here would destroy an environment this script cannot
+        # recreate — and then abort at the missing-target check anyway. It is
+        # also the only value that needs no path validation: it is built from
+        # $HOME by this script, not taken from the environment.
+        if [ "$METAL_VENV" != "$HOME/.venv-vllm-metal" ]; then
+            die "vllm-metal ${current_metal:-unknown} in $METAL_VENV is below the pinned $VLLM_METAL_MIN_VERSION.
+LOGOS_METAL_VENV points at a custom location, which upstream's installer cannot
+populate, so this script will not delete it. Upgrade or remove that venv
+yourself, or unset LOGOS_METAL_VENV to use the default."
+        fi
         log "vllm-metal ${current_metal:-unknown} is installed but this worker pins $VLLM_METAL_MIN_VERSION — rebuilding the venv"
-        rm -rf "$METAL_VENV"
+        # Move aside instead of deleting: if the download or install below
+        # fails, the node still has a working (if outdated) runtime to fall
+        # back on rather than no runtime at all. Removed once the new venv is
+        # verified.
+        stale_metal_venv="$METAL_VENV.stale-$$"
+        mv "$METAL_VENV" "$stale_metal_venv"
     fi
 fi
 if [ "$metal_needs_install" -eq 1 ]; then
@@ -149,7 +183,9 @@ if [ "$metal_needs_install" -eq 1 ]; then
     # instead of the wheel branch.
     stage="$(mktemp -d "${TMPDIR:-/tmp}/logos-vllm-metal-stage.XXXXXX")"
     installer_tmp="$(mktemp "${TMPDIR:-/tmp}/logos-vllm-metal-install.XXXXXX")"
-    trap 'rm -rf "$stage" "$installer_tmp"' EXIT
+    # Keeps the rollback armed: a bare `trap ... EXIT` here would replace the
+    # handler installed above and silently drop the venv restore.
+    trap 'rc=$?; rm -rf "$stage" "$installer_tmp"; rollback_stale_metal_venv $rc' EXIT
     mkdir -p "$stage/scripts" "$stage/wheels"
 
     fetch_verified "$VLLM_METAL_LIB" "$VLLM_METAL_LIB_SHA256" "$stage/scripts/lib.sh"
@@ -262,6 +298,15 @@ budget = info.get("max_recommended_working_set_size", 0) / 1024**3
 print(f"  {info.get('device_name')} — {budget:.1f} GiB GPU budget, "
       f"max buffer {info.get('max_buffer_length', 0) / 1024**3:.1f} GiB")
 PYCHECK
+
+# The replacement is installed, at the pinned version, with a loadable plugin —
+# only now is the previous venv safe to discard. Until this point the rollback
+# handler would have put it back.
+if [ -n "${stale_metal_venv:-}" ] && [ -d "$stale_metal_venv" ]; then
+    log "Removing the superseded vllm-metal venv"
+    rm -rf "$stale_metal_venv"
+    stale_metal_venv=""
+fi
 
 # ── 2. Worker virtualenv ─────────────────────────────────────────────────────
 # The floor is 3.12: the worker's own dependencies are fine further back, but

@@ -279,6 +279,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
           BRANCH: ${{ steps.version.outputs.branch }}
+          VERSION: ${{ steps.version.outputs.version }}
           NEW_PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
@@ -286,14 +287,20 @@ jobs:
           # OLDER release. The branch-name pattern alone is not enough on two
           # counts: a human PR pushed into the same namespace would be closed
           # and its branch deleted, and a manual dispatch pinning an older
-          # version would close the newer automated PR. Hence the author check
-          # and the version comparison.
-          gh pr list --state open --limit 100 --json number,headRefName,author \
-            | jq -r --arg branch "$BRANCH" --arg version "$VERSION" '
+          # version would close the newer automated PR.
+          #
+          # Identify our own PRs by the marker line the body carries, not by
+          # author: when LOGOS_VLLM_UPDATE_PAT is configured — which the
+          # checkout and creation steps deliberately use so CI triggers — the
+          # author is the PAT's human owner, so an author check would match
+          # none of the PRs this workflow creates.
+          marker='created automatically by the `Logos - Update vllm-metal` workflow'
+          gh pr list --state open --limit 100 --json number,headRefName,body \
+            | jq -r --arg branch "$BRANCH" --arg version "$VERSION" --arg marker "$marker" '
                 def ver: [splits("[.]") | tonumber?];
                 .[]
                 | select(.headRefName != $branch)
-                | select(.author.login == "github-actions[bot]" or .author.login == "app/github-actions")
+                | select((.body // "") | contains($marker))
                 | select(.headRefName | test("^logos/vllm-metal-[0-9][0-9a-z.]*$"))
                 | select((.headRefName | sub("^logos/vllm-metal-"; "") | ver) < ($version | ver))
                 | .number' \
