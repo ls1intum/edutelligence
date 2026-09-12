@@ -6,12 +6,14 @@ worker's own logic: discovery and expiry, capacity accounting across
 upstreams, auth pairing from the announcement, and heartbeat bookkeeping.
 """
 
+import logging
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from iris.common.boot_id import BOOT_ID
-from iris.ingestion.worker import IngestionWorker
+from iris.ingestion.worker import _WEDGED_UNIT_SKIP_THRESHOLD, IngestionWorker
 
 
 def _response(status_code=200, body=None):
@@ -179,3 +181,63 @@ class TestHeartbeat:
         ):
             worker._heartbeat_once()  # pylint: disable=protected-access
         assert upstream.heartbeat_failures == 0
+
+
+class TestStartJob:
+    """_start_job registers a run in _active for lease renewal only when the job handler
+    actually starts its thread. A run skipped as a per-unit duplicate must leave no entry:
+    an unstarted thread reads is_alive() == False, so it would be pruned on the next tick,
+    stop renewing its lease, and make Artemis reclaim a claim it already activated — a spin.
+    """
+
+    def _start_job(self, worker, upstream_url, add_job_started):
+        dto = SimpleNamespace(
+            settings=SimpleNamespace(authentication_token="tok-12345678"),
+            lecture_unit=SimpleNamespace(course_id=1, lecture_id=2, lecture_unit_id=3),
+        )
+        handler = MagicMock()
+        handler.add_job.return_value = add_job_started
+        upstream = SimpleNamespace(url=upstream_url)
+        with (
+            patch(
+                "iris.domain.ingestion.ingestion_pipeline_execution_dto"
+                ".IngestionPipelineExecutionDto.model_validate",
+                return_value=dto,
+            ),
+            patch("iris.web.utils.validate_pipeline_variant", return_value="variant"),
+            patch("iris.web.routers.webhooks.ingestion_job_handler", handler),
+            patch("iris.web.routers.webhooks.run_lecture_update_pipeline_worker"),
+        ):
+            worker._start_job({"job": 1}, upstream)  # pylint: disable=protected-access
+        return handler
+
+    def test_started_run_is_registered_for_lease_renewal(self):
+        worker = IngestionWorker()
+        handler = self._start_job(worker, "http://a:8080", add_job_started=True)
+        handler.add_job.assert_called_once()
+        assert handler.add_job.call_args.kwargs["course_id"] == 1
+        assert handler.add_job.call_args.kwargs["lecture_unit_id"] == 3
+        active = worker._active  # pylint: disable=protected-access
+        assert "tok-12345678" in active
+        assert active["tok-12345678"].upstream_url == "http://a:8080"
+
+    def test_deduplicated_run_leaves_no_zombie_entry(self):
+        worker = IngestionWorker()
+        self._start_job(worker, "http://a:8080", add_job_started=False)
+        assert "tok-12345678" not in worker._active  # pylint: disable=protected-access
+
+    def test_repeated_dedup_skips_escalate_to_a_warning_and_reset_on_start(
+        self, caplog
+    ):
+        # A thread that never exits keeps getting reclaimed and re-skipped; once the counter reaches
+        # the threshold the skip is logged at WARNING so the wedged unit is diagnosable, and the
+        # counter clears once a run for the unit finally starts.
+        worker = IngestionWorker()
+        with caplog.at_level(logging.WARNING, logger="iris.ingestion.worker"):
+            for _ in range(_WEDGED_UNIT_SKIP_THRESHOLD):
+                self._start_job(worker, "http://a:8080", add_job_started=False)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "a wedged unit must escalate to a WARNING"
+        assert "skipped" in warnings[-1].getMessage()
+        self._start_job(worker, "http://a:8080", add_job_started=True)
+        assert 3 not in worker._dedup_skips  # pylint: disable=protected-access

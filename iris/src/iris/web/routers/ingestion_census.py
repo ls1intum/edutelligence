@@ -221,9 +221,7 @@ def get_course_ingestion_census(
             in real_generations
         ]
         pages = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_NUMBER.value)
-        versions = _int_values(
-            real_rows, LectureUnitPageChunkSchema.PAGE_VERSION.value
-        )
+        versions = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_VERSION.value)
         entry.chunk_count = len(real_rows)
         entry.generation_count = len(real_generations)
         entry.chunk_page_min = min(pages) if pages else None
