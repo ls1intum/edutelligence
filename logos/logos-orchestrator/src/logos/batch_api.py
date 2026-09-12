@@ -32,11 +32,12 @@ back on the way out.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1048,7 +1049,11 @@ async def reconcile_batches_once() -> int:
         body = _response_json(response) or {}
         status = body.get("status")
         with DBManager() as db:
-            db.record_batch_provider_state(str(owner["upstream_id"]), body)
+            # The same naming the client poll does: the stored state carries
+            # Logos ids, while the settlement below downloads from the
+            # provider by its own.
+            stored = _register_result_files(db, provider, owner, body)
+            db.record_batch_provider_state(str(owner["upstream_id"]), stored)
         if status in TERMINAL_BATCH_STATES:
             if status == "failed":
                 # The unsettled-batches query does not carry the input file id,
@@ -1578,6 +1583,20 @@ async def handle_batch_api_request(request: Request) -> Response:
                     raise_openai_error(
                         502, "The provider holding this object is gone.", code="batch_upstream_unreachable"
                     )
+                # A result file is exposed under Logos's own id; the forward
+                # must address the provider's, which the mapping row keeps.
+                # The path was parsed with the id the client supplied, so it
+                # is rebuilt for the forward, not just the resource id
+                # swapped — the non-Azure url is built from the path.
+                if owner.get("provider_object_id"):
+                    provider_object_id = str(owner["provider_object_id"])
+                    operation = replace(
+                        operation,
+                        resource_id=provider_object_id,
+                        path=_canonical_path(
+                            operation.path, operation.resource, provider_object_id, operation.suboperation
+                        ),
+                    )
 
             r_log, c_log = db.log_usage(
                 api_key_id=auth.api_key_id,
@@ -1660,6 +1679,51 @@ async def handle_batch_api_request(request: Request) -> Response:
                 if rerun is not None:
                     return rerun
     return response
+
+
+def _logos_result_file_id(provider: Dict[str, Any], provider_file_id: str) -> str:
+    """The id Logos exposes for a result file the provider minted.
+
+    A result file's provider id is only unique at that provider, and the
+    client downloads it by the id it was handed, without naming a provider —
+    so the provider id is not exposed verbatim. The exposed id is derived
+    from the provider that minted the file and the id that provider chose:
+    the same pair always yields the same id, so the repeated polls of a
+    finished batch upsert the one mapping row instead of minting duplicates,
+    and two providers minting the same file id expose two different ones.
+    """
+    digest = hashlib.sha256(f"{int(provider['id'])}:{provider_file_id}".encode("utf-8")).hexdigest()
+    return f"file-lg-{digest[:24]}"
+
+
+def _register_result_files(
+    db: DBManager, provider: Dict[str, Any], owner: Dict[str, Any], body: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Name a terminal answer's result files with ids of Logos's own.
+
+    The answer names them by the provider's file ids; they are registered
+    for the batch's owner — like the batch, they appear in the provider's
+    list for every key that may use the provider — and rewritten to Logos's
+    ids before the answer is stored or returned, so the batch row, the
+    answer, and the download route all carry the same id. The mapping row
+    keeps the provider's id, which the download forward uses.
+    """
+    rewritten = dict(body)
+    for field in ("output_file_id", "error_file_id"):
+        provider_file_id = rewritten.get(field)
+        if isinstance(provider_file_id, str) and provider_file_id:
+            logos_id = _logos_result_file_id(provider, provider_file_id)
+            db.register_batch_object(
+                kind="file",
+                upstream_id=logos_id,
+                provider_id=int(provider["id"]),
+                api_key_id=owner.get("api_key_id"),
+                team_id=owner.get("team_id"),
+                user_id=owner.get("user_id"),
+                provider_object_id=provider_file_id,
+            )
+            rewritten[field] = logos_id
+    return rewritten
 
 
 async def _record_upstream_object(db: DBManager, register_kwargs: Dict[str, Any]) -> None:
@@ -1798,30 +1862,29 @@ async def _register_upstream_object(
         # next poll and by the reconciler, so it must not turn a successful
         # upstream poll into a 500.
         status = payload.get("status")
+        stored = payload
         try:
             with DBManager() as db:
-                db.record_batch_provider_state(str(operation.resource_id), payload)
                 # A terminal response is what names the result file (and the
-                # error file). Register both for the batch's owner now: they
-                # appear in the provider's list for every key that may use the
-                # provider, and without a row of their own the owner's result
-                # download would be a 404 while a stranger's would work.
-                for file_field in ("output_file_id", "error_file_id"):
-                    file_id = payload.get(file_field)
-                    if isinstance(file_id, str) and file_id:
-                        db.register_batch_object(
-                            kind="file",
-                            upstream_id=file_id,
-                            provider_id=int(provider["id"]),
-                            api_key_id=owner.get("api_key_id"),
-                            team_id=owner.get("team_id"),
-                            user_id=owner.get("user_id"),
-                        )
+                # error file). They are registered for the batch's owner —
+                # without a row of their own the owner's result download
+                # would be a 404 while a stranger's would work — and
+                # rewritten to Logos's ids before the state stores them, so
+                # the stored state, the answer below, and the download route
+                # all carry the same id.
+                stored = _register_result_files(db, provider, owner, payload)
+                db.record_batch_provider_state(str(operation.resource_id), stored)
             if status == "failed":
                 _learn_batch_ineligibility(provider, owner.get("input_file_id"), _provider_error_text(payload))
         except Exception:  # noqa: BLE001 - the next poll (and the reconciler) retries this
             logger.exception("Could not update the state of batch %s", operation.resource_id)
+        if stored != payload:
+            # The client downloads the result by the id Logos resolves, so
+            # the answer carries the rewritten ids, not the provider's.
+            response = JSONResponse(content=stored, status_code=response.status_code, media_type="application/json")
         if status in TERMINAL_BATCH_STATES and owner.get("settled_at") is None:
+            # Settlement downloads from the provider, so it keeps the answer
+            # with the provider's own file ids.
             _schedule_settlement(provider, owner, payload)
 
     return response

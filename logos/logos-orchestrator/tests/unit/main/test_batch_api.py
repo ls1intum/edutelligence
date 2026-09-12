@@ -1150,14 +1150,18 @@ def test_a_provider_batch_listing_carries_what_the_last_poll_saw(monkeypatch):
     )
     monkeypatch.setattr(batch_api, "_schedule_settlement", lambda *args: None)
 
-    assert client.get("/v1/batches/batch_p").status_code == 200  # the poll that stores the state
+    poll = client.get("/v1/batches/batch_p")
+    assert poll.status_code == 200  # the poll that stores the state
+    # The answer, like the stored state, carries Logos's ids for the result
+    # files — the ids the client downloads with, not the provider's.
+    assert poll.json()["output_file_id"] == batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out")
 
     listed = client.get("/v1/batches")
     assert listed.status_code == 200
     entry = listed.json()["data"][0]
     assert entry["status"] == "completed"
-    assert entry["output_file_id"] == "file-out"
-    assert entry["error_file_id"] == "file-err"
+    assert entry["output_file_id"] == batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out")
+    assert entry["error_file_id"] == batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-err")
     assert entry["request_counts"] == {"total": 2, "completed": 1, "failed": 1}
 
 
@@ -1185,6 +1189,10 @@ def test_a_poll_registers_the_result_file_the_provider_minted(monkeypatch):
     # credential: it shows up in the provider's file list for every key that
     # may use the provider. Without an ownership row of its own, the batch
     # owner's result download would be a 404 while a stranger's would work.
+    # The provider's file ids are only unique at that provider, and the client
+    # names a file without naming the provider — so the row is keyed by a
+    # Logos id derived from the pair, and the provider's id is kept on the
+    # row for the download forward.
     db = _FakeDB(
         [OPENAI_PROVIDER],
         OPENAI_DEPLOYMENTS,
@@ -1205,17 +1213,49 @@ def test_a_poll_registers_the_result_file_the_provider_minted(monkeypatch):
     )
     monkeypatch.setattr(batch_api, "_schedule_settlement", lambda *args: None)
 
+    poll = client.get("/v1/batches/batch_1")
+    assert poll.status_code == 200
+
+    output_id = batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out")
+    error_id = batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-err")
+    # The answer and the stored batch state carry the Logos ids...
+    assert (poll.json()["output_file_id"], poll.json()["error_file_id"]) == (output_id, error_id)
+    assert db.owned[("batch", "batch_1")]["output_file_id"] == output_id
+
+    # ...and the ownership rows map each one back to the provider's id.
+    file_rows = {row["upstream_id"]: row for (kind, _), row in db.owned.items() if kind == "file"}
+    assert set(file_rows) == {output_id, error_id}
+    assert file_rows[output_id]["provider_object_id"] == "file-out"
+    assert file_rows[error_id]["provider_object_id"] == "file-err"
+    assert all(row["team_id"] == OWN_TEAM for row in file_rows.values())
+
+    # A repeated poll of the finished batch mints the same ids and upserts
+    # the same rows — the mapping never grows with the number of polls.
     assert client.get("/v1/batches/batch_1").status_code == 200
-
     file_rows = [row for (kind, _), row in db.owned.items() if kind == "file"]
-    assert {row["upstream_id"] for row in file_rows} == {"file-out", "file-err"}
-    assert all(row["team_id"] == OWN_TEAM for row in file_rows)
+    assert len(file_rows) == 2
 
-    # And the owner can now download the result through the files route.
-    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, content=b'{"custom_id": "one"}\n'))
-    download = client.get("/v1/files/file-out/content")
+    # And the owner downloads the result through the files route, which
+    # addresses the provider by its own id.
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, content=b'{"custom_id": "one"}\n'))
+    download = client.get(f"/v1/files/{output_id}/content")
     assert download.status_code == 200
     assert download.content == b'{"custom_id": "one"}\n'
+    assert str(seen[0].url) == "https://api.openai.com/v1/files/file-out/content"
+
+
+def test_result_file_ids_are_deterministic_and_distinguish_the_providers():
+    # The same provider and file id must always yield the same Logos id, so a
+    # repeated poll upserts the one row; two providers minting the same file
+    # id must yield two different ones, so one team's result can never be
+    # reached through the other's id.
+    assert batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out") == batch_api._logos_result_file_id(
+        OPENAI_PROVIDER, "file-out"
+    )
+    assert batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out") != batch_api._logos_result_file_id(
+        AZURE_PROVIDER, "file-out"
+    )
+    assert batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out").startswith("file-lg-")
 
 
 def test_an_unfinished_batch_is_not_settled(monkeypatch):
@@ -1470,12 +1510,17 @@ class _SettlingDB:
         self.settled = 0
         self.rows = []
         self.booked = set()
+        self.registered = []
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         return False
+
+    def register_batch_object(self, **kwargs):
+        # The settlement path only stores state; recording the call is enough.
+        self.registered.append(kwargs)
 
     def claim_batch_for_settlement(self, batch_object_id, lease_seconds=1800):
         self.claims += 1
@@ -1685,6 +1730,9 @@ async def test_the_reconciler_settles_a_batch_nobody_polled(monkeypatch):
         def record_batch_provider_state(self, upstream_id, body):
             settling.rows.append(("state", upstream_id, body.get("status")))
 
+        def register_batch_object(self, **kwargs):
+            return settling.register_batch_object(**kwargs)
+
         def claim_batch_for_settlement(self, batch_object_id, lease_seconds=1800):
             return settling.claim_batch_for_settlement(batch_object_id, lease_seconds)
 
@@ -1715,6 +1763,12 @@ async def test_the_reconciler_settles_a_batch_nobody_polled(monkeypatch):
     assert await reconcile_batches_once() == 2
     assert ("state", "batch_1", "completed") in settling.rows
     assert settling.settled == 1
+    # The reconciler stores the state under Logos's id, too, and the mapping
+    # row keeps the provider's for the download — the settlement above took
+    # the provider's own answer, so it billed from the right file.
+    (file_row,) = settling.registered
+    assert file_row["upstream_id"] == batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out")
+    assert file_row["provider_object_id"] == "file-out"
 
 
 @pytest.mark.asyncio

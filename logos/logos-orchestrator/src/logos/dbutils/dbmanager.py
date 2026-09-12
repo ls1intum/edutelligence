@@ -2535,6 +2535,7 @@ class DBManager:
         input_file_id: Optional[str] = None,
         status: Optional[str] = None,
         models: Optional[List[str]] = None,
+        provider_object_id: Optional[str] = None,
     ) -> None:
         """Record who owns an object the provider just minted.
 
@@ -2542,6 +2543,11 @@ class DBManager:
         when the provider later shows it cannot batch one of them, the batch
         that named them is the evidence, and this list is what still says which
         models the file asked for.
+
+        ``provider_object_id`` is the object's own id at the provider, when
+        ``upstream_id`` is a Logos-facing name instead: result files are
+        exposed under Logos's ids, and the download forward resolves back to
+        the provider's through this column.
 
         An id is globally unique — a client supplies the id without the
         provider that minted it, so one id may not name two objects. A row
@@ -2554,9 +2560,9 @@ class DBManager:
                 """
                 INSERT INTO batch_objects
                     (kind, upstream_id, provider_id, api_key_id, team_id, user_id,
-                     input_file_id, status, models, created_at, updated_at)
+                     input_file_id, status, models, provider_object_id, created_at, updated_at)
                 VALUES (:kind, :upstream_id, :provider_id, :api_key_id, :team_id, :user_id,
-                        :input_file_id, :status, CAST(:models AS JSONB), :now, :now)
+                        :input_file_id, :status, CAST(:models AS JSONB), :provider_object_id, :now, :now)
                 -- The upsert only takes the row of the provider that minted
                 -- the id: when another provider already holds it the DO
                 -- UPDATE matches nothing (rowcount 0), and the caller turns
@@ -2565,6 +2571,8 @@ class DBManager:
                 DO UPDATE SET status = COALESCE(EXCLUDED.status, batch_objects.status),
                               input_file_id = COALESCE(EXCLUDED.input_file_id, batch_objects.input_file_id),
                               models = COALESCE(EXCLUDED.models, batch_objects.models),
+                              provider_object_id = COALESCE(EXCLUDED.provider_object_id,
+                                                            batch_objects.provider_object_id),
                               updated_at = EXCLUDED.updated_at
                 WHERE COALESCE(batch_objects.provider_id, 0) = COALESCE(EXCLUDED.provider_id, 0)
                 """
@@ -2579,6 +2587,7 @@ class DBManager:
                 "input_file_id": input_file_id,
                 "status": status,
                 "models": _json_for_jsonb(models) if models else None,
+                "provider_object_id": provider_object_id,
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         )

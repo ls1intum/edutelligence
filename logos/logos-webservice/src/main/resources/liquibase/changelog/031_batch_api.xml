@@ -35,11 +35,22 @@
             <column name="kind" type="TEXT">
                 <constraints nullable="false"/>
             </column>
-            <!-- The provider's own id (file-abc…, batch_abc…). Unique per
-                 provider: two upstreams may legitimately mint the same id. -->
+            <!-- The id the object is exposed under. For a result file that is
+                 Logos's own (the provider's file ids are only unique at that
+                 provider, and a client names the file without the provider):
+                 see provider_object_id. Otherwise the provider's own id,
+                 unique across providers by the uq_batch_objects_upstream
+                 index — a colliding registration is refused. -->
             <column name="upstream_id" type="TEXT">
                 <constraints nullable="false"/>
             </column>
+            <!-- The object's own id at the provider, when Logos exposes a
+                 different one: result files are minted by the provider, and
+                 their ids are only unique at that provider, so the row is
+                 keyed by Logos's id and the forward uses this one. NULL
+                 everywhere else — input files and local objects are exposed
+                 under the ids they carry. -->
+            <column name="provider_object_id" type="TEXT"/>
             <!-- Where the object lives. NULL for a batch Logos runs itself:
                  its lines are scheduled as ordinary low-priority requests and
                  each one picks its own provider, so the batch as a whole
