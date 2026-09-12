@@ -131,7 +131,9 @@ class BaseScheduler(SchedulerInterface):
             is_cold_start=is_cold_start,
         )
 
-    def release(self, model_id: int, provider_id: int, provider_type: str, request_id: str) -> None:
+    def release(
+        self, model_id: int, provider_id: int, provider_type: str, request_id: str, *, reevaluate: bool = True
+    ) -> None:
         """Called when a request completes: free its capacity, then re-dispatch.
 
         This used to hand the freed slot straight to the next waiter. That
@@ -148,6 +150,14 @@ class BaseScheduler(SchedulerInterface):
         the normal gate, which reads what the engine can actually take. The
         re-evaluation happens right here, so nothing waits for the next worker
         report to make progress.
+
+        ``reevaluate=False`` frees the capacity without dispatching queued
+        waiters; the caller must then invoke ``reevaluate_model_queues`` once
+        its own claim on the freed slot is registered. The stream-resume
+        handoff (#815) needs exactly that order: re-evaluating here would
+        synchronously dequeue an already-waiting lower-priority request into
+        the freed slot, and the resume's fast path would then reserve the
+        same slot — two requests dispatched against one.
         """
 
         self._check_starvation(model_id, provider_id)
@@ -168,6 +178,9 @@ class BaseScheduler(SchedulerInterface):
                 )
             except KeyError:
                 pass
+
+        if not reevaluate:
+            return
 
         # Hand the freed capacity to the queue through the gate rather than
         # to one specific waiter. `reevaluate_model_queues` re-checks lane

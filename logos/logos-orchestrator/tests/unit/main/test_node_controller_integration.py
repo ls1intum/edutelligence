@@ -778,7 +778,7 @@ async def test_sync_response_falls_back_to_direct_http_for_logosnode_without_lan
 
         class scheduler:
             @staticmethod
-            def release(model_id, provider_id, provider_type, request_id):  # noqa: ARG002
+            def release(model_id, provider_id, provider_type, request_id, *, reevaluate: bool = True):  # noqa: ARG002
                 return None
 
     monkeypatch.setattr(main_mod, "_pipeline", _FakePipeline(), raising=False)

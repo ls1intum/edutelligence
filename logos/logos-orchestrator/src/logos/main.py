@@ -2113,7 +2113,7 @@ async def _streaming_response(
     # actually delivered it.
     active_node = {"model_id": model_id, "provider_id": provider_id}
 
-    def _release_slot(slot_model_id, slot_provider_id, slot_provider_type):
+    def _release_slot(slot_model_id, slot_provider_id, slot_provider_type, *, reevaluate: bool = True):
         if scheduling_stats and scheduling_stats.get("request_id"):
             try:
                 _pipeline.scheduler.release(
@@ -2121,6 +2121,7 @@ async def _streaming_response(
                     slot_provider_id,
                     slot_provider_type,
                     scheduling_stats.get("request_id"),
+                    reevaluate=reevaluate,
                 )
             except Exception as _e:
                 logger.error(f"Failed to release scheduler resources: {_e}")
@@ -2459,7 +2460,20 @@ async def _streaming_response(
                                     # would pop the takeover's row, leak the
                                     # peer's active count, and make its final
                                     # release a swallowed KeyError.
-                                    _release_slot(*slots.pop())
+                                    #
+                                    # The handoff is also atomic with respect
+                                    # to the release's queue re-evaluation:
+                                    # that would synchronously dequeue an
+                                    # already-waiting lower-priority request
+                                    # into the freed slot, and the resume's
+                                    # fast path would then reserve the same
+                                    # slot — two requests dispatched against
+                                    # one. So the reservation goes back
+                                    # without dispatching, the resume is
+                                    # registered (reserved or queued) first,
+                                    # and only then do the remaining waiters
+                                    # re-evaluate against what is left.
+                                    _release_slot(*slots.pop(), reevaluate=False)
                                     resumed_ctx = await _schedule_stream_resume(
                                         request_id=request_id,
                                         model_id=model_id,
@@ -2472,6 +2486,12 @@ async def _streaming_response(
                                         api_key_id=api_key_id,
                                         budget=retry_budget,
                                     )
+                                    # The failed slot is back and the resume's
+                                    # claim on it is registered (reserved,
+                                    # queued, or not attempted at all) — only
+                                    # now may the queue run, so a waiter gets
+                                    # the slot only if it is actually left.
+                                    _pipeline.scheduler.reevaluate_model_queues(f"model-{model_id}")
                                     if resumed_ctx is not None:
                                         slots.append(
                                             (

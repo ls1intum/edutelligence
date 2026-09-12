@@ -1517,6 +1517,118 @@ async def test_a_resumed_stream_on_the_only_node_gets_the_slot_the_failure_held(
     assert facade._request_tracking == {}
 
 
+@pytest.mark.asyncio
+async def test_a_resumed_stream_takes_the_freed_slot_before_a_queued_waiter(monkeypatch):
+    """The slot handoff must be atomic with respect to queue re-evaluation:
+    the failed slot's release must not synchronously dispatch an
+    already-waiting lower-priority request before the RESUME entry exists —
+    the resume's fast path would then reserve the same single slot, and
+    both requests would run on it. The waiter goes last: only after the
+    resume's answer has settled does it get the slot."""
+    from fastapi.responses import StreamingResponse
+
+    import logos as main
+    from logos.pipeline.pipeline import PipelineRequest
+
+    registry, websockets, facade, pipeline = _resume_env(monkeypatch, provider_ids=(PROVIDER_ID,))
+    websocket = websockets[PROVIDER_ID]
+
+    ctx = await _dispatch_initial(pipeline, (PROVIDER_ID,), "req-race")
+    assert ctx.provider_id == PROVIDER_ID
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 1
+
+    # A lower-priority request is already waiting for the model's single
+    # slot, held by the request that is about to fail mid-stream.
+    waiter_task = asyncio.ensure_future(
+        pipeline.process(
+            PipelineRequest(
+                payload={"messages": [{"role": "user", "content": "other"}]},
+                headers={},
+                allowed_models=[_RESUME_MODEL_ID],
+                deployments=[_deployment(PROVIDER_ID)],
+                request_id="req-waiter",
+                pinned_model_id=_RESUME_MODEL_ID,
+                request_path="v1/chat/completions",
+            )
+        )
+    )
+
+    first_frame = _chat_frame("Hello")
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            ctx,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            _RESUME_MODEL_ID,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-race",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 0,
+                "is_cold_start": False,
+            },
+            request_path="v1/chat/completions",
+            deployments=[_deployment(PROVIDER_ID)],
+            # A real-clock budget: the stream is opened with its deadline,
+            # which must stay in the future in real monotonic time.
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    # The waiter is queued behind the held slot — the scenario is live.
+    assert pipeline.scheduler.get_total_queue_depth() == 1
+    await _feed_pid(registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_start", "status_code": 200})
+    await _feed_pid(
+        registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_chunk", "chunk": first_frame}
+    )
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    consumer, body = await _fail_the_stream_mid_answer(registry, PROVIDER_ID, websocket, response, first_frame)
+    try:
+        # The resume takes the freed slot itself — the waiter stays queued.
+        await _wait_for_stream_cmd_count(websocket, 2, timeout=2)
+        # While the resume is in flight, only the resume may hold the slot:
+        # a dispatch of the waiter during the handoff is the double dispatch.
+        assert "req-waiter" not in facade._providers[PROVIDER_ID]._active_request_ids
+        assert "req-waiter" not in facade._request_tracking
+
+        takeover_cmd = _stream_cmd_ids(websocket)[1]
+        resumed_frame = _chat_frame(" there")
+        done_frame = b"data: [DONE]\n\n"
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_start", "status_code": 200})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": resumed_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": done_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_end", "success": True})
+
+        assert await asyncio.wait_for(consumer, timeout=2) == resumed_frame
+        assert [chunk async for chunk in body] == [done_frame]
+
+        # The resume has settled; its final release re-evaluates the queue
+        # and the waiter — queued the whole time — gets the slot now.
+        waiter_result = await asyncio.wait_for(waiter_task, timeout=2)
+        assert waiter_result.success
+        assert waiter_result.execution_context.provider_id == PROVIDER_ID
+
+        # The waiter's own completion settles every ledger.
+        pipeline.scheduler.release(_RESUME_MODEL_ID, PROVIDER_ID, "logosnode", "req-waiter")
+    finally:
+        if not consumer.done():
+            consumer.cancel()
+        if not waiter_task.done():
+            waiter_task.cancel()
+        await _drain_pending_tasks()
+
+    assert pipeline.scheduler.get_total_queue_depth() == 0
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[PROVIDER_ID]._active_request_ids == {}
+    assert facade._request_tracking == {}
+
+
 def _responses_context() -> SimpleNamespace:
     """The real /v1/responses context: the resolver sets ``anthropic_dialect``
     only for Messages requests, so a Responses stream has no dialect marker —

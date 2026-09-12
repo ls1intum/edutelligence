@@ -167,8 +167,11 @@ def _make_pipeline(
                 status.error = terminal_status_error
 
     class DummyScheduler:
-        def release(self, model_id, provider_id, provider_type, request_id):
+        def release(self, model_id, provider_id, provider_type, request_id, *, reevaluate: bool = True):  # noqa: ARG002
             release_calls.append((model_id, provider_id, provider_type, request_id))
+
+        def reevaluate_model_queues(self, model_name: str):  # noqa: ARG002
+            return None
 
     class DummyPipeline:
         executor = DummyExecutor()
