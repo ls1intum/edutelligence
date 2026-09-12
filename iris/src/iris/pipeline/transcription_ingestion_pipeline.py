@@ -33,7 +33,7 @@ from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 from iris.vector_database.batch_verify import (
     fetch_with_retry,
-    sweep_other_generations,
+    purge_other_rows,
     write_batch_with_retry,
 )
 from iris.vector_database.database import batch_update_lock
@@ -253,18 +253,17 @@ class TranscriptionIngestionPipeline(SubPipeline):
             # One retry budget for the swap: a transient store condition re-submits
             # only the dropped chunks, never the summary/embedding work above.
             retry = WeaviateWriteRetry.for_request()
-            write_batch_with_retry(
+            written_ids = write_batch_with_retry(
                 self.collection,
                 prepared_chunks,
                 "transcription chunks",
                 retry=retry,
                 open_batch=lambda collection: collection.batch.dynamic(),
             )
-            sweep_other_generations(
+            purge_other_rows(
                 self.collection,
                 self._get_unit_filter(self.dto.lecture_unit),
-                LectureTranscriptionSchema.INGESTION_RUN_ID.value,
-                self.dto.lecture_unit.ingestion_run_id,
+                written_ids,
                 "outdated transcription chunks",
                 retry=retry,
             )

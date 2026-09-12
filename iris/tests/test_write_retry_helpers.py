@@ -64,14 +64,19 @@ class FakeBatch:
         self.failed_objects = self.failures_per_attempt[self.attempt]
         return False
 
-    def add_object(self, properties, vector):
+    def add_object(self, uuid=None, properties=None, vector=None):
         self.added.append((properties, vector))
         self.added_this_attempt.append((properties, vector))
 
 
 def error_object(message, properties):
     return SimpleNamespace(
-        message=message, object_=SimpleNamespace(properties=properties, vector=[0.1])
+        message=message,
+        object_=SimpleNamespace(
+            uuid="00000000-0000-0000-0000-000000000000",
+            properties=properties,
+            vector=[0.1],
+        ),
     )
 
 
@@ -100,6 +105,21 @@ def test_batch_retries_only_the_dropped_objects_on_transient_failure():
     # not the whole batch (so no vision/embedding rework).
     assert batch.attempt == 1
     assert batch.added == [({"p": 1}, [0.1]), ({"p": 2}, [0.2]), ({"p": 2}, [0.1])]
+
+
+def test_batch_returns_one_client_assigned_id_per_written_object():
+    # The returned ids are what the purge keeps, so there must be exactly one
+    # per prepared object and each must be the id the object was written under.
+    batch = FakeBatch(failures_per_attempt=[[]])
+    collection = FakeCollection(batch)
+    prepared = [({"p": 1}, [0.1]), ({"p": 2}, [0.2]), ({"p": 3}, [0.3])]
+
+    written_ids = write_batch_with_retry(
+        collection, prepared, "page chunks", retry=no_wait_retry()
+    )
+
+    assert len(written_ids) == len(prepared)
+    assert len(set(written_ids)) == len(prepared)  # all distinct
 
 
 def test_batch_fails_immediately_on_non_transient_drop():

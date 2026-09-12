@@ -52,8 +52,17 @@ async def lifespan(_: FastAPI):
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
     logger.info("Scheduler started")
+
+    # Pull-based ingestion worker: claims jobs from Artemis and heartbeats its
+    # running jobs. Import here to keep the pipeline stack out of module load.
+    from iris.ingestion.worker import (  # noqa: E402 pylint: disable=import-outside-toplevel
+        ingestion_worker,
+    )
+
+    ingestion_worker.start()
     yield
 
+    ingestion_worker.stop()
     shutdown_langfuse()
     scheduler.shutdown()
     logger.info("Scheduler stopped")

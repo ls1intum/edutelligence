@@ -111,6 +111,7 @@ def _unit_lecture_dto(content_unchanged: bool) -> SimpleNamespace:
         course_id=1,
         course_name="Course",
         course_description="",
+        course_language="en",
         lecture_id=2,
         lecture_name="Lecture",
         lecture_unit_id=3,
@@ -122,6 +123,7 @@ def _unit_lecture_dto(content_unchanged: bool) -> SimpleNamespace:
         content_fingerprint=_FINGERPRINT,
         ingestion_run_id=_RUN_ID,
         expected_chunk_counts_json=json.dumps({"1": 2}),
+        pdf_page_count=1,
         pipeline_version=1,
         quality_score=0.9,
         quality_flags_json=None,
@@ -149,7 +151,10 @@ def test_unit_pipeline_reuses_stored_summary_when_content_is_unchanged():
             fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[stored_row]))
         ),
         data=SimpleNamespace(
-            insert=MagicMock(return_value=_ROW_UUID), delete_many=MagicMock()
+            insert=MagicMock(return_value=_ROW_UUID),
+            delete_many=MagicMock(
+                return_value=SimpleNamespace(failed=0, matches=0, successful=0)
+            ),
         ),
     )
 
@@ -198,7 +203,10 @@ def test_unit_pipeline_recomputes_when_stored_stamp_differs():
             fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[stored_row]))
         ),
         data=SimpleNamespace(
-            insert=MagicMock(return_value=_ROW_UUID), delete_many=MagicMock()
+            insert=MagicMock(return_value=_ROW_UUID),
+            delete_many=MagicMock(
+                return_value=SimpleNamespace(failed=0, matches=0, successful=0)
+            ),
         ),
     )
 
@@ -233,7 +241,10 @@ def test_unit_pipeline_stamps_the_ingestion_ledger():
             fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
         ),
         data=SimpleNamespace(
-            insert=MagicMock(return_value=_ROW_UUID), delete_many=MagicMock()
+            insert=MagicMock(return_value=_ROW_UUID),
+            delete_many=MagicMock(
+                return_value=SimpleNamespace(failed=0, matches=0, successful=0)
+            ),
         ),
     )
 

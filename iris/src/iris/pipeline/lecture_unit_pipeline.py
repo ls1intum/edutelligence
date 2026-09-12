@@ -1,11 +1,7 @@
 from typing import Optional
 
-from weaviate.classes.query import Filter, MetadataQuery
+from weaviate.classes.query import Filter
 
-from iris.common.ingestion_errors import (
-    STALE_CONTENT_DELETE_FAILED,
-    IngestionStageError,
-)
 from iris.common.logging_config import get_logger
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import LlmRequestHandler
@@ -18,11 +14,7 @@ from iris.pipeline.lecture_unit_summary_pipeline import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
-from iris.vector_database.batch_verify import (
-    delete_many_with_retry,
-    fetch_with_retry,
-    stale_generation_ids,
-)
+from iris.vector_database.batch_verify import purge_other_rows
 from iris.vector_database.database import VectorDatabase, batch_update_lock
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
@@ -32,11 +24,6 @@ from iris.vector_database.write_retry import WeaviateWriteRetry
 from iris.web.status.status_update import StatusCallback
 
 logger = get_logger(__name__)
-
-# Upper bound on the unit-row sweep read. A unit should carry only a handful of rows, so a truncated
-# read means something is badly wrong; hitting the cap fails the run rather than certifying over a
-# possibly partial sweep. Matches the chunk/segment sweeps.
-_UNIT_ROW_SWEEP_FETCH_LIMIT = 10_000
 
 
 class LectureUnitPipeline(SubPipeline):
@@ -191,6 +178,10 @@ class LectureUnitPipeline(SubPipeline):
                     LectureUnitSchema.COURSE_DESCRIPTION.value,
                     lecture_unit.course_description,
                 ),
+                # The resolved language this run ingested under; the reconciler
+                # compares it against the course's declared language to detect a
+                # unit ingested in the wrong language and re-ingest it.
+                LectureUnitSchema.COURSE_LANGUAGE.value: lecture_unit.course_language,
                 LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
                 LectureUnitSchema.LECTURE_NAME.value: metadata_value(
                     LectureUnitSchema.LECTURE_NAME.value, lecture_unit.lecture_name
@@ -240,37 +231,16 @@ class LectureUnitPipeline(SubPipeline):
                 ),
                 description=f"unit row of lecture unit {lecture_unit.lecture_unit_id}",
             )
-            stale_rows = fetch_with_retry(
-                lambda: self.lecture_unit_collection.query.fetch_objects(
-                    filters=lecture_unit_filter,
-                    limit=_UNIT_ROW_SWEEP_FETCH_LIMIT,
-                    return_metadata=MetadataQuery(creation_time=True),
-                ),
+            # Keep the row just written and purge every other unit row by unit
+            # identity: previous generations, legacy rows, and index-only ghost
+            # rows that a delete-by-id or delete-by-run-id cannot reach. Writing
+            # the new row first keeps the unit from ever losing its row on a crash.
+            purge_other_rows(
+                self.lecture_unit_collection,
+                lecture_unit_filter,
+                [new_uuid],
+                f"unit row of lecture unit {lecture_unit.lecture_unit_id}",
                 retry=retry,
-            ).objects
-            if len(stale_rows) >= _UNIT_ROW_SWEEP_FETCH_LIMIT:
-                # A truncated read would leave older unit rows undetected and let this generation
-                # certify over a partial sweep. There should only ever be a handful of unit rows per
-                # unit, so hitting the cap means something is badly wrong; fail loudly.
-                raise IngestionStageError(
-                    STALE_CONTENT_DELETE_FAILED,
-                    f"Unit-row sweep of lecture unit {lecture_unit.lecture_unit_id} "
-                    f"hit the fetch cap of {_UNIT_ROW_SWEEP_FETCH_LIMIT} rows; "
-                    f"refusing to certify a possibly partial sweep",
-                )
-            # Sweep older unit rows with the shared concurrency fence: keep the row we just wrote (by
-            # uuid) and delete only rows older than it, so a concurrent later writer's row survives
-            # (last-writer-wins) instead of both sweeps wiping each other to leave the unit with no
-            # row. The fence engages only when Weaviate reports creation times (always in production).
-            stale_ids = stale_generation_ids(
-                stale_rows, lambda row: row.uuid == new_uuid
             )
-            if stale_ids:
-                delete_many_with_retry(
-                    self.lecture_unit_collection,
-                    Filter.by_id().contains_any(stale_ids),
-                    f"unit row of lecture unit {lecture_unit.lecture_unit_id}",
-                    retry=retry,
-                )
 
         return tokens

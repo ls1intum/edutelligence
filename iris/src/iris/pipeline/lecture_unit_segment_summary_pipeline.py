@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from weaviate.classes.query import Filter
+from weaviate.classes.query import Filter, Metrics
 from weaviate.client import WeaviateClient
 from weaviate.exceptions import UnexpectedStatusCodeError
 from weaviate.util import generate_uuid5
@@ -112,11 +112,16 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             display_page_number = slide_index
 
             if len(slides) != 0:
-                display_page_number = int(
-                    slides[0].properties.get(
-                        LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
-                        slide_index,
-                    )
+                # A stored display number can be null on legacy chunks (written
+                # before the field existed), and .get(key, default) returns that
+                # null rather than the default; int(None) would then crash the
+                # whole segment stage. Fall back to the slide index when it is
+                # absent or null.
+                stored_display = slides[0].properties.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
+                )
+                display_page_number = (
+                    int(stored_display) if stored_display is not None else slide_index
                 )
                 if display_page_number == -1:
                     transcriptions = []
@@ -208,33 +213,48 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         ).objects
 
     def _get_slide_range(self) -> Tuple[int, int]:
-        slides = self.lecture_unit_page_chunk_collection.query.fetch_objects(
-            filters=self._get_lecture_slide_filter()
-        ).objects
+        """Full page-number span of the unit, over every chunk of every generation.
 
-        if len(slides) != 0:
-            slide_numbers = [
-                int(slide.properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value))
-                for slide in slides
-            ]
-            return min(slide_numbers), max(slide_numbers)
+        Uses a server-side aggregate min/max rather than fetching objects and
+        reducing in Python: an unbounded ``fetch_objects`` returns only the
+        client's default page, so a unit larger than that page (or one whose
+        chunk set is inflated by coexisting generations) yielded a truncated
+        range and summaries were produced for only the first slides. The
+        aggregate scans all matching rows and is unaffected by page size or
+        generation count.
+        """
+        slide_span = self._aggregate_page_number_span(
+            self.lecture_unit_page_chunk_collection,
+            self._get_lecture_slide_filter(),
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+        )
+        if slide_span is not None:
+            return slide_span
 
-        transcriptions = self.lecture_transcription_collection.query.fetch_objects(
-            filters=self._get_lecture_transcription_filter()
-        ).objects
-
-        if len(transcriptions) != 0:
-            slide_numbers = [
-                int(
-                    transcription.properties.get(
-                        LectureTranscriptionSchema.PAGE_NUMBER.value
-                    )
-                )
-                for transcription in transcriptions
-            ]
-            return min(slide_numbers), max(slide_numbers)
+        transcript_span = self._aggregate_page_number_span(
+            self.lecture_transcription_collection,
+            self._get_lecture_transcription_filter(),
+            LectureTranscriptionSchema.PAGE_NUMBER.value,
+        )
+        if transcript_span is not None:
+            return transcript_span
 
         return 0, 0
+
+    @staticmethod
+    def _aggregate_page_number_span(collection, unit_filter, page_number_property):
+        """Server-side (min, max) of a page-number property, or None when empty."""
+        result = collection.aggregate.over_all(
+            filters=unit_filter,
+            total_count=True,
+            return_metrics=[
+                Metrics(page_number_property).integer(minimum=True, maximum=True)
+            ],
+        )
+        if result.total_count == 0:
+            return None
+        metric = result.properties[page_number_property]
+        return int(metric.minimum), int(metric.maximum)
 
     def _get_lecture_slide_filter(self):
         slide_filter = Filter.by_property(

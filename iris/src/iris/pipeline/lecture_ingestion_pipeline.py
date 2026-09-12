@@ -1,8 +1,10 @@
 import base64
+import bisect
 import json
 import os
 import re
 import tempfile
+from collections import Counter
 from datetime import datetime
 from typing import Optional
 
@@ -10,12 +12,15 @@ import fitz
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langdetect import DetectorFactory, detect
+from langdetect.lang_detect_exception import LangDetectException
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
 from iris.common.ingestion_errors import (
     PAGE_INGESTION_FAILED,
     SLIDE_VISION_FAILED,
+    STALE_CONTENT_DELETE_FAILED,
     IngestionStageError,
 )
 from iris.common.logging_config import get_logger
@@ -38,8 +43,10 @@ from ..llm import (
 from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
 from ..vector_database.batch_verify import (
+    confirmed_generations,
+    delete_many_with_retry,
     fetch_with_retry,
-    sweep_other_generations,
+    purge_other_rows,
     write_batch_with_retry,
 )
 from ..vector_database.database import batch_update_lock
@@ -63,6 +70,43 @@ VISION_MAX_ATTEMPTS = 3
 # Reads above this many rows are treated as possibly truncated: the skip-check
 # then re-ingests rather than trusting a partial sample to look complete.
 _SKIP_CHECK_FETCH_LIMIT = 10_000
+
+# After write-then-purge, the unit must hold a single generation. If store
+# corruption leaves a stale generation the id-scoped purge missed, escalate to a
+# total delete + rewrite this many times before failing the run (so it converges
+# or hands off to the reconciler rather than certifying a dirty unit).
+_CONVERGENCE_MAX_ESCALATIONS = 2
+
+# Deterministic language detection: a fixed seed makes langdetect reproducible so
+# the same deck always resolves to the same language across runs.
+DetectorFactory.seed = 0
+# Below this much aggregated deck text, detection is unreliable, so the deck is
+# treated as the default language rather than guessed from a scrap.
+_LANGUAGE_DETECTION_MIN_CHARS = 200
+# Detection reads at most this much text: enough for a confident verdict without
+# feeding a whole book to the detector.
+_LANGUAGE_DETECTION_MAX_CHARS = 10_000
+_DEFAULT_LANGUAGE = "en"
+
+
+def detect_course_language(page_texts: list[str]) -> str:
+    """Detect a deck's dominant language from all of its page text.
+
+    Aggregating every page is what makes this robust: no single slide — a formula
+    page, a code listing, an image with a foreign caption, a near-empty title —
+    can swing the verdict, because the statistical detector sees the whole corpus
+    and returns its dominant language as an ISO 639-1 code. This is not keyed to
+    any content type (nothing about math is special-cased); it simply refuses to
+    judge from one unrepresentative page. Below a minimum amount of text, or when
+    detection fails, it falls back to the default language instead of guessing.
+    """
+    sample = "\n".join(text for text in page_texts if text).strip()
+    if len(sample) < _LANGUAGE_DETECTION_MIN_CHARS:
+        return _DEFAULT_LANGUAGE
+    try:
+        return detect(sample[:_LANGUAGE_DETECTION_MAX_CHARS])
+    except LangDetectException:
+        return _DEFAULT_LANGUAGE
 
 
 _UNICODE_BULLETS = (
@@ -229,9 +273,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 if not force_reingest and not self.check_if_attachment_needs_update(
                     doc.page_count
                 ):
-                    self.course_language = self.get_course_language(
-                        doc.load_page(min(5, doc.page_count - 1)).get_text()
-                    )
+                    self.course_language = self._resolve_course_language(doc)
                     self.restore_display_page_numbers_from_existing_chunks()
                     self.skipped = True
                     self.callback.update()
@@ -390,6 +432,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                     LectureUnitPageChunkSchema.PAGE_VERSION.value,
                     LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
                 ],
             )
         ).objects
@@ -411,6 +454,17 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 LectureUnitPageChunkSchema.PAGE_VERSION.value
             )
             if version is None or version != self.dto.lecture_unit.attachment_version:
+                return True
+            # A null display number is legacy data written before the field existed
+            # (or before slide detection). Re-ingest so the current pipeline
+            # repopulates real, reconciled display numbers rather than leaving nulls
+            # that the retrieval UI cannot render.
+            if (
+                chunk.properties.get(
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
+                )
+                is None
+            ):
                 return True
             run_ids.add(
                 chunk.properties.get(LectureUnitPageChunkSchema.INGESTION_RUN_ID.value)
@@ -544,30 +598,87 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return prepared_chunks
 
     def replace_chunks(self, prepared_chunks):
-        """Swap in this run's generation of page chunks: write new, then sweep.
+        """Swap in this run's generation of page chunks: write new, then purge.
 
         All fallible LLM work is done by now. The new generation is inserted
         and verified first, and only then is everything that does not belong
         to this run removed (the previous generation, legacy rows, leftovers
-        of crashed runs). A crash mid-write therefore never destroys the old
-        content: at worst both generations coexist briefly, and the next
-        run's sweep or the structural skip check (which rejects mixed
-        generations) converges the unit.
+        of crashed runs, and index-only ghost rows left by store corruption).
+        The purge keeps exactly the ids this write returned and deletes the rest
+        by unit identity, so a crash mid-write never destroys the old content: at
+        worst both generations coexist briefly, and the next run's purge or the
+        structural skip check (which rejects mixed generations) converges the unit.
         """
         with batch_update_lock:
             # One retry budget for the whole swap: a transient store condition
             # re-submits only the dropped chunks, never the vision/embedding work.
             retry = WeaviateWriteRetry.for_request()
+            written_ids = write_batch_with_retry(
+                self.collection, prepared_chunks, "lecture page chunks", retry=retry
+            )
+            purge_other_rows(
+                self.collection,
+                self._get_page_chunk_filter(),
+                written_ids,
+                "outdated lecture page chunks",
+                retry=retry,
+            )
+            self._converge_to_single_generation(prepared_chunks, retry)
+
+    def _distinct_page_run_ids(self, retry) -> set:
+        """The distinct *real* ingestion generations currently held for this unit.
+
+        Counts only object-store-confirmed generations: an inert ghost generation
+        (visible to a scan but absent from the object store, so unremovable by any
+        delete) must not be mistaken for a coexisting generation, or convergence
+        would escalate pointlessly and then raise a false failure on a unit whose
+        retrievable content is already a single clean generation.
+        """
+        real_generations, _ = confirmed_generations(
+            self.collection,
+            self._get_page_chunk_filter(),
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+            limit=_SKIP_CHECK_FETCH_LIMIT,
+            retry=retry,
+        )
+        return real_generations
+
+    def _converge_to_single_generation(self, prepared_chunks, retry) -> None:
+        """Guarantee the unit ends on exactly this run's generation.
+
+        The id-scoped purge removes every generation the index can see, but store
+        corruption can hide a stale generation whose index visibility flickers, so
+        it can reappear after the purge. When more than one generation is still
+        visible, escalate to the only reliably-total remedy — delete every row for
+        the unit and rewrite this generation from scratch — and re-check. Bounded:
+        a unit that still will not converge fails the run so the reconciler retries
+        rather than certifying a dirty unit.
+        """
+        for escalation in range(_CONVERGENCE_MAX_ESCALATIONS):
+            if len(self._distinct_page_run_ids(retry)) <= 1:
+                return
+            logger.warning(
+                "[%s] Multiple generations still coexist after purge; escalating "
+                "to a full delete-and-rewrite (escalation %d/%d)",
+                self.dto.lecture_unit.lecture_unit_name,
+                escalation + 1,
+                _CONVERGENCE_MAX_ESCALATIONS,
+            )
+            delete_many_with_retry(
+                self.collection,
+                self._get_page_chunk_filter(),
+                "all lecture page chunks (convergence escalation)",
+                retry=retry,
+            )
             write_batch_with_retry(
                 self.collection, prepared_chunks, "lecture page chunks", retry=retry
             )
-            sweep_other_generations(
-                self.collection,
-                self._get_page_chunk_filter(),
-                LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
-                self.dto.lecture_unit.ingestion_run_id,
-                "outdated lecture page chunks",
-                retry=retry,
+        if len(self._distinct_page_run_ids(retry)) > 1:
+            raise IngestionStageError(
+                STALE_CONTENT_DELETE_FAILED,
+                f"Lecture unit {self.dto.lecture_unit.lecture_unit_id} still holds "
+                f"multiple ingestion generations after "
+                f"{_CONVERGENCE_MAX_ESCALATIONS} full-rewrite escalations",
             )
 
     def chunk_data(
@@ -576,21 +687,27 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         lecture_unit_slide_dto: LectureUnitPageDTO = None,
         base_url: str = None,
     ):  # pylint: disable=arguments-renamed
-        """
-        Chunk the data from the lecture into smaller pieces
+        """Chunk the lecture into smaller pieces.
+
+        Vision reads each slide independently, so the printed page number comes
+        back per page (or -1 when none is legible). The raw numbers are collected
+        across the whole deck first, then reconciled into a consistent sequence
+        (see :meth:`_reconcile_display_page_numbers`) before the chunks are built,
+        so a missing or misread number is inferred from its neighbours rather than
+        stored as -1.
         """
         doc = fitz.open(lecture_pdf)
-        self.course_language = self.get_course_language(
-            doc.load_page(min(5, doc.page_count - 1)).get_text()
-        )
-        data = []
+        self.course_language = self._resolve_course_language(doc)
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512, chunk_overlap=102
         )
         prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
         logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
+
+        # Phase 1: vision per page — collect the merged text and the raw slide number.
+        pages: list[tuple[int, str]] = []
+        raw_display_numbers: list[int] = []
         old_page_text = ""
-        display_page_numbers: list[int] = []
         for page_num in range(doc.page_count):
             self.callback.update(
                 stage_name="vision",
@@ -610,13 +727,23 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 lecture_unit_slide_dto.lecture_name,
                 self.course_language,
             )
-            display_page_numbers.append(vision_result.display_page_number)
+            raw_display_numbers.append(vision_result.display_page_number)
 
             if vision_result.academic_description:
                 page_text = self.merge_page_content_and_image_interpretation(
                     page_text, vision_result.academic_description
                 )
+            pages.append((page_num, page_text))
+            old_page_text = page_text
 
+        # Phase 2: reconcile the independently-read numbers into a consistent sequence.
+        display_page_numbers = self._reconcile_display_page_numbers(raw_display_numbers)
+
+        # Phase 3: build the chunks with the reconciled numbers.
+        data = []
+        for (page_num, page_text), display_page_number in zip(
+            pages, display_page_numbers
+        ):
             page_splits = text_splitter.create_documents([page_text])
             data.extend(
                 create_page_data(
@@ -625,15 +752,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     lecture_unit_slide_dto,
                     self.course_language,
                     base_url,
-                    vision_result.display_page_number,
+                    display_page_number,
                     self._hidden_until_by_page.get(page_num + 1),
                 )
             )
-            old_page_text = page_text
         if lecture_unit_slide_dto is not None:
             lecture_unit_slide_dto.display_page_numbers = display_page_numbers
             logger.info(
-                "%s Display page numbers: %s",
+                "%s Display page numbers (reconciled): %s",
                 prefix,
                 display_page_numbers,
             )
@@ -644,6 +770,73 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             doc.page_count,
         )
         return data
+
+    @staticmethod
+    def _reconcile_display_page_numbers(raw_numbers: list[int]) -> list[int]:
+        """Turn independently-read slide numbers into a consistent sequence.
+
+        Vision reads each slide in isolation, so a printed number can come back
+        missing (-1) or simply wrong — a figure label or a "Lecture 6" footer read
+        as the page number. Printed numbers almost always track the physical page
+        index by a constant offset (title/agenda slides shift where numbering
+        starts), so when a strict majority of the read pages agree on one offset
+        that offset is the deck's true numbering and every page is snapped to it.
+        That single step both fills the -1 gaps and corrects the confident-but-wrong
+        reads (e.g. the scattered "6"s) using exactly the "what should this page be
+        given its neighbours" rule. When no offset commands a majority (irregular or
+        genuinely restarting numbering) the confident reads are trusted and only the
+        -1 gaps are filled by interpolating between the nearest read neighbours. With
+        nothing legible at all, it falls back to the sequential page number.
+        """
+        total = len(raw_numbers)
+        read = {
+            index: number
+            for index, number in enumerate(raw_numbers)
+            if isinstance(number, int) and number > 0
+        }
+        if not read:
+            return [index + 1 for index in range(total)]
+
+        offset_counts = Counter(number - (index + 1) for index, number in read.items())
+        dominant_offset, dominant_count = offset_counts.most_common(1)[0]
+
+        # A strict majority of read pages agreeing on one offset means the deck is
+        # numbered by that constant offset; snap every page to it, which both fills
+        # the -1 gaps and overrides the minority of misread pages (the "6"s). A
+        # negative offset (title/agenda slides before printed "page 1") makes the
+        # front-matter pages snap to <=0; those slides carry no printed number, so
+        # record -1 ("unknown") rather than an invalid or duplicate page number.
+        if dominant_count * 2 > len(read):
+            return [
+                snapped if (snapped := index + 1 + dominant_offset) > 0 else -1
+                for index in range(total)
+            ]
+
+        read_indices = sorted(read)
+
+        reconciled: list[int] = []
+        for index in range(total):
+            if index in read:
+                reconciled.append(read[index])
+                continue
+            position = bisect.bisect_left(read_indices, index)
+            left = read_indices[position - 1] if position > 0 else None
+            right = read_indices[position] if position < len(read_indices) else None
+            if (
+                left is not None
+                and right is not None
+                and read[right] - read[left] == right - left
+            ):
+                # A clean linear run brackets the gap: interpolate from the left.
+                reconciled.append(read[left] + (index - left))
+            else:
+                # Edge gap or an offset jump nearby: use the deck's dominant offset.
+                reconciled.append(index + 1 + dominant_offset)
+        # Never persist a non-positive number: fall back to the sequential index.
+        return [
+            number if isinstance(number, int) and number > 0 else index + 1
+            for index, number in enumerate(reconciled)
+        ]
 
     def interpret_image(
         self,
@@ -751,22 +944,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
         return clean_output
 
-    def get_course_language(self, page_content: str) -> str:
+    def _resolve_course_language(self, doc) -> str:
+        """Resolve the language for slide descriptions: authoritative, then robust.
+
+        Order of trust: the course's declared language from Artemis when present
+        (the authoritative source — a course's real language never depends on what
+        a slide happens to contain); otherwise a statistical detection over the
+        whole deck (:func:`detect_course_language`), which is robust to any single
+        unrepresentative page; and the default language as the floor. It never
+        infers the language from one page and never special-cases content.
         """
-        Translate the student query to the course language. For better retrieval.
-        """
-        prompt = (
-            f"You will be provided a chunk of text, respond with the language of the text. Do not respond with "
-            f"anything else than the language.\nHere is the text: \n{page_content}"
+        declared = (self.dto.lecture_unit.course_language or "").strip()
+        if declared:
+            return declared
+        return detect_course_language(
+            [doc.load_page(index).get_text() for index in range(doc.page_count)]
         )
-        iris_message = PyrisMessage(
-            sender=IrisMessageRole.SYSTEM,
-            contents=[TextMessageContentDTO(text_content=prompt)],
-        )
-        response = self.llm_chat.chat(
-            [iris_message],
-            CompletionArguments(temperature=0),
-            tools=[],
-        )
-        self._append_tokens(response.token_usage, PipelineEnum.IRIS_LECTURE_INGESTION)
-        return response.contents[0].text_content

@@ -26,6 +26,11 @@ class LectureUnitPageDTO(BaseModel):
     course_id: int = Field(alias="courseId")
     course_name: str = Field(default="", alias="courseName")
     course_description: str = Field(default="", alias="courseDescription")
+    # The course's declared language of instruction, when Artemis knows it. This is
+    # the authoritative source; ingestion only detects a language from slide text
+    # when this is absent, so a course's real language never depends on what any
+    # single slide happens to contain (math, code, images, a foreign quotation).
+    course_language: Optional[str] = Field(default=None, alias="courseLanguage")
     video_link: str = Field(default="", alias="videoLink")
     video_source_type: VideoSourceType = Field(
         default=VideoSourceType.TUM_LIVE, alias="videoSourceType"

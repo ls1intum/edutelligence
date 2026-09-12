@@ -129,6 +129,7 @@ def test_metadata_baseline_is_captured_before_transcription_processing():
         video_link="video-link",
         content_fingerprint=None,
         chunk_counts_by_page=None,
+        pdf_page_count=None,
         quality_score=None,
         quality_flags=None,
     )

@@ -18,6 +18,7 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         lecture_unit_id=13,
         display_page_numbers=None,
         force_reingest=False,
+        course_language="en",
     )
     pipeline.dto = SimpleNamespace(
         lecture_unit=lecture_unit,
@@ -40,6 +41,9 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         properties={
             LectureUnitPageChunkSchema.PAGE_VERSION.value: 7,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
+            # A non-null display number keeps the unit skippable; a null one would
+            # (correctly) force a re-ingest to repopulate it.
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
         }
     )
     existing_chunks = [

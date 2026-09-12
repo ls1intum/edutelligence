@@ -517,10 +517,14 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
         SimpleNamespace(uuid=_ROW_UUID, properties=stored_properties)
     ]
     pipeline.lecture_unit_collection.data.insert.return_value = _ROW_UUID
+    pipeline.lecture_unit_collection.data.delete_many.return_value = SimpleNamespace(
+        failed=0, matches=0, successful=0
+    )
     lecture_unit = SimpleNamespace(
         course_id=30,
         course_name="Course",
         course_description="Description",
+        course_language="en",
         lecture_id=20,
         lecture_name="Lecture",
         lecture_unit_id=10,
@@ -532,6 +536,7 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
         content_fingerprint=None,
         ingestion_run_id="run-x",
         expected_chunk_counts_json=None,
+        pdf_page_count=3,
         pipeline_version=1,
         quality_score=None,
         quality_flags_json=None,
@@ -589,10 +594,14 @@ def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_starte
         objects=[SimpleNamespace(uuid=_ROW_UUID, properties=new_properties)]
     )
     pipeline.lecture_unit_collection.data.insert.return_value = _ROW_UUID
+    pipeline.lecture_unit_collection.data.delete_many.return_value = SimpleNamespace(
+        failed=0, matches=0, successful=0
+    )
     lecture_unit = SimpleNamespace(
         course_id=30,
         course_name="Course",
         course_description="Description",
+        course_language="en",
         lecture_id=20,
         lecture_name="Lecture",
         lecture_unit_id=10,
@@ -604,6 +613,7 @@ def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_starte
         content_fingerprint=None,
         ingestion_run_id="run-x",
         expected_chunk_counts_json=None,
+        pdf_page_count=3,
         pipeline_version=1,
         quality_score=None,
         quality_flags_json=None,
@@ -646,6 +656,7 @@ def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fail
         course_id=30,
         course_name="Course",
         course_description="Description",
+        course_language="en",
         lecture_id=20,
         lecture_name="Lecture",
         lecture_unit_id=10,
@@ -657,6 +668,7 @@ def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fail
         content_fingerprint=None,
         ingestion_run_id="run-x",
         expected_chunk_counts_json=None,
+        pdf_page_count=3,
         pipeline_version=1,
         quality_score=None,
         quality_flags_json=None,

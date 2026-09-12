@@ -125,6 +125,15 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
         )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.COURSE_LANGUAGE.value,
+                description="The language of the course",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
         for ledger_property in _ledger_properties():
             _add_property_if_missing(collection, ledger_property)
         return collection
