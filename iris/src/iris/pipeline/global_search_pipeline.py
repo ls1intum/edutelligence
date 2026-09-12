@@ -481,6 +481,15 @@ class GlobalSearchPipeline(SubPipeline):
             )
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
+        # Retrieval outcome decides the task: pointer-tier sources were
+        # admitted from below the floor because nothing answers the question,
+        # so there is nothing to answer FROM, only material to direct the
+        # student TO. An above-floor entity card is a real answer source (its
+        # details often ARE the answer) and stays with the grounded prompt.
+        all_pointers = all(
+            isinstance(s, EntitySourceDTO) and s.via_pointer_tier
+            for s in grounded_sources
+        )
         raw = self._generate_answer(
             query,
             grounded_sources,
