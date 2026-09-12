@@ -34,8 +34,11 @@ export const AVG_UNIT: Record<TimePreset, string> = {
   year: 'avg / month',
 };
 
-export function calendarRange(preset: TimePreset, offset: number): CalendarRange {
-  const now = new Date();
+export function calendarRange(
+  preset: TimePreset,
+  offset: number,
+  now: Date = new Date(),
+): CalendarRange {
   let currStart: Date, currEnd: Date, prevStart: Date, prevEnd: Date;
 
   switch (preset) {
@@ -90,6 +93,47 @@ export function calendarRange(preset: TimePreset, offset: number): CalendarRange
   }
 
   return { currStart: currStart!, currEnd: currEnd!, prevStart: prevStart!, prevEnd: prevEnd! };
+}
+
+/**
+ * The start of the period a preset+offset denotes at `nowMs` — the instant
+ * that pins the period (local midnight for a day, the Monday for a week, the
+ * first of the month for a month, January 1 for a year).
+ *
+ * Two instants denote the same period iff they agree here, so the start
+ * doubles as the period's identity. That is what makes the rollover test
+ * below a single comparison instead of a switch over the presets.
+ */
+export function periodStartMs(preset: TimePreset, offset: number, nowMs: number): number {
+  return calendarRange(preset, offset, new Date(nowMs)).currStart.getTime();
+}
+
+/**
+ * Whether the period a preset+offset denotes at `nowMs` is a different
+ * calendar unit than the one it denoted at `anchorMs` — that is, whether the
+ * calendar rolled over (midnight, a Monday, the first of a month, January 1)
+ * while a range resolved from `anchorMs` was still on screen.
+ *
+ * `customRangeActive` short-circuits to false: a range the user picked by
+ * hand is pinned exactly where they put it, and the calendar moving underneath
+ * it is no reason to drag them out of the window they chose.
+ *
+ * The rolling preset (`30d`) is deliberately excluded: its range is anchored
+ * to the instant it was picked, so `periodStartMs` moves with `nowMs` on
+ * every comparison and would report a rollover on every tick. "Last 30 days"
+ * names no calendar unit, so there is nothing for it to roll into — the
+ * window keeps the start it was picked with and only grows its end.
+ */
+export function periodRolloverDue(
+  preset: TimePreset,
+  offset: number,
+  anchorMs: number,
+  nowMs: number,
+  customRangeActive: boolean,
+): boolean {
+  if (customRangeActive) return false;
+  if (preset === '30d') return false;
+  return periodStartMs(preset, offset, anchorMs) !== periodStartMs(preset, offset, nowMs);
 }
 
 export function periodLabel(preset: TimePreset, offset: number, range: CalendarRange): string {

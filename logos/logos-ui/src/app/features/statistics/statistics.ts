@@ -37,7 +37,7 @@ import {
 } from './statistics.utils';
 
 import {
-  TimePreset, calendarRange, periodLabel as periodLabelFn,
+  TimePreset, calendarRange, periodLabel as periodLabelFn, periodRolloverDue,
 } from '../../shared/utils/time-range';
 import { formatUsd } from '../../shared/utils/currency';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
@@ -127,6 +127,12 @@ export class Statistics implements OnInit, OnDestroy {
   // not be a narrower truth — it would be no data at all.
   readonly filterUserId = signal<number | null>(null);
   readonly filterTeamId = signal<number | null>(null);
+
+  // Every loadScopeOptions bumps this; a response that resolves for an older
+  // value is stale — its range or team moved on while the request was in
+  // flight, and applying it would replace the options of the current
+  // selection and could clear a requester the fresh list does contain.
+  private scopeOptionsGeneration = 0;
 
   readonly filterActive = computed(
     () => this.filterUserId() !== null || this.filterTeamId() !== null,
@@ -250,7 +256,16 @@ export class Statistics implements OnInit, OnDestroy {
   // ── Preset / time-range-bar state ─────────────────────────────────────────────
   readonly preset = signal<TimePreset>('30d');
   readonly offset = signal(0);
-  readonly presetRange = computed(() => calendarRange(this.preset(), this.offset()));
+  /**
+   * The instant the calendar range on screen was resolved. `presetRange`
+   * resolves from this instead of from "now at first read", so the page
+   * remembers which period it is showing and can notice when the period
+   * moves out from under it — see `handleCalendarRollover`.
+   */
+  private readonly rangeAnchorMs = signal(Date.now());
+  readonly presetRange = computed(() =>
+    calendarRange(this.preset(), this.offset(), new Date(this.rangeAnchorMs())),
+  );
   readonly periodLabel = computed(() =>
     periodLabelFn(this.preset(), this.offset(), this.presetRange()),
   );
@@ -919,7 +934,11 @@ export class Statistics implements OnInit, OnDestroy {
       },
     });
 
-    this.nowInterval = setInterval(() => this.nowMs.set(Date.now()), 30_000);
+    this.nowInterval = setInterval(() => {
+      const now = Date.now();
+      this.nowMs.set(now);
+      this.handleCalendarRollover(now);
+    }, 30_000);
     void this.loadScopeOptions();
   }
 
@@ -984,8 +1003,18 @@ export class Statistics implements OnInit, OnDestroy {
   private async loadScopeOptions(): Promise<void> {
     const cfg = this.wsTimelineConfig();
     const teamId = this.filterTeamId();
+    // Claim this request before the await: any later range or team change
+    // bumps the counter and supersedes whatever this response still carries.
+    const generation = ++this.scopeOptionsGeneration;
     try {
       const options = await this.statisticsService.getScopeOptions(cfg.start, cfg.end, teamId);
+      if (generation !== this.scopeOptionsGeneration) {
+        // A newer request is in flight or already applied — its lists
+        // describe the selection on screen. This one describes the one
+        // before it, and neither its options nor its "the selected requester
+        // is gone" check may touch the current state.
+        return;
+      }
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
 
@@ -1098,13 +1127,29 @@ export class Statistics implements OnInit, OnDestroy {
     this.customRange.set(range);
     this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // The zoomed window holds a different set of requesters and teams than
+    // the range it replaces — and the call supersedes whatever request is
+    // still in flight for the range the operator zoomed away from, so that
+    // stale response can no longer replace the new list or clear a requester
+    // it does not contain.
+    void this.loadScopeOptions();
   }
 
   clearCustomRange(): void {
+    // Back on a preset, the period is resolved from the calendar again —
+    // from *now*, so the anchor that marks the period on screen moves with
+    // it. (Every preset and offset change funnels through here — and the
+    // "back to a preset" button calls this directly, so the dropdown reload
+    // has to live here, not in the callers.)
+    this.rangeAnchorMs.set(Date.now());
     this.customRange.set(null);
     this.resetZoomCounter.update((c) => c + 1);
     this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // Same reason as in setCustomRange: the preset range is a different list
+    // than the custom window it replaces, and the in-flight request for that
+    // window must be superseded.
+    void this.loadScopeOptions();
   }
 
   setPreset(p: TimePreset): void {
@@ -1112,14 +1157,44 @@ export class Statistics implements OnInit, OnDestroy {
     this.offset.set(0);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
-    // The dropdowns list what the range holds, so a different range is a
-    // different list — and possibly one the current selection is not in.
-    void this.loadScopeOptions();
   }
 
   setOffset(o: number): void {
     this.offset.set(o);
     this.clearCustomRange();
+    this.statsWs.setTimelineRange(this.wsTimelineConfig());
+  }
+
+  /**
+   * Re-anchor the range once the period it names has moved on.
+   *
+   * The range is resolved from the calendar when it is picked and then it
+   * sits: the server deliberately keeps the start where the preset put it and
+   * only slides the end to now, so a page that stays open across midnight
+   * keeps counting the previous day's requests under a header that still
+   * says "Today" — the counters never start the new day at zero.
+   *
+   * The page's ticker is its only clock, so it doubles as the rollover
+   * detector: when the period the preset names at the new instant is not the
+   * one the range was resolved from, the moved range is applied exactly as a
+   * picked one — pending flags up, new range to the server, scope dropdowns
+   * reloaded — and the anchor follows it so the next tick compares against
+   * the new period.
+   */
+  private handleCalendarRollover(nowMs: number): void {
+    if (
+      !periodRolloverDue(
+        this.preset(),
+        this.offset(),
+        this.rangeAnchorMs(),
+        nowMs,
+        this.customRange() !== null,
+      )
+    ) {
+      return;
+    }
+    this.rangeAnchorMs.set(nowMs);
+    this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
     void this.loadScopeOptions();
   }
