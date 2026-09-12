@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
-from logos_worker_node.models import LaneConfig, OllamaConfig, ProcessState, ProcessStatus
+from logos_worker_node.models import LaneConfig, ProcessState, ProcessStatus, WorkerConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,7 +71,7 @@ async def test_add_lane_respects_max_lanes(monkeypatch) -> None:
     """add_lane() should raise ValueError when MAX_LANES limit is reached."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15010,
         max_lanes=1,
@@ -91,7 +91,7 @@ async def test_add_lane_unlimited_when_max_lanes_zero(monkeypatch) -> None:
     """max_lanes=0 means unlimited — should not block additions."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15010,
         max_lanes=0,
@@ -107,7 +107,7 @@ async def test_apply_lanes_rejects_exceeding_max_lanes(monkeypatch) -> None:
     """apply_lanes() should raise ValueError when desired count > MAX_LANES."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15010,
         max_lanes=2,
@@ -127,7 +127,7 @@ async def test_apply_lanes_within_max_lanes(monkeypatch) -> None:
     """apply_lanes() should succeed when count <= MAX_LANES."""
     _patch_create_handle(monkeypatch)
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15010,
         max_lanes=3,
@@ -144,5 +144,5 @@ async def test_apply_lanes_within_max_lanes(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_max_lanes_default_zero() -> None:
     """Default max_lanes should be 0 (unlimited)."""
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     assert manager._max_lanes == 0

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -571,7 +573,7 @@ async def test_reclaim_drops_what_the_plan_no_longer_wants(ram_cache_env):
     await cache.ensure_cached(model)
     assert model in cache.cached_models()
 
-    removed = cache.reclaim(keep=set())
+    removed = await cache.reclaim(keep=set())
 
     assert removed == [model]
     assert cache.cached_models() == []
@@ -592,8 +594,103 @@ async def test_reclaim_keeps_what_it_is_told_to(ram_cache_env):
     model = ram_cache_env["model_name"]
     await cache.ensure_cached(model)
 
-    assert cache.reclaim(keep={model}) == []
+    assert await cache.reclaim(keep={model}) == []
     assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_coordinates_with_the_copy_worker(ram_cache_env) -> None:
+    """reclaim now runs on a 60 s tick next to in-flight copies: a copy in
+    flight is left alone (the worker owns its tree — a concurrent rmtree
+    would tear it), and queue entries the plan rejected are dropped, with
+    their completion events released, so the worker does not copy a model
+    the plan just threw away and a waiting lane falls back to disk
+    immediately instead of waiting out its timeout."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    await cache.ensure_cached(model)
+
+    # A second model is queued for a copy that has not started yet; the
+    # plan no longer wants it.
+    queued = "org/not-in-the-plan"
+    event = cache._enqueue(queued, priority=False)  # noqa: SLF001
+    assert queued in cache._cache_queue  # noqa: SLF001
+
+    removed = await cache.reclaim(keep={model})
+
+    assert removed == []  # the kept model survives, the queued one was not cached
+    assert queued not in cache._cache_queue  # noqa: SLF001
+    assert event.is_set()  # the waiter is released and falls back to disk
+    assert cache.is_cached(queued) is False
+
+    # A copy in flight (model marked _caching_now) is spared this pass.
+    cache._caching_now = model  # noqa: SLF001
+    assert await cache.reclaim(keep=set()) == []
+    assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_reclaim_spare_a_reservation_taken_after_the_keep_snapshot(ram_cache_env, monkeypatch):
+    """Regression: the caller computes ``keep`` once, BEFORE the reclaim
+    starts (main.py unions the live cache-use reservations into it exactly
+    once, up front), and the await in ``_get_model_lock`` is a window an
+    executor-thread calibration can use to reserve this very entry afterwards
+    and select the tmpfs path with ``ensure_cached_sync`` — the stale ``keep``
+    still says "evict" for a tree a probe is about to read. The live
+    reference-count re-check under the reservation guard must see the late
+    reservation and spare the model. (The earlier reservation tests only
+    observe the count at selection; they never overlap an in-flight reclaim.)
+    """
+    import asyncio as _asyncio
+
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    await cache.ensure_cached(model)
+    assert model in cache.cached_models()
+
+    # Park reclaim exactly at the await the race goes through: the per-model
+    # lock acquisition — after ``keep`` was already consulted, before the
+    # eviction decision.
+    parked = _asyncio.Event()
+    released = _asyncio.Event()
+    original_get_model_lock = cache._get_model_lock
+
+    async def _parked_get_model_lock(model_name: str):
+        if not parked.is_set():
+            parked.set()
+            await released.wait()
+        return await original_get_model_lock(model_name)
+
+    monkeypatch.setattr(cache, "_get_model_lock", _parked_get_model_lock)
+
+    reclaim_task = _asyncio.create_task(cache.reclaim(keep=set()))
+    await parked.wait()
+    # The calibration side, in a worker thread like the real executor path:
+    # reserve (in _try_start that precedes its ensure_cached_sync selection).
+    await _asyncio.to_thread(cache.reserve_cache_use, model)
+    assert model in cache.cache_use_reservations()
+    released.set()
+    removed = await reclaim_task
+
+    # The late reservation won: the stale ``keep`` said evict, the live
+    # count said hold.
+    assert removed == []
+    assert model in cache.cached_models()
+    assert (Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B").exists()
+
+    # Session over: the next reclaim is free to give the RAM back again, so
+    # the re-check spares live reservations without over-protecting.
+    cache.release_cache_use(model)
+    assert await cache.reclaim(keep=set()) == [model]
+    assert cache.cached_models() == []
 
 
 @pytest.mark.asyncio
@@ -653,3 +750,586 @@ def test_no_floor_configured_leaves_the_decision_to_tmpfs(ram_cache_env, monkeyp
 
     cache.set_host_ram_floor_mb(0.0)
     assert cache._would_starve_host(10**15) == (False, 0)
+
+
+# ---------------------------------------------------------------------------
+# The floor is re-checked for entries that are ALREADY in the cache
+#
+# The copy path checks the host-RAM floor before admitting NEW bytes, but an
+# entry that is already resident in tmpfs is handed out without a copy, so the
+# floor was never re-checked for it. That leaves two windows where a lane can
+# be launched from an entry the current sleep reserve no longer fits: one
+# cached under an earlier, smaller floor (e.g. a startup pre-population), and
+# one whose in-flight copy was admitted under that older floor and has since
+# finished. Both land on the same already-cached branch of ensure_cached.
+# ---------------------------------------------------------------------------
+
+
+def _prime_cached_entry(cache, model: str, monkeypatch) -> None:
+    """Copy *model* into the cache under a floor of 0 (as a startup
+    pre-population would), so the tests can then raise the floor and re-check
+    the already-resident entry."""
+    cache.set_host_ram_floor_mb(0.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        lambda: 400_000 * 1024 * 1024,
+    )
+    assert cache.ensure_cached_sync(model) == str(cache._cache_hub.parent)
+    assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_already_cached_entry_is_served_from_disk_when_the_floor_rises_past_it(ram_cache_env, monkeypatch):
+    """Regression: an entry already in tmpfs is now re-checked against the live
+    floor before it is handed to a lane. Once the re-plan has raised the sleep
+    reserve past it (the host is already below the floor with the entry in
+    place), the lane loads from the source HF_HOME instead of the tmpfs entry —
+    serving it from the entry would protect the entry (the lane reads it) and
+    leave the lane's first sleep short of planned host RAM."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    # The re-plan has since raised the sleep reserve; the host is now under it
+    # with the (12 MB) entry resident.
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: 50 * 1024 * 1024)
+
+    result = await cache.ensure_cached(model)
+
+    # Served from the source HF_HOME, not the over-floor tmpfs entry.
+    assert result == str(Path(ram_cache_env["source_hf"]).parent)
+    # Nothing evicted the entry — it is still in the cache, and is now
+    # evictable because the lane did not launch from it.
+    assert model in cache.cached_models()
+
+
+@pytest.mark.asyncio
+async def test_already_cached_entry_served_from_cache_when_host_above_floor(ram_cache_env, monkeypatch):
+    """The re-check must not over-reject: it gates on the host being BELOW the
+    floor, not on the entry's size. A host at or above the floor still serves
+    the already-cached model from the tmpfs cache."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        lambda: 150_000 * 1024 * 1024,
+    )
+
+    assert await cache.ensure_cached(model) == str(Path(ram_cache_env["tmpfs"]))
+
+
+@pytest.mark.asyncio
+async def test_already_cached_entry_floor_check_fails_open_without_meminfo(ram_cache_env, monkeypatch):
+    """Like the copy path, the already-cached re-check fails open: a set floor
+    with no /proc/meminfo read leaves the entry to be served from the cache,
+    exactly as before the floor existed."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: None)
+
+    assert await cache.ensure_cached(model) == str(Path(ram_cache_env["tmpfs"]))
+
+
+def test_ensure_cached_sync_rechecks_the_floor_for_an_already_cached_entry(ram_cache_env, monkeypatch):
+    """The sync path (used by calibration) applies the same re-check to an
+    already-resident entry."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _prime_cached_entry(cache, model, monkeypatch)
+
+    cache.set_host_ram_floor_mb(100_000.0)
+    monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: 50 * 1024 * 1024)
+
+    assert cache.ensure_cached_sync(model) == str(Path(ram_cache_env["source_hf"]).parent)
+    assert model in cache.cached_models()
+
+
+# ---------------------------------------------------------------------------
+# The floor is re-checked when the copy COMPLETES in the same call
+#
+# The pre-copy check is a snapshot: the re-plan runs on a tick and after
+# every lane sleep, so the sleep reserve can rise while a multi-minute rsync
+# is running. The copy then lands under the raised reserve, and the call
+# that admitted it must not hand the over-floor entry to the lane — serving
+# it from the entry would protect the entry (the lane reads it) and leave
+# the lane's first sleep short of planned host RAM.
+# ---------------------------------------------------------------------------
+
+
+def _copy_with_floor_raised_midway(cache, monkeypatch, available_after: int) -> None:
+    """Wrap the copy so the re-plan raises the sleep reserve while it runs:
+    the pre-copy check sees a roomy host under a zero floor, the copy starts,
+    the floor jumps to 100 GB, and the copy finishes."""
+    cache.set_host_ram_floor_mb(0.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        lambda: 400_000 * 1024 * 1024,
+    )
+    original_copy = cache._copy_model
+
+    async def copy_then_raise_floor(model_name: str) -> bool:
+        cache.set_host_ram_floor_mb(100_000.0)
+        monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: available_after)
+        return await original_copy(model_name)
+
+    monkeypatch.setattr(cache, "_copy_model", copy_then_raise_floor)
+
+
+def _copy_sync_with_floor_raised_midway(cache, monkeypatch, available_after: int) -> None:
+    """Sync counterpart of _copy_with_floor_raised_midway (calibration path)."""
+    cache.set_host_ram_floor_mb(0.0)
+    monkeypatch.setattr(
+        "logos_worker_node.model_cache._host_ram_available_bytes",
+        lambda: 400_000 * 1024 * 1024,
+    )
+    original_copy = cache._copy_model_sync
+
+    def copy_sync_then_raise_floor(model_name: str) -> bool:
+        cache.set_host_ram_floor_mb(100_000.0)
+        monkeypatch.setattr("logos_worker_node.model_cache._host_ram_available_bytes", lambda: available_after)
+        return original_copy(model_name)
+
+    monkeypatch.setattr(cache, "_copy_model_sync", copy_sync_then_raise_floor)
+
+
+@pytest.mark.asyncio
+async def test_floor_raised_during_the_copy_is_served_from_disk(ram_cache_env, monkeypatch):
+    """Regression: the pre-copy floor check is a snapshot, and the re-plan
+    can raise the sleep reserve while the copy runs. Once the copy completes
+    under the raised reserve (the host is below the floor with the entry in
+    place), the lane loads from the source HF_HOME instead of the tmpfs entry
+    — serving it from the entry would protect it and leave the lane's first
+    sleep short of planned host RAM. The just-landed copy is evicted at once
+    as well: the re-plan that raised the floor skipped the in-flight copy
+    (_caching_now), and nothing re-plans when the copy lands, so leaving the
+    tree resident would keep it eating the sleep reserve until the next
+    60 s tick."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _copy_with_floor_raised_midway(cache, monkeypatch, available_after=50 * 1024 * 1024)
+
+    result = await cache.ensure_cached(model)
+
+    assert result == str(Path(ram_cache_env["source_hf"]).parent)
+    assert model not in cache.cached_models()
+    assert not (Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B").exists()
+
+
+@pytest.mark.asyncio
+async def test_copy_completed_under_a_reserve_the_host_still_clears_serves_the_cache(ram_cache_env, monkeypatch):
+    """The post-copy re-check must not over-reject: it gates on the host
+    being BELOW the floor with the entry resident, not on the floor having
+    changed at all. A raised reserve the host still clears serves the cache."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _copy_with_floor_raised_midway(cache, monkeypatch, available_after=150_000 * 1024 * 1024)
+
+    result = await cache.ensure_cached(model)
+
+    assert result == str(Path(ram_cache_env["tmpfs"]))
+    assert model in cache.cached_models()
+
+
+def test_ensure_cached_sync_rechecks_the_floor_after_its_own_copy(ram_cache_env, monkeypatch):
+    """The sync path (used by calibration) applies the same re-check when the
+    reserve rises while its copy runs, and evicts the just-landed tree at
+    once (see test_floor_raised_during_the_copy_is_served_from_disk). The
+    caller's own cache-use reservation does not pin the tree: it is
+    provisional, and calibration releases it the moment this call hands back
+    the source path."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    _copy_sync_with_floor_raised_midway(cache, monkeypatch, available_after=50 * 1024 * 1024)
+
+    result = cache.ensure_cached_sync(model)
+
+    assert result == str(Path(ram_cache_env["source_hf"]).parent)
+    assert model not in cache.cached_models()
+    assert not (Path(ram_cache_env["tmpfs"]) / "hub" / "models--Qwen--Qwen2.5-7B").exists()
+
+
+@pytest.mark.asyncio
+async def test_floor_raised_mid_background_copy_evicts_before_completion_is_signaled(ram_cache_env, monkeypatch):
+    """Interleaving regression: a reactive re-plan raises the floor while the
+    background copy is in flight. reclaim() deliberately skips _caching_now
+    (the worker owns the half-written tree), so that re-plan cannot evict
+    mid-copy — and when the copy lands, clearing _caching_now fires no
+    re-plan of its own. Without the post-copy evict, the just-landed tree
+    would sit in tmpfs and _cached_models, eating the sleep reserve, until
+    the next 60 s tick, and a lane may sleep into exactly that window. The
+    post-copy check must evict the completed entry BEFORE the worker signals
+    completion: a waiter woken by the event has to find the tree already
+    gone, not merely evicted by a later tick. (On the code that only returned
+    the source path, the tree was still present at the moment of the signal.)
+    """
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    cache._total_tmpfs_bytes = lambda: 0
+    model = ram_cache_env["model_name"]
+    tree = Path(ram_cache_env["tmpfs"]) / "hub" / _hf_model_dir_name(model)
+    _copy_with_floor_raised_midway(cache, monkeypatch, available_after=50 * 1024 * 1024)
+
+    # Observe the tree at the exact moment the worker signals completion —
+    # the moment a waiter such as wait_for_cached is woken.
+    event = cache._ensure_completion_event(model)  # noqa: SLF001
+    original_set = event.set
+    at_signal: dict[str, bool] = {}
+
+    def _record_then_set() -> None:
+        at_signal["tree_present"] = tree.exists()
+        original_set()
+
+    monkeypatch.setattr(event, "set", _record_then_set)
+
+    cache.start_background_caching([model])
+    got = await cache.wait_for_cached(model)
+
+    assert at_signal["tree_present"] is False, (
+        "the over-floor copy must be evicted before completion is signaled — "
+        "until the next re-plan tick it would eat the sleep reserve a lane "
+        "may sleep into"
+    )
+    assert got is False  # the waiter falls back to disk
+    assert model not in cache.cached_models()
+    assert not tree.exists()
+    await cache.stop_background_caching()
+
+
+def test_cache_use_reservation_is_reference_counted(ram_cache_env):
+    """The re-plan protects the entries of lanes that read the cache, but
+    calibration reads its entry with no lane handle behind it — the reservation
+    is what pins the tree for the whole calibration session. Reference counting
+    keeps an overlapping use (a re-run of the session) from un-reserving the
+    other, and a stray release must not corrupt the count."""
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    model = ram_cache_env["model_name"]
+
+    assert cache.cache_use_reservations() == set()
+    cache.reserve_cache_use(model)
+    assert cache.cache_use_reservations() == {model}
+    # Overlapping uses: the first release keeps the entry reserved.
+    cache.reserve_cache_use(model)
+    cache.release_cache_use(model)
+    assert cache.cache_use_reservations() == {model}
+    cache.release_cache_use(model)
+    assert cache.cache_use_reservations() == set()
+    # A release with no matching reservation is a no-op, not an error.
+    cache.release_cache_use(model)
+    assert cache.cache_use_reservations() == set()
+
+
+def test_disabled_cache_treats_cache_use_reservations_as_noop():
+    """The stand-in the worker uses when tmpfs caching is off must accept the
+    same reserve/release calls (calibration does not special-case it)."""
+    cache = create_model_cache(tmpfs_path=None, hf_home="/unused")
+
+    assert cache.cache_use_reservations() == set()
+    cache.reserve_cache_use("org/m")
+    cache.release_cache_use("org/m")
+    cache.release_cache_use("org/m")
+    assert cache.cache_use_reservations() == set()
+
+
+# ---------------------------------------------------------------------------
+# Writer-lock coordination between the sync (calibration) and async
+# (background worker) copy paths — one per-model lock, one writer at a time
+# ---------------------------------------------------------------------------
+
+
+async def test_ensure_cached_sync_waits_for_an_inflight_background_copy(ram_cache_env, monkeypatch):
+    """Regression [high] (background-first interleaving): when the background
+    worker already owns the model's copy — here, actively copying it — the
+    synchronous calibration path must not start a second writer for the same
+    <model>.partial tree (both implementations delete, write and rename it).
+    It waits for the existing attempt through the per-model writer lock,
+    then serves the completed copy."""
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    copy_calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_copy(model_name):
+        nonlocal copy_calls
+        copy_calls += 1
+        started.set()
+        await release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    sync_copy_calls = 0
+
+    def sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model", slow_copy)
+    monkeypatch.setattr(cache, "_copy_model_sync", sync_copy)
+    # Deterministic admission: zero tmpfs size zeroes the safety floor, so
+    # the worker admits the copy no matter how full the test disk is (the
+    # real mount is 400 GB of a 503 GB host; a nearly-full test disk would
+    # otherwise make the worker reject before the copy starts).
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    cache.start_background_caching([model])
+    await started.wait()  # the worker holds the writer lock while copying
+
+    result: list[str] = []
+    thread = threading.Thread(target=lambda: result.append(cache.ensure_cached_sync(model)))
+    thread.start()
+    # The sync path enters while the background copy is in flight: it must
+    # wait for the existing attempt, not write a second partial tree.
+    release.set()
+    assert await asyncio.to_thread(thread.join, 30) is None
+    hf_home = result[0]
+
+    assert hf_home == ram_cache_env["tmpfs"]
+    assert cache.is_cached(model)
+    assert copy_calls == 1
+    assert sync_copy_calls == 0
+    await cache.stop_background_caching()
+
+
+async def test_ensure_cached_sync_serves_from_source_when_the_worker_outlives_the_wait(ram_cache_env, monkeypatch):
+    """Regression [high] (background-first interleaving, timeout bound): when
+    the worker's copy outlives SYNC_BACKGROUND_WAIT_TIMEOUT_S, the sync path
+    gives up waiting and serves from the source — it must not start its own
+    copy behind the worker's back, and the timed-out acquisition must not
+    leak the writer lock: once the worker's copy lands, a subsequent writer
+    and reclaim (both of which take the same per-model lock) must complete
+    instead of blocking forever behind the abandoned waiter."""
+    monkeypatch.setattr("logos_worker_node.model_cache.SYNC_BACKGROUND_WAIT_TIMEOUT_S", 0.2)
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    copy_calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_copy(model_name):
+        nonlocal copy_calls
+        copy_calls += 1
+        started.set()
+        await release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    sync_copy_calls = 0
+
+    def sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model", slow_copy)
+    monkeypatch.setattr(cache, "_copy_model_sync", sync_copy)
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    cache.start_background_caching([model])
+    await started.wait()  # the worker holds the writer lock while copying
+
+    result: list[str] = []
+    thread = threading.Thread(target=lambda: result.append(cache.ensure_cached_sync(model)))
+    thread.start()
+    # The sync path must give up after the (short) wait while the worker
+    # still owns the model, and must not start a competing copy.
+    assert await asyncio.to_thread(thread.join, 30) is None
+    hf_home = result[0]
+    release.set()
+
+    assert hf_home == str(Path(ram_cache_env["source_hf"]).parent)
+    assert sync_copy_calls == 0
+    assert copy_calls == 1  # the worker's attempt is the only copy
+
+    # Let the worker's copy land, then prove the timed-out acquisition did
+    # not leave the lock wedged: a subsequent worker-side writer and reclaim
+    # both take the same per-model lock and must complete (a leaked waiter
+    # would hold it forever — the wait_for bounds catch that as a hang).
+    for _ in range(100):
+        if cache.is_cached(model):
+            break
+        await asyncio.sleep(0.05)
+    assert cache.is_cached(model)
+    hf_home = await asyncio.wait_for(cache.ensure_cached(model), 10)
+    assert hf_home == ram_cache_env["tmpfs"]
+    reclaimed = await asyncio.wait_for(cache.reclaim(set()), 10)
+    assert reclaimed == [model]
+    await cache.stop_background_caching()
+
+
+async def test_background_copy_waits_for_an_inflight_synchronous_copy(ram_cache_env, monkeypatch):
+    """The single per-model writer lock in the other direction: the async
+    path (background worker / lane) must not start a copy while a
+    synchronous calibration copy owns the model — it waits for the writer
+    lock and then serves the completed copy."""
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    # The worker exists before any calibration can run in the app; the sync
+    # path takes the writer lock on its loop only when the worker exists.
+    cache.start_background_caching([])
+    started = threading.Event()
+    release = threading.Event()
+    sync_copy_calls = 0
+
+    def slow_sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        started.set()
+        release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    async_copy_calls = 0
+
+    async def async_copy(model_name):
+        nonlocal async_copy_calls
+        async_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model_sync", slow_sync_copy)
+    monkeypatch.setattr(cache, "_copy_model", async_copy)
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    thread = threading.Thread(target=lambda: cache.ensure_cached_sync(model))
+    thread.start()
+    # Blocking wait in a worker thread: the sync copy takes the writer lock
+    # ON this loop, so the loop must keep running while we wait for it.
+    assert await asyncio.to_thread(started.wait, 10)  # the sync copy holds the writer lock
+
+    path_task = asyncio.create_task(cache.ensure_cached(model))
+    # The async path enters while the sync copy is in flight: it must wait
+    # for the lock, not write a second partial tree.
+    release.set()
+    hf_home = await path_task
+    assert await asyncio.to_thread(thread.join, 10) is None
+
+    assert hf_home == ram_cache_env["tmpfs"]
+    assert cache.is_cached(model)
+    assert sync_copy_calls == 1
+    assert async_copy_calls == 0
+    await cache.stop_background_caching()
+
+
+async def test_abandoned_timeout_releases_the_lock_when_the_writer_lands_after_giving_up(ram_cache_env, monkeypatch):
+    """Regression [high] (the cancellation-propagation interleaving): the
+    writer's release lands AFTER the sync path's timeout cleanup has
+    returned, so the abandoned acquisition — whose cancellation the old
+    future.cancel() could not prove to have reached before the lock was
+    handed out — acquires the lock on the way out. With cancel(), the task
+    then completes with the destination already cancelled, its result is
+    discarded, and no release branch runs; only the completion callback
+    releases it. Later writers must still complete: a worker-side
+    ensure_cached, a fresh synchronous calibration copy, and reclaim all
+    take the same per-model lock, so a wedged lock hangs every one of
+    them."""
+    monkeypatch.setattr("logos_worker_node.model_cache.SYNC_BACKGROUND_WAIT_TIMEOUT_S", 0.2)
+    model = ram_cache_env["model_name"]
+    cache = ModelRamCache(
+        tmpfs_path=ram_cache_env["tmpfs"],
+        source_hf_hub_path=ram_cache_env["source_hf"],
+    )
+    copy_calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_copy(model_name):
+        nonlocal copy_calls
+        copy_calls += 1
+        started.set()
+        await release.wait()
+        target = cache._cache_hub / _hf_model_dir_name(model_name)  # noqa: SLF001
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    sync_copy_calls = 0
+
+    def sync_copy(model_name):
+        nonlocal sync_copy_calls
+        sync_copy_calls += 1
+        return True
+
+    monkeypatch.setattr(cache, "_copy_model", slow_copy)
+    monkeypatch.setattr(cache, "_copy_model_sync", sync_copy)
+    cache._total_tmpfs_bytes = lambda: 0  # noqa: SLF001
+
+    cache.start_background_caching([model])
+    await started.wait()  # the worker holds the writer lock while copying
+
+    result: list[str] = []
+    thread = threading.Thread(target=lambda: result.append(cache.ensure_cached_sync(model)))
+    thread.start()
+    # The sync path times out on the (shortened) lock wait and serves from
+    # the source while the worker still owns the model.
+    assert await asyncio.to_thread(thread.join, 30) is None
+    assert result[0] == str(Path(ram_cache_env["source_hf"]).parent)
+    assert sync_copy_calls == 0
+
+    # The writer's release lands AFTER the timeout cleanup has returned: the
+    # abandoned acquisition is still queued and takes the lock as the
+    # worker's copy completes — the interleaving cancel() could not order
+    # against.
+    release.set()
+    for _ in range(100):
+        if cache.is_cached(model):
+            break
+        await asyncio.sleep(0.05)
+    assert cache.is_cached(model)
+
+    # Later writers must still complete (the wait_for bounds turn a wedged
+    # lock into a failure instead of a hang).
+    assert await asyncio.wait_for(cache.ensure_cached(model), 10) == ram_cache_env["tmpfs"]
+    assert await asyncio.wait_for(asyncio.to_thread(cache.ensure_cached_sync, model), 10) == ram_cache_env["tmpfs"]
+    assert await asyncio.wait_for(cache.reclaim(set()), 10) == [model]
+    await cache.stop_background_caching()
