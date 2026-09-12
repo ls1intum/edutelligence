@@ -2446,6 +2446,20 @@ async def _streaming_response(
                                             "stream": True,
                                             "stream_options": {"include_usage": True},
                                         }
+                                    # The failed node no longer holds the
+                                    # lane — hand its slot back *before*
+                                    # awaiting the takeover's scheduling.
+                                    # The resume may need exactly the capacity
+                                    # this slot still holds (single-node,
+                                    # single-slot model: waiting on itself
+                                    # until the queue times out), and the
+                                    # facade keys its active ledger by
+                                    # request ID: a release after the
+                                    # takeover registered under the same ID
+                                    # would pop the takeover's row, leak the
+                                    # peer's active count, and make its final
+                                    # release a swallowed KeyError.
+                                    _release_slot(*slots.pop())
                                     resumed_ctx = await _schedule_stream_resume(
                                         request_id=request_id,
                                         model_id=model_id,
@@ -2459,10 +2473,6 @@ async def _streaming_response(
                                         budget=retry_budget,
                                     )
                                     if resumed_ctx is not None:
-                                        # The failed node no longer holds the
-                                        # lane: hand its slot back and track
-                                        # the takeover's.
-                                        _release_slot(*slots.pop())
                                         slots.append(
                                             (
                                                 resumed_ctx.model_id,

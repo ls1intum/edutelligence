@@ -28,10 +28,11 @@ PROVIDER_ID = 7
 class _FakeWebSocket:
     """Records outbound frames and lets a test answer command RPCs."""
 
-    def __init__(self) -> None:
+    def __init__(self, provider_id: int = PROVIDER_ID) -> None:
         self.sent: list[dict] = []
         self.auto_ack = True
         self._registry: LogosNodeRuntimeRegistry | None = None
+        self.provider_id = provider_id
         # Set from send_json the moment the command frame is on the wire.
         # Waiting on these instead of a bare asyncio.sleep(0) keeps the tests
         # deterministic: a sleep(0) yields only once, and the dispatch task
@@ -54,7 +55,7 @@ class _FakeWebSocket:
             # Answer the cancel RPC the way a worker would, so the
             # fire-and-forget task completes instead of timing out.
             await self._registry.on_command_result(
-                PROVIDER_ID,
+                self.provider_id,
                 {
                     "cmd_id": message["cmd_id"],
                     "success": True,
@@ -1112,6 +1113,408 @@ async def test_a_native_messages_mid_stream_failure_is_not_resumed(monkeypatch):
         b"event: error\n" b'data: {"type": "error", "error": {"type": "api_error", "message": "lane died"}}\n\n'
     )
     assert b"[DONE]" not in body
+
+
+# ---------------------------------------------------------------------------
+# The slot handoff when a takeover is scheduled
+#
+# A resumed stream runs under the SAME request ID as the failed attempt, and
+# the facade keys its active ledger by that ID. The failed node's scheduler
+# slot must therefore be released *before* the takeover's scheduling is
+# awaited: the resume may need exactly the capacity that slot still holds
+# (a single-node model waiting on itself until the queue times out), and a
+# release that lands after the takeover registered under the same ID would
+# pop the takeover's ledger row, leak the peer's active count, and make its
+# final release a swallowed KeyError.
+#
+# Both scenarios run on the real scheduler and facade — a fake pipeline that
+# records releases would pass whatever order the streamer picks.
+# ---------------------------------------------------------------------------
+
+_RESUME_MODEL_ID = 27
+_RESUME_MODEL_NAME = "resume-model"
+_FAILED_PROVIDER_ID = 9
+
+
+def _deployment(provider_id: int) -> dict:
+    return {"model_id": _RESUME_MODEL_ID, "provider_id": provider_id, "type": "logosnode"}
+
+
+def _resume_lane() -> dict:
+    """One ready vLLM lane per provider. The orchestrator's local ledger
+    (one slot, from the provider config) is the admission gate; the engine
+    signals report an idle lane, which is what the worker shows once the
+    failed generation is gone."""
+    return {
+        "lane_id": "resume-lane",
+        "model": _RESUME_MODEL_NAME,
+        "runtime_state": "loaded",
+        "vllm": True,
+        "num_parallel": 10,
+        "backend_metrics": {"queue_waiting": 0, "requests_running": 0},
+        "loaded_models": [{"name": _RESUME_MODEL_NAME}],
+    }
+
+
+def _resume_context(model_id: int, provider_id: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        model_id=model_id,
+        provider_id=provider_id,
+        provider_type="logosnode",
+        lane_id=f"lane-{provider_id}",
+        model_name=_RESUME_MODEL_NAME,
+        engine="vllm",
+        forward_url=f"http://fake/{provider_id}",
+    )
+
+
+class _ResumeCtxResolver:
+    """The pipeline's context resolver for the scenario: every
+    (model, provider) resolves to that provider's vLLM lane."""
+
+    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None):
+        return _resume_context(model_id, provider_id)
+
+
+class _ResumeMonitoring:
+    """No-op monitoring: the scenario exercises scheduling, not metrics."""
+
+    def __getattr__(self, name):  # noqa: ARG002
+        def _no_op(*args, **kwargs):
+            return None
+
+        return _no_op
+
+
+def _resume_env(monkeypatch, *, provider_ids: tuple[int, ...]):
+    """Real pipeline + FCFS scheduler + facade behind the streamer.
+
+    Every deployment is a single-slot logosnode lane, so the scheduler's
+    local ledger is the only gate: a resume can only be placed once the
+    failed attempt's slot has been handed back.
+    """
+    from unittest.mock import MagicMock
+
+    from tests.unit.main.test_request_logging import _make_dummy_db
+
+    import logos as main
+    from logos.pipeline.fcfs_scheduler import FcfScheduler
+    from logos.pipeline.pipeline import RequestPipeline
+    from logos.queue import PriorityQueueManager
+    from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
+
+    class _SnapshotRegistry:
+        @staticmethod
+        def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
+            return {"runtime": {"lanes": [_resume_lane()]}}
+
+        @staticmethod
+        def is_provider_online(provider_id: int) -> bool:  # noqa: ARG004
+            return True
+
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._load_provider_config",
+        lambda self: {"parallel_capacity": 1},
+    )
+    monkeypatch.setattr(
+        "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
+        lambda self: {"models": []},
+    )
+
+    queue_manager = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue_manager, runtime_registry=_SnapshotRegistry())
+    for provider_id in provider_ids:
+        facade.register_model(
+            _RESUME_MODEL_ID,
+            "logosnode",
+            "http://fake",
+            _RESUME_MODEL_NAME,
+            65536,
+            provider_id=provider_id,
+        )
+
+    scheduler = FcfScheduler(
+        queue_manager=queue_manager,
+        logosnode_facade=facade,
+        azure_facade=MagicMock(),
+    )
+    scheduler.update_model_registry({(_RESUME_MODEL_ID, p): "logosnode" for p in provider_ids})
+    pipeline = RequestPipeline(
+        classifier=object(),
+        scheduler=scheduler,
+        executor=object(),
+        context_resolver=_ResumeCtxResolver(),
+        monitoring=_ResumeMonitoring(),
+    )
+
+    registry = LogosNodeRuntimeRegistry()
+    websockets: dict[int, _FakeWebSocket] = {}
+    for provider_id in provider_ids:
+        websocket = _FakeWebSocket(provider_id=provider_id)
+        websocket.bind(registry)
+        registry._sessions[provider_id] = ProviderSession(
+            provider_id=provider_id,
+            worker_id=f"worker-{provider_id}",
+            websocket=websocket,
+            actions={CANCEL_COMMAND_ACTION},
+        )
+        websockets[provider_id] = websocket
+
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    return registry, websockets, facade, pipeline
+
+
+async def _dispatch_initial(pipeline, provider_ids: tuple[int, ...], request_id: str):
+    """The request's first hop: a dispatch that reserves the first node's
+    single slot through the real scheduler. Pinned, so the scenario does not
+    also stand up a classifier — the reservation path is the same."""
+    from logos.pipeline.pipeline import PipelineRequest
+
+    result = await pipeline.process(
+        PipelineRequest(
+            payload={"messages": [{"role": "user", "content": "hi"}]},
+            headers={},
+            allowed_models=[_RESUME_MODEL_ID],
+            deployments=[_deployment(p) for p in provider_ids],
+            request_id=request_id,
+            pinned_model_id=_RESUME_MODEL_ID,
+            request_path="v1/chat/completions",
+        )
+    )
+    assert result.success
+    return result.execution_context
+
+
+def _stream_cmd_ids(websocket: _FakeWebSocket) -> list[str]:
+    return [m["cmd_id"] for m in websocket.sent if m.get("action") == "infer_stream"]
+
+
+async def _wait_for_stream_cmd_count(websocket: _FakeWebSocket, count: int, timeout: float = 2.0) -> None:
+    """Block until ``count`` stream commands are on the wire. The takeover's
+    scheduling is what the wait is for — a resume that hangs behind the
+    failed slot's capacity never sends its second command."""
+
+    async def _poll() -> None:
+        while len(_stream_cmd_ids(websocket)) < count:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=timeout)
+
+
+async def _feed_pid(registry: LogosNodeRuntimeRegistry, provider_id: int, cmd_id: str, event: dict) -> None:
+    queue = registry._sessions[provider_id].pending_streams[cmd_id]
+    await queue.put(event)
+
+
+async def _fail_the_stream_mid_answer(
+    registry: LogosNodeRuntimeRegistry, provider_id: int, websocket: _FakeWebSocket, response, first_frame: bytes
+):
+    """Consume the committed first chunk, fail the lane, and hand back the
+    pending read — the resume logic runs inside it — plus the body to keep
+    draining."""
+    body = response.body_iterator
+    assert await body.__anext__() == first_frame
+    consumer = asyncio.ensure_future(body.__anext__())
+    await _feed_pid(
+        registry,
+        provider_id,
+        _sent_stream_cmd_id(websocket),
+        {"type": "stream_end", "success": False, "error": "lane died"},
+    )
+    return consumer, body
+
+
+def _chat_frame(content: str) -> bytes:
+    return (
+        b'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+        b'"choices": [{"index": 0, "delta": {"content": "%s"}}]}\n\n' % content.encode()
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_stream_releases_the_failed_slot_before_its_takeover(monkeypatch):
+    """End to end with the real scheduler and facade, two single-slot nodes:
+    the failed node's slot must be released before the takeover is
+    scheduled. The resume runs under the same request ID, and the facade
+    keys its active ledger by that ID — a release that lands after the
+    takeover registered would pop the takeover's row, leak the peer's active
+    count, and leave the peer's final release as a swallowed KeyError. Both
+    providers' ledgers must end clean."""
+    from fastapi.responses import StreamingResponse
+
+    import logos as main
+
+    registry, websockets, facade, pipeline = _resume_env(monkeypatch, provider_ids=(_FAILED_PROVIDER_ID, PROVIDER_ID))
+    failed_ws = websockets[_FAILED_PROVIDER_ID]
+    peer_ws = websockets[PROVIDER_ID]
+
+    ctx = await _dispatch_initial(pipeline, (_FAILED_PROVIDER_ID, PROVIDER_ID), "req-slot-handoff")
+    assert ctx.provider_id == _FAILED_PROVIDER_ID
+    # The scenario is live: the failed node holds the model's only slot on
+    # itself, and the peer is free.
+    assert facade._providers[_FAILED_PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 1
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+
+    first_frame = _chat_frame("Hello")
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            ctx,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            _FAILED_PROVIDER_ID,
+            _RESUME_MODEL_ID,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-slot-handoff",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 0,
+                "is_cold_start": False,
+            },
+            request_path="v1/chat/completions",
+            deployments=[_deployment(_FAILED_PROVIDER_ID), _deployment(PROVIDER_ID)],
+            # A real-clock budget: the stream is opened with its deadline,
+            # which must stay in the future in real monotonic time.
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(failed_ws.stream_command_sent.wait(), timeout=1)
+    await _feed_pid(
+        registry, _FAILED_PROVIDER_ID, _sent_stream_cmd_id(failed_ws), {"type": "stream_start", "status_code": 200}
+    )
+    await _feed_pid(
+        registry, _FAILED_PROVIDER_ID, _sent_stream_cmd_id(failed_ws), {"type": "stream_chunk", "chunk": first_frame}
+    )
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    consumer, body = await _fail_the_stream_mid_answer(registry, _FAILED_PROVIDER_ID, failed_ws, response, first_frame)
+    try:
+        # The takeover is scheduled on the peer while the read above is
+        # pending — wait for its stream command, then deliver the
+        # continuation.
+        await _wait_for_stream_cmd_count(peer_ws, 1, timeout=2)
+        takeover_cmd = _stream_cmd_ids(peer_ws)[0]
+        resumed_frame = _chat_frame(" there")
+        done_frame = b"data: [DONE]\n\n"
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_start", "status_code": 200})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": resumed_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": done_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_end", "success": True})
+
+        assert await asyncio.wait_for(consumer, timeout=2) == resumed_frame
+        assert [chunk async for chunk in body] == [done_frame]
+
+        # The takeover ran on the peer's lane as a continuation of the
+        # partial answer — a resume, not a restart.
+        takeover = next(m["params"] for m in peer_ws.sent if m.get("action") == "infer_stream")
+        assert takeover["lane_id"] == f"lane-{PROVIDER_ID}"
+        assert takeover["payload"]["messages"][-1] == {"role": "assistant", "content": "Hello"}
+        assert takeover["payload"]["continue_final_message"] is True
+        assert takeover["payload"]["add_generation_prompt"] is False
+        assert len(_stream_cmd_ids(failed_ws)) == 1
+    finally:
+        if not consumer.done():
+            consumer.cancel()
+        await _drain_pending_tasks()
+
+    # The failed node's slot went back before the takeover was scheduled,
+    # and the takeover's slot with it at the end: both providers' ledgers
+    # are clean, and the request is tracked nowhere.
+    assert facade._providers[_FAILED_PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[_FAILED_PROVIDER_ID]._active_request_ids == {}
+    assert facade._providers[PROVIDER_ID]._active_request_ids == {}
+    assert facade._request_tracking == {}
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_stream_on_the_only_node_gets_the_slot_the_failure_held(monkeypatch):
+    """The single-node case: the resume's only eligible deployment is the
+    one that just failed, and it holds the model's single slot. The failed
+    slot must be released before the takeover's scheduling awaits —
+    otherwise the resume waits in the queue for capacity it is holding
+    itself, until the (minutes-long) queue timeout."""
+    from fastapi.responses import StreamingResponse
+
+    import logos as main
+
+    registry, websockets, facade, pipeline = _resume_env(monkeypatch, provider_ids=(PROVIDER_ID,))
+    websocket = websockets[PROVIDER_ID]
+
+    ctx = await _dispatch_initial(pipeline, (PROVIDER_ID,), "req-single-slot")
+    assert ctx.provider_id == PROVIDER_ID
+    # The scenario is live: the failed node holds the model's only slot.
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 1
+
+    first_frame = _chat_frame("Hello")
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            ctx,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            _RESUME_MODEL_ID,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-single-slot",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 0,
+                "is_cold_start": False,
+            },
+            request_path="v1/chat/completions",
+            deployments=[_deployment(PROVIDER_ID)],
+            # A real-clock budget: the stream is opened with its deadline,
+            # which must stay in the future in real monotonic time.
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    await _feed_pid(registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_start", "status_code": 200})
+    await _feed_pid(
+        registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_chunk", "chunk": first_frame}
+    )
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    consumer, body = await _fail_the_stream_mid_answer(registry, PROVIDER_ID, websocket, response, first_frame)
+    try:
+        # The same node takes over: its single slot had to be free by the
+        # time the resume scheduled, or the wait below never ends.
+        await _wait_for_stream_cmd_count(websocket, 2, timeout=2)
+        takeover_cmd = _stream_cmd_ids(websocket)[1]
+        resumed_frame = _chat_frame(" there")
+        done_frame = b"data: [DONE]\n\n"
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_start", "status_code": 200})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": resumed_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": done_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_end", "success": True})
+
+        assert await asyncio.wait_for(consumer, timeout=2) == resumed_frame
+        assert [chunk async for chunk in body] == [done_frame]
+    finally:
+        if not consumer.done():
+            consumer.cancel()
+        await _drain_pending_tasks()
+
+    # The slot the failure held is back, and the takeover's with it.
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[PROVIDER_ID]._active_request_ids == {}
+    assert facade._request_tracking == {}
 
 
 def _responses_context() -> SimpleNamespace:
