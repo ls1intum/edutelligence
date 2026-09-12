@@ -151,6 +151,25 @@ class TranscriptionSettings(BaseModel):
     )
 
 
+class IngestionWorkerSettings(BaseModel):
+    """Configuration of the pull-based ingestion worker.
+
+    The worker discovers its Artemis upstreams from their authenticated health
+    checks (each announces its own base URL in a header), so there is no
+    upstream configuration here and Iris keeps no standing knowledge of its
+    callers. It claims lecture ingestion jobs from every discovered upstream
+    when it has free capacity and renews a lease for every run it executes on
+    the fixed heartbeat interval. capacity is shared across all upstreams and
+    replaces Artemis's global max-concurrent-jobs as the effective
+    parallelism: in pull mode this process only ever takes what it can run.
+    """
+
+    enabled: bool = Field(default=True)
+    capacity: int = Field(default=2)
+    poll_interval_seconds: float = Field(default=2.0)
+    heartbeat_interval_seconds: float = Field(default=5.0)
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -229,6 +248,9 @@ class Settings(BaseModel):
         "budget instead of pinning the list at the answer path's longer "
         "timeout (which can exceed the caller's own timeout and surface as a "
         "failed search in the UI).",
+    )
+    ingestion_worker: IngestionWorkerSettings = Field(
+        default_factory=IngestionWorkerSettings
     )
 
     @classmethod
