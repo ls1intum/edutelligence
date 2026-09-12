@@ -24,6 +24,23 @@ INSTALL_ROOT="${1:-${LOGOS_MLX_HOME:-$HOME/logos-workernode-mlx}}"
 # the same LOGOS_METAL_VENV, so a custom location cannot be installed into and
 # then missed at lane spawn.
 METAL_VENV="${LOGOS_METAL_VENV:-$HOME/.venv-vllm-metal}"
+DEFAULT_METAL_VENV="$HOME/.venv-vllm-metal"
+# Normalize before anything compares, moves or deletes this path. A trailing
+# slash alone would turn "$METAL_VENV.stale-$$" into a CHILD of the venv rather
+# than a sibling, and an unresolved symlink alias of the default location would
+# be treated as a custom path — taking the floor branch instead of the exact-pin
+# rebuild. Resolve both sides so the managed-environment policy is decided on
+# real paths.
+canonicalize_dir() {
+    local p="$1"
+    while [ "$p" != "/" ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+    if [ -d "$p" ]; then (cd "$p" 2>/dev/null && pwd -P) || printf '%s' "$p"; else printf '%s' "$p"; fi
+}
+METAL_VENV="$(canonicalize_dir "$METAL_VENV")"
+DEFAULT_METAL_VENV="$(canonicalize_dir "$DEFAULT_METAL_VENV")"
+# Downstream consumers (the launchd plist, the worker's runtime resolvers) must
+# see the same resolved path this script installs into.
+export LOGOS_METAL_VENV="$METAL_VENV"
 # Pinned to the release this worker was verified against. v0.29.0 vendors
 # vLLM 0.29.0 and is the first cut that loads the official Qwen3-Embedding
 # checkpoints: those ship their backbone weights flat (`embed_tokens.weight`,
@@ -130,20 +147,33 @@ installed_metal_version() {
     "$METAL_VENV/bin/python" -c 'import importlib.metadata as m; print(m.version("vllm-metal"))' 2>/dev/null
 }
 
-# Put the previous venv back if anything between the move and the successful
+# Put a moved-aside venv back if anything between the move and the successful
 # verification fails — a half-finished upgrade must not leave the node with no
-# runtime at all.
-rollback_stale_metal_venv() {
+# runtime at all. Covers both venvs this script rebuilds; each is a no-op
+# unless its rebuild is actually in flight.
+# Declared before the handler below references them.
+WORKER_VENV="$INSTALL_ROOT/.venv"
+stale_metal_venv=""
+stale_worker_venv=""
+restore_stale_venvs() {
     local rc="$1"
     [ "$rc" -ne 0 ] || return 0
-    [ -n "${stale_metal_venv:-}" ] && [ -d "$stale_metal_venv" ] || return 0
-    warn "Install failed — restoring the previous vllm-metal venv"
-    rm -rf "$METAL_VENV"
-    mv "$stale_metal_venv" "$METAL_VENV" \
-        && warn "  restored $METAL_VENV (still the old version; re-run to retry the upgrade)" \
-        || warn "  could not restore it; the previous venv is in $stale_metal_venv"
+    if [ -n "${stale_metal_venv:-}" ] && [ -d "$stale_metal_venv" ]; then
+        warn "Install failed — restoring the previous vllm-metal venv"
+        rm -rf "$METAL_VENV"
+        mv "$stale_metal_venv" "$METAL_VENV" \
+            && warn "  restored $METAL_VENV (still the old version; re-run to retry the upgrade)" \
+            || warn "  could not restore it; the previous venv is in $stale_metal_venv"
+    fi
+    if [ -n "${stale_worker_venv:-}" ] && [ -d "$stale_worker_venv" ]; then
+        warn "Install failed — restoring the previous worker venv"
+        rm -rf "$WORKER_VENV"
+        mv "$stale_worker_venv" "$WORKER_VENV" \
+            && warn "  restored $WORKER_VENV (still on the old interpreter; re-run to retry)" \
+            || warn "  could not restore it; the previous venv is in $stale_worker_venv"
+    fi
 }
-trap 'rollback_stale_metal_venv $?' EXIT
+trap 'restore_stale_venvs $?' EXIT
 # Is the installed version at or above the documented floor? Same comparison
 # the floor check further down performs, asked early so a custom venv is judged
 # by the requirement rather than by the pin.
@@ -173,7 +203,7 @@ if [ -x "$METAL_VENV/bin/vllm" ]; then
     # compatible environment, and since the branch below cannot rebuild custom
     # paths it would abort — with the worker already stopped when run through
     # the bootstrap.
-    if [ "$METAL_VENV" != "$HOME/.venv-vllm-metal" ]; then
+    if [ "$METAL_VENV" != "$DEFAULT_METAL_VENV" ]; then
         if metal_meets_floor "$current_metal"; then
             log "vllm-metal ${current_metal:-unknown} in $METAL_VENV meets the floor ($VLLM_METAL_MIN_VERSION) — skipping install"
             metal_needs_install=0
@@ -207,7 +237,7 @@ if [ "$metal_needs_install" -eq 1 ]; then
     installer_tmp="$(mktemp "${TMPDIR:-/tmp}/logos-vllm-metal-install.XXXXXX")"
     # Keeps the rollback armed: a bare `trap ... EXIT` here would replace the
     # handler installed above and silently drop the venv restore.
-    trap 'rc=$?; rm -rf "$stage" "$installer_tmp"; rollback_stale_metal_venv $rc' EXIT
+    trap 'rc=$?; rm -rf "$stage" "$installer_tmp"; restore_stale_venvs $rc' EXIT
     mkdir -p "$stage/scripts" "$stage/wheels"
 
     fetch_verified "$VLLM_METAL_LIB" "$VLLM_METAL_LIB_SHA256" "$stage/scripts/lib.sh"
@@ -274,8 +304,8 @@ PATCH
     fi
 
     bash "$installer_tmp"
-    if [ ! -x "$METAL_VENV/bin/vllm" ] && [ -x "$HOME/.venv-vllm-metal/bin/vllm" ]; then
-        die "vllm-metal was installed into $HOME/.venv-vllm-metal, but LOGOS_METAL_VENV points at $METAL_VENV.
+    if [ ! -x "$METAL_VENV/bin/vllm" ] && [ -x "$DEFAULT_METAL_VENV/bin/vllm" ]; then
+        die "vllm-metal was installed into $DEFAULT_METAL_VENV, but LOGOS_METAL_VENV points at $METAL_VENV.
 Upstream's installer always creates ~/.venv-vllm-metal — populate a custom location yourself (e.g. upstream's editable install) or unset LOGOS_METAL_VENV."
     fi
     [ -x "$METAL_VENV/bin/vllm" ] || die "vllm-metal install finished but $METAL_VENV/bin/vllm is missing."
@@ -342,7 +372,6 @@ python_minor() {
     "$1" -c 'import sys; print(sys.version_info[1] if sys.version_info[0] == 3 else "")' 2>/dev/null
 }
 
-WORKER_VENV="$INSTALL_ROOT/.venv"
 PYTHON_BIN="${LOGOS_PYTHON:-}"
 if [ -n "$PYTHON_BIN" ]; then
     # An explicit LOGOS_PYTHON is honoured but still checked — a stale value is
@@ -391,17 +420,32 @@ log "Worker venv:       $WORKER_VENV  (from $PYTHON_BIN, Python 3.$(python_minor
 # with 3.9 therefore keeps launching 3.9 after a re-run with a newer
 # interpreter, while pyvenv.cfg claims the new version. Recreate instead of
 # patching over it whenever the interpreter on disk is not the one we want.
+#
+# Deleting it outright is not safe: existing nodes carry a perfectly good 3.12
+# venv from the previous installer while the bootstrap now installs and selects
+# 3.13, so this branch fires on a routine upgrade. A transient venv or pip
+# failure would then leave an already-stopped worker with no runtime at all.
+# Same treatment as the Metal venv above — move aside, restore on failure.
 if [ -x "$WORKER_VENV/bin/python" ]; then
     have="$(python_minor "$WORKER_VENV/bin/python")"
     want="$(python_minor "$PYTHON_BIN")"
     if [ "$have" != "$want" ]; then
         log "  existing venv runs Python 3.${have:-?}, rebuilding it for 3.$want"
-        rm -rf "$WORKER_VENV"
+        stale_worker_venv="$WORKER_VENV.stale-$$"
+        rm -rf "$stale_worker_venv"
+        mv "$WORKER_VENV" "$stale_worker_venv"
     fi
 fi
 "$PYTHON_BIN" -m venv "$WORKER_VENV"
 "$WORKER_VENV/bin/python" -m pip install --quiet --upgrade pip
 "$WORKER_VENV/bin/python" -m pip install --quiet -r "$INSTALL_ROOT/requirements.txt"
+
+# Dependencies are in and importable — the previous venv is now redundant.
+# Until this point the EXIT handler would have put it back.
+if [ -n "${stale_worker_venv:-}" ] && [ -d "$stale_worker_venv" ]; then
+    rm -rf "$stale_worker_venv"
+    stale_worker_venv=""
+fi
 
 # ── 3. Runtime directories ───────────────────────────────────────────────────
 mkdir -p "$INSTALL_ROOT/data" "$INSTALL_ROOT/logs" "$INSTALL_ROOT/chat-templates"
