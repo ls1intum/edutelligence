@@ -144,27 +144,49 @@ rollback_stale_metal_venv() {
         || warn "  could not restore it; the previous venv is in $stale_metal_venv"
 }
 trap 'rollback_stale_metal_venv $?' EXIT
+# Is the installed version at or above the documented floor? Same comparison
+# the floor check further down performs, asked early so a custom venv is judged
+# by the requirement rather than by the pin.
+metal_meets_floor() {
+    "$METAL_VENV/bin/python" - "${1:-}" "$VLLM_METAL_MIN_VERSION" <<'PYFLOORCHK' 2>/dev/null
+import sys
+
+from packaging.version import InvalidVersion, Version
+
+try:
+    sys.exit(0 if Version(sys.argv[1]) >= Version(sys.argv[2]) else 1)
+except (InvalidVersion, IndexError):
+    sys.exit(1)
+PYFLOORCHK
+}
+
 metal_needs_install=1
 stale_metal_venv=""
 if [ -x "$METAL_VENV/bin/vllm" ]; then
     current_metal="$(installed_metal_version || true)"
-    if [ "$current_metal" = "$VLLM_METAL_MIN_VERSION" ]; then
-        log "vllm-metal $current_metal already present — skipping install"
-        metal_needs_install=0
-    else
-        # Only the default location may be rebuilt automatically. Upstream's
-        # installer always creates ~/.venv-vllm-metal regardless of
-        # LOGOS_METAL_VENV (see the guard after the install below), so removing
-        # a custom venv here would destroy an environment this script cannot
-        # recreate — and then abort at the missing-target check anyway. It is
-        # also the only value that needs no path validation: it is built from
-        # $HOME by this script, not taken from the environment.
-        if [ "$METAL_VENV" != "$HOME/.venv-vllm-metal" ]; then
-            die "vllm-metal ${current_metal:-unknown} in $METAL_VENV is below the pinned $VLLM_METAL_MIN_VERSION.
+    # The two locations are held to different standards on purpose. The default
+    # venv is managed by this script, so it tracks the pin exactly and is
+    # rebuilt on any difference — that is what makes a deployment
+    # reproducible. A custom venv is the operator's, and the documented
+    # contract for it is VLLM_METAL_MIN_VERSION, a floor: rejecting a newer
+    # build (0.30.0 against a 0.29.0 floor) would strand a perfectly
+    # compatible environment, and since the branch below cannot rebuild custom
+    # paths it would abort — with the worker already stopped when run through
+    # the bootstrap.
+    if [ "$METAL_VENV" != "$HOME/.venv-vllm-metal" ]; then
+        if metal_meets_floor "$current_metal"; then
+            log "vllm-metal ${current_metal:-unknown} in $METAL_VENV meets the floor ($VLLM_METAL_MIN_VERSION) — skipping install"
+            metal_needs_install=0
+        else
+            die "vllm-metal ${current_metal:-unknown} in $METAL_VENV is below the required $VLLM_METAL_MIN_VERSION.
 LOGOS_METAL_VENV points at a custom location, which upstream's installer cannot
 populate, so this script will not delete it. Upgrade or remove that venv
 yourself, or unset LOGOS_METAL_VENV to use the default."
         fi
+    elif [ "$current_metal" = "$VLLM_METAL_MIN_VERSION" ]; then
+        log "vllm-metal $current_metal already present — skipping install"
+        metal_needs_install=0
+    else
         log "vllm-metal ${current_metal:-unknown} is installed but this worker pins $VLLM_METAL_MIN_VERSION — rebuilding the venv"
         # Move aside instead of deleting: if the download or install below
         # fails, the node still has a working (if outdated) runtime to fall
