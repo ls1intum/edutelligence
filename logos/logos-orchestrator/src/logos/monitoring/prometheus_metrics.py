@@ -268,6 +268,70 @@ REQUEST_CONTEXT_TOKENS = Histogram(
     registry=registry,
 )
 
+# ---------------------------------------------------------------------------
+# Scheduling metrics — ETTFT accuracy, component decomposition, tier
+# ---------------------------------------------------------------------------
+
+ETTFT_ACCURACY_SECONDS = Histogram(
+    "logos_ettft_accuracy_seconds",
+    "Absolute error |ettft_estimate_s - actual_ttft_s| per provider and tier at first-token time",
+    ["provider", "tier"],
+    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+    registry=registry,
+)
+
+ETTFT_COMPONENTS_SECONDS = Histogram(
+    "logos_ettft_components_seconds",
+    "Duration of each ETTFT phase for the selected scheduling candidate",
+    # component: state_overhead | queue_wait | prefill | learned_ttft | reclaim_overhead
+    ["component", "model", "provider", "tier"],
+    buckets=(0.001, 0.01, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+    registry=registry,
+)
+
+SCHEDULING_TIER_TOTAL = Counter(
+    "logos_scheduling_tier_total",
+    "Scheduling decisions by readiness tier of the selected candidate",
+    ["model", "provider", "tier"],
+    registry=registry,
+)
+
+SCHEDULING_UNAVAILABLE_TOTAL = Counter(
+    "logos_scheduling_unavailable_total",
+    "Candidates scored UNAVAILABLE during a scheduling pass (reclaim-check returned inf)",
+    ["model", "provider"],
+    registry=registry,
+)
+
+ADMISSION_HOLD_DURATION_SECONDS = Histogram(
+    "logos_admission_hold_duration_seconds",
+    "Wall-clock time a request spent waiting in the scheduler queue before being dispatched",
+    buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0),
+    registry=registry,
+)
+
+# ---------------------------------------------------------------------------
+# Latency-store EWMA values — learned infrastructure parameters
+# ---------------------------------------------------------------------------
+
+LATENCY_STORE_LEARNED_SECONDS = Gauge(
+    "logos_latency_store_learned_seconds",
+    "Current EWMA value from the latency store per (model, provider, metric). "
+    "metric is one of: cold, cold_reclaim, sleeping, sleeping_reclaim, ttft, e2e, prefill_s_per_token",
+    ["model", "provider", "metric"],
+    registry=registry,
+)
+
+LATENCY_STORE_OBSERVATION_COUNT = Gauge(
+    "logos_latency_store_observation_count",
+    "Number of observations feeding the EWMA for a (model, provider, metric)",
+    ["model", "provider", "metric"],
+    registry=registry,
+)
+
+# Label sets published by update_latency_store_metrics(), retired when keys vanish.
+_PUBLISHED_LATENCY_STORE_KEYS: set[tuple[str, str, str]] = set()
+
 # Label sets published by update_engine_cache_metrics(), so pairs whose lanes
 # are gone can be removed instead of keeping their last value forever.
 _PUBLISHED_ENGINE_METRIC_KEYS: set[tuple[str, str]] = set()
@@ -324,6 +388,73 @@ def update_engine_cache_metrics(entries: list[tuple[str, str, float | None, floa
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def record_ettft_outcome(
+    estimate_s: float,
+    actual_ttft_s: float,
+    provider: str,
+    tier: str,
+) -> None:
+    """Observe ETTFT accuracy: |estimate_s - actual_ttft_s| for the given provider/tier.
+
+    Call this once per request when the first token arrives, passing the
+    ETTFT estimate from SchedulingResult.ettft_estimate_ms / 1000 and the
+    wall-clock duration from scheduling-start to first token.
+    """
+    import math
+
+    if not (math.isfinite(estimate_s) and math.isfinite(actual_ttft_s)):
+        return
+    ETTFT_ACCURACY_SECONDS.labels(provider=provider, tier=tier).observe(abs(estimate_s - actual_ttft_s))
+
+
+def record_ettft_components(
+    model: str,
+    provider: str,
+    tier: str,
+    state_overhead_s: float,
+    queue_wait_s: float,
+    prefill_s: float,
+    learned_ttft_s: float,
+    reclaim_overhead_s: float,
+) -> None:
+    """Observe the five ETTFT phase durations for a scheduled candidate."""
+    labels_base = dict(model=model, provider=provider, tier=tier)
+    ETTFT_COMPONENTS_SECONDS.labels(component="state_overhead", **labels_base).observe(state_overhead_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="queue_wait", **labels_base).observe(queue_wait_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="prefill", **labels_base).observe(prefill_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="learned_ttft", **labels_base).observe(learned_ttft_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="reclaim_overhead", **labels_base).observe(reclaim_overhead_s)
+
+
+def update_latency_store_metrics(
+    rows: "list[tuple[str, str, str, float, int]]",
+) -> None:
+    """Publish per-(model, provider, metric) EWMA gauges from a latency-store snapshot.
+
+    Each row is ``(model_name, provider_label, metric_name, value_s, observation_count)``.
+    Retired keys are removed from both gauges so stale label sets don't linger.
+    Call this once per capacity-planner cycle (or any other periodic driver).
+    """
+    current: set[tuple[str, str, str]] = set()
+    try:
+        for model, provider, metric, value, n in rows:
+            current.add((model, provider, metric))
+            LATENCY_STORE_LEARNED_SECONDS.labels(model=model, provider=provider, metric=metric).set(value)
+            LATENCY_STORE_OBSERVATION_COUNT.labels(model=model, provider=provider, metric=metric).set(n)
+        for model, provider, metric in _PUBLISHED_LATENCY_STORE_KEYS - current:
+            try:
+                LATENCY_STORE_LEARNED_SECONDS.remove(model, provider, metric)
+            except KeyError:
+                pass
+            try:
+                LATENCY_STORE_OBSERVATION_COUNT.remove(model, provider, metric)
+            except KeyError:
+                pass
+    finally:
+        _PUBLISHED_LATENCY_STORE_KEYS.clear()
+        _PUBLISHED_LATENCY_STORE_KEYS.update(current)
 
 
 def metrics_response() -> tuple[bytes, str]:

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
+from logos.pipeline.latency_store import LatencyStore
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.models import CapacityPlanAction, LaneSchedulerSignals, ModelProfile
 from logos.terminal_logging import (
@@ -280,6 +281,7 @@ class CapacityPlanner:
         cycle_seconds: float = 10.0,
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
+        latency_store: Optional[LatencyStore] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
@@ -287,6 +289,7 @@ class CapacityPlanner:
         self._cycle_seconds = cycle_seconds
         self._enabled = enabled
         self._on_state_change = on_state_change
+        self._latency_store = latency_store
         self._lane_idle_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
@@ -769,6 +772,7 @@ class CapacityPlanner:
             provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
         self._refresh_engine_cache_metrics(provider_ids)
+        self._refresh_latency_store_metrics()
 
         # Cross-provider best-first ranking: pre-score every (provider,
         # model) candidate so the cheapest worker for each model wins,
@@ -935,6 +939,18 @@ class CapacityPlanner:
                 mtp_rate = agg["mtp_accepted"] / agg["mtp_draft"] if agg["mtp_draft"] > 0 else None
                 entries.append((model, provider_name, prefix_rate, mtp_rate))
         prom.update_engine_cache_metrics(entries)
+
+    def _refresh_latency_store_metrics(self) -> None:
+        """Publish EWMA learned-latency gauges from the latency store."""
+        if getattr(self, "_latency_store", None) is None:
+            return
+        try:
+            rows = self._latency_store.snapshot_metrics(
+                get_provider_name=lambda pid: self._facade.get_provider_name(pid)
+            )
+            prom.update_latency_store_metrics(rows)
+        except Exception:
+            logger.debug("Failed to refresh latency store metrics", exc_info=True)
 
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
         """Print a colored cluster overview for the current planner cycle."""

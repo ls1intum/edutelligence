@@ -68,6 +68,7 @@ from logos.logosnode_snapshot import (
     _sample_snapshot_id,
 )
 from logos.middleware import APIPrefixStripperMiddleware
+from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
@@ -104,6 +105,7 @@ from logos.terminal_logging import (
     format_number,
     model_name_cache,
     paint,
+    provider_name_cache,
     style_duration,
     style_model,
     style_request_id,
@@ -1291,6 +1293,7 @@ async def start_pipeline():
         demand_tracker=_demand_tracker,
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
+        latency_store=_latency_store,
     )
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
@@ -1629,6 +1632,34 @@ def _log_request_completion(
     logger.info(" ".join(parts))
 
 
+def _record_ettft_accuracy(scheduling_stats: Optional[dict]) -> None:
+    """Observe |ettft_estimate - actual_ttft| at the moment the first token arrives.
+
+    Uses ``schedule_start_s`` from scheduling_stats (captured in pipeline.py
+    immediately before the scheduler is invoked) so that the measured interval
+    covers the same phases as the ETTFT model: reclaim → state_overhead →
+    queue_wait → prefill → TTFT.  Falls back to ``req_start`` only when the
+    field is absent (e.g. for timeout/error paths that never reach scheduling).
+    """
+    if not scheduling_stats:
+        return
+    ettft_ms = scheduling_stats.get("ettft_estimate_ms")
+    if not isinstance(ettft_ms, (int, float)) or not math.isfinite(ettft_ms):
+        return
+    schedule_start = scheduling_stats.get("schedule_start_s")
+    if not isinstance(schedule_start, float):
+        return
+    tier = str(scheduling_stats.get("ettft_tier") or "unknown")
+    provider_id = scheduling_stats.get("provider_id")
+    provider = provider_name_cache.get(provider_id) if provider_id is not None else "unknown"
+    prom.record_ettft_outcome(
+        estimate_s=ettft_ms / 1000.0,
+        actual_ttft_s=time.perf_counter() - schedule_start,
+        provider=provider or str(provider_id),
+        tier=tier,
+    )
+
+
 def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
     """Response headers exposing the scheduling decision to the client.
 
@@ -1837,6 +1868,7 @@ async def _streaming_response(
                                     if log_id:
                                         with DBManager() as db:
                                             db.set_time_at_first_token(log_id)
+                                    _record_ettft_accuracy(scheduling_stats)
                                     ttft_recorded = True
                                 _live_streams.update(request_id, stream_log.streamed_tokens())
                                 yield chunk
@@ -2032,6 +2064,7 @@ async def _streaming_response(
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
+                    _record_ettft_accuracy(scheduling_stats)
                     ttft_recorded = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
