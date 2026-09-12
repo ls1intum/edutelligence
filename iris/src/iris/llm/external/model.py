@@ -81,6 +81,40 @@ class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
         raise NotImplementedError(f"The LLM {str(self)} does not support embeddings")
 
 
+class RerankItem(BaseModel):
+    """One scored document, identified by its index into the ``documents`` list
+    that was passed to :meth:`RerankModel.rerank`."""
+
+    index: int
+    relevance_score: float
+
+
+class RerankResponse(BaseModel):
+    """Provider-neutral rerank result.
+
+    Every reranker normalises its provider's response to this shape, so the
+    model configured behind a reranker role can be swapped (Cohere <-> a
+    vLLM-served cross-encoder) without touching any call site.
+    """
+
+    results: list[RerankItem]
+
+
+class RerankModel(LanguageModel, metaclass=ABCMeta):
+    """Abstract class for the llm reranker wrappers"""
+
+    cost_per_1k_requests: float = 0
+
+    @classmethod
+    def __subclasshook__(cls, subclass) -> bool:
+        return hasattr(subclass, "rerank") and callable(subclass.rerank)
+
+    @abstractmethod
+    def rerank(self, query: str, documents: list[str], top_n: int) -> RerankResponse:
+        """Score the documents against the query"""
+        raise NotImplementedError(f"The LLM {str(self)} does not support reranking")
+
+
 class ImageGenerationModel(LanguageModel, metaclass=ABCMeta):
     """Abstract class for the llm image generation wrappers"""
 

@@ -151,6 +151,25 @@ class TranscriptionSettings(BaseModel):
     )
 
 
+class IngestionWorkerSettings(BaseModel):
+    """Configuration of the pull-based ingestion worker.
+
+    The worker discovers its Artemis upstreams from their authenticated health
+    checks (each announces its own base URL in a header), so there is no
+    upstream configuration here and Iris keeps no standing knowledge of its
+    callers. It claims lecture ingestion jobs from every discovered upstream
+    when it has free capacity and renews a lease for every run it executes on
+    the fixed heartbeat interval. capacity is shared across all upstreams and
+    replaces Artemis's global max-concurrent-jobs as the effective
+    parallelism: in pull mode this process only ever takes what it can run.
+    """
+
+    enabled: bool = Field(default=True)
+    capacity: int = Field(default=2)
+    poll_interval_seconds: float = Field(default=2.0)
+    heartbeat_interval_seconds: float = Field(default=5.0)
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -162,6 +181,77 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    global_search_rerank_floor: float = Field(
+        default=0.10,
+        description="Junk floor for global-search candidates: the score below "
+        "which a reranked candidate is treated as garbage rather than as a "
+        "weak answer. Calibrated against the NEGATIVE distribution, not the "
+        "relevant one, because junk scores in a tight, stable band while "
+        "relevance does not: across three runs on Qwen3-Reranker-8B, "
+        "deliberately irrelevant candidates peaked at 0.065 while genuinely "
+        "relevant lecture content sat at 0.24-0.62 and entity records "
+        "(30-char titles) at 0.08-0.35. 0.10 sits 0.035 above the junk "
+        "ceiling, 3.5x the reranker's measured run-to-run noise (+/-0.01), so "
+        "borderline candidates are not decided by serving nondeterminism. It "
+        "does clip the very bottom of the entity band: 0.08 would keep ~28 "
+        "percent more entity candidates but leaves only 1.5x noise margin over "
+        "junk. Revisit once entity search_text enrichment lifts that band. "
+        "Volume is capped by `limit`, "
+        "not by this value. A query whose candidates ALL fall below the floor "
+        "returns no sources - the honest empty state, skipping the answer LLM. "
+        "Set to 0.0 for log-only calibration.",
+    )
+    global_search_expand_units: bool = Field(
+        default=True,
+        description="Graph expansion for the ANSWER path: once a candidate "
+        "survives the floor, fetch the rest of its lecture unit's material by "
+        "structural join instead of making each sibling win its own ranking "
+        "slot. Measured on the scattered-scenario harness: at least one "
+        "relevant item is returned for 93 percent of queries, but every "
+        "collection holding relevant material is represented for only 16 "
+        "percent - the anchor is found, the rest loses the ranking contest. A "
+        "join has 100 percent recall by construction, which turns a "
+        "multi-collection conjunction into the single question of whether the "
+        "anchor was right. Not applied to the instant results list, which is a "
+        "ranked list by contract and has a ~400ms budget.",
+    )
+    global_search_expand_max_units: int = Field(
+        default=4,
+        description="How many distinct lecture units to expand, taken in rank "
+        "order. Bounds both the fetch and the context handed to the answer LLM.",
+    )
+    global_search_expand_per_unit: int = Field(
+        default=3,
+        description="Extra passages pulled per expanded unit. Siblings are "
+        "appended after the ranked anchors and inherit their anchor's score, so "
+        "ordering is unchanged for everything that earned its place.",
+    )
+    global_search_expand_fetch_limit: int = Field(
+        default=200,
+        description="Per-collection cap on the expansion join. Deliberately "
+        "larger than max_units * per_unit: numeric unit ids collide across "
+        "Artemis instances sharing one Weaviate, so over-fetching and filtering "
+        "on the full (base_url, course_id, lecture_unit_id) key is what keeps "
+        "another instance's unit out of the results.",
+    )
+    global_search_rerank_results_list: bool = Field(
+        default=True,
+        description="Also rerank the instant results list (SKIP_AI / REST "
+        "search). The AI answer path is always reranked. The list adds the "
+        "reranker's latency to an otherwise ~400ms response — disable if list "
+        "latency matters more than mid-list ranking quality.",
+    )
+    global_search_rerank_list_timeout_s: float = Field(
+        default=2.0,
+        description="Rerank wall-clock budget for the instant results list, in "
+        "seconds. A slow rerank call degrades to the fused ordering at this "
+        "budget instead of pinning the list at the answer path's longer "
+        "timeout (which can exceed the caller's own timeout and surface as a "
+        "failed search in the UI).",
+    )
+    ingestion_worker: IngestionWorkerSettings = Field(
+        default_factory=IngestionWorkerSettings
+    )
 
     @classmethod
     def get_settings(cls):

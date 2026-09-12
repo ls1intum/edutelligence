@@ -26,6 +26,11 @@ class LectureUnitPageDTO(BaseModel):
     course_id: int = Field(alias="courseId")
     course_name: str = Field(default="", alias="courseName")
     course_description: str = Field(default="", alias="courseDescription")
+    # The course's declared language of instruction, when Artemis knows it. This is
+    # the authoritative source; ingestion only detects a language from slide text
+    # when this is absent, so a course's real language never depends on what any
+    # single slide happens to contain (math, code, images, a foreign quotation).
+    course_language: Optional[str] = Field(default=None, alias="courseLanguage")
     video_link: str = Field(default="", alias="videoLink")
     video_source_type: VideoSourceType = Field(
         default=VideoSourceType.TUM_LIVE, alias="videoSourceType"
@@ -33,6 +38,17 @@ class LectureUnitPageDTO(BaseModel):
     display_page_numbers: Optional[list[int]] = Field(
         default=None, alias="displayPageNumbers"
     )
+    content_fingerprint: Optional[str] = Field(default=None, alias="contentFingerprint")
+    # Artemis sets this for quality re-ingestions: the structural skip checks are
+    # bypassed so unchanged content is genuinely re-processed, and the write path
+    # keeps the stored generation when the re-run scores worse.
+    force_reingest: bool = Field(default=False, alias="forceReingest")
+
+    # Internal run state, never part of the wire format.
+    ingestion_run_id: Optional[str] = Field(default=None, exclude=True)
+    chunk_counts_by_page: Optional[dict[int, int]] = Field(default=None, exclude=True)
+    quality_score: Optional[float] = Field(default=None, exclude=True)
+    quality_flags: Optional[list[str]] = Field(default=None, exclude=True)
 
     @field_validator("video_source_type", mode="before")
     @classmethod

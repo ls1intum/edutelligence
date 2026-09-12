@@ -1,5 +1,7 @@
 import json
 import re
+import time
+from datetime import datetime, timezone
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -10,6 +12,9 @@ from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.search.global_search_dto import (
     AccessContext,
+    CourseInfo,
+    EntityCandidateDTO,
+    EntitySourceDTO,
     GlobalSearchResponseDTO,
     LectureSearchResultDTO,
 )
@@ -19,8 +24,9 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.global_search_prompts import (
     answer_system_prompt,
-    hyde_system_prompt,
+    navigate_system_prompt,
 )
+from iris.pipeline.shared.entity_card_renderer import render_entity_card
 from iris.pipeline.shared.global_search_intent_classifier import (
     classify as classify_intent,
 )
@@ -32,20 +38,327 @@ from iris.tracing import observe
 
 logger = get_logger(__name__)
 
+# The answer model sometimes duplicates the schema's used_sources field as a
+# trailing plain-text line — either INSIDE an otherwise valid JSON answer string
+# (observed in the UI as a literal "Used_sources: [1, 3]" under the answer) or
+# at the end of its output when it drops the JSON envelope entirely. Matches
+# variants like "Used_sources: [1, 3]" / "used sources [2]" at end of text.
+# The navigate prompt's context labels entities as "[<course> — Course
+# information]"; small models occasionally echo the label into prose. The
+# suffix is presentation, never content — strip it defensively.
+_HEADER_ECHO_RE = re.compile(r"\s*[—-]\s*Course information\b")
+
+_TRAILING_USED_SOURCES_RE = re.compile(
+    r"\s*used[_ ]?sources\s*:?\s*\[(?P<indices>[^\]]*)\]\s*\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _try_parse_json(text: str) -> dict | None:
+    """Parse text as a JSON object, retrying with LaTeX backslashes escaped.
+
+    LaTeX commands (e.g. \\alpha, \\sum) are invalid JSON escape sequences, so
+    the retry escapes any backslash not already part of a recognised JSON
+    escape. Returns None unless the result is a dict.
+    """
+    for candidate in (text, re.sub(r'\\(?!["\\/])', r"\\\\", text)):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _source_label(source: "LectureSearchResultDTO | EntitySourceDTO") -> str:
+    """Bracketed context header naming the source's origin and kind."""
+    if isinstance(source, EntitySourceDTO):
+        if source.course is not None:
+            return f"[{source.course.name} — Course information]"
+        return "[Course information]"
+    return f"[{source.course.name} — {source.lecture.name}, {_location_label(source)}]"
+
+
+def _today_line(access_context: AccessContext | None) -> str:
+    """Semester disambiguation for the grounded prompt's user message.
+
+    Course copies repeat per semester, so an instructor (or a re-enrolled
+    student) legitimately retrieves the same exercise or exam with different
+    dates. The reranker correctly refuses to prefer a semester; the answer
+    model disambiguates instead, because every entity card names its course.
+    Measured: without this line both dates are enumerated with labels, with
+    it the current semester leads (18/18 correct on the seeded
+    semester-conflict suite).
+    """
+    now = (
+        access_context.effective_now_dt()
+        if access_context is not None
+        else datetime.now(timezone.utc)
+    )
+    return (
+        "\n\nToday is " + now.strftime("%A, %d %B %Y") + ". When sources from "
+        "several semesters or course copies conflict, prefer the one most "
+        "relevant to today and name which course/semester each date belongs "
+        "to."
+    )
+
+
+def _location_label(source: LectureSearchResultDTO) -> str:
+    """Human-readable slide/video position tag for the numbered context."""
+    page = source.lecture_unit.page_number
+    if page == -1:
+        meta = source.lecture_unit.display_meta or "video"
+        return f"Video @ {meta}"
+    return f"Slide {page}"
+
+
+_CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+# Literal the model outputs INSTEAD of an answer when the sources cannot answer
+# the question (plain-text contract; measured 8/8 discipline on nano).
+_NO_ANSWER_SENTINEL = "!none!"
+
+
+class _SentinelGateStreamHandler:
+    """Buffer streamed deltas until the output can no longer be the !none!
+    sentinel, so a no-answer run never flashes text at the student. Same
+    pattern as the chat guide's ok-sentinel gate. ``None`` deltas (provider
+    retry) reset the stream downstream as well once streaming started."""
+
+    def __init__(self, downstream):
+        self._downstream = downstream
+        self._buffer = ""
+        self._streaming = False
+
+    def __call__(self, delta):
+        if delta is None:
+            self._buffer = ""
+            if self._streaming:
+                self._downstream(None)
+            return
+        if self._streaming:
+            self._downstream(delta)
+            return
+        self._buffer += delta
+        stripped = self._buffer.strip()
+        if stripped.startswith(_NO_ANSWER_SENTINEL):
+            return  # it IS the sentinel — never stream it
+        if _NO_ANSWER_SENTINEL.startswith(stripped):
+            return  # could still become the sentinel — keep holding
+        self._downstream(self._buffer)
+        self._buffer = ""
+        self._streaming = True
+
+
+def sanitize_citation_markers(
+    answer: str | None, num_sources: int
+) -> tuple[str | None, set[int]]:
+    """Validate inline citation markers; return (answer, cited 0-based indices).
+
+    The answer LLM appends sentence-level markers like ``[2]`` after the claim
+    each source supports. This keeps every in-range marker, DROPS out-of-range
+    ones (a hallucinated ``[9]`` over 5 sources must not reach a student), and
+    collapses immediately repeated markers (``[1][1]`` -> ``[1]``). Chains of
+    DISTINCT adjacent markers (``[1][2][3]``) are the model citing several
+    sources for one claim and are preserved; the client groups them visually.
+
+    An answer without markers passes through untouched, which is the
+    compatibility path: rendering falls back to the unattributed card.
+    """
+    if not answer:
+        return answer, set()
+    cited: set[int] = set()
+    # (last kept index, end offset of the current marker run) in original
+    # string coordinates; a removed marker extends the run so [1][9][1]
+    # still collapses to [1] once [9] is gone.
+    run: list = [None, -1]
+
+    def _replace(match: re.Match) -> str:
+        index = int(match.group(1))
+        contiguous = match.start() == run[1]
+        run[1] = match.end()
+        if not contiguous:
+            run[0] = None
+        if not 1 <= index <= num_sources:
+            return ""
+        if run[0] == index:
+            return ""
+        run[0] = index
+        cited.add(index - 1)
+        return match.group(0)
+
+    sanitized = _CITATION_MARKER_RE.sub(_replace, answer)
+    return sanitized, cited
+
+
+def renumber_citation_markers(
+    answer: str | None, old_to_new: dict[int, int]
+) -> str | None:
+    """Rewrite marker numbers after the used-sources filter.
+
+    Markers reference the numbered CONTEXT (1..N over all grounded sources),
+    but the response returns only the used sources, so ``[4]`` must become the
+    position of that source in the returned list. Unknown numbers are stripped
+    defensively; sanitation has already removed them in the normal flow.
+    """
+    if not answer:
+        return answer
+
+    def _replace(match: re.Match) -> str:
+        new = old_to_new.get(int(match.group(1)))
+        return f"[{new}]" if new is not None else ""
+
+    return _CITATION_MARKER_RE.sub(_replace, answer)
+
+
+def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
+    """Parse the answer LLM's raw output into (answer, used 0-based indices).
+
+    Pure string logic, extracted for unit-testability: structured parsing
+    with salvage paths, then the sanitize/suppress guards that decide what a
+    student may actually see.
+    """
+    answer, used_indices = _extract_answer(raw, num_sources)
+    if answer:
+        answer = _HEADER_ECHO_RE.sub("", answer)
+    answer, cited_indices = sanitize_citation_markers(answer, num_sources)
+    # A cited source is a used source even when the model forgot to list it —
+    # and inline markers count as grounding for the suppression guard below.
+    used_indices = used_indices | cited_indices
+    answer = _sanitize_and_suppress(answer, used_indices)
+    return answer, used_indices
+
+
+def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
+    """Structured parse with salvage paths, in order: markdown fences, JSON
+    with LaTeX-backslash repair, embedded-JSON salvage, plain text with a
+    trailing "Used_sources: [..]" line (recovering attribution), raw text
+    with all sources as the last resort."""
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+    # Plain-text contract: the sentinel is the honest "cannot answer" state.
+    if cleaned.rstrip(".").strip().casefold() == _NO_ANSWER_SENTINEL:
+        return None, set()
+    parsed = _try_parse_json(cleaned)
+    if parsed is None:
+        # Salvage: the JSON envelope may be embedded in surrounding prose.
+        embedded = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if embedded:
+            parsed = _try_parse_json(embedded.group())
+            if parsed is not None:
+                logger.info(
+                    "[global-search] parse_salvaged=embedded_json raw_len=%d",
+                    len(raw),
+                )
+    if parsed is not None:
+        answer = parsed.get("answer")
+        # Treat null, "" and non-string values as no answer.
+        answer = answer if isinstance(answer, str) and answer else None
+        if answer is None:
+            logger.info("[global-search] outcome=llm_null_json raw=%r", raw[:300])
+        raw_indices = parsed.get("used_sources")
+        used_indices = {
+            i - 1
+            for i in (raw_indices if isinstance(raw_indices, list) else [])
+            if isinstance(i, int) and i >= 1
+        }
+        return answer, used_indices
+
+    # Plain-text output (the model dropped the JSON envelope). If it ends
+    # with a schema-imitating "Used_sources: [..]" line, recover the
+    # attribution from it and strip the line; otherwise attach all sources —
+    # there is no way to tell which were used.
+    match = _TRAILING_USED_SOURCES_RE.search(cleaned)
+    if match:
+        used_indices = {
+            int(n) - 1 for n in re.findall(r"\d+", match.group("indices"))
+        } - {-1}
+        answer = cleaned[: match.start()].rstrip() or None
+        logger.warning(
+            "[global-search] outcome=parse_salvaged_text used=%d/%d raw=%r",
+            len(used_indices),
+            num_sources,
+            raw[:300],
+        )
+        return answer, used_indices
+
+    # Plain-text answer with inline markers: the markers ARE the attribution
+    # (the caller unions them in); attaching all sources here would overrule
+    # them with the whole pool.
+    if _CITATION_MARKER_RE.search(cleaned):
+        return cleaned or None, set()
+
+    logger.info(
+        "[global-search] outcome=plain_text_no_markers raw_len=%d — "
+        "returning text with all sources attached",
+        len(raw),
+    )
+    return cleaned or None, set(range(num_sources))
+
+
+_REFUSAL_RE = re.compile(
+    r"not (covered|mentioned|discussed|found|available|provided|present|included)"
+    r"|not (in|part of) the (course|lecture|material|content|slides)"
+    r"|no (mention|reference|explanation|definition|description|information)"
+    r"|does not (cover|mention|discuss|provide|include|contain|address)"
+    r"|cannot (answer|find|provide|address)",
+    re.IGNORECASE,
+)
+
+# Refusal suppression only fires on short answers, so legitimate answers that
+# mention gaps ("X is covered, Y is not") are never eaten.
+_REFUSAL_MAX_CHARS = 120
+
+
+def _sanitize_and_suppress(answer: str | None, used_indices: set[int]) -> str | None:
+    """Guards between the parsed answer and the student's screen."""
+    # The model may write the used_sources line inside a correctly parsed
+    # answer string (observed live in the UI). Strip it — it is schema
+    # leakage, never content.
+    if answer:
+        sanitized = _TRAILING_USED_SOURCES_RE.sub("", answer).rstrip()
+        if sanitized != answer:
+            logger.info("[global-search] answer_sanitized=trailing_used_sources_line")
+            answer = sanitized or None
+
+    # Safety net: if the LLM ignored the null instruction and wrote a short
+    # refusal instead of a grounded answer, suppress it so the client never
+    # sees a "not covered" message.
+    if answer and len(answer) < _REFUSAL_MAX_CHARS and _REFUSAL_RE.search(answer):
+        logger.info(
+            "[global-search] outcome=refusal_suppressed suppressed_answer=%r",
+            answer,
+        )
+        answer = None
+
+    # Grounding contract: an answer that cites no sources came from world
+    # knowledge, not course content — never show it (observed live: a 4-char
+    # "Yes."-style answer with used_sources=[]).
+    if answer and not used_indices:
+        logger.info(
+            "[global-search] outcome=ungrounded_suppressed answer_len=%d "
+            "suppressed_answer=%r",
+            len(answer),
+            answer[:200],
+        )
+        answer = None
+
+    return answer
+
 
 class GlobalSearchPipeline(SubPipeline):
     """
-    Pipeline that answers a student's question by retrieving relevant course content
-    using HyDE (Hypothetical Document Embedding) and then generating a concise answer.
+    Pipeline that answers a student's question from retrieved course content.
 
-    HyDE improves retrieval precision for Q&A: instead of embedding the question directly,
-    it generates a short hypothetical answer first and embeds that. This works because
-    answers live closer to answers in the vector space than questions do.
+    Retrieval embeds the query with the Qwen3 retrieval instruction and lets a
+    cross-encoder reranker order and gate the candidate pool; the answer LLM
+    then grounds a concise answer on the surviving sources. (An earlier HyDE
+    step was removed after a held-out ablation showed identical top sources,
+    ~30% lower answer latency, and eliminated a model dependency that returned
+    empty output on 35-50% of calls.)
     """
 
-    hyde_llm: IrisLangchainChatModel
     answer_llm: IrisLangchainChatModel
-    hyde_pipeline: Runnable
     answer_pipeline: Runnable
 
     def __init__(self, client: WeaviateClient, local: bool = False):
@@ -54,41 +367,60 @@ class GlobalSearchPipeline(SubPipeline):
         self.retriever = LectureGlobalSearchRetrieval(client, local=local)
 
         pipeline_id = "global_search_pipeline"
-        hyde_model = resolve_model(pipeline_id, "default", "hyde", local=local)
         answer_model = resolve_model(pipeline_id, "default", "answer", local=local)
         embedding_model = resolve_model(
             pipeline_id, "default", "embedding", local=local
         )
         logger.info(
-            "Global search pipeline | mode=%s hyde_llm=%s answer_llm=%s embedding=%s",
+            "Global search pipeline | mode=%s answer_llm=%s embedding=%s",
             "local" if local else "cloud",
-            hyde_model,
             answer_model,
             embedding_model,
         )
 
-        hyde_completion_args = CompletionArguments(max_tokens=150)
-        answer_completion_args = CompletionArguments(
-            response_format="JSON", max_tokens=600
-        )
-        self.hyde_llm = IrisLangchainChatModel(
-            request_handler=LlmRequestHandler(model_id=hyde_model),
-            completion_args=hyde_completion_args,
-        )
+        # Plain-text output (markers carry the attribution, !none! carries the
+        # no-answer state) — a JSON envelope would make streamed partials
+        # unrenderable fragments.
+        answer_completion_args = CompletionArguments(max_tokens=600)
         self.answer_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=answer_model),
             completion_args=answer_completion_args,
         )
-        self.hyde_pipeline = self.hyde_llm | StrOutputParser()
         self.answer_pipeline = self.answer_llm | StrOutputParser()
 
-        self.hyde_prompt = ChatPromptTemplate.from_messages(
-            [("system", hyde_system_prompt), ("user", "{query}")]
-        )
+        # The language directive sits at the END of the USER message, not only in
+        # the system prompt: with German-heavy sources, gpt-5-mini at minimal
+        # reasoning follows the context language over a mid-system-prompt rule
+        # (observed live: English question, German answer). The final position is
+        # the one light models weight most, and the model itself is the only
+        # reliable language identifier for messy queries (typos, Arabizi,
+        # code-switching) — no string-level detector handles those.
         self.answer_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", answer_system_prompt),
-                ("user", "Course content:\n{context}\n\nQuestion: {query}"),
+                (
+                    "user",
+                    "Course content:\n{context}\n\nQuestion: {query}\n\n"
+                    "ANSWER LANGUAGE = the language of the question above. "
+                    "The sources' language is irrelevant — translate what "
+                    "you use into the question's language.{today_line}",
+                ),
+            ]
+        )
+        # Pointer-only contexts get a NAVIGATION task, not an answer task: the
+        # grounded prompt's veto is correct behavior for content QA and wrong
+        # for "where is this covered?" (measured: ~80% null on pointer-only
+        # contexts vs 8/8 with this prompt).
+        self.navigate_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", navigate_system_prompt),
+                (
+                    "user",
+                    "Catalog entries:\n{context}\n\nStudent question: "
+                    "{query}\n\nANSWER LANGUAGE = the language of the "
+                    "question above. The entries' language is irrelevant — "
+                    "write your directions in the question's language.",
+                ),
             ]
         )
 
@@ -99,16 +431,24 @@ class GlobalSearchPipeline(SubPipeline):
         limit: int = 5,
         intent: SearchIntent | None = None,
         access_context: AccessContext | None = None,
+        entity_candidates: list[EntityCandidateDTO] | None = None,
+        course_ids: list[int] | None = None,
+        stream_handler=None,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
-        Answer a student's question using course content retrieved via HyDE.
+        Answer a student's question from retrieved course content.
 
         :param query: The student's question or search text.
         :param limit: Maximum number of source segments to retrieve.
         :param intent: Pre-computed intent (SearchIntent). If None,
                        the classifier is called here.
         :param access_context: Optional permissions filter resolved by Artemis, forwarded to every retriever call.
+        :param entity_candidates: Pre-fetched, pre-authorized SearchableEntities rows
+                                  from Artemis. Rendered as cards, they join the shared
+                                  rerank pool so the answer can draw on course
+                                  information (dates, points, channels, FAQs) as well
+                                  as lecture content.
         :return: An answer with source references.
         """
         # Guard: skip the full LLM pipeline for navigation queries
@@ -117,119 +457,233 @@ class GlobalSearchPipeline(SubPipeline):
         logger.debug("Intent classification | query=%r intent=%s", query[:80], intent)
         if intent == SearchIntent.SKIP_AI:
             sources = self.retriever.search(
-                query=query, limit=limit, access_context=access_context
+                query=query,
+                limit=limit,
+                course_ids=course_ids,
+                access_context=access_context,
             )
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
-        # Step 1: Generate a short hypothetical answer to use as the search vector
-        hypothetical_answer = (self.hyde_prompt | self.hyde_pipeline).invoke(
-            {"query": query}
+        entity_sources = self._render_entity_sources(entity_candidates)
+        sources = self._retrieve_sources(
+            query, limit, access_context, entity_sources, course_ids
         )
-        self._append_tokens(
-            self.hyde_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
-        )
-        logger.debug("HyDE hypothetical answer | output=%r", hypothetical_answer[:200])
-
-        # Step 2: Search using the hypothetical answer embedding (answer-space → answer-space)
-        sources: list[LectureSearchResultDTO] = (
-            self.retriever.search_with_vector_override(
-                query=query,
-                vector_text=hypothetical_answer,
-                alpha=0.5,
-                limit=limit,
-                access_context=access_context,
-            )
-        )
-
-        # Fallback: if HyDE vector produced no hits (e.g. ambiguous query where HyDE
-        # generated off-topic content), retry with the raw query embedding.
         if not sources:
-            logger.info(
-                "HyDE retrieval returned 0 sources — retrying with keyword-heavy search"
-            )
-            sources = self.retriever.search_with_vector_override(
-                query=query,
-                vector_text=query,
-                alpha=0.1,
-                limit=limit,
-                access_context=access_context,
-            )
-
-        if not sources:
+            logger.info("[global-search] outcome=no_sources query=%r", query[:120])
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
-        # Step 3: Generate the real answer using numbered context (with metadata so the
-        # model knows the course/lecture name and can reference them explicitly)
         grounded_sources = [s for s in sources if s.snippet]
         if not grounded_sources:
+            logger.info(
+                "[global-search] outcome=no_grounded_sources sources=%d query=%r",
+                len(sources),
+                query[:120],
+            )
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
-        def _location_label(s: LectureSearchResultDTO) -> str:
-            page = s.lecture_unit.page_number
-            if page == -1:
-                meta = s.lecture_unit.display_meta or "video"
-                return f"Video @ {meta}"
-            return f"Slide {page}"
-
-        context = "\n\n".join(
-            f"[{i + 1}] [{s.course.name} — {s.lecture.name}, {_location_label(s)}]\n{s.snippet}"
-            for i, s in enumerate(grounded_sources)
+        raw = self._generate_answer(
+            query,
+            grounded_sources,
+            access_context,
+            navigate=all_pointers,
+            stream_handler=stream_handler,
         )
-        raw = (self.answer_prompt | self.answer_pipeline).invoke(
-            {"context": context, "query": query}
+        answer, used_indices = parse_answer_response(raw, len(grounded_sources))
+        used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
+        # Markers referenced the context numbering; the response carries only
+        # the used sources, so renumber them onto the returned list.
+        ordered_used = sorted(used_indices)
+        answer = renumber_citation_markers(
+            answer,
+            {old + 1: new + 1 for new, old in enumerate(ordered_used)},
         )
 
-        # Parse structured response — strip markdown code fences if present
-        try:
-            cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-            try:
-                parsed = json.loads(cleaned)
-            except json.JSONDecodeError:
-                # LaTeX backslashes (e.g. \alpha, \sum) are invalid JSON escape
-                # sequences. Escape any backslash not already part of a recognised
-                # JSON escape before retrying.
-                fixed = re.sub(r'\\(?!["\\/])', r"\\\\", cleaned)
-                parsed = json.loads(fixed)
-            answer = parsed.get("answer") or None  # treat null and "" as no answer
-            used_indices = {
-                i - 1
-                for i in parsed.get("used_sources", [])
-                if isinstance(i, int) and i >= 1
-            }
-            used_sources = [
-                s for i, s in enumerate(grounded_sources) if i in used_indices
+        # Null-to-navigate fallback: the grounded prompt answered null but
+        # entity sources exist — retry once as navigation over just those.
+        # A genuine negative has no surviving entity sources, so the fallback
+        # cannot fire there. Covers where-do-I-find questions and null
+        # flakiness of small answer models.
+        if answer is None and not all_pointers:
+            entity_grounded = [
+                s for s in grounded_sources if isinstance(s, EntitySourceDTO)
             ]
-        except (json.JSONDecodeError, ValueError, AttributeError, TypeError):
-            logger.warning(
-                "Failed to parse structured answer response, returning all sources"
-            )
-            answer = raw
-            used_sources = grounded_sources
-
-        # Safety net: if the LLM ignored the null instruction and wrote a short refusal
-        # instead of a grounded answer, suppress it so the client never sees a
-        # "not covered" message. Only fires on short answers (< 120 chars) to avoid
-        # suppressing legitimate answers that mention what the course does not cover.
-        if (
-            answer
-            and len(answer) < 120
-            and re.search(
-                r"not (covered|mentioned|discussed|found|available|provided|present|included)"
-                r"|not (in|part of) the (course|lecture|material|content|slides)"
-                r"|no (mention|reference|explanation|definition|description|information)"
-                r"|does not (cover|mention|discuss|provide|include|contain|address)"
-                r"|cannot (answer|find|provide|address)",
-                answer,
-                re.IGNORECASE,
-            )
-        ):
-            logger.info(
-                "[global-search] LLM refusal detected in answer text — suppressing to null"
-            )
-            answer = None
+            if entity_grounded:
+                raw = self._generate_answer(
+                    query, entity_grounded, access_context, navigate=True
+                )
+                answer, used_indices = parse_answer_response(raw, len(entity_grounded))
+                used_sources = [
+                    s for i, s in enumerate(entity_grounded) if i in used_indices
+                ]
+                if answer:
+                    logger.info("[global-search] outcome=navigate_fallback")
 
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
 
-        return GlobalSearchResponseDTO(answer=answer, sources=used_sources)
+        used_lecture = [
+            s for s in used_sources if isinstance(s, LectureSearchResultDTO)
+        ]
+        used_entities = [s for s in used_sources if isinstance(s, EntitySourceDTO)]
+        if answer:
+            logger.info(
+                "[global-search] outcome=answered answer_len=%d "
+                "used_sources=%d/%d used_entities=%d",
+                len(answer),
+                len(used_sources),
+                len(grounded_sources),
+                len(used_entities),
+            )
+        return GlobalSearchResponseDTO(
+            answer=answer, sources=used_lecture, entity_sources=used_entities
+        )
+
+    @staticmethod
+    def _candidate_reference_date(candidate: EntityCandidateDTO):
+        """First parseable calendar anchor of the instance, UTC-normalized."""
+        for prop in (
+            "start_date",
+            "release_date",
+            "visible_date",
+            "exam_start_date",
+            "exam_visible_date",
+            "due_date",
+            "end_date",
+        ):
+            value = getattr(candidate, prop, None)
+            if not value:
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        return None
+
+    @staticmethod
+    def _render_entity_sources(
+        entity_candidates: list[EntityCandidateDTO] | None,
+    ) -> list[EntitySourceDTO]:
+        """Render Artemis-prefetched candidates into card-carrying sources."""
+        sources: list[EntitySourceDTO] = []
+        for candidate in entity_candidates or []:
+            course = None
+            if candidate.course_id is not None and candidate.course_name:
+                course = CourseInfo(
+                    id=candidate.course_id, name=candidate.course_name.strip()
+                )
+            sources.append(
+                EntitySourceDTO(
+                    entity_type=candidate.entity_type,
+                    entity_id=candidate.entity_id,
+                    course=course,
+                    title=(candidate.title or "").strip(),
+                    snippet=render_entity_card(candidate),
+                    link=candidate.link,
+                    exercise_type=candidate.exercise_type,
+                    reference_date=GlobalSearchPipeline._candidate_reference_date(
+                        candidate
+                    ),
+                )
+            )
+        return sources
+
+    def _retrieve_sources(
+        self,
+        query: str,
+        limit: int,
+        access_context: AccessContext | None = None,
+        entity_sources: list[EntitySourceDTO] | None = None,
+        course_ids: list[int] | None = None,
+    ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
+        """Candidate retrieval with the instruct query embedding.
+
+        The reranker orders the pool on one calibrated scale and the
+        threshold gates it — an all-below-threshold pool is the honest
+        "no content exists" state and skips the answer LLM entirely. An empty
+        pool can also mean the semantic lane missed named entities (thin or
+        exotic tokens), so a keyword-heavy retry runs once before giving up.
+        """
+        t_retrieval = time.perf_counter()
+        sources = self.retriever.search(
+            query=query,
+            limit=limit,
+            alpha=0.5,
+            course_ids=course_ids,
+            auto_cut=True,
+            access_context=access_context,
+            entity_sources=entity_sources,
+        )
+        if not sources:
+            logger.info(
+                "Retrieval returned 0 sources — retrying with keyword-heavy search"
+            )
+            sources = self.retriever.search(
+                query=query,
+                limit=limit,
+                alpha=0.1,
+                course_ids=course_ids,
+                auto_cut=True,
+                access_context=access_context,
+                entity_sources=entity_sources,
+            )
+        logger.info(
+            "[global-search] retrieval_ms=%.0f sources=%d",
+            (time.perf_counter() - t_retrieval) * 1000,
+            len(sources),
+        )
+        return sources
+
+    def _generate_answer(
+        self,
+        query: str,
+        grounded_sources: list["LectureSearchResultDTO | EntitySourceDTO"],
+        access_context: AccessContext | None = None,
+        navigate: bool = False,
+        stream_handler=None,
+    ) -> str:
+        """Invoke the answer LLM on the numbered, metadata-tagged context.
+
+        With a ``stream_handler``, deltas stream through the sentinel gate so
+        partial answers reach the client while the model generates; markers in
+        partials stream raw and the client renders them progressively. The
+        terminal update still carries the sanitized, renumbered answer.
+        """
+        context = "\n\n".join(
+            f"[{i + 1}] {_source_label(s)}\n{s.snippet}"
+            for i, s in enumerate(grounded_sources)
+        )
+        t_answer = time.perf_counter()
+        prompt = self.navigate_prompt if navigate else self.answer_prompt
+        variables: dict[str, str] = {"context": context, "query": query}
+        if not navigate:
+            variables["today_line"] = _today_line(access_context)
+        # The navigate prompt answers in JSON, which cannot stream through the
+        # sentinel gate without leaking the envelope to the client, so only the
+        # grounded (plain-text) path streams.
+        if stream_handler is not None and not navigate:
+            self.answer_llm.completion_args.stream_handler = _SentinelGateStreamHandler(
+                stream_handler
+            )
+        try:
+            raw = (prompt | self.answer_pipeline).invoke(variables)
+        finally:
+            self.answer_llm.completion_args.stream_handler = None
+        # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
+        # exhausting max_tokens on reasoning and returning an empty message
+        # (finish_reason=length) — the call returns WITHOUT an exception.
+        answer_usage = self.answer_llm.tokens
+        logger.info(
+            "[global-search] answer_llm_ms=%.0f context_sources=%d "
+            "context_chars=%d raw_len=%d input_tokens=%s output_tokens=%s",
+            (time.perf_counter() - t_answer) * 1000,
+            len(grounded_sources),
+            len(context),
+            len(raw),
+            getattr(answer_usage, "num_input_tokens", None),
+            getattr(answer_usage, "num_output_tokens", None),
+        )
+        return raw

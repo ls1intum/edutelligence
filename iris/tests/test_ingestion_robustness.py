@@ -1,4 +1,5 @@
-"""Regression tests for PR 660 review feedback."""
+"""Regression tests for ingestion robustness: deletion retries, the
+transcription write path, and webhook worker failure reporting."""
 
 # pylint: skip-file
 
@@ -8,6 +9,10 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.ingestion_errors import (  # noqa: E402
+    TRANSCRIPT_INGESTION_FAILED,
+    IngestionStageError,
+)
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO  # noqa: E402
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (  # noqa: E402
     IngestionPipelineExecutionDto,
@@ -65,18 +70,34 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
         def __exit__(self, *_args):
             lock.inside = False
 
-    def update():
+    def update(**_kwargs):
         assert lock.inside is False
+
+    def delete_inside_lock(**_kwargs):
+        # The purge's delete runs inside the write lock.
+        assert lock.inside is True
+        return SimpleNamespace(failed=0, matches=0, successful=0)
 
     batch = MagicMock()
     dynamic_context = MagicMock()
     dynamic_context.__enter__.return_value = batch
     dynamic_context.__exit__.return_value = None
     pipeline.collection = SimpleNamespace(
-        batch=SimpleNamespace(dynamic=MagicMock(return_value=dynamic_context))
+        batch=SimpleNamespace(
+            dynamic=MagicMock(return_value=dynamic_context),
+            failed_objects=[],
+        ),
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        ),
+        data=SimpleNamespace(delete_many=MagicMock(side_effect=delete_inside_lock)),
     )
     pipeline.callback = SimpleNamespace(update=MagicMock(side_effect=update))
     pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=_lecture_unit(),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
     chunk = {LectureTranscriptionSchema.SEGMENT_TEXT.value: "transcript"}
 
     with patch(
@@ -86,7 +107,14 @@ def test_transcription_batch_insert_does_not_hold_lock_while_updating_status():
         pipeline.batch_insert([chunk])
 
     pipeline.callback.update.assert_called_once()
-    batch.add_object.assert_called_once_with(properties=chunk, vector=[0.1])
+    # The purge deletes by unit identity inside the lock every run (no read); the
+    # status update happens outside the lock, and the write carries a client uuid.
+    pipeline.collection.query.fetch_objects.assert_not_called()
+    pipeline.collection.data.delete_many.assert_called_once()
+    add_call = batch.add_object.call_args
+    assert add_call.kwargs["properties"] == chunk
+    assert add_call.kwargs["vector"] == [0.1]
+    assert "uuid" in add_call.kwargs
 
 
 def test_transcription_ingestion_reraises_without_terminal_callback():
@@ -94,13 +122,14 @@ def test_transcription_ingestion_reraises_without_terminal_callback():
     pipeline.callback = MagicMock()
     pipeline.dto = SimpleNamespace(lecture_unit=_lecture_unit())
     pipeline.tokens = []
-    pipeline.delete_existing_transcription_data = MagicMock(
-        side_effect=RuntimeError("delete failed")
+    pipeline.chunk_transcription = MagicMock(
+        side_effect=RuntimeError("chunking failed")
     )
 
-    with pytest.raises(RuntimeError, match="delete failed"):
+    with pytest.raises(IngestionStageError, match="chunking failed") as exc_info:
         pipeline()
 
+    assert exc_info.value.error_code == TRANSCRIPT_INGESTION_FAILED
     pipeline.callback.fail.assert_not_called()
 
 
