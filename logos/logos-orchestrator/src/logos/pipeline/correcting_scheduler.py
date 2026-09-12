@@ -928,6 +928,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             is_cold_at_queue=is_cold_at_queue,
             provider_affinity=request.required_provider_id,
         )
+        # Start the hold timer immediately after enqueue so that logging,
+        # queue-depth reads, and the capacity-task setup are included in the
+        # reported duration — they are part of the request's queue residence.
+        _hold_start = time.monotonic()
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
             "Request %s queued for model=%s worker=%s " "(corrected_score=%.2f, tier=%s, depth=%s)",
@@ -955,7 +959,6 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             timeout = (
                 request.timeout_s if request.timeout_s else global_timeout_s(1200)
             )  # 20 min queue wait (or LOGOS_TIMEOUT_S)
-            _hold_start = time.monotonic()
             result = await asyncio.wait_for(future, timeout=timeout)
             prom.ADMISSION_HOLD_DURATION_SECONDS.observe(time.monotonic() - _hold_start)
 

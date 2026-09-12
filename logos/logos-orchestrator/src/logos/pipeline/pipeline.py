@@ -250,6 +250,7 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
         )
 
+        schedule_start_s = time.perf_counter()
         try:
             scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
@@ -430,7 +431,7 @@ class RequestPipeline:
                     provider_id=scheduling_result.provider_id,
                     execution_context=exec_context,
                     classification_stats=classification_result.stats,
-                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id),
+                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id, schedule_start_s),
                 )
 
             # For cloud providers or after timeout, fail immediately
@@ -474,8 +475,13 @@ class RequestPipeline:
                 scheduling_result.provider_id,
             )
 
-    def _scheduling_stats(self, scheduling_result, request_id: str) -> dict:
-        return {
+    def _scheduling_stats(
+        self,
+        scheduling_result,
+        request_id: str,
+        schedule_start_s: float | None = None,
+    ) -> dict:
+        stats = {
             "request_id": request_id,
             "model_id": scheduling_result.model_id,
             "provider_id": scheduling_result.provider_id,
@@ -488,6 +494,9 @@ class RequestPipeline:
             "ettft_tier": scheduling_result.ettft_tier,
             "warmth_state": scheduling_result.warmth_state,
         }
+        if schedule_start_s is not None:
+            stats["schedule_start_s"] = schedule_start_s
+        return stats
 
     def _context_failure(
         self,
