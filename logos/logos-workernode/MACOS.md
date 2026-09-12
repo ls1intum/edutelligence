@@ -18,9 +18,10 @@ Linux VM with no GPU passthrough, and Apple's own `container` framework has the
 same limitation. MLX inside a container silently falls back to the CPU.
 
 So the image built by CI is a **distribution artifact, never a runtime**:
-`bootstrap-macos.sh` pulls it, copies the payload out with `docker cp`, and the
-worker runs natively under launchd. Docker reached the same conclusion for
-their own vllm-metal backend in Docker Desktop 4.62.
+`bootstrap-macos.sh` pulls it straight from the registry over HTTPS, untars
+the payload out of its layers, and the worker runs natively under launchd. No
+container runtime is involved on the Mac at all. Docker reached the same
+conclusion for their own vllm-metal backend in Docker Desktop 4.62.
 
 Running natively is also what preserves orchestrator control. A native process
 can fork `vllm serve` subprocesses on command; a containerised worker could not
@@ -29,8 +30,8 @@ reach the host GPU to start them.
 ```
 CI (GitHub Actions)                    Mac (native)
 ┌────────────────────────┐            ┌─────────────────────────────────┐
-│ Dockerfile.mlx         │   pull     │ bootstrap-macos.sh              │
-│  → source only,        │ ─────────► │  docker create + docker cp      │
+│ Dockerfile.mlx         │   HTTPS    │ bootstrap-macos.sh              │
+│  → source only,        │ ─────────► │  registry pull + untar payload/ │
 │    no runtime          │            │   → ~/logos-workernode-mlx      │
 │                        │            │  install-macos.sh               │
 │ ghcr.io/ls1intum/      │            │   → ~/.venv-vllm-metal          │
@@ -51,14 +52,22 @@ CI (GitHub Actions)                    Mac (native)
 |---|---|
 | macOS | 15 (Sequoia) or later |
 | CPU | Apple Silicon (arm64) — Rosetta Python cannot load MLX |
-| Python | 3.12+, native arm64 |
-| Docker | only to fetch and unpack the artifact |
-| vllm-metal | ≥ 0.28.0 for Qwen3.8 (0.2.0 cannot load it) |
+| Python | 3.12 or newer — **installed by the bootstrap** |
+| Homebrew, git, uv | **installed by the bootstrap** |
+| Docker | not needed |
+| vllm-metal | ≥ 0.29.0 — Qwen3.8 needs ≥ 0.28.0, embedders need 0.29.0 |
 | RAM | see the sizing table below |
+
+macOS ships Python 3.9, which cannot run this worker (pydantic v2 evaluates
+`bool | None` annotations at import, which needs 3.10+). The bootstrap installs
+a supported interpreter itself and the installer refuses anything older, rather
+than building a venv that fails later with an unrelated-looking import error.
 
 ---
 
 ## Install
+
+On a freshly installed Mac this is the only step:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/ls1intum/edutelligence/main/logos/logos-workernode/scripts/bootstrap-macos.sh
@@ -66,9 +75,28 @@ chmod +x bootstrap-macos.sh
 ./bootstrap-macos.sh
 ```
 
-This pulls the image, extracts it to `~/logos-workernode-mlx`, installs
-vllm-metal into `~/.venv-vllm-metal`, and registers the launchd agent. It is
-idempotent — re-run it to deploy a new version.
+It installs its own prerequisites (Homebrew, git, uv, `python@3.13` — each
+skipped when already present), fetches the distribution image, extracts it to
+`~/logos-workernode-mlx`, installs vllm-metal into `~/.venv-vllm-metal`,
+registers the launchd agent, and disables sleep so the machine keeps serving
+with the lid closed. Expect two password prompts: Homebrew and `pmset` both
+need `sudo`.
+
+It is idempotent — **re-running it is also the upgrade path**. Operator state
+(`config.yml`, `.env`, `data/`, `logs/`, `cache/`) is preserved; only code and
+runtime are replaced.
+
+| Flag | Effect |
+|---|---|
+| `--no-deps` | Skip the Homebrew/git/uv/python step, for machines whose toolchain is managed by Ansible or MDM |
+| `--no-power-settings` | Leave sleep behaviour alone |
+| `<image-ref>` | Install a specific tag instead of `:latest`, e.g. a PR build |
+
+**No container runtime is involved.** The image is never started — Metal does
+not exist inside containers — so the bootstrap pulls it straight from the
+registry over HTTPS with an anonymous token and untars the `payload/` directory
+out of its layers. That keeps Docker Desktop, a GUI application with a licence
+dialog on first launch, off a machine meant to run headless.
 
 The chat templates packaged with the image are merged into
 `~/logos-workernode-mlx/chat-templates` (where the agent points
@@ -76,6 +104,24 @@ The chat templates packaged with the image are merged into
 copied in, files you added or edited yourself are never overwritten. A
 template referenced in `config.yml` therefore works out of the box after the
 first bootstrap — no hand-seeding.
+
+### Register the node
+
+The worker needs a provider entry in Logos before it can connect. Create it in
+the Logos UI (*Providers → add*, type `logosnode`) and copy the worker key it
+returns.
+
+The privacy level is not a formality — pick it by where the machine physically
+stands and who can touch it:
+
+| Level | When |
+|---|---|
+| `LOCAL` | Your own datacentre or server room |
+| `THIRD_PARTY_HARDWARE` | Someone else's Mac, e.g. a personal laptop |
+
+A Metal lane is a **native process on that machine**, so whoever operates it
+can attach a debugger or read its logs. `LOCAL` in the router's privacy
+ordering means "our datacentre", not "not a cloud" — see *Privacy* below.
 
 Then fill in credentials and start:
 
@@ -114,7 +160,8 @@ The reference model for this document is
 `mlx-community/Qwen3.8-27B-4bit` (15.1 GB) and
 `mlx-community/Qwen3.8-27B-8bit` (27.5 GB). It is the model the *Sizing*
 table measures, and the reason the *Requirements* table pins
-vllm-metal ≥ 0.28.0.
+vllm-metal ≥ 0.28.0. Embedding models raise that floor to 0.29.0 — see
+*Embedding models* below.
 
 The seeded `config.yml` advertises the **4bit** build by default — the only
 one that fits the 36 GB reference machine. On a 64 GB+ Mac, point
@@ -201,13 +248,60 @@ launchctl bootout "gui/$(id -u)/de.tum.logos.workernode"        # stop
 
 The worker is a **LaunchAgent**, not a LaunchDaemon. Daemons run outside a login
 session and do not reliably get GPU access, which would quietly demote every
-lane to the CPU. On an unattended machine, enable auto-login (System Settings →
-Users & Groups → Automatic login) and keep the session alive:
+lane to the CPU. The tradeoff: the account has to be logged in for the agent to
+run at all.
+
+On an unattended machine enable auto-login (System Settings → Users & Groups →
+Automatic login). **With FileVault enabled, auto-login is unavailable** — the
+disk unlock *is* the login — so after every reboot someone has to unlock the
+machine physically before the node comes back. Two ways out:
+
+- Turn FileVault off. Reasonable for a machine in a locked server room, a
+  deliberate decision anywhere else.
+- Keep FileVault and use `sudo fdesetup authrestart` for planned reboots: it
+  unlocks the next boot once, so a remote restart does not strand the node.
+  It does not help after a power cut.
+
+### Sleep must stay off
+
+A MacBook idles into sleep within minutes and takes the node offline with it;
+closing the lid does it immediately. `bootstrap-macos.sh` configures this
+already — verify with `pmset -g | grep SleepDisabled` (must print `1`). To set
+it by hand:
 
 ```bash
-sudo pmset -a disablesleep 1
-caffeinate -dimsu &
+sudo pmset -a disablesleep 1     # covers the closed lid, which the timers below do not
+sudo pmset -c sleep 0 displaysleep 0 disksleep 0 standby 0 autopoweroff 0 powernap 0
 ```
+
+`disablesleep` is the load-bearing one: the per-source timers only govern idle
+sleep, not the lid switch.
+
+---
+
+## Uninstall
+
+```bash
+~/logos-workernode-mlx/scripts/uninstall-macos.sh
+```
+
+Prints what it is about to delete and asks before doing it. Removes the launchd
+agent, the install root (including `config.yml`, `.env` and the model cache),
+the vllm-metal venv and the pulled image, then restores the sleep defaults so a
+decommissioned laptop does not sit awake until the battery is flat.
+
+| Flag | Effect |
+|---|---|
+| `--keep-cache` | Preserve `<install root>/cache` — 15 GB per 8B model that would otherwise be re-downloaded |
+| `--keep-power-settings` | Leave sleep disabled |
+| `--yes` | No confirmation prompt |
+
+It deliberately leaves `~/.cache/huggingface`, Homebrew, uv and Python alone:
+the worker keeps its models under the install root, so anything in a shared
+cache belongs to someone else's work.
+
+The provider entry in Logos is server-side state — remove it in the UI too, or
+it lingers as a permanently disconnected node.
 
 ---
 
@@ -266,6 +360,74 @@ One accounting quirk of unified memory: the reported GPU usage is the
 model looks tighter than it is on each of them. Both directions err toward
 reporting less free memory, which is the safe side for a capacity planner,
 but do not read the two numbers as independent pools.
+
+---
+
+## Embedding models
+
+Embedders need **vllm-metal ≥ 0.29.0** and `--runner pooling`, passed through
+`extra_args` — the model is otherwise loaded as a text generator and exposes
+completions instead of `/v1/embeddings`.
+
+Two loading paths exist upstream, and which one a checkpoint takes decides
+whether it works at all:
+
+| Family | Path | Status |
+|---|---|---|
+| Encoder (BGE-M3, XLM-RoBERTa, multilingual E5) | encoder pooling, own loader — no paged attention, no KV cache | works |
+| Decoder (Qwen3-Embedding) | generation loader, then pooled | works from 0.29.0 |
+
+On 0.28.0 the decoder path failed both ways and neither error named the real
+cause. The official Qwen checkpoints store the backbone flat
+(`embed_tokens.weight`, `layers.0.…`) while mlx-lm's Qwen3 wraps it under
+`model.`, so every tensor was rejected — `Received 398 parameters not in
+model` (vllm-metal#730). The MLX re-quantizations (`-mxfp8`, `-4bit-DWQ`) got
+further and then died on `Missing 1 parameters: lm_head.weight`: the
+generation loader wanted a language-model head that an embedder does not
+have. 0.29.0 fixes the remap; both failures are gone.
+
+Worked example — `Qwen/Qwen3-Embedding-8B` on a 32 GB M2 Pro, measured:
+
+```yaml
+logos:
+  capabilities_models:
+    - "Qwen/Qwen3-Embedding-8B"
+
+engines:
+  vllm:
+    model_overrides:
+      "Qwen/Qwen3-Embedding-8B":
+        tensor_parallel_size: 1
+        max_model_len: 32768        # native window is 40960
+        mm_processor_cache_gb: 0
+        # The pooling runner has no chat-completions path, so the flags the
+        # worker adds by default would reach a server that cannot use them.
+        enable_auto_tool_choice: false
+        reasoning_parser: "none"
+        # Prefix caching is a decode-path optimization; a pooling request is
+        # a single-pass encode with nothing to reuse.
+        enable_prefix_caching: false
+        extra_args: ["--runner", "pooling"]
+
+model_profile_overrides:
+  "Qwen/Qwen3-Embedding-8B":
+    base_residency_mb: 15400        # (15.13 + 0.64) GB -> 15039 MiB, rounded up
+    kv_per_token_bytes: 147456      # 36 layers x 2 x 8 kv_heads x 128 head_dim x 2 B
+    max_context_length: 32768
+    disk_size_bytes: 15134634568
+```
+
+**The lane's log reports decimal GB, not GiB** — worth knowing before converting
+any of these numbers. Proof from the same machine: MLX reports
+`max_recommended_working_set_size = 26800603136` bytes, which is 26.80 GB
+decimal (24.96 GiB), and the lane logs `metal_limit=26.80GB`. So
+`base_residency_mb` is `(15.13 + 0.64) x 10^9 / 1024^2 = 15039 MiB`, rounded up
+to 15400. Reading those figures as GiB would inflate the profile by about
+1.1 GB and reject placements that in fact fit.
+
+That lane reports `usable_metal=22.78GB`, `kv_budget=7.00GB` and
+`max_tokens_cached=47488` — 1.45x concurrency at the full 32k window. It
+answers `/v1/embeddings` with 4096-dimensional vectors.
 
 ---
 
@@ -366,9 +528,11 @@ startup log for `Excluding N uncalibrated model(s) from capabilities`.
 the working set or `max_buffer_length`. Lower `max_model_len`, use a smaller
 quantization, or raise `iogpu.wired_limit_mb`.
 
-**`docker pull` denied.** The GHCR package is private until someone flips it to
-public once (Package settings → Change visibility). Until then:
-`echo $GITHUB_TOKEN | docker login ghcr.io -u <user> --password-stdin`
+**`Could not obtain a pull token` / manifest fetch fails.** The bootstrap
+pulls anonymously, which only works while the GHCR package is public (Package
+settings → Change visibility). For a private package, fetch the token with
+credentials instead:
+`curl -u <user>:$GITHUB_TOKEN "https://ghcr.io/token?scope=repository:ls1intum/logos-workernode-mlx:pull"`
 
 ---
 
@@ -398,7 +562,7 @@ install aborts instead of running a half-patched installer). The staged
 installer is kept as a plain file in its own directory: a `scripts/lib.sh`
 sibling would switch upstream into its source-checkout branch. The venv is
 still created by the upstream installer, which installs a matched
-(vllm, mlx, torch) set — the pinned release gives vLLM 0.28.0, the same
+(vllm, mlx, torch) set — the pinned release gives vLLM 0.29.0, the same
 release the CUDA image pins. PyPI carries no macOS vLLM wheel, and pulling
 that set apart in our own requirements file is how you get an unbootable
 lane. And the installer's version floor (`VLLM_METAL_MIN_VERSION`, asserted
@@ -409,21 +573,47 @@ That is why `MetalVllmProcessHandle` builds its own command line instead of
 filtering the CUDA one, and why `tests/test_metal_process.py` cross-checks the
 generated flags against the *installed* vllm-metal whenever the suite runs on a
 Mac. `logos_update-vllm.yml` only touches `Dockerfile`, not `Dockerfile.mlx`,
-so automated vLLM bumps do not reach this path.
+so automated vLLM bumps do not reach this path — `logos_update-vllm-metal.yml`
+is the one that does (below).
 
 Keep vllm-metal current. It moves fast and dev builds are published daily —
 but upstream prunes old dev releases, so the pin is the **stable** cut:
-v0.28.0 is the stable release that contains the build the *Sizing*
-measurements were taken with, plus 14 follow-up bugfix commits. Qwen3.8
-support landed in 08/2026, and 0.2.0 could not serve it at all. To upgrade,
-pick the stable release to move to, download its `install.sh`, its
-`scripts/lib.sh`, its release wheel, and the vLLM core wheel it names (the
-tag in `.github/vllm-release-tag.commit` at that release), compute the four
-SHA256s, and update `VLLM_METAL_REF` **and all four checksums** together in
-`install-macos.sh` (bump `VLLM_METAL_MIN_VERSION` if the new floor applies),
-re-check the four patch patterns against the new installer, and re-run the
-script — it is idempotent. Do not pipe a fetched installer into bash:
-verify the checksum first, as the installer now does for itself.
+v0.29.0 is the current stable release. Note that the two measurement sets in
+this document come from different runtimes: the *Sizing* table was measured on
+vllm-metal 0.3.0.dev20260826 (a 36 GB M3 Pro), the *Embedding models* profile
+on v0.29.0 (a 32 GB M2 Pro). Re-measure on the runtime you actually deploy
+rather than mixing them. Qwen3.8 support landed in 08/2026,
+and 0.2.0 could not serve it at all; embedding models need 0.29.0.
+
+**The bump is automated.** `.github/workflows/logos_update-vllm-metal.yml`
+runs daily (and on demand, with an optional version input): it picks the newest
+stable vllm-metal release, downloads its `install.sh`, its `scripts/lib.sh`,
+its release wheel and the vLLM core wheel it names, recomputes all four
+SHA256s, re-verifies that the four exact-string patch patterns still match
+exactly once each, updates `VLLM_METAL_REF`, the wheel names and URLs and
+`VLLM_METAL_PINNED_VERSION` together, and opens a PR. It does **not** touch
+`VLLM_METAL_MIN_VERSION`: that is the compatibility floor for
+operator-managed custom venvs, and a routine release is not a new
+requirement — raise it by hand when something actually stops working below
+a version. If a patch pattern no
+longer matches, it fails loudly instead of opening a PR that would produce a
+half-patched installer — that case needs a human.
+
+To do it by hand, the same steps apply: download those four artifacts from the
+target tag, compute the SHA256s, update `VLLM_METAL_REF` **and all checksums**
+together in `install-macos.sh`, bump `VLLM_METAL_MIN_VERSION` if the new floor
+applies, re-check the patch patterns, and re-run the script — it is idempotent.
+Do not pipe a fetched installer into bash: verify the checksum first, as the
+installer now does for itself.
+
+Note that `install.sh` and `scripts/lib.sh` are frequently byte-identical
+across tags (they were between v0.28.0 and v0.29.0), so two of the four
+checksums often do not change. Confirm that by recomputing them — never assume
+it.
+
+Upgrading a node that is already deployed is just a re-run of
+`bootstrap-macos.sh`: it fetches the current image, replaces the code and the
+runtime, and leaves `config.yml`, `.env`, `data/`, `logs/` and `cache/` alone.
 
 Two things to re-check after an upgrade, both of which changed between 0.2.0
 and 0.3.0.dev: the `VLLM_METAL_*` names in `MetalConfig`

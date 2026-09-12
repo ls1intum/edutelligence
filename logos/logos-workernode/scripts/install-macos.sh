@@ -24,18 +24,45 @@ INSTALL_ROOT="${1:-${LOGOS_MLX_HOME:-$HOME/logos-workernode-mlx}}"
 # the same LOGOS_METAL_VENV, so a custom location cannot be installed into and
 # then missed at lane spawn.
 METAL_VENV="${LOGOS_METAL_VENV:-$HOME/.venv-vllm-metal}"
-# Pinned to the release this worker was verified against. v0.28.0 is the
-# stable cut that contains the build the MACOS.md measurements were taken
-# with (v0.3.0.dev20260826134128, plus its 14 follow-up bugfix commits) and
-# vendors vLLM 0.28.0 — the combination the document describes. `main` and
-# /releases/latest are deliberately not fetched anywhere: they carry no
-# version guarantee, and the installer runs on a machine that will hold other
-# people's prompts, so every byte that is executed or installed is pinned to
-# the tag below and sha256-verified before use. Bump ref and checksums
-# together when upgrading (and re-check the patch patterns below against the
-# new installer — see the version-pinning section of MACOS.md).
-VLLM_METAL_REF="v0.28.0"
+DEFAULT_METAL_VENV="$HOME/.venv-vllm-metal"
+# Normalize before anything compares, moves or deletes this path. A trailing
+# slash alone would turn "$METAL_VENV.stale-$$" into a CHILD of the venv rather
+# than a sibling, and an unresolved symlink alias of the default location would
+# be treated as a custom path — taking the floor branch instead of the exact-pin
+# rebuild. Resolve both sides so the managed-environment policy is decided on
+# real paths.
+canonicalize_dir() {
+    local p="$1"
+    while [ "$p" != "/" ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+    if [ -d "$p" ]; then (cd "$p" 2>/dev/null && pwd -P) || printf '%s' "$p"; else printf '%s' "$p"; fi
+}
+METAL_VENV="$(canonicalize_dir "$METAL_VENV")"
+DEFAULT_METAL_VENV="$(canonicalize_dir "$DEFAULT_METAL_VENV")"
+# Downstream consumers (the launchd plist, the worker's runtime resolvers) must
+# see the same resolved path this script installs into.
+export LOGOS_METAL_VENV="$METAL_VENV"
+# Pinned to the release this worker was verified against. v0.29.0 vendors
+# vLLM 0.29.0 and is the first cut that loads the official Qwen3-Embedding
+# checkpoints: those ship their backbone weights flat (`embed_tokens.weight`,
+# `layers.0.…`) while mlx-lm's Qwen3 wraps them under `model.`, so on v0.28.0
+# every tensor was rejected with "Received 398 parameters not in model"
+# (vllm-metal#730, fixed by a key remap in #736). The MLX re-quantizations of
+# the same model failed differently and just as fatally — the generation
+# loader demanded an `lm_head.weight` an embedder does not carry. Verified on
+# an M2 Pro: `Qwen/Qwen3-Embedding-8B` with `--runner pooling` now serves
+# 4096-dimensional vectors. `main` and /releases/latest are deliberately not
+# fetched anywhere: they carry no version guarantee, and the installer runs on
+# a machine that will hold other people's prompts, so every byte that is
+# executed or installed is pinned to the tag below and sha256-verified before
+# use. Bump ref and checksums together when upgrading (and re-check the patch
+# patterns below against the new installer — see the version-pinning section
+# of MACOS.md).
+VLLM_METAL_REF="v0.29.0"
 VLLM_METAL_INSTALLER="https://raw.githubusercontent.com/vllm-project/vllm-metal/${VLLM_METAL_REF}/install.sh"
+# Unchanged from v0.28.0 on purpose, not an oversight: install.sh and
+# scripts/lib.sh are byte-identical at both tags (re-verified against
+# v0.29.0), so only the wheels below move. Always re-compute these when
+# bumping — an identical checksum is a fact to confirm, never to assume.
 VLLM_METAL_INSTALLER_SHA256="0d0400a5527169cc2a2934189081c357464a64f3b463542e6f56921f036f984a"
 # The pinned installer performs further fetches of its own before it installs
 # anything — and it only checksums itself. At this tag it sources
@@ -46,17 +73,28 @@ VLLM_METAL_INSTALLER_SHA256="0d0400a5527169cc2a2934189081c357464a64f3b463542e6f5
 # installer is patched to consume the verified copies:
 VLLM_METAL_LIB="https://raw.githubusercontent.com/vllm-project/vllm-metal/${VLLM_METAL_REF}/scripts/lib.sh"
 VLLM_METAL_LIB_SHA256="874d05acf9601a3f68e7c1246179a7ca3bb3f2f9ed9856f5f71df4bdaf293da8"
-VLLM_METAL_WHEEL_NAME="vllm_metal-0.28.0-cp312-cp312-macosx_15_0_arm64.whl"
+VLLM_METAL_WHEEL_NAME="vllm_metal-0.29.0-cp312-cp312-macosx_15_0_arm64.whl"
 VLLM_METAL_WHEEL_URL="https://github.com/vllm-project/vllm-metal/releases/download/${VLLM_METAL_REF}/${VLLM_METAL_WHEEL_NAME}"
-VLLM_METAL_WHEEL_SHA256="61d7c410fe0f017b0268a306208582b23f1ac4e18e7ffd5472cf3631866d4b28"
+VLLM_METAL_WHEEL_SHA256="0d03dcc2be9a4286a19c5e53e1355d2e47acdbf2be6f9de9cbb48cc4b880f393"
 # vLLM core wheel (cp312 — the installer's lib.sh creates the venv with
 # Python 3.12). PyPI carries no macOS vLLM wheel, hence the release URL.
-VLLM_CORE_WHEEL_NAME="vllm-0.28.0+cpu-cp312-cp312-macosx_11_0_arm64.whl"
-VLLM_CORE_WHEEL_URL="https://github.com/vllm-project/vllm/releases/download/v0.28.0/vllm-0.28.0%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl"
-VLLM_CORE_WHEEL_SHA256="e8c5a3930367b740914a14420efcc3535da2c2dba5bb23d77221ff81094cc630"
-# Documented floor (MACOS.md, Requirements): below it the current model set
-# does not load.
-VLLM_METAL_MIN_VERSION="0.28.0"
+VLLM_CORE_WHEEL_NAME="vllm-0.29.0+cpu-cp312-cp312-macosx_11_0_arm64.whl"
+VLLM_CORE_WHEEL_URL="https://github.com/vllm-project/vllm/releases/download/v0.29.0/vllm-0.29.0%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl"
+VLLM_CORE_WHEEL_SHA256="7133cb494664c502b07b114fe915847f0e71296d502f67f6fa76172ba46978df"
+# Two different things, deliberately separate.
+#
+# PINNED is the version of the wheels above — what the managed default venv is
+# rebuilt to track exactly, so a deployment is reproducible. The automated bump
+# workflow moves this one, and it must always equal the version in the wheel
+# names.
+#
+# MIN is the documented compatibility floor (MACOS.md, Requirements): below it
+# the current model set does not load. It governs operator-managed custom
+# venvs, which only have to be new enough. A routine release bump is NOT a new
+# compatibility requirement, so the workflow leaves this alone — raise it by
+# hand only when something genuinely stops working below that version.
+VLLM_METAL_PINNED_VERSION="0.29.0"
+VLLM_METAL_MIN_VERSION="0.29.0"
 
 log()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[install]\033[0m %s\n' "$*" >&2; }
@@ -93,7 +131,9 @@ fi
 # than letting the installer bootstrap it — that bootstrap is a curl|sh of
 # bytes we do not verify.
 command -v uv >/dev/null 2>&1 || die "uv not found — install it first (brew install uv), then re-run."
-command -v python3 >/dev/null 2>&1 || die "python3 not found — needed to verify and patch the installer and to create the worker venv (brew install python@3.12)."
+# Any python3 will do for the patch step below (it only rewrites text); the
+# worker venv has a real version floor and picks its own interpreter later.
+command -v python3 >/dev/null 2>&1 || die "python3 not found — needed to verify and patch the installer (brew install python@3.13)."
 
 log "Install root:      $INSTALL_ROOT"
 log "vllm-metal venv:   $METAL_VENV"
@@ -105,9 +145,99 @@ log "vllm-metal venv:   $METAL_VENV"
 # IS pinned is everything the installer executes or installs — the installer,
 # its lib.sh, the vLLM core wheel and the vllm-metal wheel (tag + sha256, see
 # above) — and the installer is patched to consume the verified copies.
+# Skipping on "a vllm exists" alone is what made a version bump undeployable:
+# an existing 0.28 venv took the skip path, the floor check below then failed,
+# and because bootstrap-macos.sh boots the agent out before running this, the
+# documented upgrade command left the node offline until someone deleted the
+# venv by hand. Compare against the pin instead of merely testing for presence,
+# and rebuild when they differ — upstream's installer creates the venv with
+# --clear, but an explicit removal keeps a half-written venv from being
+# reused.
+installed_metal_version() {
+    [ -x "$METAL_VENV/bin/python" ] || return 1
+    "$METAL_VENV/bin/python" -c 'import importlib.metadata as m; print(m.version("vllm-metal"))' 2>/dev/null
+}
+
+# Put a moved-aside venv back if anything between the move and the successful
+# verification fails — a half-finished upgrade must not leave the node with no
+# runtime at all. Covers both venvs this script rebuilds; each is a no-op
+# unless its rebuild is actually in flight.
+# Declared before the handler below references them.
+WORKER_VENV="$INSTALL_ROOT/.venv"
+stale_metal_venv=""
+stale_worker_venv=""
+restore_stale_venvs() {
+    local rc="$1"
+    [ "$rc" -ne 0 ] || return 0
+    if [ -n "${stale_metal_venv:-}" ] && [ -d "$stale_metal_venv" ]; then
+        warn "Install failed — restoring the previous vllm-metal venv"
+        rm -rf "$METAL_VENV"
+        mv "$stale_metal_venv" "$METAL_VENV" \
+            && warn "  restored $METAL_VENV (still the old version; re-run to retry the upgrade)" \
+            || warn "  could not restore it; the previous venv is in $stale_metal_venv"
+    fi
+    if [ -n "${stale_worker_venv:-}" ] && [ -d "$stale_worker_venv" ]; then
+        warn "Install failed — restoring the previous worker venv"
+        rm -rf "$WORKER_VENV"
+        mv "$stale_worker_venv" "$WORKER_VENV" \
+            && warn "  restored $WORKER_VENV (still on the old interpreter; re-run to retry)" \
+            || warn "  could not restore it; the previous venv is in $stale_worker_venv"
+    fi
+}
+trap 'restore_stale_venvs $?' EXIT
+# Is the installed version at or above the documented floor? Same comparison
+# the floor check further down performs, asked early so a custom venv is judged
+# by the requirement rather than by the pin.
+metal_meets_floor() {
+    "$METAL_VENV/bin/python" - "${1:-}" "$VLLM_METAL_MIN_VERSION" <<'PYFLOORCHK' 2>/dev/null
+import sys
+
+from packaging.version import InvalidVersion, Version
+
+try:
+    sys.exit(0 if Version(sys.argv[1]) >= Version(sys.argv[2]) else 1)
+except (InvalidVersion, IndexError):
+    sys.exit(1)
+PYFLOORCHK
+}
+
+metal_needs_install=1
+stale_metal_venv=""
 if [ -x "$METAL_VENV/bin/vllm" ]; then
-    log "vllm-metal already present — skipping install"
-else
+    current_metal="$(installed_metal_version || true)"
+    # The two locations are held to different standards on purpose. The default
+    # venv is managed by this script, so it tracks the pin exactly and is
+    # rebuilt on any difference — that is what makes a deployment
+    # reproducible. A custom venv is the operator's, and the documented
+    # contract for it is VLLM_METAL_MIN_VERSION, a floor: rejecting a newer
+    # build (0.30.0 against a 0.29.0 floor) would strand a perfectly
+    # compatible environment, and since the branch below cannot rebuild custom
+    # paths it would abort — with the worker already stopped when run through
+    # the bootstrap.
+    if [ "$METAL_VENV" != "$DEFAULT_METAL_VENV" ]; then
+        if metal_meets_floor "$current_metal"; then
+            log "vllm-metal ${current_metal:-unknown} in $METAL_VENV meets the floor ($VLLM_METAL_MIN_VERSION) — skipping install"
+            metal_needs_install=0
+        else
+            die "vllm-metal ${current_metal:-unknown} in $METAL_VENV is below the required $VLLM_METAL_MIN_VERSION.
+LOGOS_METAL_VENV points at a custom location, which upstream's installer cannot
+populate, so this script will not delete it. Upgrade or remove that venv
+yourself, or unset LOGOS_METAL_VENV to use the default."
+        fi
+    elif [ "$current_metal" = "$VLLM_METAL_PINNED_VERSION" ]; then
+        log "vllm-metal $current_metal already present — skipping install"
+        metal_needs_install=0
+    else
+        log "vllm-metal ${current_metal:-unknown} is installed but this worker pins $VLLM_METAL_PINNED_VERSION — rebuilding the venv"
+        # Move aside instead of deleting: if the download or install below
+        # fails, the node still has a working (if outdated) runtime to fall
+        # back on rather than no runtime at all. Removed once the new venv is
+        # verified.
+        stale_metal_venv="$METAL_VENV.stale-$$"
+        mv "$METAL_VENV" "$stale_metal_venv"
+    fi
+fi
+if [ "$metal_needs_install" -eq 1 ]; then
     log "Installing vllm-metal into $METAL_VENV (this downloads several GB)…"
     # The verified artifacts are staged in a directory of their own; the
     # installer gets a plain temp FILE, not a directory. That matters: if a
@@ -116,7 +246,9 @@ else
     # instead of the wheel branch.
     stage="$(mktemp -d "${TMPDIR:-/tmp}/logos-vllm-metal-stage.XXXXXX")"
     installer_tmp="$(mktemp "${TMPDIR:-/tmp}/logos-vllm-metal-install.XXXXXX")"
-    trap 'rm -rf "$stage" "$installer_tmp"' EXIT
+    # Keeps the rollback armed: a bare `trap ... EXIT` here would replace the
+    # handler installed above and silently drop the venv restore.
+    trap 'rc=$?; rm -rf "$stage" "$installer_tmp"; restore_stale_venvs $rc' EXIT
     mkdir -p "$stage/scripts" "$stage/wheels"
 
     fetch_verified "$VLLM_METAL_LIB" "$VLLM_METAL_LIB_SHA256" "$stage/scripts/lib.sh"
@@ -183,8 +315,8 @@ PATCH
     fi
 
     bash "$installer_tmp"
-    if [ ! -x "$METAL_VENV/bin/vllm" ] && [ -x "$HOME/.venv-vllm-metal/bin/vllm" ]; then
-        die "vllm-metal was installed into $HOME/.venv-vllm-metal, but LOGOS_METAL_VENV points at $METAL_VENV.
+    if [ ! -x "$METAL_VENV/bin/vllm" ] && [ -x "$DEFAULT_METAL_VENV/bin/vllm" ]; then
+        die "vllm-metal was installed into $DEFAULT_METAL_VENV, but LOGOS_METAL_VENV points at $METAL_VENV.
 Upstream's installer always creates ~/.venv-vllm-metal — populate a custom location yourself (e.g. upstream's editable install) or unset LOGOS_METAL_VENV."
     fi
     [ -x "$METAL_VENV/bin/vllm" ] || die "vllm-metal install finished but $METAL_VENV/bin/vllm is missing."
@@ -230,20 +362,101 @@ print(f"  {info.get('device_name')} — {budget:.1f} GiB GPU budget, "
       f"max buffer {info.get('max_buffer_length', 0) / 1024**3:.1f} GiB")
 PYCHECK
 
+# The replacement is installed, at the pinned version, with a loadable plugin —
+# only now is the previous venv safe to discard. Until this point the rollback
+# handler would have put it back.
+if [ -n "${stale_metal_venv:-}" ] && [ -d "$stale_metal_venv" ]; then
+    log "Removing the superseded vllm-metal venv"
+    rm -rf "$stale_metal_venv"
+    stale_metal_venv=""
+fi
+
 # ── 2. Worker virtualenv ─────────────────────────────────────────────────────
-WORKER_VENV="$INSTALL_ROOT/.venv"
+# The floor is 3.12: the worker's own dependencies are fine further back, but
+# pydantic v2 evaluates `bool | None` annotations at import, which needs 3.10+,
+# and 3.12 is what the rest of this installer is built around.
+WORKER_PYTHON_MIN_MINOR=12
+
+# Print the minor version of a CPython 3.x interpreter, or nothing if it is not
+# a usable python3 at all.
+python_minor() {
+    "$1" -c 'import sys; print(sys.version_info[1] if sys.version_info[0] == 3 else "")' 2>/dev/null
+}
+
 PYTHON_BIN="${LOGOS_PYTHON:-}"
-if [ -z "$PYTHON_BIN" ]; then
-    for candidate in python3.12 python3.13 python3; do
-        if command -v "$candidate" >/dev/null 2>&1; then PYTHON_BIN="$(command -v "$candidate")"; break; fi
+if [ -n "$PYTHON_BIN" ]; then
+    # An explicit LOGOS_PYTHON is honoured but still checked — a stale value is
+    # exactly as fatal as a bad auto-pick, and much more surprising.
+    minor="$(python_minor "$PYTHON_BIN")"
+    [ -n "$minor" ] || die "LOGOS_PYTHON=$PYTHON_BIN is not a usable python3."
+    [ "$minor" -ge "$WORKER_PYTHON_MIN_MINOR" ] || die \
+        "LOGOS_PYTHON=$PYTHON_BIN is Python 3.$minor; this worker needs 3.$WORKER_PYTHON_MIN_MINOR or newer."
+else
+    # Preferred version first, NOT newest first. python3.13 is what
+    # bootstrap-macos.sh installs and what this worker is tested against;
+    # picking the newest interpreter present would rebuild the venv onto an
+    # untested Python the moment someone installs a newer one for unrelated
+    # reasons — and the rebuild branch below would do it on every run.
+    # Newer versions are still accepted when nothing preferred is installed.
+    #
+    # macOS always has /usr/bin/python3 (Command Line Tools, 3.9), and Homebrew
+    # only symlinks a bare `python3` for its current default formula — so a
+    # machine with just `brew install python@3.14` has no `python3` of its own
+    # and the bare name resolves to Apple's 3.9. Picking it silently is what
+    # produced a venv that failed much later, at import time, with an
+    # unrelated-looking pydantic error. Hence: every candidate is
+    # version-checked, and there is no unchecked fallback.
+    for candidate in python3.13 python3.12 python3.14 python3.15 python3; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        resolved="$(command -v "$candidate")"
+        minor="$(python_minor "$resolved")"
+        [ -n "$minor" ] && [ "$minor" -ge "$WORKER_PYTHON_MIN_MINOR" ] || continue
+        PYTHON_BIN="$resolved"
+        break
     done
 fi
-[ -n "$PYTHON_BIN" ] || die "No python3 found. Install one (e.g. brew install python@3.12)."
+[ -n "$PYTHON_BIN" ] || die "No Python 3.$WORKER_PYTHON_MIN_MINOR+ found.
+macOS ships only Python 3.9 (/usr/bin/python3), which cannot run this worker.
+Install a supported one and re-run:
 
-log "Worker venv:       $WORKER_VENV  (from $PYTHON_BIN)"
-"$PYTHON_BIN" -m venv "$WORKER_VENV" 2>/dev/null || true
+  brew install python@3.13
+
+Homebrew creates a versioned 'python3.13' binary; this installer finds it on
+PATH. Use LOGOS_PYTHON=/path/to/python3.13 to point at a specific interpreter."
+
+log "Worker venv:       $WORKER_VENV  (from $PYTHON_BIN, Python 3.$(python_minor "$PYTHON_BIN"))"
+
+# `python -m venv` on an existing directory does NOT replace bin/python when it
+# already exists — it only adds the version-suffixed name. A venv first created
+# with 3.9 therefore keeps launching 3.9 after a re-run with a newer
+# interpreter, while pyvenv.cfg claims the new version. Recreate instead of
+# patching over it whenever the interpreter on disk is not the one we want.
+#
+# Deleting it outright is not safe: existing nodes carry a perfectly good 3.12
+# venv from the previous installer while the bootstrap now installs and selects
+# 3.13, so this branch fires on a routine upgrade. A transient venv or pip
+# failure would then leave an already-stopped worker with no runtime at all.
+# Same treatment as the Metal venv above — move aside, restore on failure.
+if [ -x "$WORKER_VENV/bin/python" ]; then
+    have="$(python_minor "$WORKER_VENV/bin/python")"
+    want="$(python_minor "$PYTHON_BIN")"
+    if [ "$have" != "$want" ]; then
+        log "  existing venv runs Python 3.${have:-?}, rebuilding it for 3.$want"
+        stale_worker_venv="$WORKER_VENV.stale-$$"
+        rm -rf "$stale_worker_venv"
+        mv "$WORKER_VENV" "$stale_worker_venv"
+    fi
+fi
+"$PYTHON_BIN" -m venv "$WORKER_VENV"
 "$WORKER_VENV/bin/python" -m pip install --quiet --upgrade pip
 "$WORKER_VENV/bin/python" -m pip install --quiet -r "$INSTALL_ROOT/requirements.txt"
+
+# Dependencies are in and importable — the previous venv is now redundant.
+# Until this point the EXIT handler would have put it back.
+if [ -n "${stale_worker_venv:-}" ] && [ -d "$stale_worker_venv" ]; then
+    rm -rf "$stale_worker_venv"
+    stale_worker_venv=""
+fi
 
 # ── 3. Runtime directories ───────────────────────────────────────────────────
 mkdir -p "$INSTALL_ROOT/data" "$INSTALL_ROOT/logs" "$INSTALL_ROOT/chat-templates"
