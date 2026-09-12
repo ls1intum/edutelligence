@@ -210,6 +210,31 @@ Refusing to unpack an artifact that is not what the manifest describes."
     if tar -tzf "$blob" 2>/dev/null | grep -q '^payload/'; then
         tar -xzf "$blob" -C "$UNPACK" payload \
             || die "Failed to extract payload/ from layer ${layer#*:}."
+
+        # Apply OCI whiteouts, which a container runtime does when it composes
+        # layers and a plain sequential untar does not. Without this a file
+        # deleted in a later layer survives into staging and is then synced
+        # into the installation — the payload is assembled across layers, so a
+        # file removed from the image would come back on every deploy.
+        #
+        # Per the image-layer spec: `.wh.<name>` deletes <name> in the same
+        # directory, and `.wh..wh..opq` clears the directory's inherited
+        # contents. Applied after each layer rather than once at the end,
+        # because a later layer may legitimately re-add what an earlier one
+        # deleted.
+        while IFS= read -r marker; do
+            [ -n "$marker" ] || continue
+            marker_dir="$(dirname "$marker")"
+            marker_name="$(basename "$marker")"
+            if [ "$marker_name" = ".wh..wh..opq" ]; then
+                find "$marker_dir" -mindepth 1 -maxdepth 1 ! -name '.wh..wh..opq' -exec rm -rf {} + 2>/dev/null || true
+            else
+                rm -rf "${marker_dir}/${marker_name#.wh.}"
+            fi
+            rm -f "$marker"
+        done <<WHITEOUTS
+$(find "$UNPACK/payload" -name '.wh.*' 2>/dev/null)
+WHITEOUTS
     fi
     rm -f "$blob"
 done <<EOF

@@ -47,6 +47,11 @@ jobs:
           # configured so the push and PR are attributed to a real user and CI
           # triggers on the auto-created PR.
           token: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
+          # Always branch from the default branch. workflow_dispatch checks out
+          # whatever ref was selected when starting the run, so dispatching
+          # from a feature branch would otherwise fold every commit unique to
+          # that branch into the generated PR instead of a pin-only change.
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Determine target version
         id: version
@@ -61,11 +66,18 @@ jobs:
             # Stable only. Upstream publishes dev builds daily and prunes them
             # later, so a dev pin rots into a 404 — exclude prereleases and
             # drafts, and require a plain vX.Y.Z tag.
+            #
+            # Pick the semantic maximum, NOT the most recently published: a
+            # backport cut after a newer series (v0.28.1 released after
+            # v0.29.0) is newer by date but older by version, and the equality
+            # check below would happily accept it — turning a scheduled run
+            # into an automatic downgrade.
             RAW=$(gh release list --repo "$UPSTREAM" --limit 30 \
                     --json tagName,isPrerelease,isDraft \
                   | jq -r '[.[] | select(.isPrerelease == false and .isDraft == false)
                               | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
-                           | .[0].tagName // ""')
+                           | sort_by(.tagName | ltrimstr("v") | [splits("[.]") | tonumber])
+                           | last | .tagName // ""')
           fi
           if [ -z "$RAW" ]; then
             echo "::error::Could not determine a stable vllm-metal release"
@@ -87,6 +99,7 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
           BRANCH: ${{ steps.version.outputs.branch }}
+          INPUT_VERSION: ${{ inputs.vllm-metal-version }}
         run: |
           set -euo pipefail
           CURRENT=$(sed -nE 's/^VLLM_METAL_REF="(v[0-9][0-9a-z.]*)"$/\1/p' "$INSTALLER")
@@ -99,6 +112,20 @@ jobs:
             echo "Already pinned to $TAG — nothing to do."
             echo "needed=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # An unattended run may only move forward. Selecting the semantic
+          # maximum already rules out the backport-published-late case, but if
+          # the pin is ever ahead of every published stable release, equality
+          # alone would still walk it backwards. A downgrade must be somebody's
+          # explicit decision, so it stays available through the manual input.
+          if [ -z "$INPUT_VERSION" ]; then
+            if ! printf '%s\n%s\n' "${CURRENT#v}" "${TAG#v}" \
+                 | sort -C -t. -k1,1n -k2,2n -k3,3n; then
+              echo "$TAG is older than the current pin $CURRENT — refusing to downgrade automatically."
+              echo "Dispatch this workflow with an explicit version if that is intended."
+              echo "needed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
             echo "Branch $BRANCH already exists — update PR is already open/pending."
