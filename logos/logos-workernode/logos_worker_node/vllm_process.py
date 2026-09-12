@@ -1901,7 +1901,13 @@ class VllmProcessHandle:
         if not getattr(ec, "sharded_checkpoint_convert_on_spawn", True):
             return
 
-        hf_home = self.hf_home_override or self._resolve_hf_home(cache_root)
+        # The conversion must write where the spawned lane reads from — the
+        # exact HF_HOME _build_env will give the child (the override, else
+        # the inherited value with blank counting as unset, else the
+        # resolved root).
+        from logos_worker_node import gguf  # noqa: PLC0415
+
+        hf_home = gguf.effective_hf_home(self.hf_home_override) or self._resolve_hf_home(cache_root)
         gpu_devices = lane_config.gpu_devices or self._global_config.gpu_devices
         log_path = (
             Path(cache_root) / ".cache" / "vllm" / "sharded_logs" / f"{lane_config.model.replace('/', '__')}_tp{tp}.log"
@@ -2348,11 +2354,16 @@ class VllmProcessHandle:
         # via LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
         cache_root_dir = self._resolve_persistent_cache_root(gc)
 
-        # HuggingFace cache — write into the persistent root.
-        if self.hf_home_override:
-            env["HF_HOME"] = self.hf_home_override
-        elif "HF_HOME" not in os.environ:
-            env["HF_HOME"] = self._resolve_hf_home(cache_root_dir)
+        # HuggingFace cache — write into the persistent root.  A blank or
+        # whitespace-only HF_HOME counts as unset (the same rule
+        # gguf.effective_hf_home applies when the lane resolves model
+        # references), so the child always loads from the root the
+        # resolution above consulted instead of inheriting a blank value
+        # that Hugging Face would resolve to a different default location.
+        hf_home = (self.hf_home_override or "").strip() or os.environ.get("HF_HOME", "").strip()
+        if not hf_home:
+            hf_home = self._resolve_hf_home(cache_root_dir)
+        env["HF_HOME"] = hf_home
 
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")

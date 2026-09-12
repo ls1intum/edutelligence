@@ -704,6 +704,41 @@ def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) 
     assert env["HF_HOME"].endswith(".cache/huggingface")
 
 
+def test_build_env_blank_hf_home_resolves_like_the_gguf_resolver(monkeypatch, tmp_path: Path) -> None:
+    """A blank inherited HF_HOME must give the child the same root the resolver used.
+
+    effective_hf_home treats a blank/whitespace HF_HOME as unset, so the GGUF
+    resolution consults the worker's <cache_root>/.hf_cache. _build_env must
+    apply the same rule: with the RAM cache disabled a blank value otherwise
+    reaches the child, which would resolve a different cache location and
+    redownload — or fail offline — the weights the resolution just found.
+    """
+    from logos_worker_node import gguf
+
+    monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(models_path=str(tmp_path), gpu_devices="all"))
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+
+    for blank in ("", "   "):
+        monkeypatch.setenv("HF_HOME", blank)
+        env = handle._build_env(lane)
+        # The exact root _resolve_gguf_spec computes for this lane (no
+        # override, blank inherited env).
+        expected = gguf.effective_hf_home(None) or handle._resolve_hf_home(
+            handle._resolve_persistent_cache_root(handle._global_config)
+        )
+        assert env["HF_HOME"] == expected
+
+    # A non-blank inherited HF_HOME is still honoured.
+    inherited = str(tmp_path / "inherited-hf")
+    monkeypatch.setenv("HF_HOME", inherited)
+    assert handle._build_env(lane)["HF_HOME"] == inherited
+
+
 def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
     # nccl_p2p_available=False (default) → NCCL_P2P_DISABLE=1 globally
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(gpu_devices="all"))
@@ -3009,6 +3044,43 @@ async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeyp
     assert handle._sharded_model_dir is None, "the lane must serve the full checkpoint"
     # The record is still on disk — it was not consumed into the handle.
     assert sc.rejection_state(target, current_version="0.8.0") == "skip"
+
+
+@pytest.mark.asyncio
+async def test_sharded_conversion_targets_the_childs_hf_home(monkeypatch, tmp_path) -> None:
+    """The conversion must write where the spawned lane reads from.
+
+    The child's HF_HOME is the override, else the inherited value (blank
+    counting as unset), else the resolved root — the conversion's target has
+    to be that exact root, or the child would look for the checkpoint in a
+    different cache than the one it was written into.
+    """
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        WorkerConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+    inherited = str(tmp_path / "inherited-hf")
+    monkeypatch.setenv("HF_HOME", inherited)
+    captured: dict = {}
+
+    def fake_ensure(**kwargs):
+        captured.update(kwargs)
+        return str(tmp_path / "sharded")
+
+    monkeypatch.setattr(sc, "is_sharded_checkpoint_ready", lambda _target: False)
+    monkeypatch.setattr(sc, "rejection_state", lambda _target, **_kw: None)
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", fake_ensure)
+
+    lane = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+
+    assert captured["hf_home"] == inherited
+    assert handle._build_env(lane)["HF_HOME"] == captured["hf_home"]
 
 
 async def test_maybe_prepare_runs_the_rejection_probe_off_the_event_loop(monkeypatch, tmp_path) -> None:

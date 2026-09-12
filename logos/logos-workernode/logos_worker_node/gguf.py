@@ -584,11 +584,13 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
       its ``-N-of-M`` family in one directory (a partial or path-scattered
       download still counts as missing so the idempotent prefetch completes
       it).
-    - ``repo/file.gguf`` — the named file is cached; for a sharded name the
-      whole family in one directory AND of the requested declared total (a
-      2-shard request is not satisfied by the shards of a 3-shard family of
-      the same base name), which the plugin's loader expands the first shard
-      to.
+    - ``repo/file.gguf`` — the named file is cached at the repository-relative
+      position the reference names (the strict form points at the repository
+      root, so a file of the same name in a subdirectory does not count); for
+      a sharded name the whole family in that same directory AND of the
+      requested declared total (a 2-shard request is not satisfied by the
+      shards of a 3-shard family of the same base name), which the plugin's
+      loader expands the first shard to.
 
     Local references are filesystem facts, not a Hub cache: a local GGUF
     FILE is True when the file exists (absolute or relative path), and a
@@ -644,35 +646,42 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
             for (_, _, total), indices in indices_by_family.items()
         )
     requested = model.rsplit("/", 1)[1].lower()
+    # The reference's directory is authoritative: the strict Hub form
+    # org/repo/file.gguf names the file at the repository root, and the
+    # loader resolves the file — and, for a sharded name, the rest of its
+    # family — against exactly that position. A file or family in any other
+    # directory (quants/file.gguf for a root-level file.gguf reference) does
+    # not satisfy the reference: accepting it would report an incomplete
+    # cache complete and suppress the prefetch that repairs it.
+    requested_dir = requested.rsplit("/", 1)[0] if "/" in requested else ""
     shard = _SHARD_INDEX_RE.search(requested)
     if shard is None:
-        # Membership check: the named file anywhere in the snapshot.
-        return requested in {name.rsplit("/", 1)[-1].lower() for name, _ in listing}
+        # Membership check at the exact repository-relative position.
+        return requested in {name.lower() for name, _ in listing}
     requested_total = _shard_marker_parts(shard.group(0))[1]
     requested_family = _SHARD_INDEX_RE.sub("", requested)
     # The loader reads the family from the directory it finds the requested
-    # file in, so every index 1..total must sit in ONE directory of the
-    # requested family — and the DECLARED TOTAL is part of the family's
-    # identity (same rule as the repo:quant branch above): shards of a
-    # different-total family of the same base name (…-of-3 files for a
+    # file in, so every index 1..total must sit in the requested directory
+    # of the requested family — and the DECLARED TOTAL is part of the
+    # family's identity (same rule as the repo:quant branch above): shards
+    # of a different-total family of the same base name (…-of-3 files for a
     # …-of-2 request) are a different model and must not fill the requested
     # family's index range, which would report an incomplete cache complete
     # and suppress the prefetch.
-    indices_by_family: dict[tuple[str, str, int], set[int]] = {}
+    indices: set[int] = set()
     for name, _ in listing:
         lowered = name.lower()
-        base = lowered.rsplit("/", 1)[-1]
+        directory, base = lowered.rsplit("/", 1) if "/" in lowered else ("", lowered)
+        if directory != requested_dir:
+            continue
         marker = _SHARD_INDEX_RE.search(base)
         if marker is None:
             continue
         index, entry_total = _shard_marker_parts(marker.group(0))
         if entry_total != requested_total or _SHARD_INDEX_RE.sub("", base) != requested_family:
             continue
-        directory = lowered.rsplit("/", 1)[0] if "/" in lowered else ""
-        indices_by_family.setdefault((directory, requested_family, entry_total), set()).add(index)
-    return any(
-        all(index in indices for index in range(1, total + 1)) for (_, _, total), indices in indices_by_family.items()
-    )
+        indices.add(index)
+    return all(index in indices for index in range(1, requested_total + 1))
 
 
 def gguf_capability_target(
@@ -846,9 +855,12 @@ def download_allow_patterns(model: str, quant: str) -> list[str] | None:
         basename = model.rsplit("/", 1)[1] if "/" in model else model
         if _SHARD_INDEX_RE.search(basename):
             # Wildcard the shard indices so the pattern matches the whole
-            # family; the leading * (fnmatch crosses path separators) covers
-            # weights kept in a subdirectory.
-            return ["*" + _SHARD_INDEX_RE.sub("-*-of-*", basename)]
+            # family. The pattern stays in the directory the reference names
+            # (no leading * — fnmatch crosses path separators): the loader
+            # reads the family from the directory of the requested file, so
+            # shards in any other directory are never loaded and must not be
+            # fetched.
+            return [_SHARD_INDEX_RE.sub("-*-of-*", basename)]
         return [basename]
     if not is_gguf_model(model):
         return None

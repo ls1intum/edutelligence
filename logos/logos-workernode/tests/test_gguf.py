@@ -486,11 +486,15 @@ def test_is_gguf_ref_cached_non_explicit_refs_are_not_checked(tmp_path: Path) ->
 
 def test_is_gguf_ref_cached_file_ref(tmp_path: Path) -> None:
     _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf", "quants/Qwen3-8B-Q8_0.gguf"])
-    # The named file is found — also when the repository keeps it in a
-    # subdirectory (the reference names the file, the snapshot walk finds it) …
+    # The named file is found at the exact repository-relative position …
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf") is True
-    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf") is True
-    # … but a sibling file that was never cached is not.
+    # … but a NESTED file of the same name does not satisfy the root-level
+    # reference: the loader (and the prefetch) resolve the file against the
+    # repository root, so the cache must still count as incomplete —
+    # accepting the nested file would suppress the prefetch and fail the
+    # offline startup.
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf") is False
+    # … and a sibling file that was never cached is not.
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q5_K_M.gguf") is False
 
 
@@ -536,6 +540,28 @@ def test_is_gguf_ref_cached_sharded_file_ref_family_must_be_in_one_path(tmp_path
     assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is False
     # A complete family in ONE directory satisfies the reference, even with
     # the stray shard of another directory left behind.
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is True
+
+
+def test_is_gguf_ref_cached_sharded_file_ref_family_must_be_in_the_reference_directory(tmp_path: Path) -> None:
+    # The strict reference form names the shard at the repository root, so a
+    # COMPLETE family in a subdirectory does not satisfy it: the loader reads
+    # the family next to the requested file, and accepting the nested family
+    # would suppress the prefetch that fetches the root-level shards.
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["quants/Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "quants/Qwen3-8B-Q4_K_M-00002-of-00002.gguf"],
+    )
+    ref = "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M-00001-of-00002.gguf"
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is False
+    # … while the root-level family of the reference satisfies it, nested
+    # copies included.
     _write_gguf(
         tmp_path,
         "unsloth/Qwen3-8B-GGUF",
@@ -758,12 +784,15 @@ def test_download_allow_patterns_sharded_file_ref_fetches_whole_family() -> None
     # every shard of the family — the lane loads the whole model, so a single
     # shard would leave it incomplete (fetched at startup, or failing offline).
     patterns = gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M-00001-of-00002.gguf", "")
-    assert patterns == ["*Qwen3-8B-Q4_K_M-*-of-*.gguf"]
-    # Covers both shards of the family, in the repo root or a subdirectory …
+    assert patterns == ["Qwen3-8B-Q4_K_M-*-of-*.gguf"]
+    # Covers both shards of the family, in the directory the reference names
+    # (the repo root) …
     assert fnmatch.fnmatch("Qwen3-8B-Q4_K_M-00001-of-00002.gguf", patterns[0])
     assert fnmatch.fnmatch("Qwen3-8B-Q4_K_M-00002-of-00002.gguf", patterns[0])
-    assert fnmatch.fnmatch("quants/Qwen3-8B-Q4_K_M-00002-of-00002.gguf", patterns[0])
-    # … but nothing from a different quant or a single-file reference.
+    # … but nothing from another directory (the loader reads the family next
+    # to the requested file) or from a different quant or a single-file
+    # reference.
+    assert not fnmatch.fnmatch("quants/Qwen3-8B-Q4_K_M-00002-of-00002.gguf", patterns[0])
     assert not fnmatch.fnmatch("Qwen3-8B-Q4_K_S.gguf", patterns[0])
     assert not fnmatch.fnmatch("Qwen3-8B-Q4_K_M.gguf", patterns[0])
 
@@ -771,7 +800,7 @@ def test_download_allow_patterns_sharded_file_ref_fetches_whole_family() -> None
 def test_download_allow_patterns_sharded_file_ref_quant_last() -> None:
     # The alternative layout where the quant follows the shard indices.
     patterns = gguf.download_allow_patterns("unsloth/Qwen3-8B-GGUF/Qwen3-8B-00001-of-00002-Q4_K_M.gguf", "")
-    assert patterns == ["*Qwen3-8B-*-of-*-Q4_K_M.gguf"]
+    assert patterns == ["Qwen3-8B-*-of-*-Q4_K_M.gguf"]
     assert fnmatch.fnmatch("Qwen3-8B-00001-of-00002-Q4_K_M.gguf", patterns[0])
     assert fnmatch.fnmatch("Qwen3-8B-00002-of-00002-Q4_K_M.gguf", patterns[0])
 
