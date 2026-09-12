@@ -6,6 +6,9 @@ worker's own logic: discovery and expiry, capacity accounting across
 upstreams, auth pairing from the announcement, and heartbeat bookkeeping.
 """
 
+# Tests reach into worker internals and import a couple of modules lazily; both are expected here.
+# pylint: disable=protected-access,import-outside-toplevel
+
 import logging
 import threading
 import time
@@ -38,6 +41,8 @@ def _run(worker, token, upstream_url, alive=True):
 
 
 class TestDiscovery:
+    """Upstream discovery: announcement registration, refresh, and expiry."""
+
     def test_announcement_registers_an_upstream_with_its_token(self):
         worker = IngestionWorker()
         worker.register_upstream("http://a:8080/", "key-a")
@@ -70,6 +75,8 @@ class TestDiscovery:
 
 
 class TestClaim:
+    """Claiming: capacity accounting, per-upstream token, and slot flow."""
+
     def test_claim_posts_free_capacity_with_the_announced_token(self):
         worker = IngestionWorker()
         worker.register_upstream("http://a:8080", "key-a")
@@ -133,6 +140,8 @@ class TestClaim:
 
 
 class TestHeartbeat:
+    """Heartbeating: active-token reporting, idle upstreams, failure recovery."""
+
     def test_heartbeat_lists_only_alive_runs_of_the_upstream(self):
         worker = IngestionWorker()
         worker.register_upstream("http://a:8080", "key-a")

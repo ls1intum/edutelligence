@@ -65,6 +65,8 @@ class FakeBatch:
         return False
 
     def add_object(self, uuid=None, properties=None, vector=None):
+        # uuid mirrors the real Weaviate batch signature; this fake ignores it.
+        # pylint: disable=unused-argument
         self.added.append((properties, vector))
         self.added_this_attempt.append((properties, vector))
 
