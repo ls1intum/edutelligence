@@ -2168,7 +2168,7 @@ def test_node_transient_classifier_matches_eio():
     tail = (
         "(APIServer pid=611559) FileNotFoundError: [Errno 2] No such file ...\n"
         "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
-        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--zai-org--GLM-Image'"
+        "'/usr/share/logos/models/.hf_cache/hub/models--zai-org--GLM-Image'"
     )
     pat = _classify_node_transient_error(tail)
     assert pat is not None
@@ -2236,7 +2236,7 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     patches["spawn"] = _spawn_writing_log(
         log_path,
         "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
-        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
+        "'/usr/share/logos/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
     )
     # Make sure _record_failed_command and _record_unsupported_model are real
     # (not pre-patched out) so we can detect any accidental writes.
@@ -3231,13 +3231,15 @@ def test_build_vllm_cmd_plain_named_uncached_model_never_lists_the_hub(monkeypat
     assert cmd[cmd.index("serve") + 1] == "org/some-model"
 
 
-def test_calibrate_disk_fallback_passes_persistent_hf_home_to_spawn(monkeypatch, tmp_path: Path) -> None:
-    """When tmpfs declines the copy, the persistent HF root still reaches the spawn.
+def test_calibrate_disk_fallback_resolves_from_the_persistent_cache(monkeypatch, tmp_path: Path) -> None:
+    """When tmpfs declines the copy, the probe still resolves from the persistent cache.
 
-    ensure_cached_sync returns the cache that actually holds the weights —
-    the tmpfs root on success, the persistent source root otherwise. The old
-    disk branch only logged it, so hf_home stayed None: a bare GGUF repo
-    then resolved from the Hub instead of its local cache and failed offline.
+    The reserve-and-admit helper hands back the tmpfs root only when the copy
+    was admitted; on the source fallback hf_home stays unset, and both the
+    fingerprint's resolver and spawn_vllm map that to the inherited HF_HOME —
+    the same root the RAM cache mirrors from. A bare-named GGUF repo whose
+    weights live in that root must resolve to repo:QUANT locally, with no Hub
+    listing.
     """
     from logos_worker_node import calibration
     from logos_worker_node.calibration import calibrate_model
@@ -3250,23 +3252,25 @@ def test_calibrate_disk_fallback_passes_persistent_hf_home_to_spawn(monkeypatch,
     (repo_dir / "refs").mkdir(parents=True)
     (repo_dir / "refs" / "main").write_text("rev")
     (snapshot / "plain-llm-Q4_K_M.gguf").write_bytes(b"\x00" * 1024)
-
-    class DiskOnlyCache:
-        """A RAM cache that declines the tmpfs copy (full / unavailable)."""
-
-        def __init__(self) -> None:
-            self._cache_hub = tmp_path / "tmpfs" / "hub"
-
-        def ensure_cached_sync(self, model_name: str) -> str:  # noqa: ARG002
-            return str(persistent_root)
+    # The worker wires the RAM cache to the inherited HF_HOME; mirror that.
+    monkeypatch.setenv("HF_HOME", str(persistent_root))
 
     def _no_network(_repo: str):
         raise AssertionError("Hub must not be listed — the weights are cached locally")
 
+    fingerprinted: list[list[str]] = []
+    real_fingerprint = calibration._cmd_fingerprint
+
+    def _capturing_fingerprint(cmd: list[str]) -> str:
+        fingerprinted.append(list(cmd))
+        return real_fingerprint(cmd)
+
     patches = _patch_calibration_infra()
-    managers = {k: p.__enter__() for k, p in patches.items()}
+    for p in patches.values():
+        p.__enter__()
     try:
         monkeypatch.setattr(calibration, "fetch_repo_gguf_files", _no_network)
+        monkeypatch.setattr(calibration, "_cmd_fingerprint", _capturing_fingerprint)
         result = calibrate_model(
             _make_plan("org/plain-llm"),
             vllm_binary="vllm",
@@ -3274,14 +3278,194 @@ def test_calibrate_disk_fallback_passes_persistent_hf_home_to_spawn(monkeypatch,
             log_dir=Path("/tmp/test-calibration-logs"),
             sleep_level=0,
             ready_timeout_s=60.0,
-            model_cache=DiskOnlyCache(),
+            model_cache=_FakeCalibrationCache(persistent_root, "source"),
         )
         assert result.success, result.error
     finally:
         for p in patches.values():
             p.__exit__(None, None, None)
 
-    spawn_mock = managers["spawn"]
-    hf_homes = [call.kwargs["hf_home"] for call in spawn_mock.call_args_list]
-    assert hf_homes, "spawn_vllm was never called"
-    assert all(h == str(persistent_root) for h in hf_homes), f"hf_home not propagated: {hf_homes}"
+    # Every probe command serves the quant resolved from the local
+    # persistent cache, not the bare repo.
+    assert fingerprinted, "no probe was fingerprinted"
+    for cmd in fingerprinted:
+        assert cmd[cmd.index("serve") + 1] == "org/plain-llm:Q4_K_M", cmd
+
+
+# ── RAM-cache entry reservation during calibration ──────────────────────────
+
+
+class _FakeCalibrationCache:
+    """Just enough of ModelRamCache for the calibration reservation tests.
+
+    ``select`` is the HF_HOME ``ensure_cached_sync`` returns: "tmpfs" (the
+    cache root's parent — the probe loads the model from the RAM cache) or
+    "source" (the entry is below the raised floor and the probe loads from
+    disk instead). Reservations are refcounted like ModelRamCache's.
+    """
+
+    def __init__(self, root: Path, select: str) -> None:
+        self.enabled = True
+        self._cache_hub = root / "hub"
+        self._source = root / "source"
+        self._select = select
+        self._refs: dict[str, int] = {}
+
+    def ensure_cached_sync(self, model: str) -> str:
+        # Mirror ModelRamCache: the tmpfs parent when the entry is (still)
+        # admitted, the source path when the floor rejects it.
+        if self._select == "tmpfs":
+            return str(self._cache_hub.parent)
+        return str(self._source)
+
+    def is_cached(self, model: str) -> bool:  # noqa: ARG002
+        # "tmpfs" means the entry is resident; a "source" selection means the
+        # probe reads no tmpfs bytes at all (and the floor never rejected a
+        # resident entry, so there is nothing to reconcile).
+        return self._select == "tmpfs"
+
+    def reserve_cache_use(self, model: str) -> None:
+        self._refs[model] = self._refs.get(model, 0) + 1
+
+    def release_cache_use(self, model: str) -> None:
+        refs = self._refs.get(model, 0)
+        if refs <= 1:
+            self._refs.pop(model, None)
+        else:
+            self._refs[model] = refs - 1
+
+    def cache_use_reservations(self) -> set[str]:
+        return set(self._refs)
+
+
+def _patch_probe_with_reservation_capture(cache: _FakeCalibrationCache):
+    """Patches for a failing single-probe run, with a spawn spy that records
+    the outstanding cache-use reservations at the moment vLLM is spawned —
+    i.e. while the probe is about to read the model from the HF_HOME that
+    ensure_cached_sync just chose."""
+    patches = _patch_calibration_infra(wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")])
+    seen_at_spawn: list[set[str]] = []
+
+    def _spying_spawn(*_args, **_kwargs):
+        seen_at_spawn.append(cache.cache_use_reservations())
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.poll.return_value = None
+        return proc, ["vllm", "serve"]
+
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=_spying_spawn)
+    return patches, seen_at_spawn
+
+
+def test_calibration_pins_the_tmpfs_entry_only_while_the_probe_reads_it(tmp_path) -> None:
+    """Regression [high]: the probe that reads the model from the tmpfs entry
+    must run while that entry is reserved against the re-plan: the reservation
+    is taken when ensure_cached_sync selects the tmpfs HF_HOME (only then does
+    the probe read the entry) and released when the run ends, on every exit."""
+    cache = _FakeCalibrationCache(tmp_path, "tmpfs")
+    patches, seen_at_spawn = _patch_probe_with_reservation_capture(cache)
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # While the probe spawns vLLM — i.e. while it reads the tmpfs entry —
+    # the entry is reserved ...
+    assert seen_at_spawn == [{"org/test-model"}]
+    # ... and the run releases it on the way out.
+    assert cache.cache_use_reservations() == set()
+
+
+def test_calibration_source_fallback_takes_no_cache_use_reservation(tmp_path) -> None:
+    """Regression [high]: when the entry is now below the raised floor,
+    ensure_cached_sync deliberately returns the source path — the probe reads
+    no tmpfs bytes at all. The run must not reserve the unused entry: while
+    host RAM is below its floor, the reference would protect the copy for the
+    whole calibration and block the re-plan from reclaiming exactly those
+    bytes."""
+    cache = _FakeCalibrationCache(tmp_path, "source")
+    patches, seen_at_spawn = _patch_probe_with_reservation_capture(cache)
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_with_tp_escalation(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=1,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # The probe spawned from the source path: no tmpfs bytes were read, so
+    # nothing was reserved ...
+    assert seen_at_spawn == [set()]
+    # ... and the run left the reservation table empty.
+    assert cache.cache_use_reservations() == set()
+
+
+class _SelectionSpyCache(_FakeCalibrationCache):
+    """Records the outstanding reservations the moment ensure_cached_sync
+    returns the selected path — the exact instant a re-plan tick on the
+    event loop can observe the (already cached) entry."""
+
+    def __init__(self, root: Path, select: str) -> None:
+        super().__init__(root, select)
+        self.reserved_at_selection: list[set[str]] = []
+
+    def ensure_cached_sync(self, model: str) -> str:
+        path = super().ensure_cached_sync(model)
+        self.reserved_at_selection.append(self.cache_use_reservations())
+        return path
+
+
+def test_calibration_reserves_the_entry_before_the_selection_returns(tmp_path) -> None:
+    """Regression [high]: reserving only AFTER ensure_cached_sync returned
+    the tmpfs path left a gap in which the periodic re-plan (event loop,
+    while the probe runs in an executor) saw no cache-use reservation and
+    could reclaim the just-selected entry — spawn_vllm would then read a
+    deleted HF_HOME. The reservation must be live the moment the selection
+    returns, i.e. taken before ensure_cached_sync is called; a source
+    fallback still releases it immediately (see the sibling test)."""
+    cache = _SelectionSpyCache(tmp_path, "tmpfs")
+    patches = _patch_calibration_infra(wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")])
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # By the time the selection returned the tmpfs path, the entry was
+    # already reserved — no tick between selection and spawn can reclaim it.
+    assert cache.reserved_at_selection == [{"org/test-model"}]
+    # And the run still releases it on the way out.
+    assert cache.cache_use_reservations() == set()

@@ -25,7 +25,7 @@ from logos.anthropic_compat.common import (
     normalize_content,
     parse_arguments,
     stop_reason,
-    system_to_text,
+    system_and_messages,
     tool_result_text,
     usage_block,
     usage_extras,
@@ -56,15 +56,16 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
 
     messages: List[Dict[str, Any]] = []
 
-    system = system_to_text(payload.get("system"))
+    # Any system turn the client inlined among the messages is folded into the
+    # prompt here, so exactly one system message is emitted and it leads.
+    system, conversation = system_and_messages(payload)
     if system:
         # Reasoning models replaced the system role with "developer"; o1 and
         # its successors reject a system-role message outright.
         messages.append({"role": "developer" if reasoning else "system", "content": system})
 
-    for message in payload.get("messages") or []:
-        if isinstance(message, dict):
-            messages.extend(_translate_message(message))
+    for message in conversation:
+        messages.extend(_translate_message(message))
 
     result: Dict[str, Any] = {
         "model": payload.get("model"),

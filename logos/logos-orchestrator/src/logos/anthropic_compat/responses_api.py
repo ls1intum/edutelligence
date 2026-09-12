@@ -28,7 +28,7 @@ from logos.anthropic_compat.common import (
     new_message_id,
     normalize_content,
     parse_arguments,
-    system_to_text,
+    system_and_messages,
     tool_result_text,
     usage_block,
     usage_extras,
@@ -42,17 +42,19 @@ def to_responses(payload: Dict[str, Any]) -> Dict[str, Any]:
     dialect is only reached for reasoning deployments, which reject both, and
     Anthropic clients send a temperature on every request.
     """
+    # A system turn inlined among the messages belongs in ``instructions``,
+    # the Responses API's own home for it, not in the middle of the input.
+    instructions, conversation = system_and_messages(payload)
+
     items: List[Dict[str, Any]] = []
-    for message in payload.get("messages") or []:
-        if isinstance(message, dict):
-            items.extend(_translate_message(message))
+    for message in conversation:
+        items.extend(_translate_message(message))
 
     result: Dict[str, Any] = {
         "model": payload.get("model"),
         "input": items,
     }
 
-    instructions = system_to_text(payload.get("system"))
     if instructions:
         result["instructions"] = instructions
     if payload.get("max_tokens") is not None:

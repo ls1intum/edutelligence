@@ -332,4 +332,31 @@ class PriceUpdaterServiceTest {
             new SavedPrice("billed_search_prompts", "request", 0, "default", Math.round(1.0e-3 * 1e11))
         );
     }
+
+    @Test
+    void batchKeysBecomeBatchTierRowsAlongsideTheStandardRate() {
+        // Batch result rows are booked with service_tier 'batch', so the
+        // provider's discounted rate has to reach token_prices under that tier
+        // rather than being dropped as an unknown key.
+        List<SavedPrice> rows = ingest(Map.of(
+            "input_cost_per_token", 2.0e-7,
+            "output_cost_per_token", 1.2e-6,
+            "input_cost_per_token_batches", 1.0e-7,
+            "output_cost_per_token_batches", 6.0e-7
+        ));
+        assertThat(rows).containsExactlyInAnyOrder(
+            new SavedPrice("billed_input_uncached", "token", 0, "default", Math.round(2.0e-7 * 1e11)),
+            new SavedPrice("billed_output_text", "token", 0, "default", Math.round(1.2e-6 * 1e11)),
+            new SavedPrice("billed_input_uncached", "token", 0, "batch", Math.round(1.0e-7 * 1e11)),
+            new SavedPrice("billed_output_text", "token", 0, "batch", Math.round(6.0e-7 * 1e11))
+        );
+    }
+
+    @Test
+    void aModelWithoutABatchRateGetsNoBatchRow() {
+        // The price lookup falls back to the standard rate, which over- rather
+        // than under-charges a batch whose model has no published batch price.
+        List<SavedPrice> rows = ingest(Map.of("input_cost_per_token", 2.0e-7));
+        assertThat(rows).noneMatch(row -> "batch".equals(row.tier()));
+    }
 }

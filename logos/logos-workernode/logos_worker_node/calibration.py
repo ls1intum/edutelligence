@@ -48,7 +48,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 try:
     import yaml
@@ -985,16 +985,25 @@ def _build_vllm_cmd(
 def _default_hf_home() -> str:
     """Resolved persistent HF cache root: ``<cache root>/.hf_cache``.
 
-    The cache root is ``LOGOS_WORKER_CACHE_ROOT`` when set, else the ollama
-    models_path — the same root the startup prefetch populates. Empty when
-    neither is available, in which case the caller falls back to the Hub.
+    The cache root is resolved exactly the way the lane processes that spawn
+    will resolve it (the handle class' ``_resolve_persistent_cache_root``):
+    ``LOGOS_WORKER_CACHE_ROOT`` when set, else ``worker.cache_path``, else
+    ``worker.models_path`` — the same root the startup prefetch populates.
+    The env var is the top-priority source, so it is honoured even before
+    the config singleton is loaded; empty when neither is available, in
+    which case the caller falls back to the Hub.
     """
     cache_root = os.environ.get("LOGOS_WORKER_CACHE_ROOT", "").strip()
     if not cache_root:
         try:
             from logos_worker_node.config import get_config  # noqa: PLC0415
+            from logos_worker_node.metal import is_metal_backend  # noqa: PLC0415
+            from logos_worker_node.metal_process import MetalVllmProcessHandle  # noqa: PLC0415
+            from logos_worker_node.vllm_process import VllmProcessHandle  # noqa: PLC0415
 
-            cache_root = str(get_config().engines.ollama.models_path or "").strip()
+            cfg = get_config()
+            handle_cls = MetalVllmProcessHandle if is_metal_backend() else VllmProcessHandle
+            cache_root = str(handle_cls._resolve_persistent_cache_root(cfg.worker) or "").strip()
         except Exception:  # noqa: BLE001
             cache_root = ""
     return str(Path(cache_root) / ".hf_cache") if cache_root else ""
@@ -1532,6 +1541,183 @@ def _track_host_ram_transient(
         result["transient_mb"] = max(baseline - min_seen, 0.0)
 
 
+def _reserve_and_admit_calibration_copy(
+    model_cache: Any,
+    model: str,
+    *,
+    cache_use_reserved: list[bool],
+    establish_host_ram_floor: Callable[[], bool] | None = None,
+) -> tuple[str | None, str | None]:
+    """Reserve the entry, (re-)establish the host-RAM floor, and admit the
+    probe's synchronous copy.
+
+    Returns ``(hf_home, blocked_reason)``: ``hf_home`` is the tmpfs path to
+    load from, or ``None`` when this calibration must read the source (no
+    usable copy, or the floor could not be established); ``blocked_reason``
+    is non-None when the probe must not start AT ALL — the source fallback
+    left a cached tree resident and reconciliation could not confirm the
+    host is safe (see ``_reconcile_ram_cache_after_source_fallback``), so a
+    disk-backed load would pile pressure onto an already over-committed
+    host. The provisional reservation is released whenever the entry is not
+    read from tmpfs (the ``calibrate_model`` wrapper's finally releases it
+    on every other exit). When the fallback leaves an already-cached entry
+    behind (the raised floor rejected it), one more re-plan pass reclaims
+    the now-unprotected entry before returning, so the source probe does
+    not start on a host still below the floor.
+
+    Reserve-then-floor-then-admit: ``ensure_cached_sync`` hands back the
+    tmpfs path the moment the entry is (already) cached, and the re-plan
+    runs on the event loop while this probe runs in an executor — a tick
+    in the gap between that return and a reservation taken after it can
+    reclaim the just-selected entry, leaving spawn_vllm to read a deleted
+    HF_HOME. The reservation alone only makes the entry visible to FUTURE
+    re-plans, so with a caller-supplied ``establish_host_ram_floor`` one
+    re-plan pass for the new reservation establishes the floor (sleep
+    reserve + safety margin) before the admission checks run. That pass
+    completing successfully is MANDATORY for admission: the callback
+    returns True only once the floor is set, and a timed-out or failed
+    pass (e.g. unresponsive lanes stretching the pass past its wait)
+    leaves the floor stale — both admission checks fail open against a
+    zero floor — so the copy is never admitted in that case and this
+    calibration falls back to the source HF_HOME. When the target was
+    ALREADY cached before the call, the failed pass says nothing about
+    the resident tree, so that fallback is subject to the same
+    confirmed-safety requirement as the rejection fallback below: the
+    probe proceeds from source only once the entry is gone or the host
+    is at/above a just-established floor, and aborts otherwise.
+
+    The admission itself is serialized with the background cache worker
+    through the per-model writer lock inside ``ensure_cached_sync`` (see
+    ModelRamCache): if the worker already owns this model's copy — queued
+    or in flight when the calibration started — the sync path waits for
+    that attempt instead of starting a second writer for the same
+    <model>.partial tree, and on a timed-out wait falls back to the
+    source.
+    """
+    if not cache_use_reserved[0]:
+        model_cache.reserve_cache_use(model)
+        cache_use_reserved[0] = True
+        if establish_host_ram_floor is None:
+            # Boot/CLI path: no event loop to escalate on — keep the
+            # pre-fix behaviour of admitting against the current floor.
+            _floor_ok = True
+        else:
+            try:
+                _floor_ok = bool(establish_host_ram_floor())
+            except Exception:  # noqa: BLE001
+                _floor_ok = False
+                logger.warning(
+                    "  [RAM cache] host-RAM floor escalation before the " "synchronous copy of %s raised",
+                    model,
+                    exc_info=True,
+                )
+        if not _floor_ok:
+            # Stale/unknown floor: admit NOTHING. This run reads the
+            # source HF_HOME (no tmpfs bytes), so the provisional
+            # copy-only reservation is released again.
+            model_cache.release_cache_use(model)
+            cache_use_reserved[0] = False
+            logger.warning(
+                "  [RAM cache] host-RAM floor could not be established "
+                "before the synchronous copy of %s — loading from the "
+                "source for the rest of this calibration",
+                model,
+            )
+            if model_cache.is_cached(model):
+                # The target was cached BEFORE this call: the failed pass
+                # either never ran or ran while this reservation protected
+                # the entry, so it says nothing about the resident tree.
+                # The same confirmed-safety requirement as the rejection
+                # fallback applies — the probe may proceed from source
+                # only once the entry is gone or the host is at/above a
+                # just-established floor.
+                _blocked = _reconcile_ram_cache_after_source_fallback(model_cache, establish_host_ram_floor, model)
+                if _blocked is not None:
+                    return None, _blocked
+            return None, None
+    hf_home = model_cache.ensure_cached_sync(model) or None
+    if hf_home:
+        if hasattr(model_cache, "_cache_hub") and hf_home == str(model_cache._cache_hub.parent):
+            logger.info("  [RAM cache] %s → loading from tmpfs", model)
+            return hf_home, None
+        # Source fallback (raised floor, full tmpfs, missing weights):
+        # this run reads no tmpfs bytes, so the copy must not stay
+        # pinned for the rest of the calibration.
+        model_cache.release_cache_use(model)
+        cache_use_reserved[0] = False
+        if model_cache.is_cached(model):
+            # An already-resident entry the raised floor now rejects: the
+            # pre-admission pass ran while this reservation was live, so it
+            # could not reclaim the very entry that is now unused — and
+            # nothing re-plans when the reservation drops. One more pass
+            # re-measures with the release visible and must CONFIRM the
+            # host is safe before the source probe starts (a disk-backed
+            # load on an already below-floor host is exactly the OOM
+            # window the floor exists to close).
+            _blocked = _reconcile_ram_cache_after_source_fallback(model_cache, establish_host_ram_floor, model)
+            if _blocked is not None:
+                return None, _blocked
+        logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+    else:
+        # No usable path at all — nothing to pin.
+        model_cache.release_cache_use(model)
+        cache_use_reserved[0] = False
+    return None, None
+
+
+def _reconcile_ram_cache_after_source_fallback(
+    model_cache: Any,
+    establish_host_ram_floor: Callable[[], bool] | None,
+    model: str,
+) -> str | None:
+    """Reclaim the now-unprotected entry and CONFIRM the host is safe
+    before the source-backed probe starts.
+
+    Runs one more re-plan pass with the release visible, then requires
+    confirmed safety: the pass must have COMPLETED (the callback's True —
+    a timed-out or failed pass proves nothing about the tree), and either
+    the entry must be gone, or the host must be back at/above the floor
+    (the entry is then legitimately retained by another live reference —
+    a live lane reading it — and the host absorbed it). Returns ``None``
+    when the probe may proceed, otherwise a human-readable reason it must
+    abort: a source load stacks disk-read pressure on a host that is
+    already below the RAM-cache floor with a resident tree the pass could
+    not (or did not get to) remove.
+
+    A missing callback (boot/CLI path — no event loop to re-plan on)
+    keeps the pre-fix behaviour: the next periodic tick reconciles.
+    """
+    if establish_host_ram_floor is None:
+        return None
+    try:
+        _pass_ok = bool(establish_host_ram_floor())
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "  [RAM cache] post-fallback re-plan after the source fallback for %s raised",
+            model,
+            exc_info=True,
+        )
+        _pass_ok = False
+    if not _pass_ok:
+        return (
+            "the post-fallback re-plan pass did not complete (timed out "
+            "or failed), so the cached copy may still be resident while "
+            "the host is below the RAM-cache floor"
+        )
+    if not model_cache.is_cached(model):
+        # Confirmed removal: the pass reclaimed the now-unused entry.
+        return None
+    if model_cache.host_ram_headroom_ok():
+        # The pass retained the entry for another live reference and the
+        # host is at/above the floor it just set: a consistent state.
+        return None
+    return (
+        "the post-fallback re-plan pass retained the cached copy for "
+        "another live reference and the host is still below the "
+        "RAM-cache floor"
+    )
+
+
 def calibrate_model(
     plan: dict[str, Any],
     *,
@@ -1544,6 +1730,77 @@ def calibrate_model(
     hf_home: str | None = None,
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], bool] | None = None,
+) -> CalibrationResult:
+    """Calibrate one model on this worker — the public entry point.
+
+    Runs the full probe sequence (``_calibrate_model_probe``) and owns the
+    RAM-cache entry's reservation lifecycle around it: the probe reserves the
+    entry the moment it actually reads it from tmpfs — only that moment, a
+    source fallback reads no tmpfs bytes — and holds it for the probe
+    lifetime so the re-plan cannot reclaim the tree mid-session; this
+    function releases it when the run ends, on every exit.
+
+    ``establish_host_ram_floor`` is called right after that reservation and
+    before the probe's synchronous copy admission: the reservation alone only
+    makes the entry visible to future re-plans, while this probe runs on an
+    executor thread with no tick in between, so the caller (which owns the
+    event loop) supplies a callback that runs one re-plan pass for the new
+    reservation and waits. The callback must return True only once that pass
+    has completed and the floor is established — it is MANDATORY for
+    admission, because a timed-out or failed pass leaves the floor stale and
+    both admission checks fail open against it (a zero floor admits copies
+    that eat the safety margin). A callback that returns False or raises
+    therefore admits no RAM-cache copy at all: the probe loads from the
+    source HF_HOME for the rest of the calibration instead. A missing
+    callback (boot/CLI path) keeps the pre-fix behaviour of admitting
+    against the current floor. When the floor rejects an ALREADY-CACHED
+    copy (source fallback with the entry still resident), the probe may
+    continue only once a post-fallback re-plan pass has confirmed the
+    entry was reclaimed or the host is back at/above the floor —
+    otherwise the run aborts with that reason, because a disk-backed load
+    would pile pressure onto an already over-committed host.
+    """
+    # One-element list (not a plain bool) so the reservation taken deep
+    # inside the probe's closures is observable here without a shared
+    # mutable object threaded through every level.
+    cache_use_reserved: list[bool] = [False]
+    try:
+        return _calibrate_model_probe(
+            plan,
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
+            model_cache=model_cache,
+            cancel_event=cancel_event,
+            cache_use_reserved=cache_use_reserved,
+            establish_host_ram_floor=establish_host_ram_floor,
+        )
+    finally:
+        # Release on EVERY exit — a failed, cancelled, or early-returned run
+        # must not keep the entry pinned for the next model.
+        if cache_use_reserved[0] and model_cache is not None:
+            model_cache.release_cache_use(plan["model"])
+
+
+def _calibrate_model_probe(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    sleep_level: int,
+    ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
+    model_cache: Any | None = None,
+    cancel_event: threading.Event | None = None,
+    cache_use_reserved: list[bool],
+    establish_host_ram_floor: Callable[[], bool] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker and return a :class:`CalibrationResult`.
 
@@ -1568,6 +1825,16 @@ def calibrate_model(
         model_cache: Optional model cache; the first real spawn copies the
             model into it.
         cancel_event: When set, aborts the run at the next checkpoint.
+        cache_use_reserved: One-element flag the ``calibrate_model`` wrapper
+            reads in its ``finally`` to release the reservation: ``_try_start``
+            sets ``cache_use_reserved[0]`` (and takes the reservation) when
+            this run's probe actually reads the model from the tmpfs entry.
+        establish_host_ram_floor: Optional callback (the caller owns the
+            event loop) that runs one re-plan pass for the just-taken
+            reservation and returns True only once the host-RAM floor is
+            established. Mandatory for the synchronous copy admission in
+            ``_try_start`` — on timeout or failure the probe falls back to
+            the source HF_HOME instead of admitting against a stale floor.
 
     Returns:
         A ``CalibrationResult`` with ``success=True`` and the measured
@@ -1813,6 +2080,16 @@ def calibrate_model(
     # status so the master skips this worker until ops intervenes.
     _node_unhealthy_box: list[NodeTransientErrorPattern] = []
 
+    # Sibling latch for the host-RAM block: the source fallback left a
+    # cached tree the host cannot absorb (see
+    # _reconcile_ram_cache_after_source_fallback). Once set, every
+    # remaining _try_start short-circuits — the state is stable until the
+    # host frees RAM or the holding reference goes away, so retrying other
+    # kv values would only pile more disk-read pressure onto an already
+    # over-committed host. The run fails with the reason instead of a
+    # generic "no working kv".
+    _host_ram_blocked_box: list[str] = []
+
     # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. We keep
     # this local to one probe so each KV step starts from the model default
     # and derives max_model_len fresh (no cross-step mutation leak).
@@ -1839,6 +2116,9 @@ def calibrate_model(
             partial.node_unhealthy_reason = pat.reason_code
             partial.error = f"node degraded ({pat.reason_code}): {pat.description}"
             return
+        if _host_ram_blocked_box:
+            partial.error = f"host RAM below the RAM-cache floor: {_host_ram_blocked_box[0]}"
+            return
         if not _unsupported_box:
             return
         pat = _unsupported_box[0]
@@ -1860,13 +2140,16 @@ def calibrate_model(
             (known-good from a previous run) — no process spawned.
           - ``None`` on failure, blacklist skip, or when an earlier probe
             in this calibration already detected a permanent
-            model-identity-level failure (see ``_unsupported_box``) or a
-            node-level transient failure (see ``_node_unhealthy_box``).
+            model-identity-level failure (see ``_unsupported_box``), a
+            node-level transient failure (see ``_node_unhealthy_box``), or
+            a host-RAM block that makes any further probe unsafe (see
+            ``_host_ram_blocked_box``).
         """
         nonlocal hf_home, _ram_cached, final_spawn_at
         # Short-circuit: a prior probe already proved this model can't load,
-        # or proved the node itself is degraded.
-        if _unsupported_box or _node_unhealthy_box:
+        # proved the node itself is degraded, or the host-RAM block made
+        # starting any probe unsafe.
+        if _unsupported_box or _node_unhealthy_box or _host_ram_blocked_box:
             return None
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
@@ -1879,26 +2162,40 @@ def calibrate_model(
         # before the model was cached it would resolve from the Hub instead — a
         # network call inside the KV sweep, and a hard failure when the Hub is
         # unreachable for a repo that is already downloaded. Caching first also
-        # sets hf_home to the root the spawn will load from (tmpfs when the
-        # copy succeeded, the persistent cache otherwise), so the fingerprint
-        # and the spawn resolve to the same reference.
+        # points hf_home at the root the spawn will load from (tmpfs when the
+        # copy was admitted); on the source fallback hf_home stays unset and
+        # both the fingerprint's resolver and spawn_vllm map that to the same
+        # persistent cache root, so the fingerprint and the spawn resolve to
+        # the same reference.
+        # Lazy RAM cache: copy model into tmpfs on first probe.
         if not _ram_cached and model_cache is not None:
             logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
-            _hf = model_cache.ensure_cached_sync(model) or None
-            if _hf:
-                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
-                # Both branches point hf_home at the cache the weights
-                # actually live in: the tmpfs root when the copy succeeded,
-                # the persistent HF cache root when it did not (full,
-                # unavailable, or declined). Skipping the assignment on the
-                # disk branch left hf_home=None, so a bare GGUF repo
-                # resolved from the Hub instead of its local cache — a hard
-                # failure when the Hub is unreachable.
-                hf_home = _hf
-                if is_tmpfs:
-                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
-                else:
-                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+            _tmpfs_hf, _host_ram_block = _reserve_and_admit_calibration_copy(
+                model_cache,
+                model,
+                cache_use_reserved=cache_use_reserved,
+                establish_host_ram_floor=establish_host_ram_floor,
+            )
+            if _host_ram_block:
+                # The source fallback left a cached tree the host cannot
+                # absorb: latch so every remaining attempt short-circuits
+                # and the run fails with this reason (see
+                # _override_error_if_unsupported) instead of a generic
+                # "no working kv" — nothing more to try, the state is
+                # stable until the host frees RAM or the holding
+                # reference goes away.
+                if not _host_ram_blocked_box:
+                    _host_ram_blocked_box.append(_host_ram_block)
+                logger.error(
+                    "  [RAM cache] %s — %s; aborting the calibration probe",
+                    model,
+                    _host_ram_block,
+                )
+                return None
+            if _tmpfs_hf:
+                hf_home = _tmpfs_hf
+            # The copy was admitted (or fell back to the source) — never
+            # retry the decision on a later probe attempt.
             _ram_cached = True
         fingerprint = _cmd_fingerprint(_build_vllm_cmd(planned, vllm_binary, host, port, kv_str, hf_home=hf_home))
         # Whitelist: known-good from a previous calibration run.  Trust the
@@ -3287,6 +3584,7 @@ def _try_calibrate(
     hf_home: str | None = None,
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], bool] | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -3302,6 +3600,7 @@ def _try_calibrate(
             hf_home=hf_home,
             model_cache=model_cache,
             cancel_event=cancel_event,
+            establish_host_ram_floor=establish_host_ram_floor,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -3328,6 +3627,7 @@ def calibrate_with_tp_escalation(
     model_cache: Any | None = None,
     available_gpus: int | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], bool] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model using a max-first, search-down TP strategy.
 
@@ -3368,6 +3668,12 @@ def calibrate_with_tp_escalation(
     # blacklisted.  Pass the cache object through; it will call
     # ensure_cached_sync only when needed.
     _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+    # The probes reserve this model's tmpfs entry themselves — and only
+    # once a probe actually reads it from tmpfs (calibrate_model's finally
+    # releases it when the run ends). A session-level reservation here
+    # would pin an entry a source-fallback probe never reads while host
+    # RAM is below the floor, blocking the re-plan's reclaim for the
+    # whole run.
     cal_kwargs: dict[str, Any] = dict(
         vllm_binary=vllm_binary,
         port=port,
@@ -3377,6 +3683,7 @@ def calibrate_with_tp_escalation(
         nccl_p2p_available=nccl_p2p_available,
         model_cache=_mc,
         cancel_event=cancel_event,
+        establish_host_ram_floor=establish_host_ram_floor,
     )
 
     def _retry_with_trust_remote_code_if_needed(

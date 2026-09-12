@@ -15,7 +15,7 @@ from pathlib import Path
 from logos_worker_node import gguf
 from logos_worker_node.calibration import _resolve_gguf_calibration_spec
 from logos_worker_node.lane_manager import LaneManager
-from logos_worker_node.models import OllamaConfig
+from logos_worker_node.models import WorkerConfig
 
 
 def _hf_home(models_path: Path) -> str:
@@ -87,7 +87,7 @@ def test_validate_capabilities_checks_hf_cache_dir(tmp_path: Path, monkeypatch) 
     cache_root = tmp_path / "with_hf_cache"
     (cache_root / "models").mkdir(parents=True)
     manager = LaneManager(
-        OllamaConfig(models_path=str(cache_root / "models")),
+        WorkerConfig(models_path=str(cache_root / "models")),
         lane_port_start=16001,
         lane_port_end=16010,
     )
@@ -99,7 +99,7 @@ def test_validate_capabilities_checks_hf_cache_dir(tmp_path: Path, monkeypatch) 
     stale_root = tmp_path / "with_hf_only"
     (stale_root / "models").mkdir(parents=True)
     stale = LaneManager(
-        OllamaConfig(models_path=str(stale_root / "models")),
+        WorkerConfig(models_path=str(stale_root / "models")),
         lane_port_start=16021,
         lane_port_end=16030,
     )
@@ -112,7 +112,7 @@ def test_validate_capabilities_local_dir_ref_checks_directory(tmp_path: Path, mo
     models_root = tmp_path / "models"
     models_root.mkdir()
     manager = LaneManager(
-        OllamaConfig(models_path=str(models_root)),
+        WorkerConfig(models_path=str(models_root)),
         lane_port_start=16121,
         lane_port_end=16130,
     )
@@ -140,7 +140,7 @@ def test_validate_capabilities_local_gguf_file_ref_checks_the_file(tmp_path: Pat
     models_root = tmp_path / "models"
     models_root.mkdir()
     manager = LaneManager(
-        OllamaConfig(models_path=str(models_root)),
+        WorkerConfig(models_path=str(models_root)),
         lane_port_start=16141,
         lane_port_end=16150,
     )
@@ -167,7 +167,7 @@ def test_validate_capabilities_partial_snapshot_reports_missing_quant(tmp_path: 
     cache_root = tmp_path / "root"
     (cache_root / "models").mkdir(parents=True)
     manager = LaneManager(
-        OllamaConfig(models_path=str(cache_root / "models")),
+        WorkerConfig(models_path=str(cache_root / "models")),
         lane_port_start=16041,
         lane_port_end=16050,
     )
@@ -204,7 +204,7 @@ def test_validate_capabilities_bare_repo_pinned_quant(tmp_path: Path, monkeypatc
     cache_root = tmp_path / "root"
     (cache_root / "models").mkdir(parents=True)
     manager = LaneManager(
-        OllamaConfig(models_path=str(cache_root / "models")),
+        WorkerConfig(models_path=str(cache_root / "models")),
         lane_port_start=16061,
         lane_port_end=16070,
     )
@@ -234,7 +234,7 @@ def test_validate_capabilities_bare_repo_pinned_quant(tmp_path: Path, monkeypatc
     other_root = tmp_path / "root2"
     (other_root / "models").mkdir(parents=True)
     other = LaneManager(
-        OllamaConfig(models_path=str(other_root / "models")),
+        WorkerConfig(models_path=str(other_root / "models")),
         lane_port_start=16071,
         lane_port_end=16080,
     )
@@ -257,7 +257,7 @@ def test_validate_capabilities_bare_repo_incomplete_shards_report_missing(tmp_pa
     cache_root = tmp_path / "root"
     (cache_root / "models").mkdir(parents=True)
     manager = LaneManager(
-        OllamaConfig(models_path=str(cache_root / "models")),
+        WorkerConfig(models_path=str(cache_root / "models")),
         lane_port_start=16081,
         lane_port_end=16090,
     )
@@ -289,7 +289,7 @@ def test_validate_capabilities_bare_repo_incomplete_shards_report_missing(tmp_pa
     shard_root = tmp_path / "root2"
     (shard_root / "models").mkdir(parents=True)
     shard_manager = LaneManager(
-        OllamaConfig(models_path=str(shard_root / "models")),
+        WorkerConfig(models_path=str(shard_root / "models")),
         lane_port_start=16091,
         lane_port_end=16100,
     )
@@ -311,7 +311,7 @@ def test_validate_capabilities_blank_hf_home_falls_back(tmp_path: Path, monkeypa
     cache_root = tmp_path / "root"
     (cache_root / "models").mkdir(parents=True)
     manager = LaneManager(
-        OllamaConfig(models_path=str(cache_root / "models")),
+        WorkerConfig(models_path=str(cache_root / "models")),
         lane_port_start=16101,
         lane_port_end=16110,
     )

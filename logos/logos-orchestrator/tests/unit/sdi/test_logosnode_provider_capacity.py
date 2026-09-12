@@ -9,22 +9,20 @@ The two differ on `num_parallel`. #781 read it as the worker's real limit,
 but it is the concurrency vLLM guarantees at *full context* — a lower bound.
 Measured: a dev lane reporting `num_parallel=4` served 23 concurrent
 requests at 47% KV; a production lane reporting 1 served 8 at 78%. Used as a
-ceiling it throttles by 5-8x. So for vLLM lanes the ledger now keeps a loose
-ceiling and lets admission do the real gating, while for Ollama lanes
-`num_parallel` stays authoritative — there it is an explicit `--parallel`
-slot count, and a real limit.
+ceiling it throttles by 5-8x. So the ledger keeps a loose ceiling and lets
+admission do the real gating.
 """
 
 from logos.queue import PriorityQueueManager
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 
 
-def _lane(model: str, num_parallel: int, *, vllm: bool = True, runtime_state: str = "loaded", queue_waiting: float = 0):
+def _lane(model: str, num_parallel: int, *, runtime_state: str = "loaded", queue_waiting: float = 0):
     return {
         "lane_id": f"lane-{model}-{num_parallel}",
         "model": model,
         "runtime_state": runtime_state,
-        "vllm": vllm,
+        "vllm": True,
         "num_parallel": num_parallel,
         "backend_metrics": {"queue_waiting": queue_waiting, "requests_running": 0},
     }
@@ -93,11 +91,6 @@ def test_an_unreported_vllm_lane_is_treated_like_any_other(monkeypatch):
     assert unreported.get_parallel_capacity(1) == reported.get_parallel_capacity(1)
 
 
-def test_runtime_capacity_ollama_lane_is_explicit(monkeypatch):
-    provider = _provider(monkeypatch, [_lane("m", 8, vllm=False)])
-    assert provider.get_parallel_capacity(1) == (8, "runtime")
-
-
 def test_runtime_capacity_skips_stopped_and_error_lanes(monkeypatch):
     provider = _provider(
         monkeypatch,
@@ -105,14 +98,6 @@ def test_runtime_capacity_skips_stopped_and_error_lanes(monkeypatch):
     )
     assert provider._get_runtime_parallel_capacity(1) == (None, "config")
     assert provider.get_parallel_capacity(1) == (200, "default")
-
-
-def test_an_ollama_lane_is_still_capped_at_its_slot_count(monkeypatch):
-    """Ollama's num_parallel is an explicit `--parallel` slot count, not a
-    full-context estimate. There it really is the ceiling, and the only one
-    available — Ollama reports no KV signals for admission to read."""
-    provider = _provider(monkeypatch, [_lane("m", 8, vllm=False)])
-    assert provider.get_parallel_capacity(1) == (8, "runtime")
 
 
 def test_parallel_capacity_without_runtime_registry_defaults(monkeypatch):

@@ -1,0 +1,108 @@
+<div class="batches">
+  <h1 class="page-title">Batches</h1>
+  <p class="page-subtitle">
+    Run many requests at once without waiting for them. Where a provider offers a batch endpoint
+    Logos hands the job over and you pay its batch rate; everything else — models served here, and
+    cloud models their provider does not offer for batch — Logos runs itself as low-priority
+    requests that fill whatever capacity interactive traffic leaves.
+  </p>
+
+  @if (keys().length === 0) {
+    <p class="empty">You need an active API key to run a batch.</p>
+  } @else {
+    <section class="card">
+      <h2>New batch</h2>
+
+      <label class="field">
+        <span>API key</span>
+        <select (change)="onKeyChange($any($event.target).value)">
+          @for (key of keys(); track key.id) {
+            <option [value]="key.id" [selected]="key.id === selectedKeyId()">{{ key.name }}</option>
+          }
+        </select>
+        <small>The batch runs as this key: its model permissions and its team's budget apply.</small>
+      </label>
+
+      <label class="field">
+        <span>Input file (.jsonl)</span>
+        <input type="file" accept=".jsonl,application/jsonl,text/plain" (change)="onFileSelected($event)" />
+        <small>
+          One request per line:
+          <code>{{ '{' }}"custom_id": "q-1", "method": "POST", "url": "/v1/chat/completions", "body": {{ '{' }}"model": "…", "messages": […]{{ '}' }}{{ '}' }}</code>
+        </small>
+      </label>
+
+      <label class="field">
+        <span>Endpoint</span>
+        <select (change)="endpoint.set($any($event.target).value)">
+          <option value="/v1/chat/completions">/v1/chat/completions</option>
+          <option value="/v1/responses">/v1/responses</option>
+          <option value="/v1/embeddings">/v1/embeddings</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Where it runs</span>
+        <select (change)="execution.set($any($event.target).value)">
+          <option value="auto">Automatic — use the provider's batch endpoint when it can</option>
+          <option value="logos">Run in Logos (low priority)</option>
+          <option value="provider">Provider only (fail if unavailable)</option>
+        </select>
+      </label>
+
+      <button class="primary" [disabled]="!file() || uploading()" (click)="submit()">
+        {{ uploading() ? 'Starting…' : 'Start batch' }}
+      </button>
+
+      @if (error()) {
+        <p class="error" role="alert">{{ error() }}</p>
+      }
+      @if (notice()) {
+        <p class="notice">{{ notice() }}</p>
+      }
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>Your batches</h2>
+        <button class="ghost" (click)="refresh()" [disabled]="loading()">Refresh</button>
+      </div>
+
+      @if (loading()) {
+        <p class="empty">Loading…</p>
+      } @else if (batches().length === 0) {
+        <p class="empty">No batches yet.</p>
+      } @else {
+        <table>
+          <thead>
+            <tr>
+              <th>Batch</th>
+              <th>Status</th>
+              <th>Progress</th>
+              <th>Runs on</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (batch of batches(); track batch.id) {
+              <tr>
+                <td class="mono">{{ batch.id }}</td>
+                <td><span class="status" [class]="'status-' + batch.status">{{ batch.status }}</span></td>
+                <td>{{ progressOf(batch) }}</td>
+                <td>{{ batch.logos_execution === 'logos' ? 'Logos' : 'Provider' }}</td>
+                <td class="actions">
+                  @if (batch.output_file_id) {
+                    <button class="ghost" (click)="download(batch)">Download results</button>
+                  }
+                  @if (!isTerminal(batch)) {
+                    <button class="ghost" (click)="cancel(batch)">Cancel</button>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </section>
+  }
+</div>
