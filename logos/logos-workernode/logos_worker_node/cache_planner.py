@@ -19,7 +19,15 @@ Why this rule exists:
 The algorithm is deterministic — same inputs always produce the same output:
 
   1. Compute ``reserve_mb = sum(sleeping host_ram of every sleepable
-     capability)`` — what those lanes hold while asleep, not while awake.
+     capability that is NOT already asleep)`` — what those lanes will hold
+     when they sleep, not what they hold while awake. A model that is asleep
+     right now is already paying for itself: its sleeping weights sit in
+     host RAM and are therefore already subtracted from
+     ``available_host_ram_mb``. Reserving its footprint on top of that would
+     count the same RAM twice and shrink the budget by the size of every
+     sleeping model — exactly the over-correction a re-plan must not do.
+     At boot nobody is asleep (``asleep`` is empty) and the full reserve
+     applies, as before.
   2. ``budget_mb = (available_host_ram_mb + cache_held_mb) − reserve_mb −
      safety_margin_mb``. The cache's own footprint is added back because it
      is reclaimable: a budget measured from ``MemAvailable`` alone is a
@@ -62,6 +70,14 @@ class CacheCandidate:
     # it here would reserve the same memory twice.
     sleeping_host_ram_mb: float
     size_bytes: int  # weights on disk; surrogate for tmpfs cost
+    # How many sleep-capable lane replicas of this model are configured/live.
+    # ``LaneSetRequest`` allows several uniquely named lanes for the same
+    # model, and each vLLM process keeps its own weights in host RAM while
+    # asleep, so the sleep reserve is this factor times the per-process
+    # footprint. ``size_bytes`` (the shared tmpfs cache copy) is NOT
+    # multiplied — the cache stores one copy per model no matter how many
+    # replicas sleep.
+    sleeping_replicas: int = 1
 
 
 @dataclass(frozen=True)
@@ -77,6 +93,7 @@ class CachePlan:
     cached_unsleepable: list[str]
     cached_sleepable: list[str]
     skipped_sleepable: list[str]
+    asleep: frozenset[str] = frozenset()
 
 
 def plan_cache_order(
@@ -85,6 +102,7 @@ def plan_cache_order(
     available_host_ram_mb: float,
     safety_margin_mb: float,
     cache_held_mb: float = 0.0,
+    asleep: dict[str, int] | set[str] | frozenset[str] | None = None,
 ) -> CachePlan:
     """Decide which models to pre-cache and in what order.
 
@@ -93,11 +111,18 @@ def plan_cache_order(
         about, with its sleep capability, sleeping host-RAM footprint, and
         tmpfs cost.
       - ``available_host_ram_mb``: worker's current MemAvailable.
-      - ``safety_margin_mb``: fixed host-RAM buffer for OS file cache,
-        malloc fragmentation, vLLM mm processor caches, etc.
+      - ``safety_margin_mb``: host-RAM buffer for OS file cache, malloc
+        fragmentation, vLLM mm processor caches, the cold-load spike, etc.
       - ``cache_held_mb``: what the tmpfs cache already holds. Added back
         into the pool because it is reclaimable — see the module docstring.
         Zero reproduces the original from-scratch behaviour.
+      - ``asleep``: per-model count of lanes asleep right now (a
+        ``dict`` of model -> count, or a set/frozenset of model names, each
+        counting as one). An asleep lane's RAM is already out of
+        ``available_host_ram_mb``, so its share of the sleep reserve is
+        dropped — see the module docstring. With several same-model
+        replicas only the awake ones stay reserved: ``(sleepable_replicas
+        - asleep_replicas) * sleeping_host_ram_mb``.
 
     Returns a CachePlan describing the ordering and the budget arithmetic
     used to derive it. ``order`` is the list to pass to
@@ -113,7 +138,25 @@ def plan_cache_order(
         key=lambda c: c.size_bytes,
     )
 
-    reserved_for_sleep_mb = sum(c.sleeping_host_ram_mb for c in sleepable)
+    # Normalise the asleep input to per-model counts so a same-model replica
+    # that is asleep drops exactly its own share of the reserve (a set/frozen
+    # set counts every listed model as one).
+    if asleep is None:
+        asleep_counts: dict[str, int] = {}
+    elif isinstance(asleep, dict):
+        asleep_counts = {m: max(0, int(n)) for m, n in asleep.items() if n}
+    else:
+        asleep_counts = {m: 1 for m in asleep}
+
+    # A lane that is already asleep is not reserved: its sleeping RAM is
+    # already out of MemAvailable (see the module docstring), so reserving it
+    # again would double-count. With several same-model replicas, each vLLM
+    # process keeps its own weights in host RAM while asleep, so only the
+    # awake replicas' footprints are reserved:
+    # ``sleeping_host_ram_mb * (sleeping_replicas - asleep_replicas)``.
+    reserved_for_sleep_mb = sum(
+        c.sleeping_host_ram_mb * max(0, c.sleeping_replicas - asleep_counts.get(c.name, 0)) for c in sleepable
+    )
     pool_mb = available_host_ram_mb + max(cache_held_mb, 0.0)
     sleepable_tmpfs_budget_mb = pool_mb - reserved_for_sleep_mb - safety_margin_mb
 
@@ -148,4 +191,5 @@ def plan_cache_order(
         cached_unsleepable=cached_unsleepable,
         cached_sleepable=cached_sleepable,
         skipped_sleepable=skipped_sleepable,
+        asleep=frozenset(asleep_counts),
     )

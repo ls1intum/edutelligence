@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import de.tum.cit.aet.logos.logoswebservice.operations.repository.OllamaProviderSnapshotRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderSnapshotRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderCapacityProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.VramSnapshotProjection;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorStatusClient;
@@ -23,10 +23,10 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorStatusClien
 public class VramService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private final OllamaProviderSnapshotRepository snapshotRepository;
+    private final ProviderSnapshotRepository snapshotRepository;
     private final OrchestratorStatusClient orchestratorStatusClient;
 
-    public VramService(OllamaProviderSnapshotRepository snapshotRepository,
+    public VramService(ProviderSnapshotRepository snapshotRepository,
                        OrchestratorStatusClient orchestratorStatusClient) {
         this.snapshotRepository = snapshotRepository;
         this.orchestratorStatusClient = orchestratorStatusClient;

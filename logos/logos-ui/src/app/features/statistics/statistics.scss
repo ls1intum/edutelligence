@@ -149,6 +149,10 @@
   align-items: flex-end;
   height: 28px;
   gap: 2px;
+  // The bars are fixed-width and cannot compress, so in a card too narrow
+  // for a full run the last bars clip at the card's padding instead of
+  // running into the border.
+  overflow: hidden;
 }
 
 .stats-lane-bar {

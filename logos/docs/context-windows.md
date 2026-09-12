@@ -83,9 +83,12 @@ The first is temporary — it clears when VRAM frees up. The second will not: no
 calibrated point on that node reaches the floor at any KV size, so either lower
 `min_context_fraction` for that model or re-calibrate it.
 
-A model whose context length is unknown is never blocked by the floor. It exists
-to stop the planner *choosing* a narrow window, not to keep uncalibrated models
-off the cluster.
+A model whose context length is unknown is never blocked by the floor itself —
+it exists to stop the planner *choosing* a narrow window, not to gate on
+calibration. That gate is separate: `_passes_minimum_load_feasibility` refuses
+to load any model that has never been calibrated on that node, unless the
+provider is Metal/MLX (which runs on operator-provided override profiles
+instead — calibration is impossible there by design).
 
 ## 3. Context-aware routing — send long requests where they fit
 

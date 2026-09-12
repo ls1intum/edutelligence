@@ -112,6 +112,22 @@ interface ModelLog {
   readonly providerId: number;
   readonly node: string;
   readonly modelName: string;
+  readonly success: boolean;
+}
+
+interface CalibrationProbeSummary {
+  readonly tensor_parallel_size: number | null;
+  readonly gpu_devices: string | null;
+  readonly kv_cache_sent_mb: number | null;
+  readonly base_residency_mb: number | null;
+  readonly loaded_vram_mb: number | null;
+  readonly sleeping_residual_mb: number | null;
+  readonly min_kv_cache_mb: number | null;
+  readonly max_kv_cache_mb: number | null;
+  readonly max_model_len: number | null;
+  readonly cold_load_time_s: number | null;
+  readonly wake_from_sleep_time_s: number | null;
+  readonly probe_command: string | null;
 }
 
 interface BackendCalibrationLog {
@@ -120,6 +136,7 @@ interface BackendCalibrationLog {
   readonly success: boolean;
   readonly probe_command: string | null;
   readonly error: string | null;
+  readonly summary: CalibrationProbeSummary | null;
   readonly log_text: string | null;
   readonly recorded_at: string | null;
   readonly updated_at: string;
@@ -294,8 +311,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     return result !== null && !result.ok && result.providerId === this.selectedLogProviderId();
   });
 
+  readonly downloadingLog = signal(false);
+  readonly downloadLogError = signal<string | null>(null);
+
   private readonly rawLogsByProviderId =
     signal<ReadonlyMap<number, string>>(new Map());
+
+  private readonly summaryByProviderId =
+    signal<ReadonlyMap<number, CalibrationProbeSummary | null>>(new Map());
 
   private readonly modelLogs =
     signal<readonly ModelLog[]>([]);
@@ -363,8 +386,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   };
 
   readonly hasAnyLogText = computed(() => {
-    return [...this.rawLogsByProviderId().values()].some(text => text.length > 0);
+    const hasRawLog = [...this.rawLogsByProviderId().values()].some(text => text.length > 0);
+    const hasSummary = [...this.summaryByProviderId().values()].some(summary => summary != null);
+    return hasRawLog || hasSummary;
   });
+
+  readonly showSelectedSummary = computed(() => this.selectedLog()?.success === true && this.selectedSummary() != null);
+
+  readonly showSelectedFailure = computed(() => this.selectedLog()?.success === false);
 
   readonly visibleTabs =
     computed<readonly ModelErrorTab[]>(() => this.tabs);
@@ -402,12 +431,67 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   });
 
   readonly completeLog = computed(() => {
-    const providerId = this.selectedLog()?.providerId;
-    if (providerId == null) {
+    const log = this.selectedLog();
+    if (log == null) {
       return '';
     }
-    return this.rawLogsByProviderId().get(providerId) ?? '';
+    if (log.success) {
+      return '';
+    }
+    return this.rawLogsByProviderId().get(log.providerId) ?? '';
   });
+
+  readonly selectedSummary = computed(() => {
+    const providerId = this.selectedLog()?.providerId;
+    if (providerId == null) {
+      return null;
+    }
+    return this.summaryByProviderId().get(providerId) ?? null;
+  });
+
+  readonly summaryTiles = computed<readonly { title: string; rows: { label: string; value: string }[] }[]>(() => {
+    const summary = this.selectedSummary();
+    if (!summary) {
+      return [];
+    }
+
+    const vramRows: { label: string; value: string }[] = [
+      { label: 'Base residency', value: this.formatMb(summary.base_residency_mb) },
+      { label: 'Loaded VRAM', value: this.formatMb(summary.loaded_vram_mb) },
+    ];
+    if (summary.sleeping_residual_mb != null) {
+      vramRows.push({ label: 'Sleeping residual', value: this.formatMb(summary.sleeping_residual_mb) });
+    }
+
+    const timingRows: { label: string; value: string }[] = [
+      { label: 'Cold load', value: this.formatDuration(summary.cold_load_time_s != null ? summary.cold_load_time_s * 1000 : null) },
+    ];
+    if (summary.wake_from_sleep_time_s != null) {
+      timingRows.push({ label: 'Wake from sleep', value: this.formatDuration(summary.wake_from_sleep_time_s * 1000) });
+    }
+
+    return [
+      {
+        title: 'Placement',
+        rows: [
+          { label: 'Tensor parallel size', value: this.formatNumber(summary.tensor_parallel_size) },
+          { label: 'GPU devices', value: summary.gpu_devices || '—' },
+        ],
+      },
+      { title: 'VRAM', rows: vramRows },
+      {
+        title: 'KV cache',
+        rows: [
+          { label: 'Sent', value: this.formatMb(summary.kv_cache_sent_mb) },
+          { label: 'Range', value: `${this.formatMb(summary.min_kv_cache_mb)} – ${this.formatMb(summary.max_kv_cache_mb)}` },
+          { label: 'Max model length', value: this.formatNumber(summary.max_model_len) },
+        ],
+      },
+      { title: 'Timing', rows: timingRows },
+    ];
+  });
+
+  readonly summaryProbeCommand = computed(() => this.selectedSummary()?.probe_command || null);
 
   readonly logLines = computed(() =>
     this.completeLog().split('\n')
@@ -573,11 +657,16 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           providerId: log.provider_id,
           node: log.provider_name,
           modelName,
+          success: log.success,
         }))
       );
 
       this.rawLogsByProviderId.set(
         new Map(logs.map(log => [log.provider_id, log.log_text ?? '']))
+      );
+
+      this.summaryByProviderId.set(
+        new Map(logs.map(log => [log.provider_id, log.summary ?? null]))
       );
 
       this.calibrationResults.set(
@@ -589,6 +678,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     } catch {
       this.modelLogs.set([]);
       this.rawLogsByProviderId.set(new Map());
+      this.summaryByProviderId.set(new Map());
       this.calibrationResults.set([]);
     }
   }
@@ -781,6 +871,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
   }
 
+  formatMb(value: number | null): string {
+    return value === null || !Number.isFinite(value) ? '—' : `${value.toFixed(0)} MB`;
+  }
+
+  formatNumber(value: number | null): string {
+    return value === null || !Number.isFinite(value) ? '—' : `${value}`;
+  }
+
   formatBenchmarkDuration(
     metric: GuideLlmStatusDistributionSummary | undefined,
     percentile: 'p50' | 'p95' | 'p99' | 'p100',
@@ -885,6 +983,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     const providerId = Number(value);
     if (!Number.isNaN(providerId)) {
       this.selectedLogProviderId.set(providerId);
+      this.downloadLogError.set(null);
     }
   }
 
@@ -912,6 +1011,45 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       this.logCopyResult.set(null);
       this.logCopiedResetTimer = null;
     }, 2000);
+  }
+
+  async downloadFullLog(): Promise<void> {
+    const modelId = this.modelId();
+    const providerId = this.selectedLogProviderId();
+    if (modelId == null || providerId == null || this.downloadingLog()) {
+      return;
+    }
+
+    this.downloadingLog.set(true);
+    this.downloadLogError.set(null);
+
+    try {
+      const response = await firstValueFrom(
+        this.http.post<{ log_text?: string }>(
+          '/api/logosdb/get_model_calibration_log_full',
+          { id: modelId, provider_id: providerId }
+        )
+      );
+      this.triggerLogFileDownload(response.log_text ?? '');
+    } catch (error) {
+      const response = error instanceof HttpErrorResponse ? error.error : null;
+      const message = typeof response?.error === 'string' ? response.error : null;
+      this.downloadLogError.set(message ?? 'Failed to fetch the log from the worker.');
+    } finally {
+      this.downloadingLog.set(false);
+    }
+  }
+
+  private triggerLogFileDownload(logText: string): void {
+    const modelName = (this.model()?.name ?? 'model').replace(/\//g, '__');
+    const node = this.selectedLog()?.node ?? 'node';
+    const blob = new Blob([logText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${modelName}-${node}-calibration.log`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   openNodeLog(
