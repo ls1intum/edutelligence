@@ -591,7 +591,11 @@ stable vllm-metal release, downloads its `install.sh`, its `scripts/lib.sh`,
 its release wheel and the vLLM core wheel it names, recomputes all four
 SHA256s, re-verifies that the four exact-string patch patterns still match
 exactly once each, updates `VLLM_METAL_REF`, the wheel names and URLs and
-`VLLM_METAL_MIN_VERSION` together, and opens a PR. If a patch pattern no
+`VLLM_METAL_PINNED_VERSION` together, and opens a PR. It does **not** touch
+`VLLM_METAL_MIN_VERSION`: that is the compatibility floor for
+operator-managed custom venvs, and a routine release is not a new
+requirement — raise it by hand when something actually stops working below
+a version. If a patch pattern no
 longer matches, it fails loudly instead of opening a PR that would produce a
 half-patched installer — that case needs a human.
 

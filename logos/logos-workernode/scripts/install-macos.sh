@@ -81,8 +81,19 @@ VLLM_METAL_WHEEL_SHA256="0d03dcc2be9a4286a19c5e53e1355d2e47acdbf2be6f9de9cbb48cc
 VLLM_CORE_WHEEL_NAME="vllm-0.29.0+cpu-cp312-cp312-macosx_11_0_arm64.whl"
 VLLM_CORE_WHEEL_URL="https://github.com/vllm-project/vllm/releases/download/v0.29.0/vllm-0.29.0%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl"
 VLLM_CORE_WHEEL_SHA256="7133cb494664c502b07b114fe915847f0e71296d502f67f6fa76172ba46978df"
-# Documented floor (MACOS.md, Requirements): below it the current model set
-# does not load.
+# Two different things, deliberately separate.
+#
+# PINNED is the version of the wheels above — what the managed default venv is
+# rebuilt to track exactly, so a deployment is reproducible. The automated bump
+# workflow moves this one, and it must always equal the version in the wheel
+# names.
+#
+# MIN is the documented compatibility floor (MACOS.md, Requirements): below it
+# the current model set does not load. It governs operator-managed custom
+# venvs, which only have to be new enough. A routine release bump is NOT a new
+# compatibility requirement, so the workflow leaves this alone — raise it by
+# hand only when something genuinely stops working below that version.
+VLLM_METAL_PINNED_VERSION="0.29.0"
 VLLM_METAL_MIN_VERSION="0.29.0"
 
 log()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
@@ -213,11 +224,11 @@ LOGOS_METAL_VENV points at a custom location, which upstream's installer cannot
 populate, so this script will not delete it. Upgrade or remove that venv
 yourself, or unset LOGOS_METAL_VENV to use the default."
         fi
-    elif [ "$current_metal" = "$VLLM_METAL_MIN_VERSION" ]; then
+    elif [ "$current_metal" = "$VLLM_METAL_PINNED_VERSION" ]; then
         log "vllm-metal $current_metal already present — skipping install"
         metal_needs_install=0
     else
-        log "vllm-metal ${current_metal:-unknown} is installed but this worker pins $VLLM_METAL_MIN_VERSION — rebuilding the venv"
+        log "vllm-metal ${current_metal:-unknown} is installed but this worker pins $VLLM_METAL_PINNED_VERSION — rebuilding the venv"
         # Move aside instead of deleting: if the download or install below
         # fails, the node still has a working (if outdated) runtime to fall
         # back on rather than no runtime at all. Removed once the new venv is

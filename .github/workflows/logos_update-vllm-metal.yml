@@ -3,8 +3,9 @@ name: Logos - Update vllm-metal
 # The Mac (MLX) worker's counterpart to "Logos - Update vLLM". That workflow
 # bumps a single pip pin in the CUDA Dockerfile; this one has to move a whole
 # pinned artifact set in logos-workernode/scripts/install-macos.sh: the release
-# tag, both wheel names, both wheel URLs, three sha256 values and the version
-# floor. It also re-verifies the four exact-string patch patterns that script
+# tag, both wheel names, both wheel URLs, three sha256 values and the pinned
+# version. The compatibility floor is deliberately left alone — see the pin
+# step. It also re-verifies the four exact-string patch patterns that script
 # applies to upstream's installer — if upstream reworded one of those lines, a
 # bumped pin would produce a half-patched installer, which is precisely what
 # the fail-loud patching exists to prevent. That case needs a human, so the
@@ -220,7 +221,13 @@ jobs:
               (r'^VLLM_CORE_WHEEL_NAME=".*"$',        f'VLLM_CORE_WHEEL_NAME="{os.environ["A_CORE_WHEEL"]}"'),
               (r'^VLLM_CORE_WHEEL_URL=".*"$',         f'VLLM_CORE_WHEEL_URL="{os.environ["A_CORE_URL"]}"'),
               (r'^VLLM_CORE_WHEEL_SHA256=".*"$',      f'VLLM_CORE_WHEEL_SHA256="{os.environ["A_CORE_SHA"]}"'),
-              (r'^VLLM_METAL_MIN_VERSION=".*"$',      f'VLLM_METAL_MIN_VERSION="{os.environ["VERSION"]}"'),
+              # PINNED tracks the wheels; the compatibility FLOOR
+              # (VLLM_METAL_MIN_VERSION) is deliberately NOT touched. A routine
+              # release bump is not a new requirement, and raising the floor
+              # would reject operator-managed custom venvs that are still
+              # perfectly compatible. Raise it by hand when review establishes
+              # a genuinely higher requirement.
+              (r'^VLLM_METAL_PINNED_VERSION=".*"$',   f'VLLM_METAL_PINNED_VERSION="{os.environ["VERSION"]}"'),
           ]
           for pattern, replacement in subs:
               src, n = re.subn(pattern, replacement, src, count=1, flags=re.M)
@@ -228,7 +235,7 @@ jobs:
                   sys.exit(f"::error::Could not update {pattern!r} in {path}")
 
           open(path, "w", encoding="utf-8").write(src)
-          print(f"Updated 9 pins in {path}")
+          print(f"Updated 9 pins in {path} (compatibility floor left unchanged)")
           PY
           git diff -- "$INSTALLER"
 
@@ -257,7 +264,7 @@ jobs:
 
           ## Description
 
-          Updates the pinned artifact set in \`$INSTALLER\` — release tag, both wheel names and URLs, all three SHA256 values and \`VLLM_METAL_MIN_VERSION\`. Every checksum was recomputed from the artifacts actually downloaded at that tag; identical values are possible (upstream's \`install.sh\` and \`scripts/lib.sh\` are frequently byte-identical across tags) and were verified, not assumed.
+          Updates the pinned artifact set in \`$INSTALLER\` — release tag, both wheel names and URLs, all three SHA256 values and \`VLLM_METAL_PINNED_VERSION\`. The compatibility floor \`VLLM_METAL_MIN_VERSION\` is **not** changed: a routine release bump is not a new requirement, and raising it would reject operator-managed custom venvs that are still compatible. Every checksum was recomputed from the artifacts actually downloaded at that tag; identical values are possible (upstream's \`install.sh\` and \`scripts/lib.sh\` are frequently byte-identical across tags) and were verified, not assumed.
 
           The four exact-string patch patterns \`install-macos.sh\` applies to upstream's installer were re-checked against the new release and each still matches exactly once — that check is what keeps a reworded upstream line from producing a half-patched installer.
 

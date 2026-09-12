@@ -172,9 +172,15 @@ if launchctl print "gui/$(id -u)/$LAUNCH_AGENT_LABEL" >/dev/null 2>&1; then
     # to exit on their own before checking.
     sleep 2
 fi
-if pgrep -f "$METAL_VENV/bin/vllm" >/dev/null 2>&1; then
+# -f matches against a REGEX, not a literal string, and the path is full of
+# metacharacters — even the default $HOME/.venv-vllm-metal has a `.` that
+# matches any character, so a process at $HOME/Xvenv-vllm-metal/bin/vllm would
+# be killed too. Escape every character that means something to the regex
+# engine, and anchor at the start so the pattern cannot match mid-path.
+metal_vllm_pattern="^$(printf '%s' "$METAL_VENV/bin/vllm" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
+if pgrep -f "$metal_vllm_pattern" >/dev/null 2>&1; then
     warn "Lane processes still running — terminating them"
-    pkill -f "$METAL_VENV/bin/vllm" 2>/dev/null || true
+    pkill -f "$metal_vllm_pattern" 2>/dev/null || true
     sleep 1
 fi
 rm -f "$LAUNCH_AGENT_PLIST"

@@ -182,6 +182,24 @@ while IFS= read -r layer; do
         "https://${REGISTRY}/v2/${REPO}/blobs/${layer}" -o "$blob" \
         || die "Failed to download layer ${layer%%:*}:${layer#*:} — aborting rather than deploying a partial payload."
 
+    # Verify the content digest the manifest states. A container runtime does
+    # this for every layer; replacing it with curl means doing it here, or a
+    # registry or transport fault that hands back a different — still perfectly
+    # readable — archive would be synced straight into the live installation.
+    # This is the same standard install-macos.sh applies to every byte it
+    # executes.
+    case "${layer%%:*}" in
+        sha256) actual="$(shasum -a 256 "$blob" | cut -d' ' -f1)" ;;
+        sha512) actual="$(shasum -a 512 "$blob" | cut -d' ' -f1)" ;;
+        *) die "Layer uses unsupported digest algorithm '${layer%%:*}' — refusing to trust it." ;;
+    esac
+    if [ "$actual" != "${layer#*:}" ]; then
+        die "Digest mismatch on layer ${layer#*:}
+  expected ${layer#*:}
+  got      $actual
+Refusing to unpack an artifact that is not what the manifest describes."
+    fi
+
     # Layers are applied in order so later ones win, exactly as a container
     # runtime would compose them. Listing first distinguishes the two cases a
     # bare extract cannot: a layer that genuinely carries no payload/ (normal,
