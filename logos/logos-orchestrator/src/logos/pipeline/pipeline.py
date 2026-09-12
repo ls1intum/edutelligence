@@ -353,14 +353,20 @@ class RequestPipeline:
                 result_status="error",
                 error_message="All candidate models unavailable (rate-limited or no capacity)",
             )
+            # The request still targets the model classification picked:
+            # no provider was reserved, but the model choice stands. An
+            # internal retry built from this result pins it, so the next
+            # pass re-schedules the same model instead of re-running
+            # classification over the whole request.
             return PipelineResult(
                 success=False,
-                model_id=None,
+                model_id=target_model_id,
                 provider_id=None,
                 execution_context=None,
                 classification_stats=classification_result.stats,
                 scheduling_stats={
                     "request_id": request_id,
+                    "model_id": target_model_id,
                     "error": "No available model",
                 },
                 error="All candidate models unavailable (rate-limited or no capacity)",

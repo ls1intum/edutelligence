@@ -223,6 +223,30 @@ async def test_pinned_redeploy_lifted_exclusion_carries_single_node_set():
 
 
 @pytest.mark.asyncio
+async def test_no_capacity_result_retains_the_target_model():
+    """Everything is rate-limited or busy: no provider is reserved, but the
+    model classification picked still stands. The result carries it, so the
+    internal retry built from the failure pins the model instead of
+    re-running classification over the whole request."""
+
+    class _NoCapacityScheduler(_RecordingScheduler):
+        async def schedule(self, request):
+            self.requests.append(request)
+            return None
+
+    pipeline, _classifier, _scheduler = _build_pipeline()
+    pipeline._scheduler = _NoCapacityScheduler()
+
+    result = await pipeline.process(_pinned_request())
+
+    assert result.success is False
+    assert result.error == "All candidate models unavailable (rate-limited or no capacity)"
+    assert result.model_id == 27  # the pinned target, not None
+    assert result.provider_id is None
+    assert result.scheduling_stats["model_id"] == 27
+
+
+@pytest.mark.asyncio
 async def test_non_pinned_request_stays_model_wide():
     """Normal requests carry no eligibility set — model-wide queueing is
     unchanged for them."""

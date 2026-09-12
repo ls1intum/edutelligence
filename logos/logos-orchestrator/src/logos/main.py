@@ -27,6 +27,7 @@ from grpclocal.grpc_server import LogosServicer
 from logos.anthropic_compat import (
     UpstreamDialect,
     error_body,
+    is_messages_path,
     is_responses_path,
     sse,
     stream_translator,
@@ -2406,7 +2407,24 @@ async def _streaming_response(
                         # budget, no eligible node — ends in the error
                         # frame below.
                         resume_opened = False
-                        if not resumed and _RESUME_ENABLED and retry_budget is not None and deployments:
+                        # The continuation contract is a Chat Completions
+                        # one: a trailing assistant message the lane keeps
+                        # open. The other inbound surfaces cannot take it —
+                        # a native /v1/messages client reads one
+                        # message_start per turn, so the takeover's envelope
+                        # spliced after the original one is not a valid
+                        # Anthropic stream, and the OpenAI-only fields in
+                        # the payload would be rejected or misread by the
+                        # lane. Those failures stay on their dialect's
+                        # error fallback below.
+                        if (
+                            not resumed
+                            and _RESUME_ENABLED
+                            and retry_budget is not None
+                            and deployments
+                            and not is_messages_path(request_path or "")
+                            and not is_responses_path(request_path or "")
+                        ):
                             prefix = stream_log.full_text
                             if prefix and not stream_log.saw_structured_delta:
                                 # The continuation's budget is only shrinkable
@@ -2985,8 +3003,14 @@ async def _sync_response(
             # near-expiry attempt fails fast instead of running for minutes.
             # The initial dispatch (no recorded failure) stays unbounded.
             cloud_timeout_s = retry_budget.execution_timeout_s(None) if retry_budget is not None else None
+            # The httpx timeout bounds each read, not the run — the absolute
+            # deadline is the wall the whole POST must stop at.
             exec_result = await _pipeline.executor.execute_sync(
-                context.forward_url, headers, prepared_payload, timeout=cloud_timeout_s
+                context.forward_url,
+                headers,
+                prepared_payload,
+                timeout=cloud_timeout_s,
+                deadline_at=retry_budget.deadline_at if retry_budget is not None else None,
             )
         response_at = datetime.datetime.now(datetime.timezone.utc)
 

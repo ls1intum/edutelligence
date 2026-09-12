@@ -482,3 +482,100 @@ async def test_a_deadline_cut_stream_with_recovery_disabled_propagates_the_deadl
     assert status.error == "stream execution passed its retry deadline"
     assert b"[DONE]" not in body
     assert b"passed its retry deadline" not in body
+
+
+# ---------------------------------------------------------------------------
+# The same absolute wall over the synchronous (non-streaming) execution
+#
+# The httpx timeout is a per-operation bound: its read bound resets after
+# every response-body chunk, so a drip-fed JSON response can keep arriving
+# forever without ever tripping it. The retry deadline has to be checked as
+# one wall over the complete POST — connect, send, body read.
+# ---------------------------------------------------------------------------
+
+
+class _SyncResponse:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+        self.headers = {"content-type": "application/json"}
+
+    def json(self):
+        return json.loads(self._body)
+
+
+class _FakeSyncClient:
+    """Async client whose post() takes longer than any per-read bound could
+    ever catch — the drip-fed response the timeout cannot stop."""
+
+    def __init__(self, delay=0.0, body=b'{"ok": true}', status_code=200):
+        self.delay = delay
+        self.body = body
+        self.status_code = status_code
+        self.started = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post(self, url, headers=None, timeout=None, json=None, **_kwargs):  # noqa: ARG002
+        self.started = time.monotonic()
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        return _SyncResponse(self.status_code, self.body)
+
+
+def install_sync_client(monkeypatch, client):
+    monkeypatch.setattr("logos.pipeline.executor.httpx.AsyncClient", lambda **_kwargs: client)
+    return client
+
+
+async def test_sync_execution_cannot_run_past_the_absolute_deadline(monkeypatch):
+    client = install_sync_client(monkeypatch, _FakeSyncClient(delay=0.5))
+
+    t0 = time.monotonic()
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/chat/completions",
+        {},
+        {"model": "test-model"},
+        timeout=60.0,  # a per-read bound no drip can ever trip
+        deadline_at=t0 + 0.15,
+    )
+    elapsed = time.monotonic() - t0
+
+    # Cut at the wall, not at the drip's own end.
+    assert elapsed < 0.4
+    assert result.success is False
+    assert result.error == "sync execution passed its retry deadline"
+    assert result.status_code == 504
+
+
+async def test_a_spent_sync_deadline_fails_before_the_request(monkeypatch):
+    client = install_sync_client(monkeypatch, _FakeSyncClient())
+
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/chat/completions",
+        {},
+        {"model": "test-model"},
+        deadline_at=time.monotonic() - 1.0,  # spent before the first read
+    )
+
+    assert client.started is None  # nothing was sent
+    assert result.success is False
+    assert result.error == "sync execution passed its retry deadline"
+
+
+async def test_sync_execution_inside_the_deadline_is_unaffected(monkeypatch):
+    install_sync_client(monkeypatch, _FakeSyncClient(body=b'{"ok": true}'))
+
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/chat/completions",
+        {},
+        {"model": "test-model"},
+        deadline_at=time.monotonic() + 5.0,
+    )
+
+    assert result.success is True
+    assert result.response == {"ok": True}

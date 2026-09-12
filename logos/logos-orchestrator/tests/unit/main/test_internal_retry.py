@@ -146,7 +146,14 @@ async def test_retryable_scheduling_failure_is_retried_and_succeeds(retry_env):
     pipeline = _run_sync_response(
         retry_env,
         results=[
-            _fail_result("All candidate models unavailable (rate-limited or no capacity)", provider_id=1),
+            # The shape the pipeline really returns for a no-capacity
+            # failure: the target model stands, but no provider was
+            # reserved — so there is no node to exclude.
+            _fail_result(
+                "All candidate models unavailable (rate-limited or no capacity)",
+                model_id=27,
+                provider_id=None,
+            ),
             _ok_result(provider_id=2),
         ],
         sync_responses=[JSONResponse(content={"ok": True}, status_code=200)],
@@ -165,10 +172,11 @@ async def test_retryable_scheduling_failure_is_retried_and_succeeds(retry_env):
     assert response.status_code == 200
     assert len(pipeline.requests) == 2
     retry_req = pipeline.requests[1]
-    # The retry keeps the model the request already had and excludes the node
-    # that just failed it; a plain retry keeps its original priority.
+    # The retry keeps the model the request already had; nothing was
+    # excluded because no node failed it, and a plain retry keeps its
+    # original priority.
     assert retry_req.pinned_model_id == 27
-    assert retry_req.exclude_provider_ids == frozenset({1})
+    assert retry_req.exclude_provider_ids is None
     assert retry_req.priority_override is None
     assert retry_req.request_id == "req-1"
     assert retry_req.context_resolve_timeout_s is not None
@@ -1207,14 +1215,17 @@ async def test_terminal_status_retry_bounds_clamp_to_the_post_backoff_deadline(r
 
 
 class _RecordingExecutor:
-    """Scripted executor that records the transport timeout of every call."""
+    """Scripted executor that records the transport timeout and the absolute
+    deadline of every call."""
 
     def __init__(self, results):
         self.results = list(results)
         self.timeouts = []
+        self.deadlines = []
 
-    async def execute_sync(self, url, headers, payload, timeout=None):  # noqa: ARG002
+    async def execute_sync(self, url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
         self.timeouts.append(timeout)
+        self.deadlines.append(deadline_at)
         if not self.results:
             raise AssertionError("execute_sync called more times than scripted")
         return self.results.pop(0)
@@ -1301,6 +1312,9 @@ async def test_retry_execution_is_bounded_to_the_remaining_deadline(retry_env):
     # Initial dispatch: unbounded (None). Retry: clamped to the 6s left after
     # the 4s backoff consumed from the 10s deadline.
     assert executor.timeouts == [None, 6.0]
+    # The read bound resets after every body chunk, so the budget's absolute
+    # deadline goes along on both attempts — the wall never moves.
+    assert executor.deadlines == [10.0, 10.0]
 
 
 @pytest.mark.asyncio
@@ -1509,6 +1523,67 @@ async def test_a_retry_stream_passes_the_absolute_deadline_to_the_cloud(retry_en
     # The previously-unbounded cloud call gets the 9s left as its read bound...
     assert calls[0]["timeout"] == 9.0
     # ...and the absolute deadline, enforced on the chunk loop.
+    assert calls[0]["deadline_at"] == budget.deadline_at
+
+
+@pytest.mark.asyncio
+async def test_a_retry_sync_call_passes_the_absolute_deadline_to_the_cloud(retry_env):
+    """The sync path has the same exposure: the remaining budget passed as
+    the httpx timeout resets its read bound after every body chunk, so a
+    drip-fed JSON response can run past the deadline — the executor gets
+    the absolute wall alongside it."""
+    from logos.pipeline.executor import ExecutionResult
+
+    budget = _retry_budget_one_failure_left()
+    calls = []
+
+    class _RecordingSyncExecutor:
+        async def execute_sync(self, url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
+            calls.append({"timeout": timeout, "deadline_at": deadline_at})
+            return ExecutionResult(
+                success=True,
+                response={"choices": [{"message": {"content": "ok"}}]},
+                error=None,
+                usage={},
+                is_streaming=False,
+                headers=None,
+                status_code=200,
+            )
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _RecordingSyncExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    retry_env.setattr(main, "_response_with_cost", lambda payload, *a, **k: (payload, False))
+
+    response = await main._sync_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            model_name="stub-model",
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-1", "provider_type": "cloud"},
+        retry_budget=budget,
+    )
+    assert response.status_code == 200
+
+    assert len(calls) == 1
+    # The previously-unbounded cloud call gets the 9s left as its read bound...
+    assert calls[0]["timeout"] == 9.0
+    # ...and the absolute wall, enforced over the complete POST.
     assert calls[0]["deadline_at"] == budget.deadline_at
 
 

@@ -1015,6 +1015,105 @@ async def test_a_native_messages_mid_stream_failure_emits_an_anthropic_error_eve
     assert b"[DONE]" not in body
 
 
+@pytest.mark.asyncio
+async def test_a_native_messages_mid_stream_failure_is_not_resumed(monkeypatch):
+    """End to end: the stream has everything the resume guard otherwise
+    needs — a plain-text prefix (``Hi``), a budget with attempts left,
+    eligible deployments, and a ``message_start`` whose provisional
+    ``output_tokens`` lets the continuation budget be computed. But the
+    continuation contract is a Chat Completions one: resuming would send
+    OpenAI-only fields to a lane serving /v1/messages and splice a second
+    ``message_start`` into the client's stream. The guard must block on the
+    request path, and the failure stays on the Anthropic error fallback."""
+    from fastapi.responses import StreamingResponse
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    registry, websocket = _registry_with_session()
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry, raising=False)
+    pipeline, _completion_calls, _release_calls = _make_pipeline()
+    process_calls = []
+
+    async def fake_process(request):  # noqa: ARG001
+        process_calls.append(request)
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            model_id=27,
+            provider_id=2,
+            execution_context=SimpleNamespace(
+                model_id=27, provider_id=2, provider_type="logosnode", lane_id="lane-2", engine="vllm"
+            ),
+            classification_stats={},
+            scheduling_stats={"request_id": "req-1"},
+        )
+
+    pipeline.process = fake_process
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            _native_messages_context(),
+            {"model": "test-model", "max_tokens": 100, "messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-native-messages-noresume",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+            request_path="/v1/messages",
+            deployments=[
+                {"model_id": 27, "provider_id": PROVIDER_ID, "type": "logosnode"},
+                {"model_id": 27, "provider_id": 2, "type": "logosnode"},
+            ],
+            # A real-clock budget: the stream is opened with its deadline,
+            # which must stay in the future in real monotonic time.
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    cmd_id = _sent_stream_cmd_id(websocket)
+    await _feed(registry, cmd_id, {"type": "stream_start", "status_code": 200})
+    # Envelope metadata (held, with the provisional output count), then the
+    # first content token (commits the 200), then the failure.
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _MESSAGES_START})
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": _MESSAGES_BLOCK_START})
+    delta = (
+        b"event: content_block_delta\n"
+        b'data: {"type": "content_block_delta", "index": 0, '
+        b'"delta": {"type": "text_delta", "text": "Hi"}}\n\n'
+    )
+    await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": delta})
+    await _feed(registry, cmd_id, {"type": "stream_end", "success": False, "error": "lane died"})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+    await _drain_pending_tasks()
+
+    # No takeover was scheduled — the guard blocked on the request path —
+    # and the client's stream ends in the Anthropic error event.
+    assert process_calls == []
+    assert body.endswith(
+        b"event: error\n" b'data: {"type": "error", "error": {"type": "api_error", "message": "lane died"}}\n\n'
+    )
+    assert b"[DONE]" not in body
+
+
 def _responses_context() -> SimpleNamespace:
     """The real /v1/responses context: the resolver sets ``anthropic_dialect``
     only for Messages requests, so a Responses stream has no dialect marker —

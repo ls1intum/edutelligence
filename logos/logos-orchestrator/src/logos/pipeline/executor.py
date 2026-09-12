@@ -210,6 +210,7 @@ class Executor:
         headers: Dict[str, str],
         payload: Dict[str, Any],
         timeout: Optional[float] = None,
+        deadline_at: Optional[float] = None,
     ) -> ExecutionResult:
         """
         Execute synchronous (non-streaming) HTTP request.
@@ -223,6 +224,14 @@ class Executor:
                 leaves the call unbounded so a long generation or cold start
                 can run to completion; a retry passes the time left in its
                 deadline so it cannot outlive the overall budget.
+            deadline_at: Optional absolute wall (monotonic seconds) over the
+                whole execution. The ``timeout`` above bounds each httpx
+                operation, not the run — the read bound resets after every
+                body chunk, so a drip-fed response can stretch past the
+                retry deadline forever. The deadline is checked once as a
+                single wall over the complete POST (connect, send, body
+                read) and a spent one fails the request as
+                ``RetryDeadlineExceeded``.
 
         Returns:
             ExecutionResult containing response body, usage stats, and headers
@@ -237,7 +246,13 @@ class Executor:
 
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(
+                # The deadline is a single absolute wall over the whole POST;
+                # the per-operation httpx timeout cannot play that role
+                # because its read bound resets after every body chunk.
+                remaining = deadline_at - time.monotonic() if deadline_at is not None else None
+                if remaining is not None and remaining <= 0:
+                    raise RetryDeadlineExceeded("sync execution passed its retry deadline")
+                post = client.post(
                     url,
                     headers=headers,
                     # None (proxy path / initial dispatch) keeps the call
@@ -246,6 +261,15 @@ class Executor:
                     timeout=timeout,
                     **self._request_kwargs(payload),
                 )
+                if remaining is None:
+                    response = await post
+                else:
+                    try:
+                        response = await asyncio.wait_for(post, timeout=remaining)
+                    except asyncio.TimeoutError:
+                        # wait_for's own timeout is the wall, not a transport
+                        # failure — keep the deadline's identity.
+                        raise RetryDeadlineExceeded("sync execution passed its retry deadline") from None
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
@@ -301,6 +325,20 @@ class Executor:
                 content_type=content_type,
             )
 
+        except RetryDeadlineExceeded:
+            # A spent deadline is terminal, not a transport hiccup: the
+            # budget cannot be refilled, so the request ends here with the
+            # wall named instead of being second-guessed as a flaky node
+            # worth re-dispatching.
+            logger.error(f"Sync request to {url} passed its retry deadline")
+            return ExecutionResult(
+                success=False,
+                response=None,
+                error="sync execution passed its retry deadline",
+                usage={},
+                is_streaming=False,
+                status_code=504,
+            )
         except Exception as e:
             logger.error(f"Exception during request to {url}: {type(e).__name__}: {e}")
             return ExecutionResult(
