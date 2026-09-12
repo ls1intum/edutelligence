@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
+from threading import Event
 from typing import Optional
 
+from iris.common.cancellation import raise_if_cancelled
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.domain.data.metrics.transcription_dto import (
@@ -15,6 +18,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.variant import Dep
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.pipeline import Pipeline
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
@@ -120,10 +124,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
         self,
         dto: IngestionPipelineExecutionDto,
         variant_id: str = "default",
+        cancel_event: Optional[Event] = None,
     ):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.dto = dto
         self.variant_id = variant_id
+        self.cancel_event = cancel_event
         self._is_local = bool(
             self.dto.settings and self.dto.settings.artemis_llm_selection == "LOCAL_AI"
         )
@@ -141,9 +147,10 @@ class LectureIngestionUpdatePipeline(Pipeline):
         self._run()
 
     def _run(self):
-        """Run preprocessing, then serialize the Weaviate mutation phase."""
+        """Run preprocessing, then perform guarded final mutations."""
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
+        cancel_event = self.cancel_event
 
         callback = IngestionStatusCallback(
             run_id=self.dto.settings.authentication_token,
@@ -152,6 +159,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
         )
 
         try:
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "pipeline start",
+            )
             # Snapshot before transcription/slide processing. Lightweight metadata
             # webhooks may run during that expensive phase; the final replacement
             # uses this baseline to recognize and preserve those newer values.
@@ -176,6 +188,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
                     self._run_full_transcription(callback)
                 elif needs_slides:
                     self._run_slide_detection_only(callback)
+            except IngestionCancelledException:
+                raise
             except Exception as e:
                 logger.error(
                     "[Lecture %d] Transcription failed: %s",
@@ -190,14 +204,20 @@ class LectureIngestionUpdatePipeline(Pipeline):
             # ── Phase 2: Ingestion (existing logic) ──────────────────────
             # Ingestion-phase failures (vector DB, PDF, summary) are NOT
             # transcription failures and must not be labeled as such.
-            with lecture_update_lock(
-                self.dto.settings.artemis_base_url,
-                self.dto.lecture_unit.course_id,
-                self.dto.lecture_unit.lecture_id,
+            raise_if_cancelled(
+                cancel_event,
                 self.dto.lecture_unit.lecture_unit_id,
-            ):
-                self._run_ingestion(callback, initial_properties)
+                "before ingestion",
+            )
+            self._run_ingestion(callback, initial_properties)
 
+        except IngestionCancelledException as e:
+            logger.info(
+                "[Lecture %d] Pipeline cancelled: %s",
+                self.dto.lecture_unit.lecture_unit_id,
+                e.reason,
+            )
+            return
         except Exception as e:
             logger.error(
                 "[Lecture %d] Pipeline failed: %s",
@@ -230,6 +250,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             heavy = HeavyTranscriptionPipeline(
                 callback=callback,
                 storage=storage,
+                cancel_event=self.cancel_event,
             )
             raw_transcript = heavy(
                 video_url,
@@ -243,6 +264,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 raw_transcript, lecture_unit_id, enriched=False
             )
             segment_count = len(raw_transcript.get("segments", []))
+            raise_if_cancelled(
+                self.cancel_event,
+                lecture_unit_id,
+                "before transcription checkpoint",
+            )
             callback.update(result=json.dumps(checkpoint_1))
             logger.info(
                 "[Lecture %d] Checkpoint 1: raw transcript (%d segments)",
@@ -255,6 +281,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
+                cancel_event=self.cancel_event,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -265,6 +292,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
                 enriched=True,
                 aligned_segments=aligned_segments,
+            )
+            raise_if_cancelled(
+                self.cancel_event,
+                lecture_unit_id,
+                "before alignment checkpoint",
             )
             callback.update(result=json.dumps(checkpoint_2))
             logger.info(
@@ -327,6 +359,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 "[Lecture %d] Re-downloading video for slide detection",
                 lecture_unit_id,
             )
+            raise_if_cancelled(
+                self.cancel_event,
+                lecture_unit_id,
+                "before video download",
+            )
             video_source_type = self.dto.lecture_unit.video_source_type
             if video_source_type == VideoSourceType.YOUTUBE:
                 ts = settings.transcription
@@ -354,6 +391,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 video_path=storage.video_path,
                 local=self._is_local,
+                cancel_event=self.cancel_event,
             )
             aligned_segments = light(raw_transcript, lecture_unit_id)
 
@@ -363,6 +401,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
                 enriched=True,
                 aligned_segments=aligned_segments,
+            )
+            raise_if_cancelled(
+                self.cancel_event,
+                lecture_unit_id,
+                "before alignment checkpoint",
             )
             callback.update(result=json.dumps(checkpoint_2))
             logger.info(
@@ -399,6 +442,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
         variant_id = self.variant_id
         is_local = self._is_local
+        cancel_event = self.cancel_event
 
         # PDF page ingestion
         if (
@@ -414,6 +458,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 callback=callback,
                 variant=variant,
                 local=is_local,
+                cancel_event=cancel_event,
             )
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
@@ -426,7 +471,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
             and self.dto.lecture_unit.transcription.segments is not None
         ):
             transcription_pipeline = TranscriptionIngestionPipeline(
-                client=client, dto=self.dto, callback=callback, local=is_local
+                client=client,
+                dto=self.dto,
+                callback=callback,
+                local=is_local,
+                cancel_event=cancel_event,
             )
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
@@ -437,14 +486,31 @@ class LectureIngestionUpdatePipeline(Pipeline):
         callback.update()
         lecture_unit_dto = self._build_lecture_unit_dto(language)
 
-        tokens += LectureUnitPipeline(local=is_local, callback=callback)(
+        tokens += LectureUnitPipeline(
+            local=is_local,
+            callback=callback,
+            cancel_event=cancel_event,
+        )(
             lecture_unit=lecture_unit_dto,
             initial_properties=initial_properties,
         )
-        callback.finish(
-            display_page_numbers=self.dto.lecture_unit.display_page_numbers,
-            tokens=tokens,
+        raise_if_cancelled(
+            cancel_event,
+            self.dto.lecture_unit.lecture_unit_id,
+            "terminal callback",
         )
+        with ingestion_job_handler.current_job_guard(
+            self.dto.settings.artemis_base_url,
+            self.dto.lecture_unit.course_id,
+            self.dto.lecture_unit.lecture_id,
+            self.dto.lecture_unit.lecture_unit_id,
+            cancel_event,
+            "terminal callback",
+        ):
+            callback.finish(
+                display_page_numbers=self.dto.lecture_unit.display_page_numbers,
+                tokens=tokens,
+            )
 
     # ── Checkpoint helpers ───────────────────────────────────────────────
 

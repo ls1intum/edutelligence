@@ -62,6 +62,7 @@ def test_slide_detection_only_branches_on_video_source_type():
         pipeline = LectureIngestionUpdatePipeline.__new__(
             LectureIngestionUpdatePipeline
         )
+        pipeline.cancel_event = None
         pipeline.dto = dto
         pipeline._is_local = False  # pylint: disable=protected-access
 
@@ -98,6 +99,7 @@ def test_youtube_source_type_passed_through_to_heavy_pipeline():
             pipeline = LectureIngestionUpdatePipeline.__new__(
                 LectureIngestionUpdatePipeline
             )
+            pipeline.cancel_event = None
             pipeline.dto = dto
             pipeline._is_local = False  # pylint: disable=protected-access
             with patch.object(pipeline, "_build_checkpoint", return_value={}):
@@ -136,6 +138,7 @@ def test_metadata_baseline_is_captured_before_transcription_processing():
         ),
     )
     pipeline = LectureIngestionUpdatePipeline.__new__(LectureIngestionUpdatePipeline)
+    pipeline.cancel_event = None
     pipeline.dto = dto
     pipeline._is_local = False  # pylint: disable=protected-access
     baseline = {"lecture_unit_link": "before-phase-one"}
