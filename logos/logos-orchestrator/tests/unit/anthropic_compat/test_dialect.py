@@ -13,6 +13,7 @@ from logos.anthropic_compat import (
     dialect_for,
     forward_path_for,
     is_messages_path,
+    is_responses_path,
     stream_translator,
     translate_error,
     translate_request,
@@ -81,6 +82,16 @@ def test_messages_path_recognised_with_and_without_prefix():
     assert is_messages_path("v1/messages?beta=true")  # what Claude Code sends
     assert not is_messages_path("v1/chat/completions")
     assert not is_messages_path(None)
+
+
+def test_responses_path_recognised_with_and_without_prefix():
+    assert is_responses_path("v1/responses")
+    assert is_responses_path("/v1/responses")
+    assert is_responses_path("v1/responses?beta=true")
+    assert is_responses_path("v2/responses")
+    assert not is_responses_path("v1/chat/completions")
+    assert not is_responses_path("v1/messages")
+    assert not is_responses_path(None)
 
 
 def test_forward_path_follows_the_dialect():

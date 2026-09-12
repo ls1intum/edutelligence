@@ -1,12 +1,14 @@
 """Regression tests for byte-preserving upstream streaming."""
 
+import asyncio
 import json
+import time
 
 import httpx
 import pytest
 from openai import OpenAI
 
-from logos.errors import UpstreamStreamError
+from logos.errors import RetryDeadlineExceeded, UpstreamStreamError
 from logos.pipeline.executor import Executor, StreamingExecutionStatus
 
 
@@ -320,3 +322,260 @@ async def test_openai_sdk_parses_responses_content_and_terminal_events(monkeypat
     assert events[0].delta == "OK"
     assert events[-1].type == "response.completed"
     assert events[-1].response.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# The absolute execution deadline
+#
+# The httpx timeout is a per-operation bound — the longest gap between chunks.
+# A stream that keeps delivering can never trip it, so a retry would run
+# indefinitely past its deadline; the deadline must be an absolute wall on the
+# whole execution instead.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_spent_deadline_fails_the_stream_before_the_first_byte(monkeypatch):
+    install_response(monkeypatch, FakeResponse([b"data: {}\n\n"]))
+
+    with pytest.raises(RetryDeadlineExceeded):
+        _ = [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "https://provider.test/v1/chat/completions",
+                {},
+                {"model": "test-model"},
+                deadline_at=time.monotonic() - 1.0,  # spent before the first read
+            )
+        ]
+
+
+async def test_chunks_cannot_push_the_stream_past_the_deadline(monkeypatch):
+    """The scenario a per-read bound misses: chunks arriving more often than
+    the read timeout can ever fire. The execution must still stop at the
+    absolute deadline, however steadily the upstream delivers."""
+
+    class DripResponse:
+        """Keeps delivering a chunk every 20 ms for well over a second."""
+
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+        stop_after = time.monotonic() + 1.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aread(self):
+            return b""
+
+        async def aiter_bytes(self):
+            while time.monotonic() < self.stop_after:
+                await asyncio.sleep(0.02)
+                yield b"data: {}\n\n"
+
+    install_response(monkeypatch, DripResponse())
+
+    status = StreamingExecutionStatus()
+    t0 = time.monotonic()
+    body = b"".join(
+        [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "https://provider.test/v1/chat/completions",
+                {},
+                {"model": "test-model"},
+                status=status,
+                deadline_at=t0 + 0.15,
+            )
+        ]
+    )
+    elapsed = time.monotonic() - t0
+
+    # The stream was cut at the wall, not at the end of the drip: without the
+    # deadline it would have run to the drip's own end a full second out.
+    assert elapsed < 0.8
+    assert status.error == "stream execution passed its retry deadline"
+    # After the first byte the failure is appended as protocol-compatible
+    # recovery frames, like every other mid-stream transport error.
+    assert b"passed its retry deadline" in body
+    assert body.endswith(b"data: [DONE]\n\n")
+
+
+async def test_a_recovery_disabled_stream_hands_the_mid_stream_error_back(monkeypatch):
+    """With emit_recovery_frames=False the executor does not append the Chat
+    Completions error frame + [DONE]: the caller's client speaks a dialect
+    for which those frames are protocol noise, and it owns the terminal. The
+    failure is recorded on the status and the error is handed back."""
+    partial = b'data: {"type":"response.output_text.delta","delta":"par'
+    install_response(
+        monkeypatch,
+        FakeResponse(
+            [partial, RuntimeError("connection reset")],
+            headers={"content-type": "text/event-stream"},
+        ),
+    )
+
+    status = StreamingExecutionStatus()
+    chunks = []
+    with pytest.raises(RuntimeError, match="connection reset"):
+        async for chunk in Executor().execute_streaming(
+            "https://provider.test/v1/responses",
+            {},
+            {"model": "test-model"},
+            status=status,
+            emit_recovery_frames=False,
+        ):
+            chunks.append(chunk)
+
+    # Only the partial upstream bytes came back — no recovery frame was
+    # appended by the executor.
+    assert b"".join(chunks) == partial
+    assert b"[DONE]" not in b"".join(chunks)
+    assert status.error == "connection reset"
+
+
+async def test_a_deadline_cut_stream_with_recovery_disabled_propagates_the_deadline(monkeypatch):
+    """The same wall, recovery disabled: the deadline is what a /v1/responses
+    streamer takes back so it can end the stream in a response.failed event,
+    so the executor must raise it instead of appending Chat Completions
+    framing."""
+
+    class DripResponse:
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+        stop_after = time.monotonic() + 1.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aread(self):
+            return b""
+
+        async def aiter_bytes(self):
+            while time.monotonic() < self.stop_after:
+                await asyncio.sleep(0.02)
+                yield b"data: {}\n\n"
+
+    install_response(monkeypatch, DripResponse())
+
+    status = StreamingExecutionStatus()
+    t0 = time.monotonic()
+    chunks = []
+    with pytest.raises(RetryDeadlineExceeded):
+        async for chunk in Executor().execute_streaming(
+            "https://provider.test/v1/responses",
+            {},
+            {"model": "test-model"},
+            status=status,
+            deadline_at=t0 + 0.15,
+            emit_recovery_frames=False,
+        ):
+            chunks.append(chunk)
+    body = b"".join(chunks)
+
+    # The wall is recorded and raised; no recovery frame was appended.
+    assert status.error == "stream execution passed its retry deadline"
+    assert b"[DONE]" not in body
+    assert b"passed its retry deadline" not in body
+
+
+# ---------------------------------------------------------------------------
+# The same absolute wall over the synchronous (non-streaming) execution
+#
+# The httpx timeout is a per-operation bound: its read bound resets after
+# every response-body chunk, so a drip-fed JSON response can keep arriving
+# forever without ever tripping it. The retry deadline has to be checked as
+# one wall over the complete POST — connect, send, body read.
+# ---------------------------------------------------------------------------
+
+
+class _SyncResponse:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+        self.headers = {"content-type": "application/json"}
+
+    def json(self):
+        return json.loads(self._body)
+
+
+class _FakeSyncClient:
+    """Async client whose post() takes longer than any per-read bound could
+    ever catch — the drip-fed response the timeout cannot stop."""
+
+    def __init__(self, delay=0.0, body=b'{"ok": true}', status_code=200):
+        self.delay = delay
+        self.body = body
+        self.status_code = status_code
+        self.started = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post(self, url, headers=None, timeout=None, json=None, **_kwargs):  # noqa: ARG002
+        self.started = time.monotonic()
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        return _SyncResponse(self.status_code, self.body)
+
+
+def install_sync_client(monkeypatch, client):
+    monkeypatch.setattr("logos.pipeline.executor.httpx.AsyncClient", lambda **_kwargs: client)
+    return client
+
+
+async def test_sync_execution_cannot_run_past_the_absolute_deadline(monkeypatch):
+    client = install_sync_client(monkeypatch, _FakeSyncClient(delay=0.5))
+
+    t0 = time.monotonic()
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/chat/completions",
+        {},
+        {"model": "test-model"},
+        timeout=60.0,  # a per-read bound no drip can ever trip
+        deadline_at=t0 + 0.15,
+    )
+    elapsed = time.monotonic() - t0
+
+    # Cut at the wall, not at the drip's own end.
+    assert elapsed < 0.4
+    assert result.success is False
+    assert result.error == "sync execution passed its retry deadline"
+    assert result.status_code == 504
+
+
+async def test_a_spent_sync_deadline_fails_before_the_request(monkeypatch):
+    client = install_sync_client(monkeypatch, _FakeSyncClient())
+
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/chat/completions",
+        {},
+        {"model": "test-model"},
+        deadline_at=time.monotonic() - 1.0,  # spent before the first read
+    )
+
+    assert client.started is None  # nothing was sent
+    assert result.success is False
+    assert result.error == "sync execution passed its retry deadline"
+
+
+async def test_sync_execution_inside_the_deadline_is_unaffected(monkeypatch):
+    install_sync_client(monkeypatch, _FakeSyncClient(body=b'{"ok": true}'))
+
+    result = await Executor().execute_sync(
+        "https://provider.test/v1/chat/completions",
+        {},
+        {"model": "test-model"},
+        deadline_at=time.monotonic() + 5.0,
+    )
+
+    assert result.success is True
+    assert result.response == {"ok": True}

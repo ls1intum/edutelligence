@@ -17,6 +17,7 @@ counts the statistics and billing views read.
 """
 
 import codecs
+import copy
 import json
 import threading
 import time
@@ -28,6 +29,12 @@ from logos.billing.finalize import finalize_billing_inputs
 # Anthropic Messages SSE event types the accumulator acts on. The stream also
 # emits content_block_start/stop and ping, which carry neither text nor usage.
 _MESSAGES_EVENT_TYPES = frozenset({"message_start", "message_delta", "message_stop", "content_block_delta"})
+
+# Chat-completion delta keys that carry non-text structure (tool calls,
+# function calls, audio). Their presence marks a stream a mid-flight resume
+# must not attempt: a resume continues from the accumulated text only, so it
+# would silently drop the structured part of the answer.
+_STRUCTURED_DELTA_KEYS = ("tool_calls", "function_call", "audio")
 
 
 class _LiveStreamRegistry:
@@ -195,10 +202,26 @@ class _StreamingLogAccumulator:
     # terminal usage event, which is no help to anyone watching the request run
     # — so the delta count stands in for it until then. See streamed_tokens.
     delta_count: int = 0
+    # The response id announced up front (``response.created`` and every
+    # event that carries the response object repeat it). Echoed into the
+    # synthetic ``response.failed`` terminal of a mid-flight failure, so a
+    # Responses client can correlate the failure with the stream it read.
+    responses_id: Optional[str] = None
+    # The Response object the stream announced in ``response.created`` — the
+    # full envelope a synthetic ``response.failed`` terminal completes, so
+    # the failure carries everything the client already saw, not a skeleton.
+    responses_created: Optional[Dict[str, Any]] = None
+    # The highest ``sequence_number`` seen on the stream. The synthetic
+    # terminal takes the next one, as the spec numbers its events.
+    responses_sequence: Optional[int] = None
     _decoder: Any = field(
         default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
         repr=False,
     )
+    # Set when a chat-completion delta carried non-text structure (see
+    # _STRUCTURED_DELTA_KEYS). A mid-flight resume is text-only and must not
+    # kick in for such a stream.
+    saw_structured_delta: bool = False
 
     def feed(self, chunk: bytes | str) -> None:
         if isinstance(chunk, bytes):
@@ -262,6 +285,24 @@ class _StreamingLogAccumulator:
                 return usage
         return {}
 
+    def settled_completion_tokens(self) -> Optional[int]:
+        """The engine's own completion count, or None until it has settled.
+
+        This is the only figure that can hold an explicit completion limit
+        exactly: it is what the serving model's tokenizer actually counted,
+        delivered in the terminal usage event. That event never arrives on a
+        failed stream — precisely the mid-flight resume case — so this is None
+        exactly when a takeover would otherwise have to guess. ``streamed_tokens``
+        and the live view keep their delta-count approximation, which is the
+        right number for a running indicator and the wrong one for enforcing a
+        limit a caller set.
+        """
+        usage = self.usage()
+        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        if isinstance(completion, int) and completion > 0:
+            return completion
+        return None
+
     def response_payload(self) -> Dict[str, Any]:
         # Responses-API stream: the terminal event already carries the complete
         # response (output items + usage) — log it verbatim. If the stream was
@@ -304,6 +345,30 @@ class _StreamingLogAccumulator:
         if usage:
             response_payload["usage"] = usage
         return response_payload
+
+    def failed_response_event(self, message: str) -> Optional[Dict[str, Any]]:
+        """The synthetic ``response.failed`` terminal for a mid-flight failure.
+
+        A /v1/responses client has been reading numbered ``response.*``
+        events, and the terminal the protocol expects is the Response object
+        it saw in ``response.created`` — the full envelope, not a skeleton —
+        now failed, under the next sequence number. When the stream failed
+        before a created envelope arrived there is nothing to complete and
+        no sequence to continue, so the event degrades to the announced id
+        (or None when that too is absent and the caller keeps its fallback).
+        """
+        if self.responses_created:
+            response = copy.deepcopy(self.responses_created)
+        elif self.responses_id:
+            response = {"id": self.responses_id, "object": "response"}
+        else:
+            return None
+        response["status"] = "failed"
+        response["error"] = {"code": "server_error", "message": message}
+        event: Dict[str, Any] = {"type": "response.failed", "response": response}
+        if self.responses_sequence is not None:
+            event["sequence_number"] = self.responses_sequence + 1
+        return event
 
     def _consume_complete_lines(self) -> None:
         while "\n" in self.buffer:
@@ -361,6 +426,13 @@ class _StreamingLogAccumulator:
             delta = first_choice.get("delta", {}) if isinstance(first_choice, dict) else None
             if isinstance(delta, dict):
                 content = delta.get("content", "")
+                # Structured output can ride in the same delta as a content
+                # piece, so the flag is checked independently — an `elif`
+                # would miss it whenever both are present, and a mid-flight
+                # resume must not continue a stream that is emitting tool
+                # calls.
+                if any(key in delta for key in _STRUCTURED_DELTA_KEYS):
+                    self.saw_structured_delta = True
                 if content:
                     self.full_text += content
                     self.delta_count += 1
@@ -368,6 +440,21 @@ class _StreamingLogAccumulator:
     def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
         """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
         self._saw_responses_events = True
+        if self.responses_id is None:
+            response = blob.get("response")
+            if isinstance(response, dict) and response.get("id"):
+                self.responses_id = str(response["id"])
+        # The spec numbers every event; the highest one seen is what a
+        # synthetic terminal must continue from. A resumed stream opens a
+        # new upstream response and can renumber from zero, so the numbers
+        # only ever move forward.
+        sequence = blob.get("sequence_number")
+        if isinstance(sequence, int) and (self.responses_sequence is None or sequence > self.responses_sequence):
+            self.responses_sequence = sequence
+        if event_type == "response.created":
+            response = blob.get("response")
+            if isinstance(response, dict):
+                self.responses_created = response
         if event_type == "response.output_text.delta":
             delta = blob.get("delta")
             if isinstance(delta, str):

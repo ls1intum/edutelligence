@@ -37,6 +37,31 @@ def test_chat_completions_stream_accumulates_text_and_usage():
     assert payload["usage"]["total_tokens"] == 5
 
 
+def test_settled_completion_tokens_is_none_until_the_usage_arrives():
+    """A failed stream never delivers the terminal usage event, so the exact
+    completion count is unknown. The resume path relies on being able to tell
+    that apart from a settled figure — it must refuse, not guess."""
+    acc = _StreamingLogAccumulator()
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"partial answer"}}]}\n\n')
+    acc.finish()
+
+    assert acc.usage() == {}
+    assert acc.settled_completion_tokens() is None
+
+
+def test_settled_completion_tokens_reads_the_terminal_usage():
+    """Once the terminal usage has arrived it carries the engine's own count —
+    the only figure that can hold an explicit completion limit exactly."""
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"id": "c1", "choices": [{"delta": {"content": "Hello, world"}}]},
+        {"id": "c1", "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 8, "total_tokens": 11}},
+    )
+
+    assert acc.settled_completion_tokens() == 8
+
+
 def test_mid_stream_error_frame_is_captured_without_clobbering_earlier_usage():
     # A content filter / context-length error that fires after generation began
     # arrives as a data: {"error": {...}} frame with an HTTP 200 stream. It must
@@ -222,6 +247,76 @@ def test_responses_stream_failed_event_without_error_body_still_fails():
 
     assert acc.upstream_error is not None
     assert isinstance(acc.upstream_error.get("message"), str)
+
+
+def test_failed_response_event_completes_the_created_envelope_with_the_next_sequence():
+    # A /v1/responses client has been reading numbered response.* events; the
+    # synthetic terminal it gets on a mid-flight failure must be the full
+    # envelope of the response it saw in response.created — marked failed —
+    # under the next sequence number. A skeletal object or a missing number
+    # would break a client that validates the protocol it was just reading.
+    created = {
+        "id": "resp_1",
+        "object": "response",
+        "status": "in_progress",
+        "model": "gpt-4.1",
+        "output": [],
+        "usage": None,
+        "metadata": {"run": "bench"},
+    }
+    acc = _StreamingLogAccumulator()
+    _feed_sse(
+        acc,
+        {"type": "response.created", "sequence_number": 0, "response": created},
+        {"type": "response.in_progress", "sequence_number": 1, "response": {"id": "resp_1"}},
+        {"type": "response.output_text.delta", "sequence_number": 2, "delta": "partial"},
+    )
+
+    event = acc.failed_response_event("the worker went away")
+
+    assert event["type"] == "response.failed"
+    assert event["sequence_number"] == 3
+    response = event["response"]
+    # The full envelope the client saw, not a skeleton...
+    assert response["id"] == "resp_1"
+    assert response["model"] == "gpt-4.1"
+    assert response["metadata"] == {"run": "bench"}
+    # ...marked failed with the error...
+    assert response["status"] == "failed"
+    assert response["error"] == {"code": "server_error", "message": "the worker went away"}
+    # ...and the retained envelope is not mutated for the next caller.
+    assert created["status"] == "in_progress"
+    assert "error" not in created
+
+
+def test_failed_response_event_keeps_the_announced_id_when_no_envelope_arrived():
+    # The id is announced by every event carrying a response object, so a
+    # stream that failed before response.created completed still names the
+    # response it was reading — and continues the sequence it had.
+    acc = _StreamingLogAccumulator()
+    acc.feed(b'data: {"type": "response.in_progress", "sequence_number": 1, "response": {"id": "resp_9"}}\n\n')
+    acc.finish()
+
+    event = acc.failed_response_event("the worker went away")
+
+    assert event is not None
+    assert event["sequence_number"] == 2
+    assert event["response"] == {
+        "id": "resp_9",
+        "object": "response",
+        "status": "failed",
+        "error": {"code": "server_error", "message": "the worker went away"},
+    }
+
+
+def test_failed_response_event_is_none_when_the_stream_announced_nothing():
+    # No created envelope, no announced id, no sequence to continue from:
+    # there is nothing to complete, so the caller keeps its own fallback.
+    acc = _StreamingLogAccumulator()
+    acc.feed(b'data: {"type": "response.output_text.delta", "sequence_number": 1, "delta": "partial"}\n\n')
+    acc.finish()
+
+    assert acc.failed_response_event("the worker went away") is None
 
 
 def test_responses_stream_incomplete_event_is_not_a_failure():

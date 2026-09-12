@@ -13,8 +13,11 @@ def test_resolve_queue_priority_key_wins_when_set():
     assert resolve_queue_priority(10, 5) == 10
     # Even a lower key priority is honoured — it is the key owner's choice.
     assert resolve_queue_priority(1, 10) == 1
-    # Arbitrary values pass through (Priority.from_int normalises them later).
-    assert resolve_queue_priority(7, 5) == 7
+    # Off-scale caller values normalise to NORMAL at the boundary — in
+    # particular a crafted 20 must never reach the internal RESUME level.
+    assert resolve_queue_priority(7, 5) == 5
+    assert resolve_queue_priority(20, 5) == 5
+    assert resolve_queue_priority(0, 20) == 5
 
 
 def test_resolve_queue_priority_unset_key_falls_back_to_policy():

@@ -755,7 +755,7 @@ async def test_sync_response_falls_back_to_direct_http_for_logosnode_without_lan
 ):
     class _FakeExecutor:
         @staticmethod
-        async def execute_sync(forward_url, headers, payload):  # noqa: ARG002
+        async def execute_sync(forward_url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
             return main_mod.ExecutionResult(
                 success=True,
                 response={"ok": True},

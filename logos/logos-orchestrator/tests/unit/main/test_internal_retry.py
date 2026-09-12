@@ -1,0 +1,1681 @@
+"""Internal retry loop and stream-resume helpers in the request funnel
+(#815): failed requests are re-dispatched within a bounded budget, pinned to
+their model, excluding the node that just failed."""
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.responses import JSONResponse, StreamingResponse
+
+import logos as main
+from logos.queue.models import Priority
+
+DEPLOYMENTS = [
+    {"model_id": 27, "provider_id": 1, "type": "logosnode"},
+    {"model_id": 27, "provider_id": 2, "type": "logosnode"},
+]
+
+
+class _FakeDB:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _fail_result(error, request_id="req-1", model_id=27, provider_id=1):
+    return SimpleNamespace(
+        success=False,
+        error=error,
+        model_id=model_id,
+        provider_id=provider_id,
+        execution_context=None,
+        classification_stats={},
+        scheduling_stats={"request_id": request_id, "model_id": model_id, "provider_id": provider_id},
+    )
+
+
+def _ok_result(request_id="req-1", model_id=27, provider_id=2, provider_type="logosnode"):
+    return SimpleNamespace(
+        success=True,
+        error=None,
+        model_id=model_id,
+        provider_id=provider_id,
+        execution_context=SimpleNamespace(model_name="stub-model"),
+        classification_stats={},
+        scheduling_stats={
+            "request_id": request_id,
+            "model_id": model_id,
+            "provider_id": provider_id,
+            "provider_type": provider_type,
+        },
+    )
+
+
+class _FakePipeline:
+    """Scripted pipeline: each process() call returns the next result."""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.requests = []
+        self.discard_calls = []
+        self.scheduler = MagicMock()
+
+    async def process(self, request):
+        self.requests.append(request)
+        if not self.results:
+            raise AssertionError("pipeline.process called more times than scripted")
+        return self.results.pop(0)
+
+    def discard_request(self, request_id, result_status):
+        self.discard_calls.append((request_id, result_status))
+
+    def record_completion(self, **kwargs):  # noqa: ARG002
+        return None
+
+
+def _auth():
+    return SimpleNamespace(key_value="lg-key", default_priority=0, api_key_id=None, cloud_rl=None, local_rl=None)
+
+
+@pytest.fixture
+def retry_env(monkeypatch):
+    """Wire _execute_resource_mode's collaborators to fakes and zero the
+    backoff so retry loops run instantly."""
+    monkeypatch.setattr(main, "DBManager", lambda: _FakeDB())
+    monkeypatch.setattr(main, "_check_budget_if_cloud", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_extract_policy", lambda headers, key_value, body: {})
+    monkeypatch.setattr(main, "_record_log_failure", lambda *a, **k: None)
+    monkeypatch.setattr(main, "_REQUEST_RETRY_BACKOFF_BASE_S", 0.0)
+    monkeypatch.setattr(main, "_REQUEST_RETRY_BACKOFF_CAP_S", 0.0)
+    return monkeypatch
+
+
+def _run_sync_response(retry_env, results, sync_responses, **kwargs):
+    """Drive _execute_resource_mode with scripted pipeline + sync responses."""
+    pipeline = _FakePipeline(results)
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    responses = list(sync_responses)
+    pipeline.sync_calls = []
+
+    async def fake_sync(
+        context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats, **kw
+    ):
+        assert responses, "_sync_response called more times than scripted"
+        pipeline.sync_calls.append(kw)
+        return responses.pop(0)
+
+    retry_env.setattr(main, "_sync_response", fake_sync)
+    return pipeline
+
+
+class _FakeRateLimiter:
+    """Records the (bucket, config) pairs it was checked with; rejects the
+    buckets named in ``rejected`` like a rate-limited caller would be."""
+
+    def __init__(self, rejected=()):
+        self.checks = []
+        self.rejected = set(rejected)
+
+    def check_and_record(self, key, config):
+        self.checks.append((key, config))
+        if key in self.rejected:
+            return False, "RPM limit reached"
+        return True, ""
+
+
+def _auth_with_rl(api_key_id=1):
+    return SimpleNamespace(
+        key_value="lg-key",
+        default_priority=0,
+        api_key_id=api_key_id,
+        cloud_rl={"rpm": 10, "tpm": 1000},
+        local_rl={"rpm": 5, "tpm": 5000},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scheduling-failure retries (wait-mode timeout, no capacity, lane never ready)
+# ---------------------------------------------------------------------------
+
+
+async def test_retryable_scheduling_failure_is_retried_and_succeeds(retry_env):
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            # The shape the pipeline really returns for a no-capacity
+            # failure: the target model stands, but no provider was
+            # reserved — so there is no node to exclude.
+            _fail_result(
+                "All candidate models unavailable (rate-limited or no capacity)",
+                model_id=27,
+                provider_id=None,
+            ),
+            _ok_result(provider_id=2),
+        ],
+        sync_responses=[JSONResponse(content={"ok": True}, status_code=200)],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    assert len(pipeline.requests) == 2
+    retry_req = pipeline.requests[1]
+    # The retry keeps the model the request already had; nothing was
+    # excluded because no node failed it, and a plain retry keeps its
+    # original priority.
+    assert retry_req.pinned_model_id == 27
+    assert retry_req.exclude_provider_ids is None
+    assert retry_req.priority_override is None
+    assert retry_req.request_id == "req-1"
+    assert retry_req.context_resolve_timeout_s is not None
+
+
+async def test_non_retryable_scheduling_failure_fails_immediately(retry_env):
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_fail_result("No models passed classification")],
+        sync_responses=[],
+    )
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=DEPLOYMENTS,
+            body={},
+            headers={},
+            auth=_auth(),
+            log_id=None,
+            is_async_job=False,
+            request_id="req-1",
+        )
+
+    assert exc.value.status_code == 503
+    assert len(pipeline.requests) == 1
+
+
+async def test_scheduling_failure_not_retried_when_budget_disabled(retry_env):
+    retry_env.setattr(main, "_REQUEST_MAX_ATTEMPTS", 1)  # retry budget off
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_fail_result("Failed to resolve execution context: lane not ready after 600s")],
+        sync_responses=[],
+    )
+
+    result = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=True,
+        request_id="req-1",
+    )
+
+    assert result["status_code"] == 503
+    assert len(pipeline.requests) == 1
+
+
+async def test_queue_wait_timeout_is_not_internally_retried(retry_env):
+    """A queue-wait timeout says the queue is saturated, not that a node is
+    broken: re-queueing under the same pressure cannot help, so the timeout
+    goes back to the caller — which backs off on its own terms (and sees a
+    429 + Retry-After once the queue-wait overload response lands) instead
+    of being silently re-queued by the platform."""
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_fail_result("Queue wait timeout after 1200s", provider_id=1)],
+        sync_responses=[],
+    )
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=DEPLOYMENTS,
+            body={},
+            headers={},
+            auth=_auth(),
+            log_id=None,
+            is_async_job=False,
+            request_id="req-1",
+        )
+
+    assert exc.value.status_code == 503
+    assert "Queue wait timeout" in exc.value.detail
+    assert len(pipeline.requests) == 1
+
+
+# ---------------------------------------------------------------------------
+# Terminal-status retries (execution failed with a transient HTTP status)
+# ---------------------------------------------------------------------------
+
+
+async def test_retryable_terminal_status_is_retried(retry_env):
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2)],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=503),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    assert len(pipeline.requests) == 2
+    assert pipeline.requests[1].pinned_model_id == 27
+    assert pipeline.requests[1].exclude_provider_ids == frozenset({1})
+
+
+async def test_non_retryable_terminal_status_is_not_retried(retry_env):
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1)],
+        sync_responses=[JSONResponse(content={"error": "bad payload"}, status_code=400)],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 400
+    assert len(pipeline.requests) == 1
+
+
+async def test_retryable_terminal_status_exhausts_the_budget(retry_env):
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2), _ok_result(provider_id=1)],
+        sync_responses=[
+            JSONResponse(content={"error": "boom"}, status_code=502),
+            JSONResponse(content={"error": "boom"}, status_code=502),
+            JSONResponse(content={"error": "boom"}, status_code=502),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    # max_attempts=3 (default): three dispatches, then the raw error is
+    # returned — the budget is bounded.
+    assert response.status_code == 502
+    assert len(pipeline.requests) == 3
+    # Each retry excludes every node that failed so far.
+    assert pipeline.requests[1].exclude_provider_ids == frozenset({1})
+    assert pipeline.requests[2].exclude_provider_ids == frozenset({1, 2})
+
+
+async def test_committed_streaming_response_is_never_retried(retry_env):
+    """A committed stream has no terminal status; its failures recover inside
+    the stream (pre-token JSON error / resume), not in the outer loop."""
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1)],
+        sync_responses=[],
+    )
+    stream = StreamingResponse(iter([b"data: x\n\n"]), media_type="text/event-stream")
+
+    async def fake_stream(*args, **kw):
+        return stream
+
+    retry_env.setattr(main, "_streaming_response", fake_stream)
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"stream": True, "messages": []},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response is stream
+    assert len(pipeline.requests) == 1
+
+
+async def test_async_job_dict_terminal_status_is_retried(retry_env):
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2)],
+        sync_responses=[
+            {"status_code": 503, "data": {"error": "worker gone"}},
+            {"status_code": 200, "data": {"ok": True}},
+        ],
+    )
+
+    result = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=True,
+        request_id="req-1",
+    )
+
+    assert result == {"status_code": 200, "data": {"ok": True}}
+    assert len(pipeline.requests) == 2
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit bucket + cloud budget follow the provider type the attempt
+# actually runs on
+# ---------------------------------------------------------------------------
+
+
+async def test_failover_to_cloud_reselects_bucket_and_reruns_budget_check(retry_env):
+    """The bucket and the budget check are properties of WHERE the request
+    runs: a local→cloud failover must charge the cloud bucket (so this
+    attempt's tokens are recorded against the cloud limit, not the local
+    bucket from the first attempt) and re-run the cloud budget check — a key
+    over its monthly cloud budget must not gain cloud capacity through a
+    failover."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter()
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+    budget_calls = []
+    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            _ok_result(provider_id=1, provider_type="logosnode"),
+            _ok_result(provider_id=2, provider_type="cloud"),
+        ],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=502),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth_with_rl(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # One rate-limit hit per provider type the request was dispatched to,
+    # against the right bucket each time.
+    assert [key for key, _ in limiter.checks] == ["api_key:1:local", "api_key:1:cloud"]
+    # The budget check followed the provider type as well.
+    assert budget_calls == [False, True]
+    # The attempt that actually ran records its tokens against the cloud
+    # bucket, not the local bucket of the failed first attempt.
+    assert pipeline.sync_calls[0]["rl_key"] == "api_key:1:local"
+    assert pipeline.sync_calls[1]["rl_key"] == "api_key:1:cloud"
+
+
+async def test_same_provider_retry_does_not_recharge_the_bucket(retry_env):
+    """A retry on the provider type the request was already charged to must
+    not count a second rate-limit hit — a retry must never trip the
+    caller's own limit."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter()
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+    budget_calls = []
+    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2)],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=502),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth_with_rl(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # Same provider type on both attempts: exactly one rate-limit hit total.
+    assert [key for key, _ in limiter.checks] == ["api_key:1:local"]
+    assert pipeline.sync_calls[0]["rl_key"] == "api_key:1:local"
+    assert pipeline.sync_calls[1]["rl_key"] == "api_key:1:local"
+
+
+async def test_azure_to_cloud_failover_charges_the_cloud_bucket_once(retry_env):
+    """A failover between two *cloud* provider types (azure -> cloud)
+    re-selects the same rate-limit bucket, so the request must be charged
+    exactly once — not once per provider type. ``rl_key`` (local/cloud) is
+    coarser than ``provider_type`` (azure, cloud, ...), so keying the dedup on
+    the bucket rather than the provider type is what stops a single request
+    from consuming two rpm slots on the platform's own failure and tripping
+    the caller's limit."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter()
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+    budget_calls = []
+    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            _ok_result(provider_id=1, provider_type="azure"),
+            _ok_result(provider_id=2, provider_type="cloud"),
+        ],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=502),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth_with_rl(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # Both attempts land in the cloud bucket (azure and cloud are not local),
+    # so the request is charged once — the second attempt re-selects a bucket
+    # it was already charged to. (Deduping by provider_type would charge it
+    # twice, once per type.)
+    assert [key for key, _ in limiter.checks] == ["api_key:1:cloud"]
+    assert len(limiter.checks) == 1
+    # Both attempts are cloud for budget purposes.
+    assert budget_calls == [True, True]
+    assert pipeline.sync_calls[0]["rl_key"] == "api_key:1:cloud"
+    assert pipeline.sync_calls[1]["rl_key"] == "api_key:1:cloud"
+
+
+async def test_failover_into_exhausted_bucket_is_rejected(retry_env):
+    """If the bucket the failover re-selects is already exhausted, the
+    request is rejected against THAT bucket — with the attempt's slot
+    released — instead of running over the caller's limit."""
+    import logos.rate_limiter as rl_module
+
+    limiter = _FakeRateLimiter(rejected={"api_key:1:cloud"})
+    retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2, provider_type="cloud")],
+        sync_responses=[JSONResponse(content={"error": "worker gone"}, status_code=502)],
+    )
+
+    with pytest.raises(main.HTTPException) as exc:
+        await main._execute_resource_mode(
+            deployments=DEPLOYMENTS,
+            body={},
+            headers={},
+            auth=_auth_with_rl(),
+            log_id=None,
+            is_async_job=False,
+            request_id="req-1",
+        )
+
+    assert exc.value.status_code == 429
+    assert [key for key, _ in limiter.checks] == ["api_key:1:local", "api_key:1:cloud"]
+    # The slot of the attempt that was rejected is released again.
+    pipeline.scheduler.release.assert_called_once_with(27, 2, "cloud", "req-1")
+
+
+# ---------------------------------------------------------------------------
+# Resume payload / terminal-status helpers
+# ---------------------------------------------------------------------------
+
+
+def test_build_resume_payload_appends_partial_answer_as_assistant_message():
+    base = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0.2}
+    out = main._build_resume_payload(base, "partial answer")
+
+    assert out is not None
+    assert out["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "partial answer"},
+    ]
+    assert out["temperature"] == 0.2
+    # The vLLM continuation contract keeps the trailing assistant message
+    # open so the engine continues the prefix instead of opening a fresh
+    # turn to answer it.
+    assert out["continue_final_message"] is True
+    assert out["add_generation_prompt"] is False
+    # The original payload is not mutated.
+    assert len(base["messages"]) == 1
+
+
+def test_build_resume_payload_refuses_an_explicit_limit_without_an_exact_figure():
+    # A caller that capped its completion cannot be held under that cap by a
+    # character estimate: the failed stream never reports its final usage and
+    # the serving model's tokenizer is not on hand to count the prefix. Refuse
+    # rather than let the combined answer overshoot the cap — but resume once
+    # the engine's own count is known.
+    base = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+    assert main._build_resume_payload(base, "partial answer") is None
+    out = main._build_resume_payload(base, "partial answer", streamed_completion_tokens=40)
+    assert out is not None and out["max_tokens"] == 60
+
+
+@pytest.mark.parametrize(
+    "limit_key",
+    ["max_tokens", "max_completion_tokens", "max_output_tokens"],
+)
+def test_build_resume_payload_shrinks_the_completion_budget_by_the_streamed_prefix(limit_key):
+    base = {"messages": [{"role": "user", "content": "hi"}], limit_key: 100}
+    out = main._build_resume_payload(base, "partial answer", streamed_completion_tokens=40)
+
+    assert out is not None
+    assert out[limit_key] == 60
+
+
+def test_build_resume_payload_refuses_when_the_prefix_filled_the_budget():
+    base = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+    # 100 requested, 100 already streamed: there is nothing left to generate.
+    assert main._build_resume_payload(base, "partial answer", streamed_completion_tokens=100) is None
+    assert main._build_resume_payload(base, "partial answer", streamed_completion_tokens=140) is None
+
+
+@pytest.mark.parametrize(
+    "base, prefix",
+    [
+        ({"prompt": "hi"}, "partial"),  # not a chat payload
+        ({"messages": []}, "partial"),  # nothing to continue from
+        ({"messages": [{"role": "user", "content": "hi"}]}, ""),  # no prefix delivered
+        ({"messages": [{"role": "user", "content": "hi"}], "n": 2}, "partial"),  # parallel candidates
+        (
+            {"messages": [{"role": "user", "content": "hi"}], "response_format": {"type": "json_object"}},
+            "partial",
+        ),  # structured output cannot be continued
+    ],
+)
+def test_build_resume_payload_rejects_inexpressible_continuations(base, prefix):
+    assert main._build_resume_payload(base, prefix) is None
+
+
+def test_response_terminal_status():
+    assert main._response_terminal_status({"status_code": 503, "data": {}}) == 503
+    assert main._response_terminal_status(JSONResponse(content={}, status_code=200)) == 200
+    assert main._response_terminal_status(StreamingResponse(iter([]), media_type="text/event-stream")) is None
+
+
+# ---------------------------------------------------------------------------
+# _schedule_stream_resume (phase 2 re-dispatch at RESUME priority)
+# ---------------------------------------------------------------------------
+
+
+def _resume_pipeline(result):
+    pipeline = _FakePipeline([result])
+    return pipeline
+
+
+def _result_with_context(ctx):
+    return SimpleNamespace(
+        success=True,
+        error=None,
+        model_id=ctx.model_id,
+        provider_id=ctx.provider_id,
+        execution_context=ctx,
+        classification_stats={},
+        scheduling_stats={"request_id": "req-1"},
+    )
+
+
+async def test_schedule_stream_resume_returns_logosnode_context(retry_env):
+    ctx = SimpleNamespace(model_id=27, provider_id=2, provider_type="logosnode", lane_id="lane-2", engine="vllm")
+    pipeline = _resume_pipeline(_result_with_context(ctx))
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    clock_t = [1000.0]
+    budget = main.RetryBudget(max_attempts=3, deadline_s=100.0, now=lambda: clock_t[0])
+
+    out = await main._schedule_stream_resume(
+        request_id="req-1",
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": [{"role": "assistant", "content": "partial"}], "stream": True},
+        request_path="v1/chat/completions",
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=budget,
+    )
+
+    assert out is ctx
+    req = pipeline.requests[0]
+    # Resume is the absolute highest priority and skips re-classification.
+    assert req.priority_override == Priority.RESUME.value
+    assert req.pinned_model_id == 27
+    assert req.skip_laura is True
+    assert req.exclude_provider_ids == frozenset({1})
+    assert req.context_resolve_timeout_s is not None
+    # The budget recorded the failed node for further failover.
+    assert budget.failed_provider_ids == [1]
+
+
+async def test_schedule_stream_resume_none_when_budget_exhausted(retry_env):
+    pipeline = _resume_pipeline(_ok_result())
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    budget = main.RetryBudget(max_attempts=1, deadline_s=100.0, now=lambda: 1000.0)
+
+    out = await main._schedule_stream_resume(
+        request_id="req-1",
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": []},
+        request_path=None,
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=budget,
+    )
+
+    assert out is None
+    assert pipeline.requests == []  # nothing was re-queued
+
+
+async def test_schedule_stream_resume_none_when_scheduling_fails(retry_env):
+    pipeline = _resume_pipeline(_fail_result("All candidate models unavailable (rate-limited or no capacity)"))
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    budget = main.RetryBudget(max_attempts=3, deadline_s=100.0, now=lambda: 1000.0)
+
+    out = await main._schedule_stream_resume(
+        request_id="req-1",
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": []},
+        request_path=None,
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=budget,
+    )
+
+    assert out is None
+
+
+async def test_schedule_stream_resume_rejects_non_logosnode_takeover(retry_env):
+    """A cloud deployment would restart the answer from scratch — only a local
+    lane can continue after the partial prefix, so the slot is released and
+    None comes back."""
+    ctx = SimpleNamespace(model_id=27, provider_id=9, provider_type="cloud", lane_id=None, engine=None)
+    pipeline = _resume_pipeline(_result_with_context(ctx))
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    budget = main.RetryBudget(max_attempts=3, deadline_s=100.0, now=lambda: 1000.0)
+
+    out = await main._schedule_stream_resume(
+        request_id="req-1",
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": []},
+        request_path=None,
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=budget,
+    )
+
+    assert out is None
+    pipeline.scheduler.release.assert_called_once_with(27, 9, "cloud", "req-1")
+
+
+async def test_schedule_stream_resume_rejects_non_vllm_lane_takeover(retry_env):
+    """An Ollama lane cannot keep the partial assistant message open — the
+    takeover would start a second, full answer — so it is refused the same
+    way a cloud placement is: slot released, None back."""
+    ctx = SimpleNamespace(model_id=27, provider_id=9, provider_type="logosnode", lane_id="lane-9", engine="ollama")
+    pipeline = _resume_pipeline(_result_with_context(ctx))
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    budget = main.RetryBudget(max_attempts=3, deadline_s=100.0, now=lambda: 1000.0)
+
+    out = await main._schedule_stream_resume(
+        request_id="req-1",
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": []},
+        request_path=None,
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=budget,
+    )
+
+    assert out is None
+    pipeline.scheduler.release.assert_called_once_with(27, 9, "logosnode", "req-1")
+
+
+# ---------------------------------------------------------------------------
+# Resume re-enqueueing keeps one terminal outcome per enqueue
+# ---------------------------------------------------------------------------
+
+
+def _requests_total_counts() -> dict[str, float]:
+    from logos.monitoring import prometheus_metrics as prom
+
+    counts: dict[str, float] = {}
+    for metric in prom.registry.collect():
+        if metric.name != "logos_requests":
+            continue
+        for sample in metric.samples:
+            if sample.name.endswith("_total"):
+                counts[sample.labels["status"]] = sample.value
+    return counts
+
+
+def _requests_in_flight() -> float:
+    from logos.monitoring import prometheus_metrics as prom
+
+    for metric in prom.registry.collect():
+        if metric.name == "logos_requests_in_flight":
+            for sample in metric.samples:
+                return sample.value
+    return 0.0
+
+
+class _EnqueueTrackingPipeline:
+    """Pipeline stub that honours the real monitoring contract: every
+    process() enqueues the request (as ``RequestPipeline.process`` does)
+    and discard_request settles it, both on a real recorder — so the
+    counter arithmetic under test is the production arithmetic."""
+
+    def __init__(self, recorder, results):
+        self._recorder = recorder
+        self.results = list(results)
+        self.requests = []
+        self.scheduler = MagicMock()
+
+    async def process(self, request):
+        self.requests.append(request)
+        self._recorder.record_enqueue(
+            request_id=request.request_id,
+            model_id=27,
+            provider_id=1,
+            initial_priority="normal",
+            queue_depth=0,
+        )
+        if not self.results:
+            raise AssertionError("pipeline.process called more times than scripted")
+        return self.results.pop(0)
+
+    def discard_request(self, request_id, result_status):
+        self._recorder.discard(request_id, result_status)
+
+    def record_completion(self, **kwargs):  # noqa: ARG002
+        return None
+
+
+def _resume_call_kwargs():
+    return dict(
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={"messages": []},
+        request_path=None,
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=main.RetryBudget(max_attempts=3, deadline_s=100.0, now=lambda: 1000.0),
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_stream_resume_settles_the_failed_attempt_before_reenqueueing(retry_env):
+    """The resume re-queues the same request id, replacing the tracked
+    state: without a terminal for the failed first attempt, the streamer's
+    single final record_completion leaves two enqueues with one outcome.
+    The invariant — one terminal state per enqueue — is asserted on the
+    real counters."""
+    from logos.monitoring.recorder import MonitoringRecorder
+
+    ctx = SimpleNamespace(model_id=27, provider_id=2, provider_type="logosnode", lane_id="lane-2", engine="vllm")
+    recorder = MonitoringRecorder(db_factory=_FakeDB)
+    pipeline = _EnqueueTrackingPipeline(recorder, [_result_with_context(ctx)])
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    request_id = "req-resume-settle"
+    before = _requests_total_counts()
+    in_flight_before = _requests_in_flight()
+    # The main handler enqueued the initial attempt before the stream ran.
+    recorder.record_enqueue(request_id, 27, 1, "normal", 0)
+
+    out = await main._schedule_stream_resume(request_id=request_id, **_resume_call_kwargs())
+    assert out is ctx
+    # The streamer's single final settlement closes the resumed attempt.
+    recorder.record_complete(request_id, "success")
+
+    after = _requests_total_counts()
+    delta = {status: after.get(status, 0.0) - before.get(status, 0.0) for status in ("enqueued", "error", "success")}
+    assert delta["enqueued"] == 2  # the initial attempt and the resume
+    assert delta["error"] == 1  # the failed attempt, settled before the re-enqueue
+    assert delta["success"] == 1  # the final settlement of the resume
+    assert delta["error"] + delta["success"] == delta["enqueued"], "one terminal per enqueue must hold"
+    assert _requests_in_flight() == in_flight_before, "the gauge must return to where it started"
+
+
+@pytest.mark.asyncio
+async def test_schedule_stream_resume_settles_the_attempt_even_when_the_resume_is_not_scheduled(retry_env):
+    """The re-queue counts even when the re-schedule itself fails, so the
+    failed first attempt needs its terminal in that case too: the streamer
+    ends in the error frame and its settlement covers the re-queue, not the
+    attempt that produced the partial answer."""
+    from logos.monitoring.recorder import MonitoringRecorder
+
+    recorder = MonitoringRecorder(db_factory=_FakeDB)
+    pipeline = _EnqueueTrackingPipeline(recorder, [_fail_result("no capacity left")])
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    request_id = "req-resume-settle-failed"
+    before = _requests_total_counts()
+    in_flight_before = _requests_in_flight()
+    recorder.record_enqueue(request_id, 27, 1, "normal", 0)
+
+    out = await main._schedule_stream_resume(request_id=request_id, **_resume_call_kwargs())
+    assert out is None
+    # The streamer ends in the error frame and settles once.
+    recorder.record_complete(request_id, "error")
+
+    after = _requests_total_counts()
+    delta = {status: after.get(status, 0.0) - before.get(status, 0.0) for status in ("enqueued", "error", "success")}
+    assert delta["enqueued"] == 2  # the initial attempt and the (failed) re-queue
+    assert delta["error"] == 2  # one terminal per enqueue, both failed
+    assert delta["success"] == 0
+    assert _requests_in_flight() == in_flight_before, "the gauge must return to where it started"
+
+
+@pytest.mark.asyncio
+async def test_context_resolution_retry_settles_the_failed_attempt_before_reenqueueing(retry_env):
+    """A context-resolution failure is re-queued under the same request id,
+    replacing the tracked state: without a terminal for the failed attempt,
+    the final settlement of the retry leaves two enqueues with one outcome —
+    `enqueued` one ahead of the terminal totals per such retry. The
+    invariant — one terminal state per enqueue — is asserted on the real
+    counters."""
+    from logos.monitoring.recorder import MonitoringRecorder
+
+    recorder = MonitoringRecorder(db_factory=_FakeDB)
+    request_id = "req-ctx-retry-settle"
+    pipeline = _EnqueueTrackingPipeline(
+        recorder,
+        [
+            _fail_result("Failed to resolve execution context for model 27", provider_id=1, request_id=request_id),
+            _ok_result(provider_id=2, request_id=request_id),
+        ],
+    )
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    async def fake_sync(
+        context, payload, log_id, provider_id, model_id, policy_id, classification_stats, scheduling_stats, **kw
+    ):
+        return JSONResponse(content={"ok": True}, status_code=200)
+
+    retry_env.setattr(main, "_sync_response", fake_sync)
+
+    before = _requests_total_counts()
+    in_flight_before = _requests_in_flight()
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id=request_id,
+    )
+
+    assert response.status_code == 200
+    assert len(pipeline.requests) == 2  # the failed attempt and the retry
+    # The execution path's final settlement closes the retried attempt.
+    recorder.record_complete(request_id, "success")
+
+    after = _requests_total_counts()
+    delta = {status: after.get(status, 0.0) - before.get(status, 0.0) for status in ("enqueued", "error", "success")}
+    assert delta["enqueued"] == 2  # the failed attempt and the retry
+    assert delta["error"] == 1  # the failed attempt, settled before the re-enqueue
+    assert delta["success"] == 1  # the final settlement of the retry
+    assert delta["error"] + delta["success"] == delta["enqueued"], "one terminal per enqueue must hold"
+    assert _requests_in_flight() == in_flight_before, "the gauge must return to where it started"
+
+
+# ---------------------------------------------------------------------------
+# Pre-token failures surface as JSON errors before commit (#815 phase 1)
+# ---------------------------------------------------------------------------
+
+
+async def test_logosnode_pre_token_failure_comes_back_as_json_error(retry_env):
+    """Pulling the first chunk before the response is committed is what makes
+    a pre-token failure a proper JSON error the outer loop can retry
+    cross-node, instead of a broken 200 stream that can only end in an error
+    frame."""
+    from tests.unit.main.test_request_logging import _make_dummy_db
+
+    from logos.logosnode_registry import LogosNodeOfflineError
+    from logos.pipeline.retry import status_is_retryable
+
+    async def broken_send_stream_command(**kwargs):  # noqa: ARG001
+        raise LogosNodeOfflineError("worker session dropped")
+        yield b""  # unreachable; makes this an async generator
+
+    retry_env.setattr(main, "DBManager", _make_dummy_db())
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    retry_env.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=broken_send_stream_command),
+        raising=False,
+    )
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 0)
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", 0.0)
+    retry_env.setattr(main, "_pipeline", _FakePipeline([_fail_result("unused")]), raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-pretoken",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+
+    # A JSONResponse (not a StreamingResponse) with a retryable status — the
+    # outer loop re-dispatches it to a peer node serving the same model.
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+    assert status_is_retryable(response.status_code)
+
+
+async def test_pre_token_deadline_is_not_retried_on_the_same_lane(retry_env):
+    """A spent execution deadline is not the just-woken race the same-lane
+    pre-token retry exists for: the wall this request may run until has
+    passed, so re-pulling the lane — backoff sleep and all — could only spend
+    time that is no longer there. It must surface on the first attempt."""
+    from logos.errors import RetryDeadlineExceeded
+
+    opened = []
+
+    async def deadline_send_stream_command(**kwargs):  # noqa: ARG001
+        opened.append(kwargs)
+        raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+        yield b""  # unreachable; makes this an async generator
+
+    retry_env.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=deadline_send_stream_command),
+        raising=False,
+    )
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    retry_env.setattr(main, "_pipeline", _FakePipeline([_fail_result("unused")]), raising=False)
+    # Same-lane retries are available: the deadline must still stop the loop
+    # after the first attempt instead of burning them (and their backoff).
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 3)
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", 1.0)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-pretoken-deadline",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+
+    # A pre-stream JSON error, and the stream was opened exactly once: a
+    # same-lane retry would have opened it again after each backoff sleep.
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+    assert len(opened) == 1
+
+
+def _fake_deadline_env(retry_env, deadline_s=10.0, backoff_s=4.0):
+    """A RetryBudget on a fake clock plus a fake asyncio.sleep that advances
+    it, so a retry loop can be driven with real backoff in zero wall time."""
+    from logos.pipeline.retry import RetryBudget
+
+    clock = {"t": 0.0}
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+        clock["t"] += seconds
+
+    retry_env.setattr("asyncio.sleep", fake_sleep)
+    retry_env.setattr(
+        main,
+        "_new_retry_budget",
+        lambda: RetryBudget(
+            max_attempts=3,
+            deadline_s=deadline_s,
+            backoff_base_s=backoff_s,
+            backoff_cap_s=15.0,
+            now=lambda: clock["t"],
+        ),
+    )
+    return slept
+
+
+@pytest.mark.asyncio
+async def test_retry_request_bounds_clamp_to_the_post_backoff_deadline(retry_env):
+    """The next retry's queue-wait and context bounds must be computed AFTER
+    the backoff sleep: a bound frozen from the pre-sleep budget lets the next
+    wait run past the overall retry deadline."""
+    slept = _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            _fail_result("All candidate models unavailable (rate-limited or no capacity)", provider_id=1),
+            _ok_result(provider_id=2),
+        ],
+        sync_responses=[JSONResponse(content={"ok": True}, status_code=200)],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # The backoff consumed 4s of the 10s deadline before the retry was built
+    # — its bounds must reflect the remaining 6s, not the old 10.
+    assert slept == [4.0]
+    retry_req = pipeline.requests[1]
+    assert retry_req.payload["timeout_s"] == 6.0
+    assert retry_req.context_resolve_timeout_s == 6.0
+    # The retry also carries the budget's ABSOLUTE deadline (10s on the fake
+    # clock) so the resolver recomputes the bound after the queue wait
+    # instead of re-anchoring 6.0 fresh.
+    assert retry_req.context_resolve_deadline == 10.0
+
+
+@pytest.mark.asyncio
+async def test_terminal_status_retry_bounds_clamp_to_the_post_backoff_deadline(retry_env):
+    """Same ordering guarantee on the terminal-status retry branch: the
+    rebuilt request sees the deadline after the backoff, not before."""
+    slept = _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff
+
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[_ok_result(provider_id=1), _ok_result(provider_id=2)],
+        sync_responses=[
+            JSONResponse(content={"error": "worker gone"}, status_code=503),
+            JSONResponse(content={"ok": True}, status_code=200),
+        ],
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    assert slept == [4.0]
+    retry_req = pipeline.requests[1]
+    assert retry_req.payload["timeout_s"] == 6.0
+    assert retry_req.context_resolve_timeout_s == 6.0
+    assert retry_req.context_resolve_deadline == 10.0
+
+
+# ---------------------------------------------------------------------------
+# A retry admitted near expiry is bounded to the remaining deadline (#815)
+#
+# The queue wait, backoff and context-resolve bounds were already clamped to
+# the retry budget, but the execution itself was not: a cloud call ran with
+# no timeout and a local node kept its fixed infer window, so a retry admitted
+# with only the five-second minimum left could still run well past the overall
+# deadline. These drive the real _execute_resource_mode + _sync_response and
+# assert the transport bound each attempt actually gets.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingExecutor:
+    """Scripted executor that records the transport timeout and the absolute
+    deadline of every call."""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.timeouts = []
+        self.deadlines = []
+
+    async def execute_sync(self, url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
+        self.timeouts.append(timeout)
+        self.deadlines.append(deadline_at)
+        if not self.results:
+            raise AssertionError("execute_sync called more times than scripted")
+        return self.results.pop(0)
+
+
+def _ok_cloud_result(provider_id=1, request_id="req-1"):
+    return SimpleNamespace(
+        success=True,
+        error=None,
+        model_id=27,
+        provider_id=provider_id,
+        execution_context=SimpleNamespace(
+            model_name="stub-model",
+            provider_type="cloud",
+            forward_url="https://cloud.test/v1/chat/completions",
+            lane_id=None,
+            anthropic_dialect=None,
+        ),
+        classification_stats={},
+        scheduling_stats={
+            "request_id": request_id,
+            "model_id": 27,
+            "provider_id": provider_id,
+            "provider_type": "cloud",
+        },
+    )
+
+
+def _wire_real_sync_path(retry_env, pipeline):
+    """Point _sync_response's collaborators at fakes so the real function runs."""
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_execution_is_bounded_to_the_remaining_deadline(retry_env):
+    """A retry admitted near expiry must not run past the overall deadline: the
+    previously-unbounded cloud call is given the time left in the budget, while
+    the initial dispatch stays unbounded (cold starts / long generations)."""
+    from logos.pipeline.executor import ExecutionResult
+
+    _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff -> retry at 6s left
+    executor = _RecordingExecutor(
+        [
+            ExecutionResult(
+                success=False,
+                response={"error": "worker gone"},
+                error="worker gone",
+                usage={},
+                is_streaming=False,
+                status_code=503,
+            ),
+            # 400 is permanent, so the retry loop stops here instead of looping on.
+            ExecutionResult(
+                success=False,
+                response={"error": "bad payload"},
+                error="bad payload",
+                usage={},
+                is_streaming=False,
+                status_code=400,
+            ),
+        ]
+    )
+    pipeline = _FakePipeline([_ok_cloud_result(provider_id=1), _ok_cloud_result(provider_id=2)])
+    pipeline.executor = executor
+    _wire_real_sync_path(retry_env, pipeline)
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 400
+    # Initial dispatch: unbounded (None). Retry: clamped to the 6s left after
+    # the 4s backoff consumed from the 10s deadline.
+    assert executor.timeouts == [None, 6.0]
+    # The read bound resets after every body chunk, so the budget's absolute
+    # deadline goes along on both attempts — the wall never moves.
+    assert executor.deadlines == [10.0, 10.0]
+
+
+@pytest.mark.asyncio
+async def test_logosnode_retry_execution_clamps_the_infer_window(retry_env):
+    """The local node's fixed infer window is clamped to the time left in the
+    retry deadline, so a near-expiry retry cannot run past the overall budget."""
+    from logos.logosnode_registry import LogosNodeCommandError
+
+    _fake_deadline_env(retry_env)  # 10s deadline, 4s backoff -> retry at 6s left
+    windows = []
+
+    async def fake_send_command(**kwargs):  # noqa: ARG002
+        windows.append(kwargs.get("timeout_seconds"))
+        if len(windows) == 1:
+            # A worker-side fault: retryable, so the loop re-dispatches.
+            raise LogosNodeCommandError("worker refused the command")
+        return {"status_code": 200, "body": {"ok": True}}
+
+    pipeline = _FakePipeline(
+        [
+            SimpleNamespace(
+                success=True,
+                error=None,
+                model_id=27,
+                provider_id=1,
+                execution_context=SimpleNamespace(
+                    model_name="stub-model",
+                    provider_type="logosnode",
+                    lane_id="lane-1",
+                    anthropic_dialect=None,
+                ),
+                classification_stats={},
+                scheduling_stats={
+                    "request_id": "req-1",
+                    "model_id": 27,
+                    "provider_id": 1,
+                    "provider_type": "logosnode",
+                },
+            ),
+            SimpleNamespace(
+                success=True,
+                error=None,
+                model_id=27,
+                provider_id=2,
+                execution_context=SimpleNamespace(
+                    model_name="stub-model",
+                    provider_type="logosnode",
+                    lane_id="lane-2",
+                    anthropic_dialect=None,
+                ),
+                classification_stats={},
+                scheduling_stats={
+                    "request_id": "req-1",
+                    "model_id": 27,
+                    "provider_id": 2,
+                    "provider_type": "logosnode",
+                },
+            ),
+        ]
+    )
+    _wire_real_sync_path(retry_env, pipeline)
+    retry_env.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=fake_send_command), raising=False)
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+    )
+
+    assert response.status_code == 200
+    # Initial dispatch keeps the full configured window; the retry is clamped
+    # to the 6s left in the deadline.
+    full_window = main._LOGOSNODE_INFER_TIMEOUT_SECONDS
+    assert windows == [full_window, min(full_window, 6.0)]
+
+
+# ---------------------------------------------------------------------------
+# The absolute deadline reaches the stream execution
+#
+# A clamped per-read bound still only fails a STALLED stream: a worker (or
+# upstream) that keeps delivering can never trip it, so a retry would run
+# indefinitely past the deadline. The budget's absolute deadline must reach
+# the streamer as well, where it is enforced on every read.
+# ---------------------------------------------------------------------------
+
+
+def _retry_budget_one_failure_left():
+    """A budget with one failure recorded and a second of its ten-second
+    deadline already spent: this stream is the retry (or resume), not the
+    initial dispatch."""
+    from logos.pipeline.retry import RetryBudget
+
+    clock = {"t": 0.0}
+    budget = RetryBudget(max_attempts=3, deadline_s=10.0, now=lambda: clock["t"])
+    clock["t"] = 1.0
+    budget.record_failure(1)
+    return budget
+
+
+@pytest.mark.asyncio
+async def test_a_retry_stream_passes_the_absolute_deadline_to_the_node(retry_env):
+    """The node stream is opened with the budget's deadline, so a worker that
+    keeps streaming cannot push the retry past it."""
+    budget = _retry_budget_one_failure_left()
+    calls = []
+
+    async def fake_send_stream_command(**kwargs):
+        calls.append(kwargs)
+        yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    retry_env.setattr(
+        main, "_logosnode_registry", SimpleNamespace(send_stream_command=fake_send_stream_command), raising=False
+    )
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline = _FakePipeline([_ok_result()])
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, model_name="stub-model"
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-1", "provider_type": "logosnode"},
+        retry_budget=budget,
+    )
+    assert isinstance(response, StreamingResponse)
+
+    assert len(calls) == 1
+    # The idle bound is clamped to the 9s left (10s deadline, 1s elapsed)...
+    assert calls[0]["timeout_seconds"] == 9.0
+    # ...and the absolute deadline goes along, so the stream stops at it
+    # however often the worker sends.
+    assert calls[0]["deadline_at"] == budget.deadline_at
+
+
+@pytest.mark.asyncio
+async def test_a_retry_stream_passes_the_absolute_deadline_to_the_cloud(retry_env):
+    """The cloud stream gets the deadline the same way: the httpx timeout is
+    a per-operation bound, so only the absolute wall bounds the run."""
+    budget = _retry_budget_one_failure_left()
+    calls = []
+
+    class _RecordingStreamingExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):
+            calls.append({"timeout": timeout, "deadline_at": deadline_at, "emit_recovery_frames": emit_recovery_frames})
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _RecordingStreamingExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            model_name="stub-model",
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-1", "provider_type": "cloud"},
+        retry_budget=budget,
+    )
+    assert isinstance(response, StreamingResponse)
+
+    assert len(calls) == 1
+    # The previously-unbounded cloud call gets the 9s left as its read bound...
+    assert calls[0]["timeout"] == 9.0
+    # ...and the absolute deadline, enforced on the chunk loop.
+    assert calls[0]["deadline_at"] == budget.deadline_at
+
+
+@pytest.mark.asyncio
+async def test_a_retry_sync_call_passes_the_absolute_deadline_to_the_cloud(retry_env):
+    """The sync path has the same exposure: the remaining budget passed as
+    the httpx timeout resets its read bound after every body chunk, so a
+    drip-fed JSON response can run past the deadline — the executor gets
+    the absolute wall alongside it."""
+    from logos.pipeline.executor import ExecutionResult
+
+    budget = _retry_budget_one_failure_left()
+    calls = []
+
+    class _RecordingSyncExecutor:
+        async def execute_sync(self, url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
+            calls.append({"timeout": timeout, "deadline_at": deadline_at})
+            return ExecutionResult(
+                success=True,
+                response={"choices": [{"message": {"content": "ok"}}]},
+                error=None,
+                usage={},
+                is_streaming=False,
+                headers=None,
+                status_code=200,
+            )
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _RecordingSyncExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    retry_env.setattr(main, "_response_with_cost", lambda payload, *a, **k: (payload, False))
+
+    response = await main._sync_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            model_name="stub-model",
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-1", "provider_type": "cloud"},
+        retry_budget=budget,
+    )
+    assert response.status_code == 200
+
+    assert len(calls) == 1
+    # The previously-unbounded cloud call gets the 9s left as its read bound...
+    assert calls[0]["timeout"] == 9.0
+    # ...and the absolute wall, enforced over the complete POST.
+    assert calls[0]["deadline_at"] == budget.deadline_at
+
+
+@pytest.mark.asyncio
+async def test_cloud_responses_deadline_ends_the_stream_in_a_failed_event(retry_env):
+    """A /v1/responses cloud stream that hits its deadline after bytes are out
+    must end in a ``response.failed`` event — not the Chat Completions error
+    frame + ``[DONE]`` a Responses client does not recognise. The streamer
+    tells the executor not to emit that framing and builds the terminal
+    itself, completing the created envelope under the next sequence number."""
+    import json
+
+    from logos.errors import RetryDeadlineExceeded
+
+    created = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {"id": "resp_1", "status": "in_progress", "model": "m-test", "output": []},
+    }
+    delta = {"type": "response.output_text.delta", "sequence_number": 1, "delta": "Hi"}
+    created_chunk = b"event: response.created\n" + b"data: " + json.dumps(created).encode() + b"\n\n"
+    delta_chunk = b"event: response.output_text.delta\n" + b"data: " + json.dumps(delta).encode() + b"\n\n"
+
+    calls = []
+
+    class _DeadlineExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):  # noqa: ARG002
+            calls.append({"emit_recovery_frames": emit_recovery_frames})
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield created_chunk
+            yield delta_chunk
+            # The absolute deadline fires after the first bytes — the error the
+            # real executor hands back when emit_recovery_frames is False.
+            raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _DeadlineExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/responses",
+            anthropic_dialect=None,
+            model_name="stub-model",
+        ),
+        {"model": "test-model", "input": "hi"},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-responses-deadline", "provider_type": "cloud"},
+        request_path="/v1/responses",
+    )
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+
+    # The streamer told the executor not to emit Chat Completions framing...
+    assert calls[0]["emit_recovery_frames"] is False
+    # ...the partial content was still forwarded...
+    assert b'"delta": "Hi"' in body
+    # ...and the stream ends in the Responses terminal, not [DONE].
+    assert b"[DONE]" not in body
+    frames = [frame for frame in body.split(b"\n\n") if frame.startswith(b"event: response.failed")]
+    assert len(frames) == 1
+    data_line = next(line for line in frames[0].split(b"\n") if line.startswith(b"data:"))
+    failed = json.loads(data_line[len(b"data: ") :])
+    assert failed["type"] == "response.failed"
+    assert failed["sequence_number"] == 2  # one past the last event read
+    resp = failed["response"]
+    # The created envelope the client already read, now failed — not a
+    # skeleton.
+    assert resp["id"] == "resp_1"
+    assert resp["model"] == "m-test"
+    assert resp["status"] == "failed"
+    assert resp["error"]["message"] == "stream execution passed its retry deadline"

@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from logos.dbutils.types import Deployment
+from logos.timeouts import global_timeout_s
+
+# Default queue-wait bound for a request that did not set ``timeout_s`` — the
+# point where a wait-mode timeout is declared. Shared with the internal retry
+# policy, which clamps a re-queue to whatever time is left in its deadline.
+DEFAULT_QUEUE_TIMEOUT_S = global_timeout_s(1200.0)
 
 
 class QueueTimeoutError(Exception):
@@ -75,6 +81,12 @@ class SchedulingRequest:
     required_provider_id: Optional[int] = None
     """Trusted internal affinity. When set, scheduling and queue dispatch
     must never fall back to another provider."""
+    eligible_provider_ids: Optional[frozenset[int]] = None
+    """When set, only these providers may dequeue the request once it is
+    queued. The pipeline derives it from a pinned request's filtered
+    deployment list (internal retry / stream resume) so the model-wide queue
+    honours the same cross-node failover eligibility the scheduling pass
+    just established. Normal requests leave it unset and stay model-wide."""
     # Chained prefix-block hashes identifying the request's "stream"
     # (api key + actual prompt prefix), deepest block first. Used for
     # prefix-cache-aware placement; empty/None means "route as before".
