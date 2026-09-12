@@ -11,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -363,4 +364,162 @@ class LatencyObservation(Base):
         nullable=False,
         default=lambda: datetime.datetime.now(datetime.timezone.utc),
         onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class BatchObject(Base):
+    """A file or batch that lives at the provider, and the team that owns it.
+
+    The Batch API hands the client an upstream id it uses for hours after the
+    request that created it. Logos forwards those calls with a provider
+    credential shared by every key allowed to use that provider, so ownership
+    has to be recorded here — otherwise any such key could poll, cancel or
+    delete another team's batch and download its output file.
+
+    ``settled_at`` is the billing latch: a terminal batch is metered exactly
+    once, when its output rows are read.
+    """
+
+    __tablename__ = "batch_objects"
+    __table_args__ = (UniqueConstraint("provider_id", "kind", "upstream_id", name="uq_batch_objects_upstream"),)
+
+    id = Column(BigInteger, primary_key=True)
+    kind = Column(Text, nullable=False)  # "file" | "batch"
+    upstream_id = Column(Text, nullable=False)
+    # NULL for a batch Logos runs itself: each of its lines picks its own
+    # provider, so the batch as a whole belongs to none.
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"))
+    execution = Column(Text, nullable=False, server_default="provider")  # "provider" | "logos"
+    api_key_id = Column(Integer, ForeignKey("api_keys.id"))
+    team_id = Column(Integer, ForeignKey("teams.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    input_file_id = Column(Text)
+    status = Column(Text)
+    settled_at = Column(TIMESTAMP(timezone=True))
+    filename = Column(Text)
+    size_bytes = Column(BigInteger)
+    endpoint = Column(Text)
+    completion_window = Column(Text)
+    request_metadata = Column(JSON)
+    output_file_id = Column(Text)
+    error_file_id = Column(Text)
+    total_requests = Column(Integer, nullable=False, default=0)
+    completed_requests = Column(Integer, nullable=False, default=0)
+    failed_requests = Column(Integer, nullable=False, default=0)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    # The Logos model names a batch input file asks for, as uploaded. When a
+    # forwarded batch turns out that the provider cannot batch one of them,
+    # this is what gets marked as not batch-eligible on that provider.
+    models = Column(JSON)
+    # Lease of the runner currently executing a Logos-run batch: which process
+    # holds it, and until when. A row whose lease is expired (or empty) is
+    # recoverable, so a batch whose runner died is picked up again — but a
+    # batch another live process is running is not.
+    runner_id = Column(Text)
+    lease_expires_at = Column(TIMESTAMP(timezone=True))
+    started_at = Column(TIMESTAMP(timezone=True))
+    finished_at = Column(TIMESTAMP(timezone=True))
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class BatchFileContent(Base):
+    """The bytes of a file Logos holds itself.
+
+    A forwarded batch keeps its files at the provider; a Logos-run one has
+    nowhere else to put them. Separate from ``batch_objects`` so a listing does
+    not drag megabytes of JSONL with it.
+    """
+
+    __tablename__ = "batch_file_contents"
+
+    batch_object_id = Column(BigInteger, ForeignKey("batch_objects.id", ondelete="CASCADE"), primary_key=True)
+    content = Column(LargeBinary, nullable=False)
+
+
+class ProviderBatchCapability(Base):
+    """Whether a provider's Batch API answers, as last probed.
+
+    A cloud provider is not automatically a batch target: an OpenAI-shaped
+    resource can be a self-hosted inference endpoint that serves chat and
+    nothing else. The answer is a property of the upstream, so it is probed
+    and cached rather than configured — a hand-set flag would go stale.
+    """
+
+    __tablename__ = "provider_batch_capability"
+
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
+    supports_batch = Column(Boolean, nullable=False, default=False)
+    detail = Column(Text)
+    checked_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class ProviderModelBatchEligibility(Base):
+    """Per-model Batch eligibility on one provider, as learned from the provider.
+
+    Serving a model and serving it *for batch* are two different things: an
+    Azure resource answers its Batch API with a Global-Batch deployment for
+    each model it offers for that, and a model that only exists as a Standard
+    deployment cannot be batched there no matter how capable the resource
+    looks. The Batch API does not publish a model list for its batch endpoint,
+    so the knowledge is learned from the provider's own refusals (a batch
+    creation or a failed batch naming the unsupported model) and tracked here —
+    one row per model, with the detail of what the provider said.
+
+    Absence means "unknown", which routes to the provider as before (its error
+    is then passed through and can teach this table); an ``eligible = false``
+    row is what moves the batch to Logos execution. Rows expire after a TTL so
+    a model the provider adds to Batch later is picked up automatically, at the
+    price of one more failed batch.
+    """
+
+    __tablename__ = "provider_model_batch_eligibility"
+    __table_args__ = (UniqueConstraint("provider_id", "model_id", name="uq_provider_model_batch_eligibility"),)
+
+    id = Column(BigInteger, primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
+    model_id = Column(Integer, ForeignKey("models.id", ondelete="CASCADE"), nullable=False)
+    eligible = Column(Boolean, nullable=False, default=False)
+    detail = Column(Text)
+    checked_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
+class BatchLineResult(Base):
+    """One finished request line of a Logos-run batch, keyed by its custom_id.
+
+    The runner persists each line's result as it completes, so a batch whose
+    runner died (or was redeployed) is resumed from the checkpoint rather than
+    replayed from line zero — the finished lines were already sent through the
+    pipeline and already billed, and running them again would bill them twice.
+    The result file itself is only written when the batch finishes; this table
+    is what makes "finished" resumable.
+    """
+
+    __tablename__ = "batch_line_results"
+    __table_args__ = (UniqueConstraint("batch_object_id", "custom_id", name="uq_batch_line_results"),)
+
+    batch_object_id = Column(BigInteger, ForeignKey("batch_objects.id", ondelete="CASCADE"), primary_key=True)
+    custom_id = Column(Text, primary_key=True)
+    row = Column(JSON, nullable=False)
+    finished_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
     )

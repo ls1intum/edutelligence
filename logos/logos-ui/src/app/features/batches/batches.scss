@@ -1,0 +1,152 @@
+@use 'styles/glass' as *;
+
+.batches {
+  padding: 36px 32px 48px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.batches .page-subtitle {
+  margin-bottom: 24px;
+  max-width: 68ch;
+}
+
+.card {
+  @include glass-card;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+
+  h2 {
+    margin: 0 0 16px;
+    font-size: 1rem;
+  }
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+
+  h2 {
+    margin: 0;
+  }
+}
+
+.field {
+  display: block;
+  margin-bottom: 16px;
+
+  > span {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  select,
+  input[type='file'] {
+    width: 100%;
+    max-width: 520px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+    background: transparent;
+    color: inherit;
+  }
+
+  small {
+    display: block;
+    margin-top: 6px;
+    opacity: 0.75;
+
+    code {
+      // The example line is long on purpose; let it wrap rather than pushing
+      // the panel wider than the viewport.
+      overflow-wrap: anywhere;
+    }
+  }
+}
+
+button.primary {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  background: rgb(var(--color-primary-500));
+  color: #fff;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+button.ghost {
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th,
+  td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgb(var(--color-outline-200) / var(--opacity-subtle));
+  }
+
+  th {
+    font-weight: 500;
+    opacity: 0.75;
+  }
+}
+
+.mono {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+}
+
+.status-completed {
+  border-color: rgb(var(--color-success-500) / var(--opacity-strong));
+}
+
+.status-failed,
+.status-expired {
+  border-color: rgb(var(--color-danger-500) / var(--opacity-strong));
+}
+
+.empty {
+  opacity: 0.7;
+}
+
+.error {
+  color: rgb(var(--color-danger-500));
+}
+
+.notice {
+  opacity: 0.85;
+}
