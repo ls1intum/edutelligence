@@ -16,4 +16,9 @@ class GlobalSearchStatusUpdateDTO(StatusUpdateDTO):
 
     result: Optional[str] = None
     answer: Optional[str] = None
+    # Streaming draft of the answer while the LLM generates (RUNNING updates
+    # from the PartialResultSender); the terminal update carries the
+    # authoritative sanitized answer. Mirrors the chat DTO's fields.
+    partial_result: Optional[str] = Field(alias="partialResult", default=None)
+    partial_seq: Optional[int] = Field(alias="partialSeq", default=None)
     sources: List[LectureSearchResultDTO] = Field(default_factory=list)
