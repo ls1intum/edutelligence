@@ -2064,11 +2064,15 @@ async def _streaming_response(
 ):
     """Build streaming response using executor.
 
-    Returns a ``JSONResponse`` when the upstream returns a non-2xx status code
-    *before* emitting any SSE chunks so that clients receive the correct HTTP
-    status code. Returns a ``StreamingResponse`` for normal 2xx streams while
-    preserving the upstream content type. Mid-stream errors append an
-    OpenAI-spec error frame only for SSE responses.
+    Returns a ``JSONResponse`` when the upstream fails *before* generated
+    output is known — a non-2xx status, or a transport error while only
+    protocol metadata has streamed — so that the client receives the correct
+    HTTP status code and the internal retry can still re-dispatch. Returns a
+    ``StreamingResponse`` for normal 2xx streams while preserving the
+    upstream content type. A failure once output is flowing ends the stream
+    in the dialect the client is reading: the Chat Completions error frame
+    plus ``[DONE]``, a ``response.failed`` event for /v1/responses, or the
+    Anthropic error event when the response is being translated.
 
     LogosNode streams additionally resume mid-flight failures (#815, phase
     2): the request is re-dispatched at RESUME priority on another node of
@@ -2680,10 +2684,13 @@ async def _streaming_response(
     else:
         stream_timeout_s = None
         stream_deadline_at = None
-    # A /v1/responses client ends its stream in a ``response.failed`` event,
-    # not the Chat Completions error frame + ``[DONE]`` the executor would
-    # append — so for that path the executor hands the mid-stream error back
-    # and the streamer below emits the dialect-correct terminal.
+    # The mid-stream error is handed back to the streamer below instead of
+    # being appended by the executor: only the streamer knows whether the
+    # response is committed, and before commit the failure must reach the
+    # pre-stream handlers below as an exception so the retry can re-dispatch.
+    # The streamer emits the dialect-correct terminal — the same Chat
+    # Completions error frame + ``[DONE]`` the executor would have appended,
+    # or the Anthropic / Responses event for those paths.
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
         headers,
@@ -2692,14 +2699,29 @@ async def _streaming_response(
         status=stream_status,
         timeout=stream_timeout_s,
         deadline_at=stream_deadline_at,
-        emit_recovery_frames=not is_responses_path(request_path or ""),
+        emit_recovery_frames=False,
     )
 
-    # Peek at the first chunk.  This triggers the initial HTTP connection so
-    # that on_headers fires and – crucially – UpstreamStreamError is raised
-    # for non-2xx responses before we commit to a StreamingResponse.
+    # Pull until generated output is known — the same pre-commit window the
+    # LogosNode path has. This triggers the initial HTTP connection so that
+    # on_headers fires and — crucially — UpstreamStreamError is raised for
+    # non-2xx responses before we commit to a StreamingResponse. A cloud
+    # text stream opens with protocol metadata (Azure's first frame is a
+    # role-only delta with empty content), and yielding the first of them
+    # would commit HTTP 200 while nothing has been generated: a failure
+    # right after it could no longer be re-dispatched, because the retry
+    # only sees pre-stream errors and a committed stream reads as unsettled.
+    # Transport chunks can split a frame mid-JSON, so the gate decides only
+    # on complete lines (see ``_SsePreCommitGate``). Binary (audio-upload)
+    # streams are never gated — every byte is output.
+    gate = _SsePreCommitGate(not is_audio_upload_path(request_path or ""))
+    held_chunks: list = []
     try:
-        first_chunk = await chunk_iter.__anext__()
+        while True:
+            chunk = await chunk_iter.__anext__()
+            held_chunks.append(chunk)
+            if gate.has_output(chunk):
+                break
     except UpstreamStreamError as exc:
         logger.error(
             "Pre-stream error from upstream (model_id=%s, provider_id=%s): HTTP %s",
@@ -2709,7 +2731,7 @@ async def _streaming_response(
         )
         return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
     except StopAsyncIteration:
-        first_chunk = None
+        pass  # the stream ended before emitting anything
     except Exception as exc:
         logger.error(
             "Pre-stream transport error from upstream (model_id=%s, provider_id=%s): %s: %s",
@@ -2766,12 +2788,15 @@ async def _streaming_response(
         # just as opaque while it runs, and the page shows both together.
         _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
         try:
-            # Yield the already-peeked first chunk
-            if first_chunk:
+            # Replay the frames pulled before the response was committed —
+            # the metadata held behind the gate and the first output frame.
+            # They were pulled before commit, so the first-token time is
+            # recorded here instead of in the loop below.
+            for first_chunk in held_chunks:
                 for outgoing_chunk in enriched_chunks(first_chunk):
                     for client_chunk in client_chunks(outgoing_chunk):
                         yield client_chunk
-                if not ttft_recorded:
+                if first_chunk and not ttft_recorded:
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)

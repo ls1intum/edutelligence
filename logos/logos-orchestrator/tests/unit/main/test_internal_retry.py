@@ -365,6 +365,78 @@ async def test_committed_streaming_response_is_never_retried(retry_env):
     assert len(pipeline.requests) == 1
 
 
+async def test_a_role_only_cloud_prefix_failure_is_retried_before_commit(retry_env):
+    """A cloud text stream opens with protocol metadata — the Azure fixture
+    starts with a role-only delta whose content is empty. A failure right
+    after that frame must still be a pre-stream failure: the metadata stays
+    held behind the pre-commit gate, the error comes back as a JSON response
+    with a retryable status, and the funnel re-dispatches. Committing on the
+    first raw chunk would hide the failure — a committed stream has no
+    terminal status, so the loop would return it raw even though no
+    generated output reached the caller."""
+    role_only = b'data: {"id": "c1", "choices": [{"delta": {"role": "assistant", "content": ""}}]}\n\n'
+    content = b'data: {"id": "c2", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+    done = b"data: [DONE]\n\n"
+    emit_flags = []
+
+    class _CloudExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):  # noqa: ARG002
+            emit_flags.append(emit_recovery_frames)
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            if len(emit_flags) == 1:
+                yield role_only
+                # The executor hands the failure back instead of appending
+                # its recovery frames — that is what lets it surface while
+                # nothing has been committed yet.
+                raise RuntimeError("upstream disconnected")
+            yield content
+            yield done
+
+    pipeline = _FakePipeline([_ok_cloud_result(provider_id=1), _ok_cloud_result(provider_id=2)])
+    pipeline.executor = _CloudExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+        request_path="v1/chat/completions",
+    )
+
+    # The metadata-only prefix failed pre-commit, so the funnel re-dispatched
+    # instead of returning a committed stream...
+    assert isinstance(response, StreamingResponse)
+    assert len(pipeline.requests) == 2
+    # ...and the streamer owns the recovery terminal on both attempts.
+    assert emit_flags == [False, False]
+
+    body = b"".join([part async for part in response.body_iterator])
+    # The client reads the second attempt's answer: no error frame, and none
+    # of the first attempt's held metadata (it was never committed).
+    assert body == content + done
+
+
 async def test_async_job_dict_terminal_status_is_retried(retry_env):
     pipeline = _run_sync_response(
         retry_env,

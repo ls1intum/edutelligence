@@ -98,11 +98,13 @@ class Executor:
             emit_recovery_frames: Whether to append the best-effort
                 Chat Completions recovery frames (a new error frame plus
                 ``data: [DONE]``) when a transport failure lands after the
-                first byte. A caller whose client speaks a different dialect
-                — the /v1/responses streamer, which must end the stream in a
-                ``response.failed`` event the executor cannot build without
-                the accumulated response — passes ``False`` and takes the
-                error back to emit its own terminal.
+                first byte. A caller that owns its own terminal passes
+                ``False`` and takes the error back: the /v1/responses
+                streamer must end the stream in a ``response.failed`` event
+                the executor cannot build without the accumulated response,
+                and the resource-mode streamer needs pre-commit failures as
+                exceptions so the internal retry can re-dispatch before the
+                response is committed.
 
         Yields:
             Upstream response bytes without reconstructing their framing.
