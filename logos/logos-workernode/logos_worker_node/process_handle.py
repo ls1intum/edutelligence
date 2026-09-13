@@ -1,9 +1,8 @@
 """
 Abstract process handle protocol.
 
-Both ``OllamaProcessHandle`` and ``VllmProcessHandle`` implement this
-interface so that ``LaneManager`` can work with either backend without
-conditionals.
+``VllmProcessHandle`` implements this interface; ``LaneManager`` treats it
+as the backend handle for every model lane.
 """
 
 from __future__ import annotations

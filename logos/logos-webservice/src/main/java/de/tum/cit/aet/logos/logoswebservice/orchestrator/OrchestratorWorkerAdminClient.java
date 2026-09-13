@@ -56,6 +56,16 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/lanes/add", Map.of("provider_id", providerId, "lane", lane));
     }
 
+    /**
+     * Asks the orchestrator for the outcome of the most recent manual load of a
+     * model. The load itself runs in the background after addLane's 202, and a
+     * refusal there (e.g. not enough VRAM) is otherwise only a log line — the
+     * statistics UI polls this while its "Loading" note is up.
+     */
+    public ResponseEntity<Map> getLaneLoadStatus(int providerId, String model) {
+        return post("/internal/logosnode/lanes/load_status", Map.of("provider_id", providerId, "model", model));
+    }
+
     public ResponseEntity<Map> startModelBenchmark(int modelProviderId, int sampleSize, int maxOutputTokens) {
         return post(
             "/internal/model_benchmarks/run",

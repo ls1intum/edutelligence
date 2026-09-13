@@ -13,6 +13,18 @@ permissions:
   contents: read
 
 jobs:
-  docs:
-    uses: ./.github/workflows/docs.yml
+  # Call the build workflows directly instead of docs.yml: the locally
+  # called reusable workflow is PR-controlled code, so this workflow must
+  # stay read-only and must not carry pages/id-token permissions. Pages
+  # deployment stays on the push-main.yml path.
+  build-athena:
+    uses: ./.github/workflows/athena_docs-build.yml
+    secrets: inherit
+
+  build-atlas:
+    uses: ./.github/workflows/atlas_docs-build.yml
+    secrets: inherit
+
+  build-iris:
+    uses: ./.github/workflows/iris_docs-build.yml
     secrets: inherit

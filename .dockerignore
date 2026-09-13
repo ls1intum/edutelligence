@@ -1,8 +1,13 @@
-# The repo-root build context is used by logos/logos-orchestrator/Dockerfile
+# The repo-root build context is used by logos/logos-orchestrator/Dockerfile,
+# logos/logos-agent/Dockerfile, logos/logos-agent/workspace/Dockerfile,
 # AND iris/Dockerfile (docker-context: . in iris_build-and-push-docker.yml).
 # Whitelist exactly what those Dockerfiles COPY so the context stays small
 # and untracked local files (benchmarks, calibration data, .git, …) never
 # get uploaded to the builder.
+#
+# A Dockerfile added here without its inputs whitelisted fails with
+# "failed to compute cache key: … not found" — the path is simply absent from
+# the context.
 *
 # Shared dependency: only the files the orchestrator's dependency layer
 # installs from (metadata, declared readme, package source) — not the whole
@@ -14,6 +19,24 @@
 !logos/logos-orchestrator/pyproject.toml
 !logos/logos-orchestrator/src
 !logos/logos-orchestrator/tests
+# Agent runner: the service package and the session-image entrypoints.
+# Deliberately not the whole directory — no README, no tests in the image.
+!logos/logos-agent/pyproject.toml
+!logos/logos-agent/app
+!logos/logos-agent/workspace/run_session.py
+!logos/logos-agent/workspace/screenshot.js
+# The session image installs the repository's own hook environments at build
+# time, because a session has no network to install them with. Every config,
+# not only Logos's: the root one delegates to the services through
+# sub-pre-commit, and they pin their own versions of the same tools.
+!.pre-commit-config.yaml
+!logos/.pre-commit-config.yaml
+!iris/.pre-commit-config.yaml
+!athena/.pre-commit-config.yaml
+!memiris/.pre-commit-config.yaml
+# The model gateway's nginx configuration, shipped in its image rather than
+# bind-mounted: a deployment copies only the compose file to its VM.
+!logos/agent-gateway/nginx.conf
 !iris/pyproject.toml
 !iris/poetry.lock
 !iris/src/iris

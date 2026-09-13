@@ -1,12 +1,11 @@
 # Logos Benchmark
 
-Misst **TTFT** (Time to First Token), **TTLT** (Time to Last Token) und **GPU-Energieverbrauch** pro Request über drei Szenarien:
+Misst **TTFT** (Time to First Token), **TTLT** (Time to Last Token) und **GPU-Energieverbrauch** pro Request über zwei Szenarien:
 
 | Szenario | Beschreibung |
 |---|---|
 | `logos-sleep` | Logos mit aktiviertem Sleep Mode (Kapazitätsplaner darf Modelle entladen) |
 | `logos-nosleep` | Logos ohne Sleep Mode (Modelle bleiben dauerhaft geladen) |
-| `ollama` | Direkt gegen Ollama ohne Logos-Layer |
 
 Jedes Szenario wird in zwei Konfigurationen getestet:
 - **2-LLM-Config**: Requests verteilen sich auf 2 Modelle
@@ -80,7 +79,7 @@ pip install datasets  # nur für prepare_benchmark.py benötigt
 
 ### `benchmark_config.py`
 
-Zentrales Config-File für beide LLM-Konfigurationen und die Ollama-Namens-Übersetzung:
+Zentrales Config-File für beide LLM-Konfigurationen:
 
 ```python
 # Zwei-LLM-Konfiguration
@@ -97,18 +96,6 @@ MODELS_5 = [
     "microsoft/Phi-4-reasoning",
     "Gemma4-26b",
 ]
-
-# Übersetzung Logos-Modellname → Ollama-Tag
-OLLAMA_MODEL_MAP = {
-    "Qwen3-30B-A3B":             "qwen3:30b-a3b",
-    ...
-}
-```
-
-**Vor dem ersten Lauf die Ollama-Tags überprüfen:**
-```bash
-# Auf dem Ollama-Server:
-ollama list
 ```
 
 ---
@@ -175,9 +162,9 @@ python benchmark_logos.py --scenario SZENARIO [OPTIONEN] \
 
 | Option | Standard | Beschreibung |
 |---|---|---|
-| `--scenario` | `logos-sleep` | Szenario: `logos-sleep`, `logos-nosleep`, `ollama` |
+| `--scenario` | `logos-sleep` | Szenario: `logos-sleep`, `logos-nosleep` |
 | `--workload CSV` | — | Workload-CSV von `prepare_benchmark.py` |
-| `--logos-url URL` | `http://localhost:8080` | Ziel-URL (Logos oder Ollama) |
+| `--logos-url URL` | `http://localhost:8080` | Ziel-URL (Logos) |
 | `--logos-key KEY` | — | Logos API-Key (erforderlich für `logos-*`-Szenarien) |
 | `--sequential` | aus | **Sequentieller Modus** (siehe unten) |
 | `--max-concurrent N` | `64` | Max. parallele Requests (ohne `--sequential`) |
@@ -230,7 +217,7 @@ t=10s                                                                           
 
 - **Exakte Energiezuordnung:** Zwischen zwei Requests ist die GPU (weitgehend) idle. Die Energie zwischen `t_start` und `t_end` stammt vollständig von diesem Request.
 - **Reproduzierbarkeit:** Jeder Request startet unter identischen Bedingungen — kein Einfluss durch parallele GPU-Last.
-- **Sauberste Vergleichsbasis** zwischen Szenarien: Logos-Sleep vs. -NoSleep vs. Ollama sind unter gleichen Isolationsbedingungen messbar.
+- **Sauberste Vergleichsbasis** zwischen Szenarien: Logos-Sleep vs. -NoSleep sind unter gleichen Isolationsbedingungen messbar.
 
 **Nachteil:** Bildet keine realistische Produktionslast ab. Für Latenz-unter-Last-Tests sollte `--sequential` weggelassen werden.
 
@@ -245,7 +232,7 @@ t=10s                                                                           
 
 ---
 
-## Vollständige Beispiel-Kommandos (alle 6 Runs)
+## Vollständige Beispiel-Kommandos (alle 4 Runs)
 
 ```bash
 # ── Schritt 1: Workloads vorbereiten (einmalig) ──────────────────────────
@@ -292,26 +279,6 @@ python benchmark_logos.py \
     --gpu-host gpu-node-a gpu-node-b \
     --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
     --sequential --output-dir results
-
-# ── Szenario 3: Ollama direkt ────────────────────────────────────────────
-# Modellnamen werden automatisch via benchmark_config.py übersetzt.
-# --gpu-host zeigt hier auf den Ollama-Server selbst.
-
-python benchmark_logos.py \
-    --scenario ollama \
-    --logos-url http://ollama-host:11434 \
-    --workload workloads/workload_gsm8k_2llm.csv \
-    --gpu-host ollama-host \
-    --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
-    --sequential --output-dir results
-
-python benchmark_logos.py \
-    --scenario ollama \
-    --logos-url http://ollama-host:11434 \
-    --workload workloads/workload_gsm8k_5llm.csv \
-    --gpu-host ollama-host \
-    --gpu-ssh-user ubuntu --gpu-ssh-key ~/.ssh/id_rsa \
-    --sequential --output-dir results
 ```
 
 ---
@@ -343,8 +310,8 @@ results/
 | `request_id` | — | Request-ID aus der Workload-CSV |
 | `model` | — | Modellname wie vom Server zurückgegeben |
 | `scenario` | — | Benchmark-Szenario |
-| `warmth_state` | — | Zustand des Modells zum Scheduling-Zeitpunkt (aus `X-Logos-Warmth-State`): `-1` = cold, `0` = warm aber nicht laufend, `1+x` = laufend mit `x` wartenden Requests. Leer bei direktem Ollama. |
-| `ettft_ms` | ms | ETTFT — vom Logos-Scheduler geschätzte TTFT zum Entscheidungszeitpunkt (aus `X-Logos-ETTFT-Ms`). Vergleich mit `ttft_ms` zeigt die Schätzgüte. Leer bei direktem Ollama. |
+| `warmth_state` | — | Zustand des Modells zum Scheduling-Zeitpunkt (aus `X-Logos-Warmth-State`): `-1` = cold, `0` = warm aber nicht laufend, `1+x` = laufend mit `x` wartenden Requests. Leer bei direkten Backends. |
+| `ettft_ms` | ms | ETTFT — vom Logos-Scheduler geschätzte TTFT zum Entscheidungszeitpunkt (aus `X-Logos-ETTFT-Ms`). Vergleich mit `ttft_ms` zeigt die Schätzgüte. Leer bei direkten Backends. |
 | `ttft_ms` | ms | Time to First Token |
 | `ttlt_ms` | ms | Time to Last Token (= Ende des Streams) |
 | `tpot_ms` | ms/Token | Time Per Output Token (Decode-Phase) |
@@ -508,13 +475,6 @@ pip show nvidia-ml-py
 **Logos antwortet nicht:**
 ```bash
 curl -H "logos_key: YOUR_KEY" http://logos.ase.cit.tum.de/v1/models
-```
-
-**Ollama-Modell nicht gefunden (404):**
-```bash
-# Auf dem Ollama-Server:
-ollama list              # exakte Tags prüfen
-ollama pull llama3.3:70b # fehlende Modelle pullen
 ```
 
 **Energiemessung zeigt `not measured`:**
