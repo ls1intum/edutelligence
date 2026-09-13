@@ -35,6 +35,7 @@ from logos_worker_node.calibration import (
     _extract_vllm_max_model_len_suggestion,
     _extract_vllm_max_num_seqs_suggestion,
     _format_kv_mb,
+    _is_cuda_oom_log,
     _load_unsupported_models,
     _max_tp_for_plan,
     _parse_kv_to_mb,
@@ -2392,6 +2393,58 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
     # The file on disk now lists the model — restart-safe.
     loaded = _load_unsupported_models(log_dir / _UNSUPPORTED_MODELS_FILE)
     assert loaded["Qwen/Bogus"].reason_code == "invalid-repo-id"
+
+
+def test_is_cuda_oom_log_distinguishes_capacity_from_validation_errors():
+    """A real allocator OOM must be detected; the KV-too-small and
+    max-num-seqs validation rejections (which name their own fix) must not
+    be mistaken for one."""
+    assert _is_cuda_oom_log("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB")
+    assert _is_cuda_oom_log("RuntimeError: CUDA error: out of memory")
+    assert not _is_cuda_oom_log("estimated maximum model length is 4096")
+    assert not _is_cuda_oom_log("lower max_num_seqs to at most 160")
+    assert not _is_cuda_oom_log("")
+    assert not _is_cuda_oom_log(None)  # type: ignore[arg-type]
+
+
+def test_kv_search_stops_climbing_on_genuine_cuda_oom(tmp_path: Path):
+    """A real CUDA OOM at the kv floor must abort the upward scan instead
+    of climbing toward the ceiling — a larger kv only needs more memory,
+    never less, so every further probe would repeat the same OOM."""
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    log_path = log_dir / "org__huge-model.log"
+
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+        gpu_vram_total_mb=24000.0,  # ceiling would be 18432 MB — 17+ steps if not short-circuited
+    )
+    patches["spawn"] = _spawn_writing_log(
+        log_path,
+        "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB "
+        "(GPU 0; 24.00 GiB total capacity; 23.50 GiB already allocated)\n",
+    )
+
+    plan = {"model": "org/huge-model"}  # no kv_cache_memory_bytes — triggers the search
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    assert "exceed available GPU VRAM" in result.error
+    # Exactly one spawn — the floor probe latched the OOM box; the scan
+    # stopped instead of climbing toward the 18432 MB ceiling.
+    assert managers["spawn"].call_count == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════

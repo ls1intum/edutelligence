@@ -663,6 +663,20 @@ def _extract_vllm_max_num_seqs_suggestion(log_tail: str) -> int | None:
     return value if value > 0 else None
 
 
+# A genuine CUDA/torch allocator OOM — distinct from the KV-too-small and
+# max-num-seqs validation rejections above, which name a fix (shrink
+# max_model_len / max_num_seqs) rather than exhausting the GPU itself.
+_CUDA_OOM_MARKERS: tuple[str, ...] = ("CUDA out of memory", "CUDA error: out of memory")
+
+
+def _is_cuda_oom_log(log_tail: str) -> bool:
+    """True when the log shows a genuine CUDA/torch OOM, not one of the
+    recoverable validation rejections handled by the suggestion-based
+    retries. Weights are fixed for a given tp, so once this appears, a
+    larger kv can only need more memory — never less."""
+    return bool(log_tail) and any(m in log_tail for m in _CUDA_OOM_MARKERS)
+
+
 # vLLM prints the achievable concurrency at every engine init, e.g.
 #   "Maximum concurrency for 33,888 tokens per request: 2.00x"
 # This is total_kv_cache_tokens / max_model_len — i.e. how many simultaneous
@@ -1979,6 +1993,12 @@ def _calibrate_model_probe(
     # generic "no working kv".
     _host_ram_blocked_box: list[str] = []
 
+    # Sibling latch for a genuine CUDA/torch OOM. Once set, the kv_lo scan
+    # below stops climbing to ever-larger (and therefore hungrier) kv sizes
+    # — a real capacity shortfall at this tp can't be fixed by asking for
+    # more kv, only for less.
+    _capacity_oom_box: list[bool] = []
+
     # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. We keep
     # this local to one probe so each KV step starts from the model default
     # and derives max_model_len fresh (no cross-step mutation leak).
@@ -2283,6 +2303,12 @@ def _calibrate_model_probe(
                         allow_whitelist=allow_whitelist,
                     )
 
+            # Neither suggestion-based recovery applied — a genuine CUDA
+            # OOM here means climbing to a larger kv can only ask for more
+            # memory, never less. Latch it for the kv_lo scan below.
+            if not _capacity_oom_box and _is_cuda_oom_log(probe_log):
+                _capacity_oom_box.append(True)
+
             # Normal recoverable failure (OOM at this kv, NCCL timeout, …):
             # record the per-command blacklist line so the kv search avoids
             # re-trying this exact fingerprint on the next pass.
@@ -2459,6 +2485,8 @@ def _calibrate_model_probe(
                 kv_lo = kv
                 first_mml = mml
                 break
+            if _capacity_oom_box:
+                break  # real OOM — a larger kv will only need more, not less
             kv += _KV_CACHE_MIN_STEP_MB
         if kv_lo is None:
             partial.error = (
