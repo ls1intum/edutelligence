@@ -208,10 +208,17 @@ Refusing to unpack an artifact that is not what the manifest describes."
     # runtime would compose them. Listing first distinguishes the two cases a
     # bare extract cannot: a layer that genuinely carries no payload/ (normal,
     # base image layers) versus a corrupt archive (fatal).
-    if ! tar -tzf "$blob" >/dev/null 2>&1; then
+    # Capture the listing once, to a file, and search THAT. `tar … | grep -q`
+    # would be a trap under `set -o pipefail`: grep exits at its first match
+    # and closes the pipe, tar dies of SIGPIPE, and the pipeline reports
+    # failure — so a large payload-bearing layer would test negative and be
+    # skipped in silence. Since the payload spans several layers, the
+    # --delete sync could then publish an incomplete worker.
+    listing="$UNPACK/layer.list"
+    if ! tar -tzf "$blob" > "$listing" 2>/dev/null; then
         die "Layer ${layer#*:} is not a readable gzip archive — aborting."
     fi
-    if tar -tzf "$blob" 2>/dev/null | grep -q '^payload/'; then
+    if grep -q '^payload/' "$listing"; then
         # Each layer is unpacked on its own and then merged, rather than
         # extracted straight onto the accumulated tree. Whiteouts are why:
         # they delete from the layers BELOW, and applying them after extracting

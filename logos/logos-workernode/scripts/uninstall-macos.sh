@@ -175,9 +175,17 @@ fi
 # -f matches against a REGEX, not a literal string, and the path is full of
 # metacharacters — even the default $HOME/.venv-vllm-metal has a `.` that
 # matches any character, so a process at $HOME/Xvenv-vllm-metal/bin/vllm would
-# be killed too. Escape every character that means something to the regex
-# engine, and anchor at the start so the pattern cannot match mid-path.
-metal_vllm_pattern="^$(printf '%s' "$METAL_VENV/bin/vllm" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
+# be killed too. Escape everything that means something to the regex engine.
+#
+# Match at an argument boundary, NOT at byte zero: `vllm` is a Python console
+# script, so once its shebang is resolved the command line reads
+# "<venv>/bin/python <venv>/bin/vllm serve …" and the script path is an
+# argument, not the start of the line. Anchoring at ^ missed exactly the
+# orphaned lanes this is here to catch — they would survive `bootout` and then
+# have their venv deleted underneath them. The boundary still prevents a
+# mid-path match such as /elsewhere/<venv>/bin/vllm.
+metal_vllm_escaped="$(printf '%s' "$METAL_VENV/bin/vllm" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
+metal_vllm_pattern="(^|[[:space:]])${metal_vllm_escaped}([[:space:]]|$)"
 if pgrep -f "$metal_vllm_pattern" >/dev/null 2>&1; then
     warn "Lane processes still running — terminating them"
     pkill -f "$metal_vllm_pattern" 2>/dev/null || true
