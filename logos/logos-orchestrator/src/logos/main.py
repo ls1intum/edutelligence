@@ -2850,9 +2850,15 @@ async def _execute_resource_mode(
                     # can re-serve the header (see get_job_status).
                     "headers": {"Retry-After": str(_QUEUE_TIMEOUT_RETRY_AFTER_S)},
                 }
-            raise HTTPException(
+            # Return, do not raise: the _record_log_failure call above already
+            # recorded the "timeout" result status, and raising would funnel
+            # through route_and_execute's HTTPException handler, which
+            # re-records the same log row as "error". The body and headers are
+            # wire-identical to how _http_exception_handler renders the
+            # equivalent HTTPException.
+            return JSONResponse(
+                content={"detail": error_msg},
                 status_code=429,
-                detail=error_msg,
                 headers={"Retry-After": str(_QUEUE_TIMEOUT_RETRY_AFTER_S)},
             )
         if is_async_job:

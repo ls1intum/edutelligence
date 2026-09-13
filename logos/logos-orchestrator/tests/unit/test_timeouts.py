@@ -47,7 +47,7 @@ def test_global_timeout_overrides_the_window(monkeypatch):
 
 
 def test_invalid_global_timeout_falls_back_to_the_default(monkeypatch):
-    for raw in ("", "abc", "0", "-5"):
+    for raw in ("", "abc", "0", "-5", "inf", "-inf", "nan"):
         monkeypatch.setenv("LOGOS_TIMEOUT_S", raw)
         assert global_timeout_s(DEFAULT_QUEUE_WAIT_TIMEOUT_S) == DEFAULT_QUEUE_WAIT_TIMEOUT_S
 

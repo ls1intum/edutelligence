@@ -47,7 +47,11 @@ def global_timeout_s(default: float) -> float:
         value = float(raw)
     except (TypeError, ValueError):
         return default
-    return value if value > 0 else default
+    # Non-finite values fall back like the negative ones: an infinite window
+    # would defeat the bounded queue-timeout 429 (requests would wait forever
+    # instead of failing fast), and nan would poison the comparisons
+    # downstream. math.isfinite covers inf, -inf and nan.
+    return value if math.isfinite(value) and value > 0 else default
 
 
 def queue_wait_window_s(request_timeout_s: float | None = None) -> float:

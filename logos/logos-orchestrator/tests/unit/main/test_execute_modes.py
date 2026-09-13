@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -105,18 +106,23 @@ async def test_execute_resource_mode_queue_timeout_returns_429_with_retry_after(
     )
     monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
 
-    with pytest.raises(main.HTTPException) as exc:
-        await main._execute_resource_mode(
-            deployments=[{"model_id": 10, "provider_id": 1}],
-            body={},
-            headers={"h": "v"},
-            auth=MagicMock(key_value="lg-test", api_key_id=1),
-            log_id=1,
-            is_async_job=False,
-        )
-    assert exc.value.status_code == 429
-    assert exc.value.headers == {"Retry-After": str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)}
-    assert "timeout" in str(exc.value.detail).lower()
+    # A queue timeout RETURNS the 429 instead of raising: raising would funnel
+    # through route_and_execute's HTTPException handler, which re-records the
+    # log row as "error" and clobbers the "timeout" result status the failure
+    # record above wrote. The body/headers are wire-identical to the
+    # HTTPException render.
+    response = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1}],
+        body={},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1),
+        log_id=1,
+        is_async_job=False,
+    )
+    assert isinstance(response, main.JSONResponse)
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)
+    assert "timeout" in json.loads(response.body)["detail"].lower()
 
 
 async def test_execute_resource_mode_queue_timeout_job_gets_retryable_body(monkeypatch):
