@@ -13,6 +13,8 @@ request path (read only in ``main.py``). They live here rather than in
 ``logosnode_snapshot.py`` because that module is pure shaping of worker
 runtime snapshots; the one snapshot-side constant
 (``_LOGOSNODE_STATS_STALE_AFTER_SECONDS``) stays with the helper that uses it.
+The internal-retry settings (``_REQUEST_*``) live here for the same reason —
+read only in ``main.py``, and their parsing belongs with the parsing helpers.
 """
 
 import math
@@ -85,3 +87,19 @@ _LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
 # backoff so the lane finishes waking. Never retries once a token has streamed.
 _LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
 _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = _env_float("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", 1.0)
+
+# Internal retry: a request that fails before its answer is complete —
+# worker redeploy or crash, network hiccup, transient upstream status — is
+# re-dispatched internally (same model, possibly another node serving it)
+# instead of returning the error raw to the caller. A queue-wait timeout is
+# deliberately not among these: it reports queue saturation, not a broken
+# node, so re-queueing under the same pressure cannot help. Bounded by both
+# an attempt count and an overall wall-clock deadline, so a persistently
+# broken deployment degrades back to the old behaviour, eventually. Set
+# LOGOS_REQUEST_MAX_ATTEMPTS=1 to disable.
+# All four parse through the safe helpers: import-time parsing must never
+# raise on a malformed deployment value (see _env_float).
+_REQUEST_MAX_ATTEMPTS = _env_int("LOGOS_REQUEST_MAX_ATTEMPTS", 3)
+_REQUEST_RETRY_DEADLINE_S = global_timeout_s(_env_float("LOGOS_REQUEST_RETRY_DEADLINE_S", 1800.0))
+_REQUEST_RETRY_BACKOFF_BASE_S = _env_float("LOGOS_REQUEST_RETRY_BACKOFF_BASE_S", 1.0)
+_REQUEST_RETRY_BACKOFF_CAP_S = _env_float("LOGOS_REQUEST_RETRY_BACKOFF_CAP_S", 15.0)

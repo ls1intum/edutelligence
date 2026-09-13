@@ -130,8 +130,10 @@ from logos.timeouts import (
     _LOGOSNODE_PRETOKEN_RETRIES,
     _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S,
     _LOGOSNODE_STREAM_TIMEOUT_SECONDS,
-    _env_int,
-    global_timeout_s,
+    _REQUEST_MAX_ATTEMPTS,
+    _REQUEST_RETRY_BACKOFF_BASE_S,
+    _REQUEST_RETRY_BACKOFF_CAP_S,
+    _REQUEST_RETRY_DEADLINE_S,
 )
 
 logger = logging.getLogger("LogosLogger")
@@ -235,21 +237,6 @@ _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 _cloud_model_sync: Optional[CloudModelSyncService] = None
 
 
-# Internal retry: a request that fails before its answer is complete —
-# worker redeploy or crash, network hiccup, transient upstream status — is
-# re-dispatched internally (same model, possibly another node serving it)
-# instead of returning the error raw to the caller. A queue-wait timeout is
-# deliberately not among these: it reports queue saturation, not a broken
-# node, so re-queueing under the same pressure cannot help. Bounded by both
-# an attempt count and an overall wall-clock deadline, so a persistently
-# broken deployment degrades back to the old behaviour, eventually. Set
-# LOGOS_REQUEST_MAX_ATTEMPTS=1 to disable.
-_REQUEST_MAX_ATTEMPTS = _env_int("LOGOS_REQUEST_MAX_ATTEMPTS", 3)
-_REQUEST_RETRY_DEADLINE_S = float(
-    global_timeout_s(float(os.getenv("LOGOS_REQUEST_RETRY_DEADLINE_S", "1800") or "1800"))
-)
-_REQUEST_RETRY_BACKOFF_BASE_S = float(os.getenv("LOGOS_REQUEST_RETRY_BACKOFF_BASE_S", "1.0") or "1.0")
-_REQUEST_RETRY_BACKOFF_CAP_S = float(os.getenv("LOGOS_REQUEST_RETRY_BACKOFF_CAP_S", "15.0") or "15.0")
 # Mid-flight stream resume: a stream that already delivered
 # tokens is re-dispatched at the absolute highest queue priority (RESUME) and
 # continues generation after the partial answer, so the caller sees a pause
