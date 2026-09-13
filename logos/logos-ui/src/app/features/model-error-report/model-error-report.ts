@@ -781,7 +781,17 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       return -1;
     }
 
-    return this.logLines().findIndex(line => line.includes(error));
+    // The reason shown reflects the LAST failing attempt ("last
+    // observed wins" in calibration.py), but the same anchor text
+    // (e.g. a repeated CUDA OOM) often also appears in earlier,
+    // unrelated probes — search from the end, not the first match.
+    const lines = this.logLines();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].includes(error)) {
+        return i;
+      }
+    }
+    return -1;
   });
 
   readonly logViewport =
