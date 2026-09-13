@@ -84,7 +84,7 @@ def test_aggregates_prefix_mean_and_token_weighted_mtp_per_pair(monkeypatch):
 
 
 def test_lane_without_any_metrics_yields_pair_with_none_rates(monkeypatch):
-    """An ollama lane (or a failed vLLM scrape) still claims its pair."""
+    """A lane without any metrics (or a failed vLLM scrape) still claims its pair."""
     planner = _make_planner(
         {1: _snapshot([_lane("model-b")])},
         {1: "node-a"},

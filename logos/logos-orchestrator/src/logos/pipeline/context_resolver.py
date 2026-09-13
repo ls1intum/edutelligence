@@ -112,7 +112,6 @@ class ContextResolver:
                     "logosnode",
                     "node",
                     "node_controller",
-                    "ollama",
                     "logos_worker_node",
                 }
                 else provider_type_raw

@@ -31,13 +31,12 @@ PROVIDER = 13
 # ---------------------------------------------------------------------------
 
 
-def _signal(lane_id, model, *, runtime_state="loaded", sleep_state="awake", active=0, queue=0.0, is_vllm=True):
+def _signal(lane_id, model, *, runtime_state="loaded", sleep_state="awake", active=0, queue=0.0):
     return LaneSchedulerSignals(
         lane_id=lane_id,
         model_name=model,
         runtime_state=runtime_state,
         sleep_state=sleep_state,
-        is_vllm=is_vllm,
         active_requests=active,
         queue_waiting=queue,
         requests_running=float(active),

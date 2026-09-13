@@ -1088,6 +1088,46 @@ class TestAnAnswerThatWasNeverWritten:
 
         assert attempts == [(7, False)]
 
+    async def test_settlement_and_the_sweep_do_not_post_the_answer_twice(self, monkeypatch, tmp_path):
+        # The settlement and the reply sweep can reach the same session at the
+        # same moment. Without the reply lock both read reply_posted_at as
+        # unset, and both post — the thread shows the answer twice, a second
+        # apart. The lock re-reads the row after the first's stamp, so the
+        # second caller sees it and stops.
+        from app import sessions
+
+        row = {"id": 30, "status": "succeeded", "reply_target": "issue:886", "reply_posted_at": None}
+        posted: list = []
+
+        async def get_session(_session_id):
+            return row
+
+        async def post_issue_comment(number, body):
+            await asyncio.sleep(0)  # let a concurrent caller in, as the loop does
+            posted.append((number, body))
+            return f"https://github.com/x/y/issues/{number}#issuecomment-1"
+
+        async def record_reply_attempt(_session_id, *, delivered):
+            if delivered:
+                row["reply_posted_at"] = "2026-09-09T00:00:00Z"
+
+        async def add_event(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.github, "post_issue_comment", post_issue_comment)
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record_reply_attempt)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+
+        directory = tmp_path / "30"
+        directory.mkdir()
+        (directory / "reply.md").write_text("The answer.")
+
+        await asyncio.gather(sessions.manager._post_reply(30), sessions.manager._post_reply(30))
+
+        assert posted == [(886, "The answer.")]
+
 
 class TestReactionsOnAThread:
     """What a person watching their own comment gets to see.

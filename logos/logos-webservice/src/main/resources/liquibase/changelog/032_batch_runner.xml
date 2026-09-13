@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Runner lease on batch_objects.
+
+         A Logos-run batch whose process died mid-file is recovered by the next
+         pass of the runner, which deliberately re-offers in_progress rows.
+         Without a lease that recovery cannot tell "the runner is gone" from
+         "another replica is running it right now", so a second process picks
+         up a batch that is still active and runs — and bills — its lines a
+         second time. runner_id names the process that holds the batch, and
+         lease_expires_at is when its right to it runs out: a row is only
+         recoverable when the lease is missing or expired, and the holder
+         refreshes it as it makes progress. -->
+    <changeSet id="032-batch-runner-lease" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="batch_objects" columnName="runner_id"/></not>
+        </preConditions>
+        <addColumn tableName="batch_objects">
+            <column name="runner_id" type="TEXT"/>
+            <column name="lease_expires_at" type="TIMESTAMP WITH TIME ZONE"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="batch_objects" columnName="lease_expires_at"/>
+            <dropColumn tableName="batch_objects" columnName="runner_id"/>
+        </rollback>
+    </changeSet>
+
+    <!-- The models a batch input file asks for, as uploaded.
+
+         A forwarded batch whose provider turns out not to batch one of its
+         models has to be marked as much *per model* — and at that point the
+         only thing that still says what the file wanted is this list. The
+         error text the provider sends is not trusted enough to name the model
+         on its own. -->
+    <changeSet id="032-batch-file-models" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="batch_objects" columnName="models"/></not>
+        </preConditions>
+        <addColumn tableName="batch_objects">
+            <column name="models" type="JSONB"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="batch_objects" columnName="models"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Per-model Batch eligibility on one provider, learned from refusals.
+
+         Being a cloud provider that answers GET /batches is not the same as
+         batching a given model: on Azure each batchable model needs its own
+         Global-Batch deployment, and a model that only exists as a Standard
+         deployment cannot be batched there even though the resource serves the
+         Batch API. The provider does not publish its batch model list, so the
+         knowledge is learned from its own refusals (a batch creation refused
+         for the model, or a batch that finishes failed with the SKU error) and
+         tracked here. eligible=false is what moves that model's batches to
+         Logos execution; the absence of a row means "unknown" and keeps the
+         forwarding behaviour. detail keeps what the provider said, for the
+         admin who wants to know why a model is excluded. -->
+    <changeSet id="032-provider-model-batch-eligibility" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="provider_model_batch_eligibility"/></not>
+        </preConditions>
+        <createTable tableName="provider_model_batch_eligibility">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_provider_model_batch_eligibility"/>
+            </column>
+            <column name="provider_id" type="INTEGER">
+                <constraints nullable="false"
+                             foreignKeyName="fk_pmb_eligibility_provider"
+                             references="providers(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="model_id" type="INTEGER">
+                <constraints nullable="false"
+                             foreignKeyName="fk_pmb_eligibility_model"
+                             references="models(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="eligible" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="detail" type="TEXT"/>
+            <column name="checked_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="provider_model_batch_eligibility"
+                             columnNames="provider_id, model_id"
+                             constraintName="uq_provider_model_batch_eligibility"/>
+        <rollback>
+            <dropTable tableName="provider_model_batch_eligibility"/>
+        </rollback>
+    </changeSet>
+
+    <!-- The finished request lines of a Logos-run batch, one row per custom_id.
+
+         The runner writes each line's result here as it completes. A batch
+         recovered after a restart resumes from this checkpoint instead of
+         replaying the file from line zero: the finished lines already went
+         through the ordinary pipeline and were billed once, and the result
+         file is only written when the batch finishes, so without a durable
+         per-line record there is nothing to resume from. The table is keyed by
+         the batch object and the line's custom_id, which the input-file
+         validation already guarantees to be unique per file. -->
+    <changeSet id="032-batch-line-results" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="batch_line_results"/></not>
+        </preConditions>
+        <createTable tableName="batch_line_results">
+            <column name="batch_object_id" type="BIGINT">
+                <constraints nullable="false"
+                             foreignKeyName="fk_batch_line_results_object"
+                             references="batch_objects(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="custom_id" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="row" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <column name="finished_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="batch_line_results"
+                       columnNames="batch_object_id, custom_id"
+                       constraintName="pk_batch_line_results"/>
+        <rollback>
+            <dropTable tableName="batch_line_results"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

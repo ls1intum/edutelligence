@@ -57,7 +57,7 @@ async def health():
                 local_ok = True
         # Cloud is serveable if any deployment lives outside the local provider
         # inventory — by type alone this would miscount legacy local worker
-        # types (ollama, node, ...) as cloud.
+        # types (node, ...) as cloud.
         cloud_ok = any(int(d.get("provider_id") or 0) not in worker_ids for d in deployments)
     except Exception:
         logger.exception("Health check failed to evaluate provider state")

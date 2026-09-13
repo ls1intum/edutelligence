@@ -207,15 +207,6 @@ def _resolve_requested_model_name(
     return None
 
 
-def _runtime_modes_for_lanes(lanes: list[dict[str, Any]]) -> list[str]:
-    modes: set[str] = set()
-    for lane in lanes:
-        if not isinstance(lane, dict):
-            continue
-        modes.add("vllm" if bool(lane.get("vllm")) else "ollama")
-    return sorted(modes)
-
-
 def _safe_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -308,13 +299,12 @@ def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optio
 def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
     """Served context window of one lane in tokens, 0 when unknown.
 
-    Mirrors the worker's --max-model-len precedence for vLLM lanes
+    Mirrors the worker's --max-model-len precedence for the vLLM lane
     (vllm_process.py): explicit vllm_config value, then a non-sentinel lane
     context_length (4096 is the shared lane-schema default, meaning "unset"
-    for vLLM), then the calibrated profile value. Ollama lanes always run at
-    their configured context_length. A vLLM lane where none of these are set
-    lets vLLM pick the model's native maximum, which the worker does not
-    report — such lanes yield 0 rather than a guess.
+    for vLLM), then the calibrated profile value. A lane where none of these
+    are set lets vLLM pick the model's native maximum, which the worker does
+    not report — such lanes yield 0 rather than a guess.
     """
     model = lane.get("model")
     if not model:
@@ -326,9 +316,6 @@ def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
         except (TypeError, ValueError):
             return 0
         return value if value > 0 else 0
-
-    if not lane.get("vllm"):
-        return _as_len(lane.get("context_length"))
 
     backend_metrics = lane.get("backend_metrics")
     explicit = _as_len(backend_metrics.get("max_model_len")) if isinstance(backend_metrics, dict) else 0
@@ -370,6 +357,13 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
     capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
     transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
     lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
+    # Host RAM is a first-class scheduling axis parallel to VRAM (see
+    # capacity/host_ram_ledger.py): sleeping lanes keep their weights in it and
+    # the worker's tmpfs model cache draws from it too, so the statistics page
+    # shows it the same way it shows the GPU memory above. The worker reports
+    # it in the runtime's host_memory summary on every heartbeat; on
+    # non-Linux hosts that summary is all zeros and source="unavailable".
+    host_memory = runtime.get("host_memory") if isinstance(runtime.get("host_memory"), dict) else {}
     # Needed to resolve a lane's served window: a vLLM lane that was started
     # without an explicit --max-model-len takes it from the calibrated profile,
     # so the number is not on the lane itself.
@@ -385,13 +379,16 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
         "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
         "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
+        "host_ram_total_mb": _safe_float(host_memory.get("total_mb")),
+        "host_ram_used_mb": _safe_float(host_memory.get("used_mb")),
+        "host_ram_available_mb": _safe_float(host_memory.get("available_mb")),
         "lane_count": _safe_int(capacity.get("lane_count")) or len(lanes),
         "active_requests": _safe_int(capacity.get("active_requests")) or 0,
         "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
         "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
         "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
         "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
-        "runtime_modes": _runtime_modes_for_lanes(lanes),
+        "runtime_modes": ["vllm"],
     }
 
     raw_device_list = devices.get("devices") or []
@@ -419,8 +416,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             model_name,
             {
                 "lane_count": 0,
-                "vllm_lane_count": 0,
-                "ollama_lane_count": 0,
                 "loaded_lane_count": 0,
                 "running_lane_count": 0,
                 "sleeping_lane_count": 0,
@@ -458,7 +453,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         model_name = str(lane.get("model") or "").strip()
         lane_id = str(lane.get("lane_id") or "").strip()
         runtime_state = str(lane.get("runtime_state") or "").strip()
-        is_vllm = bool(lane.get("vllm"))
         active_requests = _safe_int(lane.get("active_requests")) or 0
         backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         ttft_histogram = (
@@ -468,7 +462,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
 
         lane_signal = {
             "model": model_name,
-            "vllm": is_vllm,
             "runtime_state": runtime_state,
             "sleep_state": lane.get("sleep_state"),
             "gpu_devices": str(lane.get("gpu_devices") or ""),
@@ -503,10 +496,6 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
 
         entry = _ensure_model_entry(model_name)
         entry["lane_count"] += 1
-        if is_vllm:
-            entry["vllm_lane_count"] += 1
-        else:
-            entry["ollama_lane_count"] += 1
 
         if runtime_state == "loaded":
             entry["loaded_lane_count"] += 1
@@ -634,7 +623,6 @@ def _build_live_local_provider_sample(
         remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)
 
     loaded_models = _normalize_loaded_models(lanes)
-    runtime_modes = _runtime_modes_for_lanes(lanes)
     scheduler_signals = _build_logosnode_scheduler_signals(runtime)
 
     if remaining_vram_mb is None and not loaded_models and used_vram_mb <= 0:
@@ -680,7 +668,7 @@ def _build_live_local_provider_sample(
         "connection_state": "online",
         "connected": True,
         "transport_connected": bool(transport.get("connected", True)),
-        "runtime_modes": runtime_modes,
+        "runtime_modes": ["vllm"],
         "vram_mb": used_vram_mb,
         "used_vram_mb": used_vram_mb,
         "remaining_vram_mb": remaining_vram_mb,

@@ -602,6 +602,20 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
+async def pull_inline_comments(number: int) -> list[dict[str, Any]]:
+    """Every inline comment on a pull request, across all reviews.
+
+    A reviewer's inline notes and standalone inline comments all live under
+    the pull request's comments, but a conversation the agent is handed is
+    one *thread* at a time. The comment that points at another thread's note
+    — "address the reviewer's comment" — reaches the agent alone, so it can
+    only reply that it cannot see the other one. This returns the whole set,
+    so the caller can hand over the threads the one it is answering refers to.
+    """
+    payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/comments")
+    return [comment for comment in payload if isinstance(comment, dict)]
+
+
 # GitHub answers an attachment link with a redirect to signed storage, and
 # that storage may take a few hops to reach.
 _MAX_REDIRECTS = 5

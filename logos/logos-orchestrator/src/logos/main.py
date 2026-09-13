@@ -26,6 +26,8 @@ from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
 from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
+from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
+from logos.batch_local import local_batch_runner_loop
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
     BENCHMARK_PHASE_HEADER,
@@ -33,6 +35,7 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_token,
 )
+from logos.billing.budget import check_monthly_budget
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
@@ -61,7 +64,6 @@ from logos.logosnode_snapshot import (
     _merge_provider_samples,
     _profile_native_context_length,
     _resolve_requested_model_name,
-    _runtime_modes_for_lanes,
     _safe_float,
     _sample_snapshot_id,
 )
@@ -75,6 +77,7 @@ from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
     force_non_streaming_payload,
     is_audio_upload_path,
+    is_batch_api_path,
     is_multipart_payload,
     is_whisper_payload,
     metered_whisper_response_format,
@@ -114,6 +117,10 @@ from logos.timeouts import (
 
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
+# Settles batches that finished while nobody polled them (see logos.batch_api),
+# and runs the batches Logos executes itself (see logos.batch_local).
+_batch_reconciler_task = None
+_local_batch_runner_task = None
 _background_tasks: Set[asyncio.Task] = set()
 _benchmark_tasks: Set[asyncio.Task] = set()
 _benchmark_tasks_by_job: dict[int, asyncio.Task] = {}
@@ -247,7 +254,7 @@ def _load_persisted_local_provider_vram_payload(
 ) -> Dict[str, Any]:
     with DBManager() as db:
         if int(after_snapshot_id or 0) > 0:
-            payload, status = db.get_ollama_vram_deltas(
+            payload, status = db.get_provider_vram_deltas(
                 logos_key,
                 day=day,
                 after_snapshot_id=int(after_snapshot_id or 0),
@@ -258,14 +265,14 @@ def _load_persisted_local_provider_vram_payload(
             # snapshots — the UI only renders a 30-min live window anyway,
             # and live deltas keep flowing afterwards via after_snapshot_id.
             recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
-            payload, status = db.get_ollama_vram_deltas(
+            payload, status = db.get_provider_vram_deltas(
                 logos_key,
                 day="all",
                 after_snapshot_id=0,
                 since=recent_since,
             )
         else:
-            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
+            payload, status = db.get_provider_vram_stats(logos_key, day=day, bucket_seconds=5)
     if status != 200 or not isinstance(payload, dict):
         return {
             "providers": [],
@@ -336,10 +343,7 @@ def _merge_local_provider_vram_payload(
         entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
 
         runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
-        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
-        runtime_modes = _runtime_modes_for_lanes(lanes)
-        if runtime_modes:
-            entry["runtime_modes"] = runtime_modes
+        entry["runtime_modes"] = ["vllm"]
         transport = (
             runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
         )
@@ -709,6 +713,27 @@ def _close_orphaned_request_logs() -> None:
         logger.info("Closed %d request log(s) left in-flight by a previous orchestrator process", closed)
 
 
+def _assert_no_ollama_typed_providers() -> None:
+    """Refuse to start while provider rows of the dropped 'ollama' type exist.
+
+    Ollama servers are gone from the deployment — every worker lane runs
+    vLLM — so a provider still typed 'ollama' would be routed nowhere. Dropping
+    it from scheduling silently would hide the data problem; a startup failure
+    forces the operator to retype the row (worker-backed: 'logosnode') or
+    delete it before any traffic is accepted.
+    """
+    with DBManager() as db:
+        stale = db.find_ollama_typed_providers()
+    if stale:
+        rows = ", ".join(f"#{p['id']} {p['name']!r}" for p in stale)
+        raise RuntimeError(
+            "Startup aborted: providers of the dropped type 'ollama' still exist "
+            f"in the database: {rows}. Ollama is no longer served by Logos — "
+            "retype each provider as 'logosnode' (worker-backed) or delete it, "
+            "then restart."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -752,6 +777,10 @@ async def lifespan(app: FastAPI):
     # state" unambiguously means "orphaned by a restart".
     _close_orphaned_request_logs()
 
+    # Ollama-typed provider rows are a data problem, not a runtime state —
+    # abort loudly instead of scheduling around them.
+    _assert_no_ollama_typed_providers()
+
     # Start Pipeline
     await start_pipeline()
 
@@ -762,9 +791,22 @@ async def lifespan(app: FastAPI):
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
 
+    # A client may fire a batch and never poll it to completion. Without this
+    # pass its cost would never be booked, so the ledger would understate what
+    # the provider actually charged.
+    global _batch_reconciler_task, _local_batch_runner_task
+    _batch_reconciler_task = asyncio.create_task(batch_reconciler_loop())
+    # Batches Logos runs itself: started here, and picked up again after a
+    # restart that interrupted one mid-file.
+    _local_batch_runner_task = asyncio.create_task(local_batch_runner_loop())
+
     yield
 
     # Shutdown logic
+    for batch_task in (_batch_reconciler_task, _local_batch_runner_task):
+        if batch_task:
+            batch_task.cancel()
+            await asyncio.gather(batch_task, return_exceptions=True)
     benchmark_tasks = list(_benchmark_tasks)
     for task in benchmark_tasks:
         task.cancel()
@@ -1124,9 +1166,8 @@ def _prefer_deployments_with_context_room(
     Deliberate escape hatches, because this filter runs on an estimate:
 
     * A worker whose window is unknown is always kept. ``max_model_len`` is
-      absent for cloud providers, for Ollama lanes and for a vLLM lane the
-      worker has not reported a window for — none of those are evidence of a
-      *narrow* window.
+      absent for cloud providers and for a vLLM lane the worker has not
+      reported a window for — neither is evidence of a *narrow* window.
     * A model is never filtered out entirely. If every lane of a model has a
       known window that is too narrow, the widest of them is kept anyway.
       Downstream, proxy mode narrows this list to the requested model and
@@ -2712,7 +2753,7 @@ async def _execute_resource_mode(
     current system state.
 
     The scheduler is aware of:
-    - Real-time model availability (via Ollama/Azure SDI facades)
+    - Real-time model availability (via LogosNode/Azure SDI facades)
     - Current queue depths per model
     - Cold start penalties
     - Model utilization levels
@@ -3326,6 +3367,12 @@ async def handle_sync_request(path: str, request: Request):
     priority is derived from the authenticated API key's default_priority
     (falling back to the policy-level priority inside the pipeline).
     """
+    # Batch API operations (file uploads, batch jobs) carry no model to
+    # classify or schedule, so they bypass the per-request pipeline and are
+    # forwarded to a Batch-capable cloud provider the key may use.
+    if is_batch_api_path(path):
+        return await handle_batch_api_request(request)
+
     # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
     headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
     request_id = secrets.token_urlsafe(16)
@@ -3492,46 +3539,13 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     return headers, None, body, client_ip, None
 
 
-def _check_budget_if_cloud(db: DBManager, auth: "AuthContext", is_cloud: bool, month_start: str) -> None:
-    """
-    Raise HTTPException(402) if this key/team is over its monthly budget.
-
-    Only cloud usage is metered (logosnode/local providers have no configured
-    token pricing in token_prices, so they always cost $0), so this is a
-    no-op when the request that actually got scheduled isn't routing to a
-    cloud provider at all. Called post-scheduling (see _execute_resource_mode)
-    with the real resolved provider type, not a guess from the permission list --
-    that's what lets this be exact for mixed cloud+local keys instead of only
-    for pure-type ones.
-    """
-    if not is_cloud:
-        return
-
-    key_type = getattr(auth, "key_type", "user")
-
-    if key_type == "application":
-        app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
-        if app_budget_limit is not None:
-            app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-            if app_used >= app_budget_limit:
-                raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
-    else:
-        if auth.team_id is not None:
-            team_info = db.get_team(auth.team_id)
-            if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                team_limit = team_info["team_monthly_budget_micro_cents"]
-                team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                if team_used >= team_limit:
-                    raise HTTPException(status_code=402, detail="Team monthly budget exceeded. Contact your admin.")
-
-        personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
-        if personal_limit is not None:
-            personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-            if personal_used >= personal_limit:
-                raise HTTPException(status_code=402, detail="Personal monthly budget exceeded.")
+# The budget guard lives in logos.billing.budget so the Batch API can apply the
+# same limits without importing main (which imports it). Kept bound here under
+# its original name: it is called above and patched by name in the tests.
+_check_budget_if_cloud = check_monthly_budget
 
 
-async def submit_job_request(path: str, request: Request) -> JSONResponse:
+async def submit_job_request(path: str, request: Request) -> Response:
     """
     Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
 
@@ -3540,11 +3554,17 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         request: Incoming FastAPI request containing headers/body.
 
     Returns:
-        202 Accepted with job id and status URL.
+        202 Accepted with job id and status URL — or the provider's
+        Batch API response when the path is a batch operation.
 
     Raises:
         HTTPException(400/401) on invalid payload or auth.
     """
+    # Same dispatch as the sync path: batch operations never become Logos
+    # jobs, they are forwarded to the provider's Batch API.
+    if is_batch_api_path(path):
+        return await handle_batch_api_request(request)
+
     # Auth with full context + initial logging
     headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
 
@@ -3727,36 +3747,39 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
     but this lets the API caller see the candidate list up front. Sourced
     from configured_models so models the worker stripped from
     capabilities_models (because they have no profile yet) are visible.
+
+    Reads the live session snapshot directly rather than through
+    _logosnode_facade: the facade's provider entry is populated from DB
+    model_provider links, which sync_logosnode_capabilities prunes to
+    match capabilities_models. A worker with every model uncalibrated
+    reports an empty capabilities_models, so that sync deletes all of its
+    links and the facade drops the provider entirely — leaving nothing
+    here to discover, even though the raw snapshot still has it all.
     """
-    if _logosnode_facade is None:
+    snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+    if snap is None:
         return []
-    candidates = _logosnode_facade.get_configured_models(provider_id)
-    if not candidates:
-        candidates = _logosnode_facade.get_worker_capabilities(provider_id)
-    try:
-        profiles = _logosnode_facade.get_model_profiles(provider_id)
-    except Exception:
-        profiles = {}
+    candidates = snap.get("configured_models") or snap.get("capabilities_models") or []
+    raw_profiles = (snap.get("runtime") or {}).get("model_profiles")
+    profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
     uncalibrated: list[str] = []
     for model_name in candidates:
         profile = profiles.get(model_name)
+        if not isinstance(profile, dict):
+            profile = None
         collapsed_envelope = (
             profile is not None
-            and profile.min_kv_cache_mb is not None
-            and profile.max_kv_cache_mb is not None
-            and profile.min_kv_cache_mb > 0
-            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+            and profile.get("min_kv_cache_mb") is not None
+            and profile.get("max_kv_cache_mb") is not None
+            and profile.get("min_kv_cache_mb") > 0
+            and profile.get("min_kv_cache_mb") == profile.get("max_kv_cache_mb")
         )
         if (
             profile is None
-            or profile.base_residency_mb is None
-            or profile.sleeping_residual_mb is None
-            or profile.sleep_l1_transient_host_ram_mb is None
-            or (
-                profile is not None
-                and profile.residency_source == "calibrated"
-                and not profile.kv_cache_to_max_model_len_pairs
-            )
+            or profile.get("base_residency_mb") is None
+            or profile.get("sleeping_residual_mb") is None
+            or profile.get("sleep_l1_transient_host_ram_mb") is None
+            or (profile.get("residency_source") == "calibrated" and not profile.get("kv_cache_to_max_model_len_pairs"))
             or collapsed_envelope
         ):
             uncalibrated.append(model_name)

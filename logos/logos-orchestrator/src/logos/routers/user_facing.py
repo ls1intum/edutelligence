@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 
 import logos.main as _main
 from logos.auth import authenticate_api_key
+from logos.batch_api import handle_batch_api_request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.errors import coerce_upstream_error
@@ -311,6 +312,44 @@ async def create_audio_transcription(request: Request):
 async def create_audio_translation(request: Request):
     """Transcribe and translate an uploaded audio file into English."""
     return await handle_sync_request("v1/audio/translations", request)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Batch API (files + batches)
+#
+# Registered ahead of the POST-only catch-alls, which cannot answer the GET and
+# DELETE half of the lifecycle. Every operation is served by
+# logos.batch_api.handle_batch_api_request: authenticate, authorise, forward to
+# the provider's Batch API, account for the result.
+# ---------------------------------------------------------------------------
+
+_BATCH_API_ROUTES = (
+    ("POST", "files"),
+    ("GET", "files"),
+    ("GET", "files/{file_id}"),
+    ("GET", "files/{file_id}/content"),
+    ("DELETE", "files/{file_id}"),
+    ("POST", "batches"),
+    ("GET", "batches"),
+    ("GET", "batches/{batch_id}"),
+    ("POST", "batches/{batch_id}/cancel"),
+)
+
+
+async def _batch_api_route(request: Request):
+    """Serve one Batch API operation under any proxy prefix."""
+    return await handle_batch_api_request(request)
+
+
+for _batch_prefix in ("v1", "openai", "jobs/v1", "jobs/openai"):
+    for _batch_method, _batch_path in _BATCH_API_ROUTES:
+        router.add_api_route(
+            f"/{_batch_prefix}/{_batch_path}",
+            _batch_api_route,
+            methods=[_batch_method],
+            tags=["batch"],
+            include_in_schema=_batch_prefix == "v1",
+        )
 
 
 @router.post("/v1/{path:path}", tags=["user-facing"])

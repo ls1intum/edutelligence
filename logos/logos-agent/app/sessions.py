@@ -286,6 +286,10 @@ class SessionManager:
         # across sessions: an interleaved pair would each settle against the
         # other's run and photograph the other's revision.
         self._deploy_screenshot_lock = asyncio.Lock()
+        # Serialises posting a session's answer: the settlement and the reply
+        # sweep can reach the same session at the same moment, and without
+        # this both would read reply_posted_at as unset and post twice.
+        self._reply_lock = asyncio.Lock()
         self._last_reading: capacity.Reading = capacity.UNKNOWN
         # Set once the session image has been seen on this host.
         self._image_present = False
@@ -2200,7 +2204,20 @@ class SessionManager:
             await self._post_reply(int(row["id"]))
 
     async def _post_reply(self, session_id: int) -> None:
-        """Post the answer a session wrote, if it was asked for one."""
+        """Post the answer a session wrote, if it was asked for one.
+
+        Serialized on ``_reply_lock``: the settlement and the reply sweep can
+        both reach the same session at the same moment, and without the lock
+        both read ``reply_posted_at`` as unset and both post — the thread then
+        shows the answer twice, a second apart. The runner is one worker, so
+        one lock is enough, and the row is re-read inside it, so the second
+        caller sees the first's stamp and stops.
+        """
+        async with self._reply_lock:
+            await self._post_reply_once(session_id)
+
+    async def _post_reply_once(self, session_id: int) -> None:
+        """The body of :meth:`_post_reply`, run with the reply lock held."""
         session = await db.get_session(session_id)
         target = str((session or {}).get("reply_target") or "")
         if not target:
