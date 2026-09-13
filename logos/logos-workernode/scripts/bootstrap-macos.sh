@@ -115,6 +115,10 @@ command -v uv >/dev/null 2>&1 \
 # the extraction keeps a hostile layer from writing outside it.
 STAGING="$(mktemp -d)"
 UNPACK="$(mktemp -d)"
+# LOWER accumulates the composed image; LAYER_DIR holds one layer at a time
+# so its whiteouts can be applied to LOWER before it is merged in.
+LOWER="$UNPACK/lower"
+LAYER_DIR="$UNPACK/layer"
 cleanup() { rm -rf "$STAGING" "$UNPACK"; }
 trap cleanup EXIT
 
@@ -208,42 +212,53 @@ Refusing to unpack an artifact that is not what the manifest describes."
         die "Layer ${layer#*:} is not a readable gzip archive — aborting."
     fi
     if tar -tzf "$blob" 2>/dev/null | grep -q '^payload/'; then
-        tar -xzf "$blob" -C "$UNPACK" payload \
+        # Each layer is unpacked on its own and then merged, rather than
+        # extracted straight onto the accumulated tree. Whiteouts are why:
+        # they delete from the layers BELOW, and applying them after extracting
+        # in place cannot tell inherited files from ones this same layer just
+        # added. `.wh..wh..opq` in particular clears a whole directory, so a
+        # layer carrying both the marker and a new file would have deleted its
+        # own new file — staging an incomplete worker.
+        #
+        # Order per the image-layer spec: apply this layer's whiteouts to the
+        # accumulated tree, then overlay what the layer actually contains.
+        rm -rf "$LAYER_DIR"
+        mkdir -p "$LAYER_DIR"
+        tar -xzf "$blob" -C "$LAYER_DIR" payload \
             || die "Failed to extract payload/ from layer ${layer#*:}."
 
-        # Apply OCI whiteouts, which a container runtime does when it composes
-        # layers and a plain sequential untar does not. Without this a file
-        # deleted in a later layer survives into staging and is then synced
-        # into the installation — the payload is assembled across layers, so a
-        # file removed from the image would come back on every deploy.
-        #
-        # Per the image-layer spec: `.wh.<name>` deletes <name> in the same
-        # directory, and `.wh..wh..opq` clears the directory's inherited
-        # contents. Applied after each layer rather than once at the end,
-        # because a later layer may legitimately re-add what an earlier one
-        # deleted.
         while IFS= read -r marker; do
             [ -n "$marker" ] || continue
-            marker_dir="$(dirname "$marker")"
+            rel="${marker#"$LAYER_DIR"/}"
+            rel_dir="$(dirname "$rel")"
             marker_name="$(basename "$marker")"
             if [ "$marker_name" = ".wh..wh..opq" ]; then
-                find "$marker_dir" -mindepth 1 -maxdepth 1 ! -name '.wh..wh..opq' -exec rm -rf {} + 2>/dev/null || true
+                # Opaque: drop everything inherited in this directory. What the
+                # current layer puts there is merged back in below.
+                [ -d "$LOWER/$rel_dir" ] && \
+                    find "$LOWER/$rel_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
             else
-                rm -rf "${marker_dir}/${marker_name#.wh.}"
+                rm -rf "$LOWER/$rel_dir/${marker_name#.wh.}"
             fi
             rm -f "$marker"
         done <<WHITEOUTS
-$(find "$UNPACK/payload" -name '.wh.*' 2>/dev/null)
+$(find "$LAYER_DIR" -name '.wh.*' 2>/dev/null)
 WHITEOUTS
+
+        # Overlay the layer's own contents; later layers win, as a runtime
+        # composes them.
+        mkdir -p "$LOWER"
+        rsync -a "$LAYER_DIR/" "$LOWER/" \
+            || die "Failed to merge layer ${layer#*:} into the staging tree."
     fi
     rm -f "$blob"
 done <<EOF
 $LAYERS
 EOF
 
-[ -d "$UNPACK/payload" ] || die "The image contains no /payload directory — is $IMAGE the MLX worker image?"
-[ -f "$UNPACK/payload/requirements.txt" ] || die "Extracted payload looks incomplete (requirements.txt missing)."
-mv "$UNPACK/payload/." "$STAGING/" 2>/dev/null || cp -R "$UNPACK/payload/." "$STAGING/"
+[ -d "$LOWER/payload" ] || die "The image contains no /payload directory — is $IMAGE the MLX worker image?"
+[ -f "$LOWER/payload/requirements.txt" ] || die "Extracted payload looks incomplete (requirements.txt missing)."
+mv "$LOWER/payload/." "$STAGING/" 2>/dev/null || cp -R "$LOWER/payload/." "$STAGING/"
 log "Payload staged in $STAGING"
 
 # Stop the agent before swapping code underneath it, so a half-copied

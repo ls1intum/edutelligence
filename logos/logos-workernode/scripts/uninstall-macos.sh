@@ -204,7 +204,14 @@ if [ -d "$INSTALL_ROOT" ]; then
                 || warn "  could not restore it automatically; it is in $staged/cache"
             rmdir "$staged" 2>/dev/null || true
         }
-        trap 'restore_cache' EXIT INT TERM
+        # EXIT restores; INT/TERM restore AND leave. Bash resumes the script
+        # after a signal handler that does not exit, so a Ctrl-C landing
+        # between the two moves below would put the cache back and then walk
+        # straight into `rm -rf "$INSTALL_ROOT"` — deleting exactly what was
+        # just rescued.
+        trap 'restore_cache' EXIT
+        trap 'restore_cache; exit 130' INT
+        trap 'restore_cache; exit 143' TERM
         mv "$INSTALL_ROOT/cache" "$staged/cache"
         rm -rf "$INSTALL_ROOT"
         mkdir -p "$INSTALL_ROOT"
