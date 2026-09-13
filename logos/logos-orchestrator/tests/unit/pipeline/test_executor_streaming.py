@@ -349,6 +349,92 @@ async def test_a_spent_deadline_fails_the_stream_before_the_first_byte(monkeypat
         ]
 
 
+async def test_a_slow_stream_open_cannot_run_past_the_deadline(monkeypatch):
+    """Entering the stream context is the request itself — connect, send,
+    wait for the response headers — a single await the per-phase httpx
+    timeouts cannot bound as a run. A slow open must be cut at the wall and
+    fail as the deadline, not run to its own end."""
+
+    class SlowOpenResponse:
+        """Holds the response headers for well past the deadline."""
+
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+
+        async def __aenter__(self):
+            await asyncio.sleep(0.5)
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aread(self):
+            return b""
+
+        async def aiter_bytes(self):
+            yield b""
+
+    install_response(monkeypatch, SlowOpenResponse())
+
+    t0 = time.monotonic()
+    with pytest.raises(RetryDeadlineExceeded):
+        _ = [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "https://provider.test/v1/chat/completions",
+                {},
+                {"model": "test-model"},
+                deadline_at=t0 + 0.15,
+            )
+        ]
+    # Cut at the wall, not at the open's own end.
+    assert time.monotonic() - t0 < 0.4
+
+
+async def test_a_drip_fed_error_body_cannot_run_past_the_deadline(monkeypatch):
+    """A non-2xx body is read whole before the error is raised — a single
+    await whose read timeout resets on every dripped byte, so only the
+    absolute wall can cut it. It must fail as the deadline (the identity the
+    retry logic acts on), not as the upstream error a beat too late."""
+
+    class DripErrorResponse:
+        status_code = 500
+        headers = {"content-type": "application/json"}
+        stop_after = time.monotonic() + 1.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aread(self):
+            body = b""
+            # One byte at a time: every byte resets the read timeout.
+            while time.monotonic() < self.stop_after:
+                await asyncio.sleep(0.02)
+                body += b"{"
+            return body
+
+        async def aiter_bytes(self):
+            yield b""
+
+    install_response(monkeypatch, DripErrorResponse())
+
+    t0 = time.monotonic()
+    with pytest.raises(RetryDeadlineExceeded):
+        _ = [
+            chunk
+            async for chunk in Executor().execute_streaming(
+                "https://provider.test/v1/chat/completions",
+                {},
+                {"model": "test-model"},
+                deadline_at=t0 + 0.15,
+            )
+        ]
+    assert time.monotonic() - t0 < 0.4
+
+
 async def test_chunks_cannot_push_the_stream_past_the_deadline(monkeypatch):
     """The scenario a per-read bound misses: chunks arriving more often than
     the read timeout can ever fire. The execution must still stop at the
