@@ -168,6 +168,10 @@ dot and `Excluding 1 uncalibrated model(s) from capabilities` instead means
 the model is advertised to no one — the profile is missing or has no
 `base_residency_mb` (*Troubleshooting*).
 
+The orchestrator otherwise refuses to load a model that has never been
+calibrated on the node it would run on — Metal/MLX providers are the one
+exception, so an `override` profile here keeps working exactly as before.
+
 On the orchestrator, add this Mac as a provider with the privacy level
 **`THIRD_PARTY_HARDWARE`** (*Privacy* below). When a request routed there
 arrives, the worker spawns the lane — a native

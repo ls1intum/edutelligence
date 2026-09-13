@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-import logos as main_mod
 from logos.main import _LiveStreamRegistry
+from logos.routers import internal as main_mod
 
 
 def _make_request(authorization: str = "") -> MagicMock:

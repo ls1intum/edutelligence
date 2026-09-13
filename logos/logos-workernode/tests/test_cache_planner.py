@@ -252,3 +252,64 @@ def test_the_reserve_is_the_sleeping_footprint_not_the_awake_one():
     plan = plan_cache_order(cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0)
 
     assert plan.reserved_for_sleep_mb == 30_000.0
+
+
+def test_same_model_replicas_reserve_one_footprint_each():
+    """LaneSetRequest permits several uniquely named lanes for the same model,
+    and each sleeping vLLM process keeps its own weights in host RAM. The
+    reserve must therefore hold one footprint per awake replica — not one for
+    the whole model — while the shared tmpfs cache copy is charged only once
+    (size_bytes, not multiplied)."""
+    cands = [
+        CacheCandidate(
+            name="org/replicated",
+            can_sleep=True,
+            sleeping_host_ram_mb=20_000.0,
+            size_bytes=10_000 * _MB,
+            sleeping_replicas=2,
+        )
+    ]
+
+    # Both replicas awake: reserve = 2 * footprint.
+    plan = plan_cache_order(cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0)
+    assert plan.reserved_for_sleep_mb == 2 * 20_000.0
+    assert plan.asleep == frozenset()
+
+    # One replica asleep: its RAM is out of MemAvailable, so only the awake
+    # replica's footprint stays reserved.
+    plan = plan_cache_order(
+        cands,
+        available_host_ram_mb=100_000.0,
+        safety_margin_mb=4096.0,
+        asleep={"org/replicated": 1},
+    )
+    assert plan.reserved_for_sleep_mb == 1 * 20_000.0
+    assert plan.asleep == frozenset({"org/replicated"})
+
+
+def test_asleep_set_input_counts_one_replica():
+    """A set/frozenset of model names is accepted for ``asleep`` (each counts
+    as one), and with a multi-replica model it drops exactly one footprint —
+    the old behaviour of collapsing every replica into a single entry is gone."""
+    cands = [
+        CacheCandidate(
+            name="org/replicated",
+            can_sleep=True,
+            sleeping_host_ram_mb=20_000.0,
+            size_bytes=10_000 * _MB,
+            sleeping_replicas=3,
+        )
+    ]
+
+    # No asleep info at all: all three footprints reserved.
+    plan = plan_cache_order(cands, available_host_ram_mb=100_000.0, safety_margin_mb=4096.0)
+    assert plan.reserved_for_sleep_mb == 3 * 20_000.0
+
+    # A set drops exactly one replica's footprint.
+    plan = plan_cache_order(
+        cands,
+        available_host_ram_mb=100_000.0,
+        safety_margin_mb=4096.0,
+        asleep={"org/replicated"},
+    )
+    assert plan.reserved_for_sleep_mb == 2 * 20_000.0

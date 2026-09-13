@@ -16,20 +16,29 @@ reasons:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from logos.capacity.capacity_planner import CapacityPlanner
 
+# Stands in for a real calibrated ModelProfile — load_lane_manually's own
+# calibration gate only ever reads .residency_source.
+_CALIBRATED_PROFILE = SimpleNamespace(residency_source="calibrated")
 
-def _planner(*, calibrating=False, has_status=True, capacity=object()) -> CapacityPlanner:
+
+def _planner(*, calibrating=False, has_status=True, capacity=object(), profiles=None, metal=False) -> CapacityPlanner:
     planner = CapacityPlanner.__new__(CapacityPlanner)
     registry = MagicMock()
     registry.is_calibrating.return_value = calibrating
     registry.has_received_first_status.return_value = has_status
+    registry.peek_runtime_snapshot.return_value = {"runtime": {"devices": {"mode": "metal"}}} if metal else None
     planner._registry = registry
     facade = MagicMock()
     facade.get_capacity_info.return_value = capacity
     facade.get_provider_name.return_value = "worker-a"
+    # load_lane_manually tests below target "org/model-a"; default it to a
+    # calibrated profile so the new calibration gate stays out of their way.
+    facade.get_model_profiles.return_value = profiles if profiles is not None else {"org/model-a": _CALIBRATED_PROFILE}
     planner._facade = facade
     planner._lane_action_locks = {}
     return planner
@@ -55,6 +64,57 @@ def test_provider_without_capacity_snapshot_is_refused():
     reason = _planner(capacity=None).manual_load_rejection_reason(1)
     assert reason is not None
     assert "capacity information" in reason
+
+
+def test_never_calibrated_model_is_refused_on_cuda():
+    profiles = {"org/model-a": SimpleNamespace(residency_source=None)}
+    reason = _planner(profiles=profiles).manual_load_rejection_reason(1, "org/model-a")
+    assert reason is not None
+    assert "never been calibrated" in reason
+
+
+def test_hf_precheck_profile_is_refused_on_cuda():
+    profiles = {"org/model-a": SimpleNamespace(residency_source="hf")}
+    reason = _planner(profiles=profiles).manual_load_rejection_reason(1, "org/model-a")
+    assert reason is not None
+    assert "never been calibrated" in reason
+
+
+def test_override_profile_is_accepted_on_metal():
+    profiles = {"org/model-a": SimpleNamespace(residency_source="override")}
+    reason = _planner(profiles=profiles, metal=True).manual_load_rejection_reason(1, "org/model-a")
+    assert reason is None
+
+
+def test_override_profile_is_refused_on_cuda():
+    profiles = {"org/model-a": SimpleNamespace(residency_source="override")}
+    reason = _planner(profiles=profiles).manual_load_rejection_reason(1, "org/model-a")
+    assert reason is not None
+    assert "never been calibrated" in reason
+
+
+def test_missing_profile_is_refused_even_on_metal():
+    """A missing profile is not the same as an override — building a load
+    with profile=None starts a lane with the wrong backend config (see
+    load_lane_manually's docstring), so Metal must not wave this through."""
+    reason = _planner(profiles={}, metal=True).manual_load_rejection_reason(1, "org/does-not-exist")
+    assert reason is not None
+    assert "never been calibrated" in reason
+
+
+def test_model_name_omitted_skips_the_calibration_check():
+    """Provider-level readiness checks (no model chosen yet) are unaffected."""
+    profiles = {"org/model-a": SimpleNamespace(residency_source=None)}
+    assert _planner(profiles=profiles).manual_load_rejection_reason(1) is None
+
+
+def test_load_lane_manually_rejects_a_never_calibrated_model_on_cuda():
+    profiles = {"org/model-a": SimpleNamespace(residency_source=None)}
+    planner = _planner(profiles=profiles)
+    planner._execute_action_with_confirmation = MagicMock()
+
+    assert asyncio.run(planner.load_lane_manually(1, "org/model-a")) is False
+    planner._execute_action_with_confirmation.assert_not_called()
 
 
 def test_calibrating_wins_over_missing_capacity():
@@ -108,7 +168,6 @@ def test_concurrent_manual_loads_dispatch_once():
         return True
 
     planner._execute_action_with_confirmation = execute
-    planner._safe_get_profiles = MagicMock(return_value={})
     planner._build_load_params = MagicMock(return_value={})
     # Stands in for the registry snapshot: the runtime knows the lane from the
     # moment the command goes out, which is what the second attempt must see.

@@ -34,7 +34,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=2          # 2026-09-04
+CLAUDE_LOGOS_VERSION=3          # 2026-09-07
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -805,4 +805,9 @@ if [[ -n "$LOGOS_EFFORT" ]]; then
   done
 fi
 
-exec claude "${settings_args[@]}" "${effort_args[@]}" "$@"
+# ${arr[@]+"${arr[@]}"} rather than a bare "${arr[@]}": under `set -u`, bash 3.2
+# treats an empty array expansion as an unbound variable and aborts. That is the
+# bash macOS still ships, and either array is routinely empty — no readable
+# settings file, or an --effort passed on the command line — so the plain form
+# refused to start a session on a stock Mac.
+exec claude ${settings_args[@]+"${settings_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} "$@"

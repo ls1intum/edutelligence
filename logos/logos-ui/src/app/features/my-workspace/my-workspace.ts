@@ -14,7 +14,7 @@ import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../core/services/my-keys.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { AuthService } from '../../core/auth/services/auth.service';
-import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
+import { MyKey, ModelAccess, RateLimitUsage } from '../../shared/models/my-key.model';
 import { MyTeam } from '../../shared/models/team.model';
 import { formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
@@ -312,13 +312,40 @@ export class MyWorkspace implements OnInit {
   }
 
   // ── Display ────────────────────────────────────────────────────────────────
-  formatRpm(rpm: number | null): string {
-    return rpm != null ? rpm.toLocaleString() : '∞';
+  /**
+   * The key's usage inside the current rate-limit window, or null when the
+   * backend found nothing for the window. Null is kept distinct from zero on
+   * purpose: a rate-limit figure of zero claims the entire budget is
+   * available, so an unknown window must not be rendered as one.
+   */
+  usageFor(key: MyKey): RateLimitUsage | null {
+    return key.rate_limit_usage;
   }
 
-  formatTpm(tpm: number | null): string {
-    if (tpm == null) return '∞';
-    return tpm >= 1000 ? (tpm / 1000).toFixed(0) + 'k' : tpm.toString();
+  /**
+   * Used/limit pair for one side of a rate limit: "12/60" when a limit is
+   * set, "12/∞" when the key or its team set none (the ∞ marker keeps an
+   * unlimited key readable — a bare used figure looks like the limit is the
+   * used figure), "–/60" when the used figure is unknown for the window.
+   */
+  formatRpm(used: number | null, limit: number | null): string {
+    const u = used == null ? '–' : used.toLocaleString();
+    const l = limit == null ? '∞' : limit.toLocaleString();
+    return `${u}/${l}`;
+  }
+
+  /**
+   * Like {@link formatRpm} with compact thousand figures. The used side keeps
+   * one decimal ("59.5k/60k"): at 1k granularity a near-exhausted limit
+   * rounds to the limit and reads as fully used, and small used figures
+   * round up. The limit side stays whole ("60k").
+   */
+  formatTpm(used: number | null, limit: number | null): string {
+    const compact = (n: number, decimals: number) =>
+      n >= 1000 ? `${(n / 1000).toFixed(decimals)}k` : n.toString();
+    const u = used == null ? '–' : compact(used, 1);
+    const l = limit == null ? '∞' : compact(limit, 0);
+    return `${u}/${l}`;
   }
 
   formatLastUsed(iso: string | null): string {

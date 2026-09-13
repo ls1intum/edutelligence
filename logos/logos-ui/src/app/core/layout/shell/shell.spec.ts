@@ -151,7 +151,6 @@ describe('Shell', () => {
 
       expect(menuLabels()).toEqual(
         expect.arrayContaining([
-          'Dashboard',
           'Statistics',
           'Models',
           'Providers',

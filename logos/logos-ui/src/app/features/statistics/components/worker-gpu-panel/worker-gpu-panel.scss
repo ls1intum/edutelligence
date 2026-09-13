@@ -197,6 +197,12 @@
   &--util {
     background: rgb(var(--color-success));
   }
+
+  // Host RAM is the machine-level pool — brand violet keeps it distinct
+  // from the per-GPU cyan (VRAM) and green (utilization) bars.
+  &--ram {
+    background: rgb(var(--color-primary-500));
+  }
 }
 
 // ── Synthetic card extras ─────────────────────────────────────────────────────

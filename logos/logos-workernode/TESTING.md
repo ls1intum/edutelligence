@@ -18,7 +18,7 @@ PYTHONPATH=../src:. pytest -q \
 cd logos
 PYTHONPATH=src pytest -q \
   tests/unit/main/test_node_controller_integration.py \
-  tests/unit/sdi/test_ollama_facade.py \
+  tests/unit/sdi/test_logosnode_provider_capacity.py \
   tests/unit/sdi/test_scheduler_view.py
 ```
 

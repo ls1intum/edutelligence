@@ -282,7 +282,7 @@ services:
       # and to both services but not to this line is still routed straight to the
       # orchestrator — which does not serve Spring's paths and answers 404. That
       # is what happened to lanes/add: present end to end, unreachable in prod.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=websecure"
       - "traefik.http.routers.webservice-logosnode-admin.tls=true"
       - "traefik.http.routers.webservice-logosnode-admin.tls.certresolver=letsencrypt"
@@ -437,12 +437,22 @@ services:
       LOGOS_AGENT_TRIGGERS_ENABLED: "${LOGOS_AGENT_TRIGGERS_ENABLED:-true}"
       LOGOS_AGENT_DEPLOY_ENABLED: "${LOGOS_AGENT_DEPLOY_ENABLED:-false}"
       LOGOS_AGENT_DEV_BASE_URL: "${LOGOS_AGENT_DEV_BASE_URL:-https://logos-dev.aet.cit.tum.de}"
+      # The volume that backs the runner's per-session state (the pause mark).
+      # It must name the *actual* Docker volume behind the mount below. A
+      # compose volume with no explicit name is project-scoped
+      # (<project>_agent_state), which is not this name — so the volume is given
+      # a literal name and this matches it. That is what keeps the child's bind
+      # source on the same storage the runner writes the mark into.
+      LOGOS_AGENT_STATE_VOLUME: "${LOGOS_AGENT_STATE_VOLUME:-logos_agent_state}"
     volumes:
       # Needed to create session containers. This is the one privileged thing
       # the runner holds — and precisely what it never passes on: session
       # containers get no socket, no root, and no capabilities.
       - /var/run/docker.sock:/var/run/docker.sock
       - agent_artifacts:/var/lib/logos-agent/artifacts
+      # Runner-owned session state, shared with the child read-only: a pause
+      # mark written here is the mark the agent container reads.
+      - agent_state:/var/lib/logos-agent/state
     expose:
       - "8082"
     # On purpose *not* attached to the agent network: the runner controls
@@ -534,6 +544,12 @@ volumes:
   data_volume:
   postgres_data:
   agent_artifacts:
+  # Named literally (not project-scoped) so its Docker name is exactly the
+  # value LOGOS_AGENT_STATE_VOLUME hands to the runner: a bind source is
+  # resolved on the daemon host, so the two must name the same volume, or the
+  # child mounts a directory the runner never writes the pause mark into.
+  agent_state:
+    name: logos_agent_state
 
 networks:
   internal:

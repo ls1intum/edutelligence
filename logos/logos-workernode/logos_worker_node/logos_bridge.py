@@ -28,7 +28,14 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.metal import is_metal_backend
-from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
+from logos_worker_node.models import (
+    LaneConfig,
+    LaneEvent,
+    LogosConfig,
+    WorkerTransportStatus,
+    model_can_sleep,
+    model_uses_sharded_checkpoint,
+)
 from logos_worker_node.request_content import MULTIPART_PAYLOAD_KEY, httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
 
@@ -893,6 +900,25 @@ class LogosBridgeClient:
 
         ``persist=False`` skips the model_profiles write. Never raises.
         """
+        if is_metal_backend():
+            # No nvidia-smi here, so the VRAM-fit half could never run
+            # anyway — skip up front rather than fall through that
+            # exception. Metal profiles come from model_profile_overrides,
+            # not this precheck.
+            return {
+                "model": model_name,
+                "hf_source": "skipped:metal-backend",
+                "weight_bytes": None,
+                "kv_per_token_bytes": None,
+                "max_context_length": None,
+                "quantization_method": None,
+                "per_gpu_total_mb": None,
+                "per_gpu_free_mb": None,
+                "hardware_max_tp": None,
+                "fit_tp_idle": None,
+                "fit_tp_current": None,
+                "unsupported_reason": None,
+            }
         from logos_worker_node.calibration import (  # noqa: PLC0415
             _max_tp_for_plan,
             calibration_gpu_slice,
@@ -1686,6 +1712,51 @@ class LogosBridgeClient:
                 # is the same instance the stop RPC sets — wait_ready polls
                 # it every 2s and bails immediately.
                 loop = asyncio.get_running_loop()
+
+                def _establish_host_ram_floor_for_probe() -> bool:
+                    # The probe reserves its tmpfs entry on the executor
+                    # thread and immediately admits a synchronous copy, with
+                    # no re-plan tick in between: run one re-plan pass for
+                    # the new reservation on the bridge's event loop and
+                    # wait, so the floor (sleep reserve + safety margin) is
+                    # established before ensure_cached_sync's admission
+                    # checks could fail open against a stale zero floor.
+                    # Return True only once the pass has completed and set
+                    # the floor: a re-plan can legitimately exceed this
+                    # wait (sleeping_model_counts probes the live lanes
+                    # sequentially with a five-second HTTP timeout each),
+                    # and a timed-out or failed pass leaves the floor
+                    # stale — the probe must then admit NO RAM-cache copy
+                    # (it falls back to the source HF_HOME) rather than
+                    # check the stale floor.
+                    fut = None
+                    try:
+                        from logos_worker_node.main import _replan_ram_cache_once  # noqa: PLC0415
+
+                        fut = asyncio.run_coroutine_threadsafe(
+                            _replan_ram_cache_once(self._app),
+                            loop,
+                        )
+                        fut.result(timeout=30.0)
+                        return True
+                    except Exception:  # noqa: BLE001
+                        # Cancel the pass if it has not started; a pass
+                        # already running cannot be interrupted from here,
+                        # and its eventual completion is a normal re-plan
+                        # tick (the probe's own reservation keeps its
+                        # entry protected meanwhile).
+                        if fut is not None:
+                            fut.cancel()
+                        logger.warning(
+                            "[Calibration] host-RAM floor escalation before "
+                            "the synchronous calibration copy did not "
+                            "complete successfully — the probe will load "
+                            "from the source instead of admitting a RAM "
+                            "cache copy",
+                            exc_info=True,
+                        )
+                        return False
+
                 try:
                     result = await loop.run_in_executor(
                         None,
@@ -1699,6 +1770,7 @@ class LogosBridgeClient:
                             nccl_p2p_available=nccl_p2p,
                             model_cache=_mc,
                             cancel_event=session.cancel_event,
+                            establish_host_ram_floor=_establish_host_ram_floor_for_probe,
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -1869,19 +1941,41 @@ class LogosBridgeClient:
             from logos_worker_node.calibration import _DEFAULT_VLLM  # noqa: PLC0415
 
             vc_engine = cfg.engines.vllm if cfg.engines else None
-            if vc_engine is None or not getattr(vc_engine, "sharded_checkpoint_enabled", True):
+            if vc_engine is None:
+                return
+            # Per-model override wins over the worker-wide switch in both
+            # directions; the lane spawner reads the same answer, so a
+            # conversion it would never serve is never started here.
+            if not model_uses_sharded_checkpoint(vc_engine, model_name):
                 return
             tp = int(getattr(result, "tensor_parallel_size", 1) or 1)
             min_tp = max(2, int(getattr(vc_engine, "sharded_checkpoint_min_tensor_parallel_size", 2)))
             if tp < min_tp:
                 return
 
-            models_path = cfg.engines.ollama.models_path if cfg.engines else ""
+            models_path = cfg.worker.models_path
             cache_root = sc.resolve_cache_root(models_path)
             if not cache_root:
                 return
             target = sc.sharded_checkpoint_dir(cache_root, model_name, tp)
             if sc.is_sharded_checkpoint_ready(target):
+                return
+
+            loop = asyncio.get_running_loop()
+            # ensure_sharded_checkpoint would refuse a rejected (model, tp)
+            # itself, but returning None there is indistinguishable from a real
+            # conversion failure and would record a misleading
+            # sharded_conversion_failed event. Ask first so the skip stays a
+            # skip. Off the event loop: the check can probe a separate-venv
+            # interpreter for its version.
+            rejection = await loop.run_in_executor(None, lambda: sc.rejection_state(target, vllm_binary=_DEFAULT_VLLM))
+            if rejection == "skip":
+                logger.info(
+                    "[Calibration] sharded checkpoint for %s (tp=%d) was rejected by this vLLM — "
+                    "not converting; the lane serves the full checkpoint",
+                    model_name,
+                    tp,
+                )
                 return
 
             import os as _os  # noqa: PLC0415
@@ -1895,7 +1989,6 @@ class LogosBridgeClient:
             self._record_calibration_event("sharded_conversion_started", model=model_name, details=f"tp={tp}")
             logger.info("[Calibration] Converting %s to sharded checkpoint (tp=%d)", model_name, tp)
 
-            loop = asyncio.get_running_loop()
             out = await loop.run_in_executor(
                 None,
                 lambda: sc.ensure_sharded_checkpoint(

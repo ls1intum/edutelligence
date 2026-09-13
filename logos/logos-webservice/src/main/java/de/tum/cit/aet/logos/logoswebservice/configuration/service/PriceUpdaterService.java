@@ -126,6 +126,9 @@ public class PriceUpdaterService {
     // <base>_priority / <base>_flex / <base>_scale / <base>_standard
     private static final Pattern MODE_SUFFIX =
         Pattern.compile("^(?<base>.+?)_(?<mode>priority|flex|scale|standard)$");
+    // <base>_batches — the provider's Batch API rate for the same quantity
+    private static final Pattern BATCH_SUFFIX =
+        Pattern.compile("^(?<base>.+?)_batches$");
     private static final Pattern DURATION_INTERVAL_SUFFIX =
         Pattern.compile("^input_cost_per_video_per_second_above_(?<seconds>8|15)s_interval$");
 
@@ -303,7 +306,19 @@ public class PriceUpdaterService {
                 }
                 continue;
             }
-            if (rawKey.contains("_batches") || rawKey.contains("_batch")) continue;
+            // <base>_batches is the provider's Batch API rate for that base
+            // quantity — the same dimension, priced for asynchronous work.
+            // Logos books batch result rows with service_tier 'batch', so the
+            // discounted rate is what prices them; a model whose catalogue
+            // entry carries none falls back to the standard rate rather than
+            // going unpriced.
+            String batchStripped = rawKey;
+            String batchTier = "default";
+            Matcher batch = BATCH_SUFFIX.matcher(rawKey);
+            if (batch.matches()) {
+                batchStripped = batch.group("base");
+                batchTier = "batch";
+            }
 
             Matcher durationInterval = DURATION_INTERVAL_SUFFIX.matcher(rawKey);
             if (durationInterval.matches()) {
@@ -315,14 +330,18 @@ public class PriceUpdaterService {
                 continue;
             }
 
-            String key = rawKey;
+            String key = batchStripped;
             long minContextTokens = 0L;
-            String serviceTier = "default";
+            String serviceTier = batchTier;
 
             Matcher mode = MODE_SUFFIX.matcher(key);
             if (mode.matches()) {
                 String m = mode.group("mode");
-                serviceTier = "standard".equals(m) ? "default" : m;
+                // A key cannot carry both a batch and a flex/priority rate;
+                // the batch tier wins if a catalogue ever spells one that way.
+                if ("default".equals(serviceTier)) {
+                    serviceTier = "standard".equals(m) ? "default" : m;
+                }
                 key = mode.group("base");
             }
 

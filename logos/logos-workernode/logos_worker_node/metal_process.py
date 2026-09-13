@@ -182,9 +182,10 @@ class MetalVllmProcessHandle(VllmProcessHandle):
     def _resolve_persistent_cache_root(gc) -> str:
         """Cache root with a macOS-appropriate default.
 
-        The inherited resolution falls back to the ollama models_path
-        (/usr/share/ollama/.ollama/models), which exists only because the Linux
-        compose file mounts a volume there. On a Mac that path is absent and not
+        The inherited resolution falls back to the worker models_path
+        (worker.models_path, the deployment's model volume), which exists only
+        because the Linux compose file mounts a volume there. On a Mac that
+        path is absent and not
         creatable without root, so VLLM_CACHE_ROOT would point somewhere
         unwritable. LOGOS_WORKER_CACHE_ROOT (which worker.cache_path is lifted
         into, see config._propagate_cache_path_to_env) still wins when set.

@@ -9,8 +9,10 @@ the policy build their own.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
-from app import controls, conventions, db, docker_engine, model_policy
+from app import controls, conventions, db, docker_engine, model_policy, sessions
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +79,17 @@ def session_image_present(monkeypatch):
     # is still there, and unstubbed that question goes to whatever daemon is
     # running on this machine — which has never heard of "cid-7".
     monkeypatch.setattr(docker_engine, "container_state", running)
+
+
+@pytest.fixture(autouse=True)
+def state_root_off_the_host(tmp_path, monkeypatch):
+    """The launch creates the runner's per-session state directory.
+
+    Unstubbed it would be created where the default points, on the host
+    this suite runs on — and a run as root would leave it behind. Tests
+    that are about the state root set it themselves.
+    """
+    monkeypatch.setattr(sessions, "settings", replace(sessions.settings, state_root=str(tmp_path / "state")))
 
 
 @pytest.fixture(autouse=True)

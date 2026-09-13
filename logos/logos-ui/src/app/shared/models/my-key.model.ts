@@ -13,6 +13,20 @@ export interface MyKeyTeam {
   budget_used_micro_cents: number;
 }
 
+/**
+ * Requests and tokens this key sent inside one rate-limit window, split the
+ * way the limits are enforced (cloud vs. local). The figures are what the
+ * sliding window is currently counting, so they can be held directly against
+ * the rpm/tpm limits in {@link MyKeySettings}.
+ */
+export interface RateLimitUsage {
+  window_seconds: number;
+  cloud_requests: number;
+  cloud_tokens: number;
+  local_requests: number;
+  local_tokens: number;
+}
+
 export interface MyKey {
   id: number;
   name: string;
@@ -24,6 +38,7 @@ export interface MyKey {
   used_micro_cents: number;
   settings: MyKeySettings | null;
   last_used_at: string | null;
+  rate_limit_usage: RateLimitUsage | null;
   team: MyKeyTeam;
 }
 

@@ -19,8 +19,8 @@
     claude-logos -Uninstall          remove the wrapper, its config and its key
 
   NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
-  set on this process only — never with [Environment]::SetEnvironmentVariable at User or
-  Machine scope — and the extra Claude Code settings live in this wrapper's own folder
+  set on this process only - never with [Environment]::SetEnvironmentVariable at User or
+  Machine scope - and the extra Claude Code settings live in this wrapper's own folder
   and are handed over with --settings. Your PowerShell profile,
   %USERPROFILE%\.claude\settings.json and your claude.ai login are left exactly as they
   are, so plain `claude` keeps using your Anthropic subscription.
@@ -49,9 +49,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Bump on every change installed copies should pick up. Keep in step with the same
-# constant in claude-logos.sh — the two wrappers are one tool with two front ends.
+# constant in claude-logos.sh - the two wrappers are one tool with two front ends.
 # A monotonic integer, not a version string: the comparison cannot misread anything.
-$ClaudeLogosVersion = 2          # 2026-09-04
+$ClaudeLogosVersion = 3          # 2026-09-07
 
 $ConfigDir = if ($env:LOGOS_CONFIG_DIR) { $env:LOGOS_CONFIG_DIR }
              else { Join-Path $env:USERPROFILE '.config\claude-logos' }
@@ -68,7 +68,7 @@ $ShimPath = Join-Path $InstallDir 'claude-logos.cmd'
 function Write-Note([string]$Message) { Write-Host "claude-logos: $Message" }
 function Stop-WithError([string]$Message) { Write-Error "claude-logos: $Message"; exit 1 }
 
-# ── Settings, lowest precedence first ────────────────────────────────────────────
+# -- Settings, lowest precedence first --------------------------------------------
 # The config file is written by -Install (i.e. by the AI Tools page) and holds
 # KEY=value lines. Environment variables win over it, so a single invocation can be
 # redirected without editing anything:
@@ -92,7 +92,7 @@ $LogosUrl = (Get-Setting 'LOGOS_URL' 'https://logos.aet.cit.tum.de').TrimEnd('/'
 $LogosModel = Get-Setting 'LOGOS_MODEL' ''
 
 # Which context size to run the session at: 'available' (what Logos can give this
-# model at the moment — the default, since long requests are sent wherever there is
+# model at the moment - the default, since long requests are sent wherever there is
 # room for them), 'guaranteed' (the size you always get, whatever the load) or 'max'
 # (the most this model can ever offer). See claude-logos.sh for the full reasoning.
 $ContextSource = Get-Setting 'LOGOS_CONTEXT_SOURCE' 'available'
@@ -111,7 +111,7 @@ $MaxOutputTokens = [int](Get-Setting 'LOGOS_MAX_OUTPUT_TOKENS' 20000)
 # match. Set LOGOS_EFFORT to an empty string to opt out.
 $Effort = Get-Setting 'LOGOS_EFFORT' 'xhigh'
 
-# ── Revision check ──────────────────────────────────────────────────────────────
+# -- Revision check --------------------------------------------------------------
 # Logos serves the current wrapper at the same URL this copy came from, so the
 # revision in that file is the only source of truth. Nothing here ever replaces
 # this script.
@@ -159,7 +159,7 @@ function Update-CachedRevision {
     }
 }
 
-# ── -Update ─────────────────────────────────────────────────────────────────────
+# -- -Update ---------------------------------------------------------------------
 # Replaces this file and nothing else: the key, the config and the settings layer
 # stay as they are, so an update is not a re-setup.
 function Invoke-LogosUpdate {
@@ -173,7 +173,7 @@ function Invoke-LogosUpdate {
     }
 
     # Validate before replacing anything. A captive portal or a proxy error page
-    # would otherwise leave a working wrapper overwritten with HTML — and this file
+    # would otherwise leave a working wrapper overwritten with HTML - and this file
     # is the next thing the user runs.
     $remote = Get-RemoteRevision (Get-Content -Raw -LiteralPath $staged)
     if ($remote -le 0) {
@@ -184,7 +184,7 @@ function Invoke-LogosUpdate {
     [System.Management.Automation.Language.Parser]::ParseFile($staged, [ref]$null, [ref]$errors) | Out-Null
     if ($errors -and $errors.Count -gt 0) {
         Remove-Item -LiteralPath $staged -Force
-        Stop-WithError 'the downloaded script does not parse — not installing it'
+        Stop-WithError 'the downloaded script does not parse - not installing it'
     }
 
     if ($remote -eq $ClaudeLogosVersion) {
@@ -200,7 +200,7 @@ function Invoke-LogosUpdate {
     Write-Host 'Your key, model and settings were not touched.'
 }
 
-# ── -Install ────────────────────────────────────────────────────────────────────
+# -- -Install --------------------------------------------------------------------
 # Takes KEY=value lines from -LogosConfig, or from stdin when that is empty.
 function Invoke-LogosInstall([string]$ConfigText) {
     if (-not $ConfigText -and [Console]::IsInputRedirected) {
@@ -212,8 +212,8 @@ function Invoke-LogosInstall([string]$ConfigText) {
         elseif ($line -match '^LOGOS_MODEL=(.*)$') { $model = $Matches[1] }
         elseif ($line -match '^LOGOS_KEY=(.*)$') { $key = $Matches[1] }
     }
-    if (-not $key) { Stop-WithError '-Install needs a LOGOS_KEY=… line in -LogosConfig' }
-    if (-not $url) { Stop-WithError '-Install needs a LOGOS_URL=… line in -LogosConfig' }
+    if (-not $key) { Stop-WithError '-Install needs a LOGOS_KEY=... line in -LogosConfig' }
+    if (-not $url) { Stop-WithError '-Install needs a LOGOS_URL=... line in -LogosConfig' }
 
     New-Item -ItemType Directory -Force -Path $InstallDir, $ConfigDir | Out-Null
     if ($PSCommandPath -ne $InstallPath) {
@@ -251,7 +251,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0claude-logos.ps1" %*
     Write-Host "  $ConfigFile"
     Write-Host "  $SettingsFile"
     Write-Host ''
-    Write-Host 'Nothing else on this machine was modified — plain `claude` still uses your'
+    Write-Host 'Nothing else on this machine was modified - plain `claude` still uses your'
     Write-Host 'Anthropic subscription.'
     Write-Host ''
 
@@ -284,13 +284,13 @@ function Protect-UserOnly([string]$Path) {
     }
 }
 
-# ── -Uninstall ──────────────────────────────────────────────────────────────────
+# -- -Uninstall ------------------------------------------------------------------
 function Invoke-LogosUninstall {
     $removed = $false
 
     # The AI Tools page used to configure Claude Code by writing an env block into
     # %USERPROFILE%\.claude\settings.json. Leaving it behind would keep pointing plain
-    # `claude` at Logos after an uninstall, so offer to clean it — but only when it
+    # `claude` at Logos after an uninstall, so offer to clean it - but only when it
     # really is the Logos block.
     $userSettings = Join-Path $env:USERPROFILE '.claude\settings.json'
     if (Test-Path -LiteralPath $userSettings) {
@@ -353,7 +353,7 @@ function Invoke-LogosUninstall {
             Write-Host "  removed $dir"
             $removed = $true
         } elseif (Test-Path -LiteralPath $dir) {
-            Write-Note "kept $dir — it still holds files this wrapper did not create"
+            Write-Note "kept $dir - it still holds files this wrapper did not create"
         }
     }
 
@@ -361,7 +361,7 @@ function Invoke-LogosUninstall {
         Write-Host ''
         Write-Host 'Done. Nothing of claude-logos is left; `claude` is unaffected.'
     } else {
-        Write-Host 'Nothing to remove — claude-logos is not installed here.'
+        Write-Host 'Nothing to remove - claude-logos is not installed here.'
     }
 }
 
@@ -369,7 +369,7 @@ if ($Install) { Invoke-LogosInstall $LogosConfig; exit 0 }
 if ($Update) { Invoke-LogosUpdate; exit 0 }
 if ($Uninstall) { Invoke-LogosUninstall; exit 0 }
 
-# ── Credential ──────────────────────────────────────────────────────────────────
+# -- Credential ------------------------------------------------------------------
 if (-not (Test-Path -LiteralPath $KeyFile)) {
     Stop-WithError "no key at $KeyFile. Install from the Logos web UI (AI Tools -> Claude Code)."
 }
@@ -379,7 +379,7 @@ if (-not $LogosModel) {
     Stop-WithError "no model configured. Set LOGOS_MODEL in $ConfigFile, or per invocation."
 }
 
-# ── Context window, from the gateway ────────────────────────────────────────────
+# -- Context window, from the gateway --------------------------------------------
 # The window is a property of the lane serving the model, not of the model: the
 # capacity planner gives a lane as much context as the node's free KV cache allows, so
 # the same model can run at 262144 tokens on one worker and a fraction of that on
@@ -418,7 +418,7 @@ try {
         # Nothing is serving the model right now: the current_* pair only exists
         # while a lane is up, so both are empty and the cascade above has nothing
         # to hand back. max_model_len_overall comes from the model profile instead
-        # and survives that, so it is still known — and it beats the blind fallback
+        # and survives that, so it is still known - and it beats the blind fallback
         # constant, which is a guess for every model at once and is wrong in both
         # directions (way under a 262144-token model, way over a 32768-token one).
         if ($ContextTokens -le 0 -and $ContextMax -gt 0) {
@@ -441,22 +441,22 @@ if ($Headroom -le 0) {
     $Headroom = [Math]::Min(8192, [Math]::Max(1024, [int]($ContextTokens / 50)))
 }
 # The number handed to Claude Code is the window MINUS the headroom and nothing else.
-# Claude Code subtracts its own output reservation — min(CLAUDE_CODE_MAX_OUTPUT_TOKENS,
-# 20000) — from whatever it is told, and then compacts 13000 tokens below that.
+# Claude Code subtracts its own output reservation - min(CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+# 20000) - from whatever it is told, and then compacts 13000 tokens below that.
 # Subtracting the output reservation here as well double-counts it and throws away
 # 20000 tokens of context for nothing.
 $ContextForCli = $ContextTokens - $Headroom
 $CompactAt = $ContextForCli - $MaxOutputTokens - 13000
 $HardStopAt = $ContextForCli - $MaxOutputTokens - 3000
 
-# ── Is there room for a session at all? ─────────────────────────────────────────
-# Claude Code's opening prompt — its system prompt plus the schemas of every tool
-# it carries — is around 13000 tokens before the user has typed anything, and none
+# -- Is there room for a session at all? -----------------------------------------
+# Claude Code's opening prompt - its system prompt plus the schemas of every tool
+# it carries - is around 13000 tokens before the user has typed anything, and none
 # of it is compactable. Since the output reservation is charged against the same
 # window, a narrow window can leave less input room than that, and then the FIRST
 # request of the session comes back as "maximum context length is 32768 tokens.
 # However, you requested 20000 output tokens and your prompt contains at least
-# 12769 input tokens" — with nothing to compact yet, and so no way back. The check
+# 12769 input tokens" - with nothing to compact yet, and so no way back. The check
 # that used to sit here only caught the arithmetic going negative, which a
 # 32768-token window passes comfortably while being unusable.
 #
@@ -464,13 +464,13 @@ $HardStopAt = $ContextForCli - $MaxOutputTokens - 3000
 # this, so it prints the arithmetic and only a real start refuses to run.
 $ClaudeCodeBasePromptTokens = 13000
 $ContextTooSmall = $HardStopAt -lt $ClaudeCodeBasePromptTokens
-# What the reservation would have to be for the opening prompt to fit — measured
+# What the reservation would have to be for the opening prompt to fit - measured
 # against the auto-compact point (13000) rather than the hard stop (3000), because
 # a value that only clears the hard stop leaves auto-compaction firing on every
 # turn. Offered only when what is left is still a usable reply length.
 $AffordableOutputTokens = $ContextTokens - $Headroom - 13000 - $ClaudeCodeBasePromptTokens
 
-# ── New models since the last run ───────────────────────────────────────────────
+# -- New models since the last run -----------------------------------------------
 # Models get added to a team without anyone telling the people on it, and the
 # terminal someone is about to work in is the one place they will read it. First
 # run records the baseline silently instead of announcing everything as new.
@@ -489,9 +489,9 @@ function Report-NewModels([string[]]$Current) {
     Set-Content -LiteralPath $KnownModelsFile -Value $Current -Encoding UTF8
 }
 
-# ── Warm-up ─────────────────────────────────────────────────────────────────────
+# -- Warm-up ---------------------------------------------------------------------
 # A session starts, the developer reads the startup line, and the first real
-# request lands seconds later — paying for a cold load that could have happened
+# request lands seconds later - paying for a cold load that could have happened
 # during those seconds. This tells Logos the model is about to be used and
 # returns immediately; no request is ever sent on the caller's behalf.
 function Invoke-Warmup {
@@ -509,12 +509,12 @@ function Write-ContextReport {
     Write-Host ("model    : {0}" -f $LogosModel)
     Write-Host ("logos    : {0}" -f $LogosUrl)
     if ($ContextOrigin -eq 'estimate') {
-        Write-Host ("context  : {0:N0} tokens (an estimate — Logos reports no size for this model)" -f $ContextTokens)
+        Write-Host ("context  : {0:N0} tokens (an estimate - Logos reports no size for this model)" -f $ContextTokens)
     } elseif ($ContextOrigin -eq 'cold') {
         Write-Host ("context  : {0:N0} tokens, the maximum this model is served with" -f $ContextTokens)
         Write-Host '           (no lane is up yet, so Logos reports no current size. The first request'
         Write-Host '            brings one up, and how wide it comes up is decided then from whatever'
-        Write-Host '            capacity is free — it can land well below this number, in which case'
+        Write-Host '            capacity is free - it can land well below this number, in which case'
         Write-Host '            that request is turned down and the next start sizes itself correctly)'
     } else {
         Write-Host ("context  : {0:N0} tokens, using ""{1}"" of what Logos offers" -f $ContextTokens, $ContextOrigin)
@@ -533,7 +533,7 @@ function Write-ContextReport {
             $HardStopAt, $MaxOutputTokens)
         Write-Host ("           the {0:N0} of headroom, and Claude Code needs about {1:N0} of that for its own" -f `
             $Headroom, $ClaudeCodeBasePromptTokens)
-        Write-Host '           system prompt and tool definitions — so the first request is rejected.'
+        Write-Host '           system prompt and tool definitions - so the first request is rejected.'
         if ($AffordableOutputTokens -ge 4096) {
             Write-Host '           Reserving less fits, at the cost of reply length:'
             Write-Host ("             `$env:LOGOS_MAX_OUTPUT_TOKENS={0}; claude-logos" -f $AffordableOutputTokens)
@@ -542,7 +542,7 @@ function Write-ContextReport {
             ($ClaudeCodeBasePromptTokens + 20000 + 3000 + 1024))
         Write-Host '           the AI Tools page shows what each one gets.'
     } elseif ($CompactAt -lt $ClaudeCodeBasePromptTokens) {
-        Write-Host 'warning  : this window is workable but tight — auto-compaction starts almost'
+        Write-Host 'warning  : this window is workable but tight - auto-compaction starts almost'
         Write-Host ("           immediately, because {0:N0} tokens are left before it fires and the system" -f $CompactAt)
         Write-Host ("           prompt and tools already take about {0:N0}." -f $ClaudeCodeBasePromptTokens)
     }
@@ -555,7 +555,7 @@ function Write-ContextReport {
     }
 }
 
-# ── Claude Code → Logos wiring ──────────────────────────────────────────────────
+# -- Claude Code -> Logos wiring --------------------------------------------------
 # $env: assignments live on THIS process only. Nothing is written to a PowerShell
 # profile, to the User/Machine environment or to %USERPROFILE%\.claude\settings.json,
 # which is what keeps a plain `claude` on your Anthropic subscription.
@@ -589,7 +589,7 @@ if ($Check) {
     exit 0
 }
 
-# ── Launch ──────────────────────────────────────────────────────────────────────
+# -- Launch ----------------------------------------------------------------------
 # A window too narrow for the opening prompt is refused here rather than handed to
 # Claude Code, whose first request would come back as a 400 from the worker that
 # reads like a bug in Logos. The report says what is left and how to get around
@@ -600,12 +600,12 @@ if ($ContextTooSmall) {
 }
 
 if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-    Stop-WithError 'claude is not on your PATH — install Claude Code first'
+    Stop-WithError 'claude is not on your PATH - install Claude Code first'
 }
 
 # Ask Logos to get the model ready before handing over. The endpoint answers
 # immediately (it records a hint rather than doing the work inline), so this is a
-# round trip and not a wait — no background job needed, and a failure changes
+# round trip and not a wait - no background job needed, and a failure changes
 # nothing except that the first request pays for the load itself.
 Invoke-Warmup
 

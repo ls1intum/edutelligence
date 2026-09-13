@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (Azure, Ollama, OpenAI, and a fleet of self-hosted GPU workers running vLLM/Ollama). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, GPU capacity planning, and monitoring.
+**Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (worker-backed vLLM lanes, Azure, OpenAI). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, GPU capacity planning, and monitoring.
 
 This section (and most of this file) covers `logos-orchestrator/`, the Python/FastAPI service. See **Repository Structure** below for the other three services in this directory.
 
@@ -21,7 +21,9 @@ This section (and most of this file) covers `logos-orchestrator/`, the Python/Fa
 
 `logos/` is a multi-service directory, not a single Python project. The
 FastAPI service described in most of this file lives under
-`logos-orchestrator/`, alongside three sibling services:
+`logos-orchestrator/`, alongside three sibling services.
+
+The tree below is an **illustrative overview of the key modules, not an authoritative listing** — it is not kept in sync with the directory (some files it shows have moved, some current files are missing). For the current layout, look at the actual `logos-orchestrator/src/logos/` tree.
 
 ```text
 logos/
@@ -40,12 +42,21 @@ logos/
 │   │   ├── config-openai.yaml
 │   │   └── config-openwebui.yaml
 │   ├── src/logos/
-│   │   ├── main.py                    # FastAPI app + ALL route definitions (~6250 lines)
+│   │   ├── main.py                    # FastAPI app, middleware, shared runtime helpers
+│   │   ├── routers/                   # All route handlers, grouped by domain (included in main.py)
+│   │   │   ├── monitoring.py          # /health, /metrics
+│   │   │   ├── internal.py            # secret-gated /internal/* (Spring webservice)
+│   │   │   ├── logosnode.py           # worker provider endpoints /logosdb/providers/logosnode/*
+│   │   │   ├── admin.py               # admin endpoints /logosdb/*, /forward_host
+│   │   │   └── user_facing.py         # public API: models, audio, /v1/{path:path} catch-all, jobs
 │   │   ├── auth.py                    # Authentication & authorization
 │   │   ├── role_auth.py               # Role-based authorization checks
 │   │   ├── responses.py               # Helper utilities (URL merging, token extraction)
 │   │   ├── request_content.py         # Request payload parsing helpers
 │   │   ├── model_string_parser.py     # logos-v* model string parser
+│   │   ├── live_stream.py             # Live in-flight stream view + SSE log accumulator
+│   │   ├── logosnode_snapshot.py      # Pure shaping of worker runtime snapshots (signals, VRAM)
+│   │   ├── middleware.py              # APIPrefixStripperMiddleware (/api prefix)
 │   │   ├── context_budget.py          # Estimates a request's context-window need for routing
 │   │   ├── logosnode_registry.py      # Bridge/registry for connected logos-workernode fleet
 │   │   ├── rate_limiter.py            # Per-process rate limiting
@@ -73,18 +84,16 @@ logos/
 │   │   ├── queue/
 │   │   │   └── priority_queue.py      # Thread-safe priority queue
 │   │   ├── sdi/                       # Scheduling Data Interface
-│   │   │   ├── ollama_facade.py
+│   │   │   ├── logosnode_facade.py
 │   │   │   └── azure_facade.py
 │   │   ├── monitoring/
-│   │   │   ├── recorder.py            # Request event monitoring
-│   │   │   └── ollama_monitor.py      # Background VRAM/model polling
+│   │   │   └── recorder.py            # Request event monitoring
 │   │   └── jobs/
 │   │       └── job_service.py         # Async job persistence
 │   └── tests/
 │       ├── conftest.py                # Global test config (stubs heavy deps)
 │       ├── unit/                      # main/, sdi/, queue/, responses/, capacity/, ...
-│       ├── integration/               # Full endpoint tests with mock providers
-│       └── scheduling_data/           # SDI-specific tests
+│       └── integration/               # Full endpoint tests with mock providers
 ├── logos-workernode/                  # Python — GPU worker-node control plane; see its own AGENTS.md
 │   └── logos_worker_node/             # lane_manager.py, calibration.py, logos_bridge.py, vllm_process.py, ...
 ├── logos-webservice/                  # Spring Boot (Java 25) — admin/stats API, owns the DB schema
@@ -95,7 +104,7 @@ logos/
 
 **Sibling services, briefly**: `logos-workernode` runs on GPU hosts, connects
 out to the orchestrator over a websocket bridge (`logosnode_registry.py` on
-the orchestrator side), and handles vLLM/Ollama lane lifecycle, calibration,
+the orchestrator side), and handles vLLM lane lifecycle, calibration,
 and the HF compatibility precheck (see `logos-workernode/AGENTS.md`).
 `logos-webservice` is a separate Spring Boot service that now owns the
 Postgres schema (via Liquibase) and serves admin/statistics endpoints
@@ -105,10 +114,27 @@ database but does not migrate it — see Database Schema below.
 
 ## Architecture & Key Patterns
 
-### Monolithic main.py
-All FastAPI routes are defined directly in `logos-orchestrator/src/logos/main.py`. There are NO separate router files. When adding new endpoints, add them to `main.py` or create a new router file and include it.
+### main.py and where new code goes
+`logos-orchestrator/src/logos/main.py` owns the FastAPI `app`, the exception handlers, the middleware, and the shared runtime helpers (pipeline startup, request execution, VRAM payloads, benchmark bookkeeping). All route handlers live in `logos-orchestrator/src/logos/routers/`, grouped by domain, and are included on the app at the bottom of `main.py`:
 
-**Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be defined BEFORE the catch-all in the file, otherwise FastAPI will never match them.
+- `monitoring.py` — `/health`, `/metrics`
+- `internal.py` — secret-gated `/internal/*` endpoints (Spring webservice)
+- `logosnode.py` — worker provider endpoints under `/logosdb/providers/logosnode/*`
+- `admin.py` — admin endpoints under `/logosdb/*` and `/forward_host`
+- `user_facing.py` — public OpenAI-compatible API: model listing, audio, the `/v1/{path:path}` catch-all, jobs
+
+So new code must move toward that structure, not back into the monolith:
+
+- **New endpoints** go in the matching router module under `src/logos/routers/` — never into `main.py`.
+- **New helpers** go in a domain module (`live_stream.py`, `logosnode_snapshot.py`, `middleware.py`, ...) — never into `main.py`, unless several routers genuinely share them (then they belong in `main.py`'s shared-helper section, imported by the routers).
+- A module approaching ~1000 lines is a signal to split it — a soft guideline, not a gate.
+- The guideline applies to the whole orchestrator, not just `main.py`: `capacity/capacity_planner.py` is currently 7818 lines, larger than `main.py` itself.
+
+Endpoint request models live in `dbutils/dbrequest.py`.
+
+**Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be registered before the catch-all, otherwise FastAPI will never match them: within `user_facing.py` they must be defined above it, and any new router must be `include_router`-ed in `main.py` before the `user_facing` router (which is included last).
+
+**Important**: Routers import shared state from `logos.main` — this works only because `main.py` imports the routers at its very bottom, after all module-level definitions. Globals that `start_pipeline`/`refresh_pipeline_runtime_state` rebind (`_pipeline`, `_queue_mgr`, `_logosnode_facade`, `_azure_facade`, `_context_resolver`, `_demand_tracker`, `_capacity_planner`, `_calibration_orchestrator`, `_cloud_model_sync`) must be read in router code through `import logos.main as _main` + `_main.<name>`; a plain `from logos.main import <name>` would freeze the pre-startup `None`.
 
 ### Database Pattern
 - `DBManager` is a context manager: `with DBManager() as db: ...`
@@ -177,7 +203,7 @@ schema).
 | `model_provider` | Model ↔ Provider mapping |
 | `model_profiles` | Per-provider VRAM/calibration profile for a model (base residency, loaded/sleeping VRAM) — written by `logos-workernode` calibration |
 | `logosnode_provider_keys` | Auth keys for the workernode websocket bridge, per provider |
-| `ollama_provider_snapshots` | Periodic VRAM/loaded-model snapshots from Ollama providers |
+| `provider_snapshots` | Periodic VRAM/loaded-model snapshots from workers |
 | `policies` | Classification policies with threshold weights |
 | `log_entry` | Request usage logs (timestamps, payloads, tokens, SDI metrics) |
 | `usage_tokens` | Per-request token counts linked to log_entry |
@@ -190,7 +216,7 @@ The `api_keys.settings` JSONB field can store per-key configuration (e.g., rate 
 ## Adding New Features — Checklist
 
 ### Adding a new API endpoint
-1. Add the route handler to `logos-orchestrator/src/logos/main.py` (or create a new router and include it)
+1. Add the route handler to a router module under `logos-orchestrator/src/logos/routers/` and include it on the app — not into `main.py` (see "main.py and where new code goes")
 2. Add any new Pydantic request models to `logos-orchestrator/src/logos/dbutils/dbrequest.py`
 3. Add DB operations to `logos-orchestrator/src/logos/dbutils/dbmanager.py`
 4. Write unit tests in `logos-orchestrator/tests/unit/`
@@ -376,10 +402,10 @@ ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name
 
 ## Important Notes for AI Agents
 
-1. **main.py is large** (~6250 lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
+1. **main.py is still large** (about 4000 lines after the route handlers moved to `routers/`) — it holds the shared runtime helpers (see "main.py and where new code goes": new code goes into router/domain modules, and existing clusters are still being extracted, so the file should keep shrinking). Until it is small enough to hold in one read, read specific sections rather than the whole file and use grep to find relevant functions.
 2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
 3. **No Alembic/migration tooling on the orchestrator side** — it never had any; it just reads/writes tables. Schema and migrations are owned by `logos-webservice` via Liquibase (see Database Schema above).
-4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances), and self-hosted GPU workers via `logos-workernode` (vLLM/Ollama lanes, connected over the websocket bridge in `logosnode_registry.py`).
+4. **Provider types**: `cloud` (Azure/OpenAI), and self-hosted GPU workers via `logos-workernode` (vLLM lanes, connected over the websocket bridge in `logosnode_registry.py`).
 5. **Token tracking exists** in the `usage_tokens` and `token_prices` tables.
 6. **`api_keys` is the key auth entity** — each key has a unique `key_value`, and belongs to a `team_id` and/or `user_id`. There is no `process` table anymore.
 7. **Model/provider access is team-scoped by default** — `team_model_permissions`/`team_provider_permissions`, unless a key sets `use_custom_permissions=true` and gets its own `api_key_model_permissions`/`api_key_provider_permissions` rows. There is no `profiles` table anymore.

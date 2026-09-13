@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main
+from logos.routers import user_facing as user_facing_mod
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,10 +28,12 @@ def _make_request(headers: dict | None = None):
 class DummyDB:
     """Minimal DBManager stub used via monkeypatch."""
 
-    def __init__(self, models=None, historic=None):
+    def __init__(self, models=None, historic=None, cloud=None):
         self._models = models if models is not None else []
         # Model name -> widest context ever reported (model_profiles high-water mark).
         self._historic = historic if historic is not None else {}
+        # Model name -> the windows cloud upstreams report (cloud_model_context).
+        self._cloud = cloud if cloud is not None else {}
 
     def __enter__(self):
         return self
@@ -47,6 +50,9 @@ class DummyDB:
     def get_historic_max_context_by_model(self):
         return self._historic
 
+    def get_cloud_context_by_model(self):
+        return self._cloud
+
 
 # ---------------------------------------------------------------------------
 # GET /v1/models — list models
@@ -61,12 +67,12 @@ async def test_list_models_returns_openai_format(monkeypatch):
         {"id": 2, "name": "gpt-3.5-turbo", "description": None},
     ]
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
 
     body = response.body
     import json
@@ -90,12 +96,12 @@ async def test_list_models_returns_openai_format(monkeypatch):
 @pytest.mark.asyncio
 async def test_list_models_empty(monkeypatch):
     """When a profile has no models, returns an empty list."""
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=[]))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=[]))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
 
     import json
 
@@ -107,11 +113,11 @@ async def test_list_models_empty(monkeypatch):
 @pytest.mark.asyncio
 async def test_list_models_auth_failure():
     """Missing/invalid key returns 401."""
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.list_models(_make_request(headers={}))
+            await user_facing_mod.list_models(_make_request(headers={}))
 
         assert exc.value.status_code == 401
 
@@ -129,12 +135,12 @@ async def test_retrieve_model_success(monkeypatch):
         {"id": 2, "name": "gpt-3.5-turbo", "description": None},
     ]
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.retrieve_model("gpt-4o", _make_request())
+        response = await user_facing_mod.retrieve_model("gpt-4o", _make_request())
 
     import json
 
@@ -150,13 +156,13 @@ async def test_retrieve_model_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_retrieve_model_not_found(monkeypatch):
     """Requesting a model that doesn't exist returns 404."""
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=[]))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=[]))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.retrieve_model("nonexistent-model", _make_request())
+            await user_facing_mod.retrieve_model("nonexistent-model", _make_request())
 
         assert exc.value.status_code == 404
 
@@ -167,13 +173,13 @@ async def test_retrieve_model_no_access(monkeypatch):
     fake_models = [
         {"id": 1, "name": "gpt-4o", "description": "GPT-4o"},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.retrieve_model("gpt-3.5-turbo", _make_request())
+            await user_facing_mod.retrieve_model("gpt-3.5-turbo", _make_request())
 
         assert exc.value.status_code == 404
 
@@ -185,12 +191,12 @@ async def test_retrieve_model_with_slashes(monkeypatch):
     fake_models = [
         {"id": 1, "name": slash_model, "description": "Llama 3 8B"},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.retrieve_model(slash_model, _make_request())
+        response = await user_facing_mod.retrieve_model(slash_model, _make_request())
 
     import json
 
@@ -211,12 +217,12 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
     fake_models = [
         {"id": 1, "name": canonical_model, "description": "Qwen 0.5B"},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.retrieve_model(alias_model, _make_request())
+        response = await user_facing_mod.retrieve_model(alias_model, _make_request())
 
     import json
 
@@ -229,11 +235,11 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
 @pytest.mark.asyncio
 async def test_retrieve_model_auth_failure():
     """Missing/invalid key on retrieve returns 401."""
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.retrieve_model("gpt-4o", _make_request(headers={}))
+            await user_facing_mod.retrieve_model("gpt-4o", _make_request(headers={}))
 
         assert exc.value.status_code == 401
 
@@ -269,14 +275,20 @@ def _vllm_lane(model, max_model_len=0, context_length=4096):
     }
 
 
-async def _list_ids_to_entries(monkeypatch, models, registry, historic=None):
+async def _list_ids_to_entries(monkeypatch, models, registry, historic=None, cloud=None):
     import json
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models, historic=historic))
+    # The handler reads DBManager from its router module; the historic-max
+    # lookup it goes through reads it from main's globals — both need the fake.
+    # The handler reads DBManager from its router module; the historic-max and
+    # cloud-window lookups it goes through read it from main's globals — both
+    # need the fake.
+    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud))
     monkeypatch.setattr(main, "_logosnode_registry", registry)
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
     return {entry["id"]: entry for entry in json.loads(response.body)["data"]}
 
 
@@ -296,10 +308,11 @@ async def test_list_models_includes_served_context_window(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_models_ollama_lane_context_length(monkeypatch):
-    """Ollama lanes report their configured context length directly."""
+async def test_list_models_lane_configured_context_length(monkeypatch):
+    """A lane whose engine has not reported a window falls back to its
+    configured context_length (the 4096 sentinel means "unset")."""
     models = [{"id": 1, "name": "mistral-7b", "description": None}]
-    lane = {"model": "mistral-7b", "vllm": False, "context_length": 16384, "backend_metrics": {}}
+    lane = _vllm_lane("mistral-7b", max_model_len=0, context_length=16384)
     registry = DummyRegistry({7: _snapshot([lane])})
 
     entries = await _list_ids_to_entries(monkeypatch, models, registry)
@@ -371,16 +384,16 @@ async def test_retrieve_model_includes_served_context_window(monkeypatch):
     import json
 
     models = [{"id": 1, "name": "qwen-14b", "description": None}]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=models))
     monkeypatch.setattr(
         main,
         "_logosnode_registry",
         DummyRegistry({7: _snapshot([_vllm_lane("qwen-14b", max_model_len=40960)])}),
     )
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.retrieve_model("qwen-14b", _make_request())
+        response = await user_facing_mod.retrieve_model("qwen-14b", _make_request())
 
     assert json.loads(response.body)["max_model_len"] == 40960
 
@@ -489,3 +502,49 @@ async def test_list_models_historic_max_never_shrinks_a_live_overall(monkeypatch
     entries = await _list_ids_to_entries(monkeypatch, models, registry, historic={"qwen-27b": 33000})
 
     assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_a_cloud_upstreams_context_window(monkeypatch):
+    """A model reachable only through a cloud provider used to be published with
+    no window at all, because the numbers came solely from the workernode
+    snapshots. A downstream Logos instance therefore hid the very window its
+    upstream had measured, and claude-logos fell back to a guess."""
+    models = [{"id": 1, "name": "Qwen/Qwen3.8-27B", "description": None}]
+    entries = await _list_ids_to_entries(
+        monkeypatch,
+        models,
+        DummyRegistry({}),
+        cloud={"Qwen/Qwen3.8-27B": {"current_min": 262144, "current_max": 262144, "overall": 262144}},
+    )
+
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_current_min"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_current_max"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_window_does_not_widen_the_guaranteed_minimum(monkeypatch):
+    """A model served both locally and through a cloud upstream keeps the
+    smallest window as its guaranteed one: the request may be routed to either,
+    so only the narrower number holds unconditionally."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)])})
+    entries = await _list_ids_to_entries(
+        monkeypatch, models, registry, cloud={"qwen-27b": {"current_min": 262144, "overall": 262144}}
+    )
+
+    assert entries["qwen-27b"]["max_model_len"] == 33000
+    assert entries["qwen-27b"]["max_model_len_current_max"] == 262144
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_model_without_a_reported_window_stays_bare(monkeypatch):
+    """Most OpenAI-shaped upstreams report no window; those models keep the
+    object they had before any of this existed."""
+    models = [{"id": 1, "name": "gpt-4.1-nano", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), cloud={})
+
+    assert "max_model_len" not in entries["gpt-4.1-nano"]
