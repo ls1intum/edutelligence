@@ -1772,6 +1772,137 @@ async def test_a_cancelled_resume_handoff_releases_the_takeover_and_runs_the_wai
     assert facade._request_tracking == {}
 
 
+@pytest.mark.asyncio
+async def test_a_cancelled_resume_handoff_dispatches_only_one_queued_waiter(monkeypatch):
+    """Two waiters are queued on the single slot while the resume's context
+    resolution is blocked; the client disconnect cancels the handoff. The
+    cancellation release and the streamer's finally must not each
+    re-evaluate: the first pass dequeues one waiter, but its
+    on_request_start only lands when its future result runs (scheduled via
+    call_soon_threadsafe), so a second pass sees the still-zero active
+    count and dequeues the next waiter too — two requests dispatched onto
+    one slot. Exactly one waiter may dispatch before it settles."""
+    from fastapi.responses import StreamingResponse
+
+    import logos as main
+    from logos.pipeline.pipeline import PipelineRequest
+
+    resolver = _BlockingResumeCtxResolver()
+    registry, websockets, facade, pipeline = _resume_env(
+        monkeypatch, provider_ids=(PROVIDER_ID,), ctx_resolver=resolver
+    )
+    websocket = websockets[PROVIDER_ID]
+
+    ctx = await _dispatch_initial(pipeline, (PROVIDER_ID,), "req-race")
+    assert ctx.provider_id == PROVIDER_ID
+    assert resolver.calls == 1
+
+    def _waiter_process(request_id: str):
+        return pipeline.process(
+            PipelineRequest(
+                payload={"messages": [{"role": "user", "content": "other"}]},
+                headers={},
+                allowed_models=[_RESUME_MODEL_ID],
+                deployments=[_deployment(PROVIDER_ID)],
+                request_id=request_id,
+                pinned_model_id=_RESUME_MODEL_ID,
+                request_path="v1/chat/completions",
+            )
+        )
+
+    # Two lower-priority requests wait, in order, for the model's single
+    # slot, held by the request that is about to fail mid-stream.
+    waiter_a_task = asyncio.ensure_future(_waiter_process("req-waiter-a"))
+    waiter_b_task = asyncio.ensure_future(_waiter_process("req-waiter-b"))
+
+    async def _poll_depth() -> None:
+        while pipeline.scheduler.get_total_queue_depth() < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll_depth(), timeout=2)
+
+    first_frame = _chat_frame("Hello")
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            ctx,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            _RESUME_MODEL_ID,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-race",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 0,
+                "is_cold_start": False,
+            },
+            request_path="v1/chat/completions",
+            deployments=[_deployment(PROVIDER_ID)],
+            # A real-clock budget: the stream is opened with its deadline,
+            # which must stay in the future in real monotonic time.
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    await _feed_pid(registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_start", "status_code": 200})
+    await _feed_pid(
+        registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_chunk", "chunk": first_frame}
+    )
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    consumer, body = await _fail_the_stream_mid_answer(registry, PROVIDER_ID, websocket, response, first_frame)
+    try:
+        # The takeover took the freed slot and is now parked in its context
+        # resolution, with both waiters queued behind it.
+        await _wait_for_resolver_call(resolver, 2)
+        provider = facade._providers[PROVIDER_ID]
+        assert provider.get_active_count(_RESUME_MODEL_ID) == 1
+        assert pipeline.scheduler.get_total_queue_depth() == 2
+
+        # The client disconnect: cancels the consumer, which owns the
+        # streamer's mid-resolution await.
+        consumer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await consumer
+
+        # Exactly one waiter was dispatched: the first one, in queue order.
+        waiter_a_result = await asyncio.wait_for(waiter_a_task, timeout=2)
+        assert waiter_a_result.success
+        assert waiter_a_result.execution_context.provider_id == PROVIDER_ID
+        await _drain_pending_tasks()
+        # ...and the second is still queued. A second re-evaluation pass
+        # would have dequeued it while the first waiter's reservation had
+        # not landed yet.
+        assert pipeline.scheduler.get_total_queue_depth() == 1
+        assert "req-waiter-b" not in provider._active_request_ids
+
+        # The dispatched waiter's own completion settles the slot, and its
+        # single release re-evaluation hands it to the remaining waiter.
+        pipeline.scheduler.release(_RESUME_MODEL_ID, PROVIDER_ID, "logosnode", "req-waiter-a")
+        waiter_b_result = await asyncio.wait_for(waiter_b_task, timeout=2)
+        assert waiter_b_result.success
+        assert waiter_b_result.execution_context.provider_id == PROVIDER_ID
+        pipeline.scheduler.release(_RESUME_MODEL_ID, PROVIDER_ID, "logosnode", "req-waiter-b")
+    finally:
+        # Unblock anything still parked in the resolver so the loop drains.
+        resolver.block.set()
+        if not consumer.done():
+            consumer.cancel()
+        for task in (waiter_a_task, waiter_b_task):
+            if not task.done():
+                task.cancel()
+        await _drain_pending_tasks()
+
+    assert pipeline.scheduler.get_total_queue_depth() == 0
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[PROVIDER_ID]._active_request_ids == {}
+    assert facade._request_tracking == {}
+
+
 def _responses_context() -> SimpleNamespace:
     """The real /v1/responses context: the resolver sets ``anthropic_dialect``
     only for Messages requests, so a Responses stream has no dialect marker —

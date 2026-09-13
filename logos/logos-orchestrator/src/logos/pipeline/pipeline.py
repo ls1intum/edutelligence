@@ -140,6 +140,16 @@ class PipelineRequest:
     # resolution bound is recomputed as the time left after scheduling —
     # never re-anchored as a fresh relative timeout.
     context_resolve_deadline: Optional[float] = None
+    # Stream-resume handoff: when True, the pipeline's context-failure
+    # releases (deadline, timeout, error, cancellation) free the reservation
+    # WITHOUT re-evaluating the model queue — the caller performs the single
+    # re-evaluation itself (the streamer does it in its finally). Two
+    # back-to-back re-evaluations can each dequeue a waiter before the first
+    # one's on_request_start has run (its future result is scheduled via
+    # call_soon_threadsafe), double dispatching onto one slot. Normal
+    # requests leave this False so a cancelled request still wakes the queue
+    # on its own.
+    defer_reevaluation: bool = False
 
 
 @dataclass
@@ -432,6 +442,7 @@ class RequestPipeline:
             # The budget's absolute deadline, so the scheduling wait above
             # consumes from it instead of the resolver starting a fresh one.
             context_resolve_deadline=request.context_resolve_deadline,
+            defer_reevaluation=request.defer_reevaluation,
         )
         if not ctx_result.success:
             return ctx_result
@@ -477,8 +488,15 @@ class RequestPipeline:
         request_path: Optional[str] = None,
         context_resolve_timeout_s: Optional[float] = None,
         context_resolve_deadline: Optional[float] = None,
+        defer_reevaluation: bool = False,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting.
+
+        ``defer_reevaluation``: when True, every release below frees the
+        reservation without re-evaluating the model queue — the caller is
+        the sole re-evaluator (the stream-resume handoff re-evaluates in
+        the streamer's finally). See ``PipelineRequest.defer_reevaluation``
+        for why a second, back-to-back pass can double dispatch.
 
         ``context_resolve_deadline`` is the retry budget's absolute deadline:
         the scheduling wait above already consumed part of it, so the bound
@@ -519,7 +537,9 @@ class RequestPipeline:
             # overall deadline.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                self._release_scheduler_safe(
+                    scheduling_result, request_id, "failure", reevaluate=not defer_reevaluation
+                )
                 return self._context_failure(
                     scheduling_result,
                     classification_result,
@@ -541,10 +561,14 @@ class RequestPipeline:
                 # the scheduling reservation exists while the caller has
                 # lost track of it. Only the pipeline knows; release it
                 # here and let the cancellation propagate.
-                self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
+                self._release_scheduler_safe(
+                    scheduling_result, request_id, "cancellation", reevaluate=not defer_reevaluation
+                )
                 raise
             except asyncio.TimeoutError:
-                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                self._release_scheduler_safe(
+                    scheduling_result, request_id, "failure", reevaluate=not defer_reevaluation
+                )
                 logger.warning(
                     "Execution context resolution timed out for request %s (model_id=%s, provider_id=%s): "
                     "the resolve call outlived the remaining retry budget",
@@ -559,7 +583,9 @@ class RequestPipeline:
                     error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
                 )
             except Exception as exc:  # noqa: BLE001
-                self._release_scheduler_safe(scheduling_result, request_id, "exception")
+                self._release_scheduler_safe(
+                    scheduling_result, request_id, "exception", reevaluate=not defer_reevaluation
+                )
                 logger.warning(
                     "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
                     request_id,
@@ -586,7 +612,9 @@ class RequestPipeline:
 
             # For cloud providers or after timeout, fail immediately
             if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
-                self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                self._release_scheduler_safe(
+                    scheduling_result, request_id, "failure", reevaluate=not defer_reevaluation
+                )
                 return self._context_failure(
                     scheduling_result,
                     classification_result,
@@ -613,16 +641,19 @@ class RequestPipeline:
             except asyncio.CancelledError:
                 # The same rule as above: a cancelled request still holds
                 # the scheduling reservation until it is released here.
-                self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
+                self._release_scheduler_safe(
+                    scheduling_result, request_id, "cancellation", reevaluate=not defer_reevaluation
+                )
                 raise
 
-    def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str) -> None:
+    def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str, reevaluate: bool = True) -> None:
         try:
             self._scheduler.release(
                 scheduling_result.model_id,
                 scheduling_result.provider_id,
                 scheduling_result.provider_type,
                 request_id,
+                reevaluate=reevaluate,
             )
         except Exception:  # noqa: BLE001
             logger.exception(

@@ -764,7 +764,9 @@ async def test_schedule_stream_resume_rejects_non_logosnode_takeover(retry_env):
     )
 
     assert out is None
-    pipeline.scheduler.release.assert_called_once_with(27, 9, "cloud", "req-1")
+    # reevaluate=False: the streamer's finally is the sole re-evaluation
+    # for the handoff, not this rejection release.
+    pipeline.scheduler.release.assert_called_once_with(27, 9, "cloud", "req-1", reevaluate=False)
 
 
 async def test_schedule_stream_resume_rejects_non_vllm_lane_takeover(retry_env):
@@ -791,7 +793,9 @@ async def test_schedule_stream_resume_rejects_non_vllm_lane_takeover(retry_env):
     )
 
     assert out is None
-    pipeline.scheduler.release.assert_called_once_with(27, 9, "logosnode", "req-1")
+    # reevaluate=False: the streamer's finally is the sole re-evaluation
+    # for the handoff, not this rejection release.
+    pipeline.scheduler.release.assert_called_once_with(27, 9, "logosnode", "req-1", reevaluate=False)
 
 
 # ---------------------------------------------------------------------------

@@ -1843,6 +1843,11 @@ async def _schedule_stream_resume(
         # left after scheduling instead of re-anchoring this relative bound.
         context_resolve_timeout_s=budget.remaining_s(),
         context_resolve_deadline=budget.deadline_at,
+        # The caller's finally is the sole queue re-evaluation for this
+        # handoff — a second pass right after a release here could dequeue
+        # a waiter before the first one's reservation has landed, double
+        # dispatching onto one slot.
+        defer_reevaluation=True,
     )
     # The failed attempt is still the request's open enqueue. The process()
     # below enqueues the same id again and replaces the tracked state, so
@@ -1870,11 +1875,14 @@ async def _schedule_stream_resume(
         # Only a vLLM lane can continue the generation in place, so anything
         # else is refused and the caller ends in the error frame.
         try:
+            # reevaluate=False: the caller's finally is the sole
+            # re-evaluation for this handoff — see defer_reevaluation above.
             _pipeline.scheduler.release(
                 context.model_id,
                 context.provider_id,
                 context.provider_type,
                 request_id,
+                reevaluate=False,
             )
         except Exception as _e:
             logger.error(f"Failed to release scheduler resources after resume rejection: {_e}")
