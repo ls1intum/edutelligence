@@ -4,6 +4,7 @@ import pytest
 
 import logos as main
 from logos import PipelineRequest, RequestPipeline, SchedulingResult
+from logos.routers import user_facing as user_facing_mod
 
 
 async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
@@ -176,10 +177,12 @@ async def test_get_job_status_forwards_stored_429_headers(monkeypatch):
         def get_user_by_api_key(self, key_value):
             return None
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
-    monkeypatch.setattr(main, "authenticate_api_key", lambda headers: MagicMock(api_key_id=1, team_id=7))
+    # get_job_status moved to the routers package with the route-handler
+    # extraction; it keeps its own module-level bindings, so patch there.
+    monkeypatch.setattr(user_facing_mod, "DBManager", DummyDB)
+    monkeypatch.setattr(user_facing_mod, "authenticate_api_key", lambda headers: MagicMock(api_key_id=1, team_id=7))
     monkeypatch.setattr(
-        main,
+        user_facing_mod,
         "JobService",
         type(
             "J",
@@ -205,7 +208,7 @@ async def test_get_job_status_forwards_stored_429_headers(monkeypatch):
         raising=False,
     )
 
-    response = await main.get_job_status(42, MagicMock(headers={}))
+    response = await user_facing_mod.get_job_status(42, MagicMock(headers={}))
     assert response.status_code == 429
     assert response.headers["retry-after"] == str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)
 
