@@ -88,10 +88,26 @@ assert_safe_target() {
         resolved="$(cd "$probe" 2>/dev/null && pwd -P)" || die "Cannot resolve $label ('$path')."
         resolved="${resolved%/}/$missing"
     fi
-    case "$resolved" in
-        /|/Users|/Users/*/|/System*|/Library*|/Applications*|/bin*|/usr*|/etc*|/var*|/opt|/opt/homebrew*)
-            die "$label resolves to '$resolved', which is not a Logos worker directory — refusing to delete." ;;
-    esac
+    [ "$resolved" != "/" ] || die "$label resolves to '/' — refusing to delete."
+    [ "$resolved" != "/Users" ] || die "$label resolves to '/Users' — refusing to delete."
+
+    # Compare against the CANONICAL form of each system tree, not its spelling.
+    # Literal prefixes are a trap on macOS: /etc, /var and /tmp are symlinks
+    # into /private, so canonicalizing first (which the code above must do, to
+    # stop symlinks smuggling the target elsewhere) turns LOGOS_MLX_HOME=/etc/ssh
+    # into /private/etc/ssh — which matched no literal prefix, passed the depth
+    # check, and would have been deleted. Resolving the forbidden roots the same
+    # way closes that gap by construction instead of by listing every alias.
+    for sys_root in /System /Library /Applications /bin /sbin /usr /etc /var /tmp /opt /private /cores /Network /Volumes; do
+        canon_root="$(cd "$sys_root" 2>/dev/null && pwd -P)" || continue
+        if [ "$resolved" = "$canon_root" ]; then
+            die "$label resolves to the system directory '$resolved' — refusing to delete."
+        fi
+        case "$resolved/" in
+            "$canon_root"/*)
+                die "$label resolves to '$resolved', inside the system tree $sys_root ($canon_root) — refusing to delete." ;;
+        esac
+    done
     [ "$resolved" != "$HOME" ] || die "$label resolves to your home directory — refusing to delete."
     # An ancestor of $HOME would take the home directory with it.
     case "$HOME/" in
@@ -145,11 +161,21 @@ if command -v docker >/dev/null 2>&1 && [ -n "$(docker images -q "$IMAGE" 2>/dev
     echo "    docker image     $IMAGE"
     present=1
 fi
-if [ "$KEEP_POWER" -eq 0 ]; then
-    echo "    power settings   restore sleep defaults (needs sudo; see --keep-power-settings)"
+# Outstanding power changes count as something to do in their own right. They
+# outlive the files: an interrupted uninstall, or a pmset call that failed the
+# first time, leaves a Mac that cannot sleep — and if this branch returned
+# early just because the directories are already gone, re-running the script
+# could never put that right.
+POWER_PENDING=0
+if [ "$KEEP_POWER" -eq 0 ] && [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" = "1" ]; then
+    POWER_PENDING=1
+fi
+if [ "$POWER_PENDING" -eq 1 ]; then
+    echo "    power settings   sleep is disabled — restoring defaults (needs sudo; see --keep-power-settings)"
+    present=1
 fi
 if [ "$present" -eq 0 ]; then
-    echo "    nothing — no Logos worker node found at these paths."
+    echo "    nothing — no Logos worker node found at these paths, and sleep is not disabled."
     echo
     exit 0
 fi
@@ -247,6 +273,9 @@ fi
 # Leaving a decommissioned laptop unable to sleep drains it flat, so restore
 # the defaults unless asked not to.
 if [ "$KEEP_POWER" -eq 0 ]; then
+    # Re-read rather than trusting POWER_PENDING from the summary above: the
+    # removal steps in between take time, and this is the check that decides
+    # whether sudo is asked for at all.
     if [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" = "1" ]; then
         log "Restoring sleep defaults (sudo)"
         sudo pmset -a disablesleep 0 || warn "Could not restore disablesleep — run: sudo pmset -a disablesleep 0"
