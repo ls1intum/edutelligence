@@ -946,7 +946,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
             log.unsupported_reason,
             log.node_unhealthy_reason,
             log.observed_reason,
-            log.stages
+            log.stages,
+            log.summary?.tensor_parallel_size ?? null
           )
         )
       );
@@ -1563,11 +1564,21 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   // BackendCalibrationLog) — nothing to parse. Without this,
   // getCalibrationChecklistItems() sees `probes: []` and the node
   // silently drops out of every domain's checklist row.
-  private buildSyntheticSuccessProbe(): CalibrationProbeResult {
+  private buildSyntheticSuccessProbe(
+    tensorParallelSize: number | null
+  ): CalibrationProbeResult {
+    // Mirrors _domain_applies in calibration.py: the worker never even
+    // attempts Multi-GPU Coordination for a single-GPU run, so claiming
+    // it succeeded here would overstate what actually happened.
+    const domains = CALIBRATION_DOMAINS.filter(
+      domain =>
+        domain.id !== DOMAIN_MULTI_GPU_COORDINATION ||
+        (tensorParallelSize ?? 1) > 1
+    );
     return {
       probe: 1,
       status: 'success',
-      stages: CALIBRATION_DOMAINS.map(domain => ({
+      stages: domains.map(domain => ({
         name: domain.label,
         status: 'success',
       })),
@@ -1582,7 +1593,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     unsupportedReason: string | null = null,
     nodeUnhealthyReason: string | null = null,
     observedReason: string | null = null,
-    backendStages: readonly BackendStageResult[] | null = null
+    backendStages: readonly BackendStageResult[] | null = null,
+    tensorParallelSize: number | null = null
   ): NodeCalibrationResult {
     const authoritativeReason = this.resolveAuthoritativeReason(
       unsupportedReason,
@@ -1616,7 +1628,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       // (log format changed, or log_text is empty/unexpected) — fall
       // back to the calibration's actual recorded outcome.
       if (success) {
-        const probe = this.buildSyntheticSuccessProbe();
+        const probe = this.buildSyntheticSuccessProbe(tensorParallelSize);
         return {
           providerId,
           node,
@@ -1632,6 +1644,16 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         'Calibration failed — log format not recognized, see Complete Logs for details.';
       const errorDetail = authoritativeReason?.description ?? error?.detail;
       const logAnchor = authoritativeReason?.needle ?? error?.summary;
+      // Node Preflight only when the reason has no domain of its own
+      // (undefined reason, or one resolved positionally) — otherwise
+      // the checklist would misplace e.g. hf-network-timeout there
+      // instead of Model Resolution & Download.
+      const domainIndex = authoritativeReason?.domain
+        ? CALIBRATION_DOMAINS.findIndex(
+            domain => domain.id === authoritativeReason.domain
+          )
+        : -1;
+      const failedDomain = CALIBRATION_DOMAINS[domainIndex !== -1 ? domainIndex : 0];
       return {
         providerId,
         node,
@@ -1652,7 +1674,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
             logAnchor,
             stages: [
               {
-                name: CALIBRATION_DOMAINS[0].label,
+                name: failedDomain.label,
                 status: 'failure',
                 errorMessage,
                 errorDetail,
