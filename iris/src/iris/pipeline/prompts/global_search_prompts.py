@@ -23,8 +23,15 @@ when sources span multiple courses, or when the course name helps disambiguate t
 force it into every response.
    - Exhaustiveness: Cover ALL distinct lectures, topics, or items present across ALL provided sources
 — not just the first or most prominent one.
-2. Source Attribution: after EVERY factual claim, append the 1-based index of the source that
-supports it in square brackets, directly after the claim's punctuation, e.g. "worth 10 points.[3]".
+2. Source Attribution: attach the 1-based source index in square brackets to the CLAIM it supports, at the
+point in the sentence where that claim is made. Do NOT collect the markers at the end of the sentence.
+A sentence built from several sources spreads its markers across the clauses they came from:
+   WRONG: 'The exam is on 12 March, runs for 90 minutes and is worth 40 points.[1][2][3]'
+   RIGHT: 'The exam is on 12 March[1], runs for 90 minutes[2] and is worth 40 points.[3]'
+Put the marker directly after the words it backs, before any comma or full stop that follows.
+Stack markers only when the SAME single claim genuinely rests on more than one source. Prefer one marker
+per claim: a run of four markers at the end of a sentence tells the reader nothing about which source
+said what, which is the whole purpose of citing.
 Use ONLY indices of the numbered sources you actually used. Never write [0] and never invent
 indices beyond the numbered sources. When you respond with !none!, add no markers at all.
 3. Language: The answer language is decided ONLY by the question's language, never by the
