@@ -1638,8 +1638,8 @@ def _record_ettft_accuracy(scheduling_stats: Optional[dict]) -> None:
     Uses ``schedule_start_s`` from scheduling_stats (captured in pipeline.py
     immediately before the scheduler is invoked) so that the measured interval
     covers the same phases as the ETTFT model: reclaim → state_overhead →
-    queue_wait → prefill → TTFT.  Falls back to ``req_start`` only when the
-    field is absent (e.g. for timeout/error paths that never reach scheduling).
+    queue_wait → prefill → TTFT.  Returns without recording when
+    ``schedule_start_s`` is absent (e.g. timeout or error paths).
     """
     if not scheduling_stats:
         return
@@ -2053,6 +2053,7 @@ async def _streaming_response(
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
+                    _record_ettft_accuracy(scheduling_stats)
                     ttft_recorded = True
 
             async for chunk in chunk_iter:
