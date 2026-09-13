@@ -2474,32 +2474,47 @@ async def _streaming_response(
                                     # and only then do the remaining waiters
                                     # re-evaluate against what is left.
                                     _release_slot(*slots.pop(), reevaluate=False)
-                                    resumed_ctx = await _schedule_stream_resume(
-                                        request_id=request_id,
-                                        model_id=model_id,
-                                        failed_provider_id=active_node["provider_id"],
-                                        deployments=deployments,
-                                        resume_payload=resume_payload,
-                                        request_path=request_path,
-                                        policy=policy,
-                                        default_priority=default_priority,
-                                        api_key_id=api_key_id,
-                                        budget=retry_budget,
-                                    )
-                                    # The failed slot is back and the resume's
-                                    # claim on it is registered (reserved,
-                                    # queued, or not attempted at all) — only
-                                    # now may the queue run, so a waiter gets
-                                    # the slot only if it is actually left.
-                                    _pipeline.scheduler.reevaluate_model_queues(f"model-{model_id}")
-                                    if resumed_ctx is not None:
-                                        slots.append(
-                                            (
-                                                resumed_ctx.model_id,
-                                                resumed_ctx.provider_id,
-                                                resumed_ctx.provider_type,
-                                            )
+                                    # The re-evaluation runs in the finally,
+                                    # no matter how the resume scheduling
+                                    # ends — a client disconnect cancels the
+                                    # await below, and without it the freed
+                                    # slot would stay out of circulation and
+                                    # every queued waiter stranded behind it.
+                                    # The takeover's slot is tracked before
+                                    # anything else may interrupt, so the
+                                    # streamer's finally can release it if
+                                    # the handoff is cancelled mid-flight.
+                                    resumed_ctx = None
+                                    try:
+                                        resumed_ctx = await _schedule_stream_resume(
+                                            request_id=request_id,
+                                            model_id=model_id,
+                                            failed_provider_id=active_node["provider_id"],
+                                            deployments=deployments,
+                                            resume_payload=resume_payload,
+                                            request_path=request_path,
+                                            policy=policy,
+                                            default_priority=default_priority,
+                                            api_key_id=api_key_id,
+                                            budget=retry_budget,
                                         )
+                                        if resumed_ctx is not None:
+                                            slots.append(
+                                                (
+                                                    resumed_ctx.model_id,
+                                                    resumed_ctx.provider_id,
+                                                    resumed_ctx.provider_type,
+                                                )
+                                            )
+                                    finally:
+                                        # The failed slot is back and the
+                                        # resume's claim on it is settled
+                                        # (reserved, queued, released, or not
+                                        # attempted) — only now may the queue
+                                        # run, so a waiter gets the slot only
+                                        # if it is actually left.
+                                        _pipeline.scheduler.reevaluate_model_queues(f"model-{model_id}")
+                                    if resumed_ctx is not None:
                                         active_node["provider_id"] = resumed_ctx.provider_id
                                         old_iter = open_iter
                                         (

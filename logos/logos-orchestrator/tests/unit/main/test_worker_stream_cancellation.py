@@ -1176,6 +1176,22 @@ class _ResumeCtxResolver:
         return _resume_context(model_id, provider_id)
 
 
+class _BlockingResumeCtxResolver:
+    """Resolves like ``_ResumeCtxResolver`` but holds the resume's
+    resolution — the second call — until released. That await is the exact
+    point a client disconnect cancels the handoff at."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.block = asyncio.Event()
+
+    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None):
+        self.calls += 1
+        if self.calls == 2:
+            await self.block.wait()
+        return _resume_context(model_id, provider_id)
+
+
 class _ResumeMonitoring:
     """No-op monitoring: the scenario exercises scheduling, not metrics."""
 
@@ -1186,7 +1202,7 @@ class _ResumeMonitoring:
         return _no_op
 
 
-def _resume_env(monkeypatch, *, provider_ids: tuple[int, ...]):
+def _resume_env(monkeypatch, *, provider_ids: tuple[int, ...], ctx_resolver: object | None = None):
     """Real pipeline + FCFS scheduler + facade behind the streamer.
 
     Every deployment is a single-slot logosnode lane, so the scheduler's
@@ -1243,7 +1259,7 @@ def _resume_env(monkeypatch, *, provider_ids: tuple[int, ...]):
         classifier=object(),
         scheduler=scheduler,
         executor=object(),
-        context_resolver=_ResumeCtxResolver(),
+        context_resolver=ctx_resolver or _ResumeCtxResolver(),
         monitoring=_ResumeMonitoring(),
     )
 
@@ -1305,6 +1321,18 @@ async def _wait_for_stream_cmd_count(websocket: _FakeWebSocket, count: int, time
 
     async def _poll() -> None:
         while len(_stream_cmd_ids(websocket)) < count:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=timeout)
+
+
+async def _wait_for_resolver_call(resolver, calls: int, timeout: float = 2.0) -> None:
+    """Block until the context resolver has been reached ``calls`` times —
+    i.e. until the handoff has parked at its resolution await, the exact
+    moment a client disconnect is about to land."""
+
+    async def _poll() -> None:
+        while resolver.calls < calls:
             await asyncio.sleep(0.01)
 
     await asyncio.wait_for(_poll(), timeout=timeout)
@@ -1617,6 +1645,121 @@ async def test_a_resumed_stream_takes_the_freed_slot_before_a_queued_waiter(monk
         # The waiter's own completion settles every ledger.
         pipeline.scheduler.release(_RESUME_MODEL_ID, PROVIDER_ID, "logosnode", "req-waiter")
     finally:
+        if not consumer.done():
+            consumer.cancel()
+        if not waiter_task.done():
+            waiter_task.cancel()
+        await _drain_pending_tasks()
+
+    assert pipeline.scheduler.get_total_queue_depth() == 0
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[PROVIDER_ID]._active_request_ids == {}
+    assert facade._request_tracking == {}
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_resume_handoff_releases_the_takeover_and_runs_the_waiter(monkeypatch):
+    """A client disconnect cancels the handoff while the resume is blocked in
+    its context resolution. The cancellation is a BaseException, so none of
+    the scheduling's handlers see it: the takeover's reservation (taken in
+    the fast path under the same request ID) can only be released by the
+    pipeline, and the freed slot can only reach the queue through a
+    re-evaluation that runs no matter how the handoff ends. After the
+    cancellation the queued waiter must run and every ledger must return to
+    zero."""
+    from fastapi.responses import StreamingResponse
+
+    import logos as main
+    from logos.pipeline.pipeline import PipelineRequest
+
+    resolver = _BlockingResumeCtxResolver()
+    registry, websockets, facade, pipeline = _resume_env(
+        monkeypatch, provider_ids=(PROVIDER_ID,), ctx_resolver=resolver
+    )
+    websocket = websockets[PROVIDER_ID]
+
+    ctx = await _dispatch_initial(pipeline, (PROVIDER_ID,), "req-race")
+    assert ctx.provider_id == PROVIDER_ID
+    assert resolver.calls == 1
+
+    # A lower-priority request waits for the model's single slot, held by
+    # the request that is about to fail mid-stream.
+    waiter_task = asyncio.ensure_future(
+        pipeline.process(
+            PipelineRequest(
+                payload={"messages": [{"role": "user", "content": "other"}]},
+                headers={},
+                allowed_models=[_RESUME_MODEL_ID],
+                deployments=[_deployment(PROVIDER_ID)],
+                request_id="req-waiter",
+                pinned_model_id=_RESUME_MODEL_ID,
+                request_path="v1/chat/completions",
+            )
+        )
+    )
+
+    first_frame = _chat_frame("Hello")
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            ctx,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            PROVIDER_ID,
+            _RESUME_MODEL_ID,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-race",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 0,
+                "is_cold_start": False,
+            },
+            request_path="v1/chat/completions",
+            deployments=[_deployment(PROVIDER_ID)],
+            # A real-clock budget: the stream is opened with its deadline,
+            # which must stay in the future in real monotonic time.
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
+    # The waiter is queued behind the held slot — the scenario is live.
+    assert pipeline.scheduler.get_total_queue_depth() == 1
+    await _feed_pid(registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_start", "status_code": 200})
+    await _feed_pid(
+        registry, PROVIDER_ID, _sent_stream_cmd_id(websocket), {"type": "stream_chunk", "chunk": first_frame}
+    )
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    consumer, body = await _fail_the_stream_mid_answer(registry, PROVIDER_ID, websocket, response, first_frame)
+    try:
+        # The takeover took the freed slot and is now parked in its context
+        # resolution — the moment a client disconnect lands.
+        await _wait_for_resolver_call(resolver, 2)
+        provider = facade._providers[PROVIDER_ID]
+        assert provider.get_active_count(_RESUME_MODEL_ID) == 1
+        assert provider._active_request_ids == {"req-race": _RESUME_MODEL_ID}
+        assert pipeline.scheduler.get_total_queue_depth() == 1
+
+        # The client disconnect: cancels the consumer, which owns the
+        # streamer's mid-resolution await.
+        consumer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await consumer
+
+        # The handoff settled: the cancelled takeover's reservation is gone
+        # and the re-evaluation ran, so the queued waiter gets the slot.
+        waiter_result = await asyncio.wait_for(waiter_task, timeout=2)
+        assert waiter_result.success
+        assert waiter_result.execution_context.provider_id == PROVIDER_ID
+
+        # The waiter's own completion settles every ledger.
+        pipeline.scheduler.release(_RESUME_MODEL_ID, PROVIDER_ID, "logosnode", "req-waiter")
+    finally:
+        # Unblock anything still parked in the resolver so the loop drains.
+        resolver.block.set()
         if not consumer.done():
             consumer.cancel()
         if not waiter_task.done():

@@ -535,6 +535,14 @@ class RequestPipeline:
                     ),
                     timeout=remaining,
                 )
+            except asyncio.CancelledError:
+                # A cancellation (a client disconnect) is a BaseException,
+                # so neither handler below can see it — and by this point
+                # the scheduling reservation exists while the caller has
+                # lost track of it. Only the pipeline knows; release it
+                # here and let the cancellation propagate.
+                self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
+                raise
             except asyncio.TimeoutError:
                 self._release_scheduler_safe(scheduling_result, request_id, "failure")
                 logger.warning(
@@ -600,7 +608,13 @@ class RequestPipeline:
             # The sleep itself must not outrun the budget: with less than one
             # interval left, a full interval would cross the absolute
             # deadline before the next pre-check can act on it.
-            await asyncio.sleep(min(self._CONTEXT_RESOLVE_INTERVAL_S, max(0.0, deadline - time.monotonic())))
+            try:
+                await asyncio.sleep(min(self._CONTEXT_RESOLVE_INTERVAL_S, max(0.0, deadline - time.monotonic())))
+            except asyncio.CancelledError:
+                # The same rule as above: a cancelled request still holds
+                # the scheduling reservation until it is released here.
+                self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
+                raise
 
     def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str) -> None:
         try:
