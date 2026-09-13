@@ -133,15 +133,23 @@ jobs:
           # PR without deleting its branch, the ref outlives the attempt — and
           # treating its mere existence as "already handled" would suppress
           # this bump forever, silently, on every future schedule.
+          # Look for an open PR on the version branch OR on any recovery
+          # branch derived from it. Checking only the base name would miss the
+          # PR a previous recovery run opened, and — since the orphan ref is
+          # still there — every following run would allocate another
+          # -run<id> branch and open a duplicate PR for the same version, which
+          # the cleanup keeps because the versions compare equal.
+          EXISTING_PR=$(gh pr list --state open --limit 100 --json number,headRefName \
+            --jq --arg b "$BRANCH" 'map(select(.headRefName == $b or (.headRefName | startswith($b + "-run")))) | .[0].number // empty' 2>/dev/null || true)
+          if [ -n "$EXISTING_PR" ]; then
+            echo "An open PR (#$EXISTING_PR) already covers $BRANCH — nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null)" ]; then
-              echo "An open PR already exists for $BRANCH — nothing to do."
-              echo "needed=false" >> "$GITHUB_OUTPUT"
-              echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            # Orphan ref: push to a collision-free name instead of giving up.
-            # The run id makes it unique and traceable back to the run.
+            # Orphan ref with no PR behind it: push to a collision-free name
+            # instead of giving up. The run id makes it unique and traceable.
             BRANCH="${BRANCH}-run${GITHUB_RUN_ID}"
             echo "::warning::Branch exists with no open PR (orphaned by an earlier run). Using $BRANCH instead."
           fi

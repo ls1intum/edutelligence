@@ -31,6 +31,10 @@ METAL_VENV="${LOGOS_METAL_VENV:-$HOME/.venv-vllm-metal}"
 IMAGE="${LOGOS_MLX_IMAGE:-ghcr.io/ls1intum/logos-workernode-mlx}"
 LAUNCH_AGENT_LABEL="de.tum.logos.workernode"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
+# Written by bootstrap-macos.sh before it changes the power settings, and
+# deliberately outside the install root so it survives the removal below.
+POWER_STATE_DIR="$HOME/Library/Application Support/$LAUNCH_AGENT_LABEL"
+POWER_STATE_FILE="$POWER_STATE_DIR/power-state.saved"
 
 KEEP_CACHE=0
 KEEP_POWER=0
@@ -174,19 +178,20 @@ fi
 # to restore them. Look at both halves.
 power_changes_pending() {
     [ "$KEEP_POWER" -eq 0 ] || return 1
+    # disablesleep is unambiguous: nothing but the bootstrap sets it here.
     [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" != "1" ] || return 0
-    # Any managed AC timer still forced to 0 counts as outstanding work.
-    pmset -g custom 2>/dev/null \
-        | sed -n '/AC Power/,$p' \
-        | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ && $2 == "0" { found = 1 }
-               END { exit !found }'
+    # Otherwise the only evidence that Logos changed a timer is the file the
+    # bootstrap wrote before changing it. A zeroed timer on its own proves
+    # nothing — plenty of Macs legitimately run with powernap or disksleep at
+    # 0, and treating those as ours would overwrite settings we never touched.
+    [ -s "$POWER_STATE_FILE" ]
 }
 POWER_PENDING=0
 if power_changes_pending; then
     POWER_PENDING=1
 fi
 if [ "$POWER_PENDING" -eq 1 ]; then
-    echo "    power settings   sleep is disabled — restoring defaults (needs sudo; see --keep-power-settings)"
+    echo "    power settings   restoring what the bootstrap changed (needs sudo; see --keep-power-settings)"
     present=1
 fi
 if [ "$present" -eq 0 ]; then
@@ -293,13 +298,36 @@ if [ "$KEEP_POWER" -eq 0 ]; then
     # whether sudo is asked for at all. Both halves again, so a previously
     # half-completed restore is finished rather than skipped.
     if power_changes_pending; then
-        log "Restoring sleep defaults (sudo)"
+        log "Restoring power settings (sudo)"
         sudo pmset -a disablesleep 0 || warn "Could not restore disablesleep — run: sudo pmset -a disablesleep 0"
-        # Mirror every knob bootstrap-macos.sh turns off, standby and
-        # autopoweroff included — leaving those at 0 keeps the deeper
-        # power-saving states disabled long after the worker is gone.
-        sudo pmset -c sleep 10 displaysleep 10 disksleep 10 standby 1 autopoweroff 1 powernap 1 \
-            || warn "Could not restore AC sleep settings — check 'pmset -g custom'"
+        # Put back exactly what was there, field by field, from the file the
+        # bootstrap wrote. Without it only disablesleep is undone: the timers
+        # cannot be restored to values nobody recorded, and inventing defaults
+        # would clobber the operator's own preferences.
+        if [ -s "$POWER_STATE_FILE" ]; then
+            restore_args=""
+            while read -r field value; do
+                case "$field" in
+                    sleep|displaysleep|disksleep|standby|autopoweroff|powernap)
+                        case "$value" in
+                            ''|*[!0-9]*) continue ;;
+                        esac
+                        restore_args="$restore_args $field $value" ;;
+                esac
+            done < "$POWER_STATE_FILE"
+            if [ -n "$restore_args" ]; then
+                # shellcheck disable=SC2086 -- deliberate word splitting into pmset arguments
+                if sudo pmset -c $restore_args; then
+                    log "  restored:$restore_args"
+                    rm -f "$POWER_STATE_FILE"
+                    rmdir "$POWER_STATE_DIR" 2>/dev/null || true
+                else
+                    warn "Could not restore the AC settings — check 'pmset -g custom'; saved values are in $POWER_STATE_FILE"
+                fi
+            fi
+        else
+            log "  no saved settings found; left the AC timers as they are"
+        fi
     fi
 fi
 

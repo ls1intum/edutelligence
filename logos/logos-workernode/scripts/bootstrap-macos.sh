@@ -346,6 +346,26 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
         log "Sleep already disabled"
     else
         log "Configuring the machine to keep running (asks for your password)"
+        # Record what the machine looked like first, so the uninstaller can put
+        # back these exact values instead of guessing. Guessing is not viable:
+        # a zeroed timer is indistinguishable from a deliberate preference
+        # (plenty of Macs legitimately run with powernap or disksleep at 0),
+        # and "restoring" those would overwrite settings Logos never touched.
+        #
+        # Kept outside the install root on purpose — that directory is deleted
+        # during uninstall, and the power settings outlive it.
+        POWER_STATE_DIR="$HOME/Library/Application Support/$LAUNCH_AGENT_LABEL"
+        mkdir -p "$POWER_STATE_DIR"
+        pmset -g custom 2>/dev/null \
+            | sed -n '/AC Power/,$p' \
+            | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ { print $1, $2 }' \
+            > "$POWER_STATE_DIR/power-state.saved" || true
+        if [ -s "$POWER_STATE_DIR/power-state.saved" ]; then
+            log "  saved previous power settings to $POWER_STATE_DIR/power-state.saved"
+        else
+            rm -f "$POWER_STATE_DIR/power-state.saved"
+            warn "  could not read the current power settings; uninstall will only re-enable sleep"
+        fi
         if sudo pmset -a disablesleep 1 2>/dev/null \
            && sudo pmset -c sleep 0 displaysleep 0 disksleep 0 standby 0 autopoweroff 0 powernap 0 2>/dev/null; then
             log "  sleep disabled, AC timers zeroed"
