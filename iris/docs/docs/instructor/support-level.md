@@ -42,13 +42,24 @@ Iris provides step-by-step explanations with analogies and small code examples t
 
 > **Student:** My sorting algorithm is not working. Can you help?
 >
-> **Iris:** The issue is in your inner loop condition `j <= arr.length`. Arrays are zero-indexed, so the last element is at `arr.length - 1`. Try changing it to `j < arr.length` and see if that resolves the IndexOutOfBoundsException.
+> **Iris:** That `IndexOutOfBoundsException` is coming from your inner loop — the one that walks the array on each pass. It means the loop asked for a position that is one past the end.
+>
+> Here is the idea. Java arrays are zero-indexed: an array of length 5 has valid positions 0 through 4, so the last valid index is always one less than the length. Picture a row of five numbered lockers starting at 0 — asking for locker 5 finds a wall.
+>
+> Here is the shape of it in an unrelated setting — counting rainfall readings:
+>
+> ```java
+> // valid readings live at 0 .. readings.length - 1
+> for (int day = 0; day < readings.length; day++) { ... }
+> ```
+>
+> So look at your inner loop's stopping condition and ask: on the very last pass, what index does it allow, and is that index still inside the array? Trace it with a five-element array and write down the last value the loop reaches.
 
 **Best suited for** introductory courses where students are new to programming and need clear and approachable explanations.
 
 ## Choosing a Level
 
-Reading the three examples against each other is the quickest way to decide. The same question — a sorting algorithm that does not work — draws a counter-question at Low, a walk-through invitation at Moderate, and at High the actual off-by-one error named with the fix.
+Reading the three examples against each other is the quickest way to decide. The same question — a sorting algorithm that does not work — draws a bare counter-question at Low, a walk-through invitation at Moderate, and at High a full explanation of the underlying concept with the faulty line localised, stopping short of the corrected condition itself.
 
 The choice is about what the exercise is meant to teach, not about how capable your students are:
 
