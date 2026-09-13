@@ -139,8 +139,13 @@ jobs:
           # still there — every following run would allocate another
           # -run<id> branch and open a duplicate PR for the same version, which
           # the cleanup keeps because the versions compare equal.
+          # Pipe into a standalone jq: `gh --jq` takes ONE expression as its
+          # value, so passing `--arg` to it makes gh reject the whole call —
+          # and the `|| true` would then turn that error into an empty result,
+          # silently falling through to a duplicate PR on every run. Let a
+          # failing `gh pr list` fail the step instead of guessing.
           EXISTING_PR=$(gh pr list --state open --limit 100 --json number,headRefName \
-            --jq --arg b "$BRANCH" 'map(select(.headRefName == $b or (.headRefName | startswith($b + "-run")))) | .[0].number // empty' 2>/dev/null || true)
+            | jq -r --arg b "$BRANCH" 'map(select(.headRefName == $b or (.headRefName | startswith($b + "-run")))) | .[0].number // empty')
           if [ -n "$EXISTING_PR" ]; then
             echo "An open PR (#$EXISTING_PR) already covers $BRANCH — nothing to do."
             echo "needed=false" >> "$GITHUB_OUTPUT"
