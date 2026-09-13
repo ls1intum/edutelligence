@@ -221,21 +221,17 @@
 
                         @if (item.scope) {
                           <div class="error-scope">
-                            @if (item.scope.type === 'global') {
-                              <span class="error-scope-label">Global</span>
-                            } @else {
-                              <div class="scope-nodes">
-                                @for (node of item.scope.nodes ?? []; track node) {
-                                  <button
-                                    type="button"
-                                    class="scope-node-button"
-                                    (click)="openNodeLog(node, item.logAnchor ?? item.errorMessage)"
-                                  >
-                                    {{ node }}
-                                  </button>
-                                }
-                              </div>
-                            }
+                            <div class="scope-nodes">
+                              @for (node of item.scope.nodes ?? []; track node) {
+                                <button
+                                  type="button"
+                                  class="scope-node-button"
+                                  (click)="openNodeLog(node, item.logAnchor ?? item.errorMessage)"
+                                >
+                                  {{ node }}
+                                </button>
+                              }
+                            </div>
                           </div>
                         }
 
@@ -317,6 +313,13 @@
                     </option>
                   }
                 </select>
+
+                @if (selectedCalibratedAt(); as calibratedAt) {
+                  <span class="log-selector__timestamp">
+                    <i class="pi pi-clock" aria-hidden="true"></i>
+                    Calibrated {{ calibratedAt }}
+                  </span>
+                }
 
                 <div class="log-selector__actions">
 

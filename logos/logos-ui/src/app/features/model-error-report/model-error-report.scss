@@ -442,20 +442,20 @@
   gap: 0.35rem;
 }
 
-// Wraps the "Global" text or the scope-nodes button row inside an
-// error-box. No heading — the row of clickable node pills (or the
-// single "Global" label) is self-explanatory in context.
+// Wraps the scope-nodes button row — either bare (the "Successful
+// Nodes" case) or inside an error-box, optionally preceded by a label.
 .error-scope {
   display: flex;
   align-items: center;
+  gap: 0.5rem;
 }
 
-.error-scope-label {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--letter-spacing-wider);
-  color: rgb(var(--color-primary-500));
+// The "Successful Nodes" block sits directly in the checklist, right
+// under the check-row's badge — .checklist's own 0.5rem gap alone reads
+// as too tight against it, unlike the error-box case above which has
+// its own margin/border for separation.
+.checklist > .error-scope {
+  margin-top: 0.5rem;
 }
 
 // ==========================================================================
@@ -744,6 +744,18 @@
         / 0.5
       );
     outline-offset: 2px;
+  }
+}
+
+.log-selector__timestamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-400));
+
+  i {
+    font-size: var(--font-size-xs);
   }
 }
 

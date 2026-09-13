@@ -309,6 +309,11 @@ class FatalLoadErrorPattern:
     # single deterministic point — resolve positionally instead", not
     # "uncategorized".
     domain: str | None = None
+    # False when an automatic retry (see
+    # _retry_with_trust_remote_code_if_needed) can resolve this within the
+    # same run — persisting it would make Phase 0a block that retry's own
+    # re-entry into calibrate_model.
+    persist: bool = True
 
 
 _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
@@ -354,6 +359,9 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
             "reviewing the repo's code and enabling it explicitly."
         ),
         domain=_DOMAIN_MODEL_RESOLUTION,
+        # _retry_with_trust_remote_code_if_needed retries this within the
+        # same run — never persist it as permanently unsupported.
+        persist=False,
     ),
     FatalLoadErrorPattern(
         needle="is not supported for quantization method",
@@ -940,6 +948,11 @@ _GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES: tuple[str, ...] = (
 # follows its "failed to import" line).
 _GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW = 1
 
+# Cap on how many lines of trailing log we keep as generic_error_detail —
+# the match can land near the top of a long probe log, and the untrimmed
+# remainder has ended up dumping the entire log into the stored detail.
+_GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80
+
 
 def _get_generic_calibration_error(probe_log: str) -> tuple[str, str] | None:
     """Last-resort (summary, detail) pair for an unclassified failure.
@@ -976,7 +989,8 @@ def _get_generic_calibration_error(probe_log: str) -> tuple[str, str] | None:
         )
     if index == -1:
         return None
-    return lines[index], "\n".join(lines[index:])
+    detail_lines = lines[index : index + _GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES]
+    return lines[index], "\n".join(detail_lines)
 
 
 def _classify_calibration_stages(
@@ -1009,7 +1023,10 @@ def _classify_calibration_stages(
         if not domain.completion_patterns:
             completed[index] = any(completed[index + 1 :])
 
-    first_incomplete_index = next((i for i, done in enumerate(completed) if not done), -1)
+    # -1 when every domain is already complete — the probe still failed
+    # (this is only ever called for a failed probe), so fall back to the
+    # last domain rather than leaving no stage marked as the failure.
+    first_incomplete_index = next((i for i, done in enumerate(completed) if not done), len(domains) - 1)
 
     domain_index_by_id = {domain.id: i for i, domain in enumerate(domains)}
     mapped_index = domain_index_by_id.get(reason_domain, -1) if reason_domain else -1
@@ -2500,6 +2517,12 @@ def _calibrate_model_probe(
     # generic "no working kv".
     _host_ram_blocked_box: list[str] = []
 
+    # Sibling latch for a fatal pattern with persist=False (see
+    # FatalLoadErrorPattern) — stops the kv-cache search like
+    # _unsupported_box, but is never written to the unsupported-models
+    # file, so a same-run retry isn't blocked by its own side effect.
+    _retryable_fatal_box: list[FatalLoadErrorPattern] = []
+
     # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. We keep
     # this local to one probe so each KV step starts from the model default
     # and derives max_model_len fresh (no cross-step mutation leak).
@@ -2533,6 +2556,12 @@ def _calibrate_model_probe(
         if _host_ram_blocked_box:
             partial.error = f"host RAM below the RAM-cache floor: {_host_ram_blocked_box[0]}"
             return
+        # Not unsupported_reason: this one isn't persisted, so it must not
+        # read as permanently blacklisted elsewhere (DB, orchestrator, UI).
+        if _retryable_fatal_box:
+            pat = _retryable_fatal_box[0]
+            partial.error = f"retryable fatal error ({pat.reason_code}): {pat.description}"
+            return
         if not _unsupported_box:
             return
         pat = _unsupported_box[0]
@@ -2563,7 +2592,7 @@ def _calibrate_model_probe(
         # Short-circuit: a prior probe already proved this model can't load,
         # proved the node itself is degraded, or the host-RAM block made
         # starting any probe unsafe.
-        if _unsupported_box or _node_unhealthy_box or _host_ram_blocked_box:
+        if _unsupported_box or _retryable_fatal_box or _node_unhealthy_box or _host_ram_blocked_box:
             return None
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
@@ -2844,22 +2873,25 @@ def _calibrate_model_probe(
             # latch ``_unsupported_box`` so the search loops bail without
             # spawning vLLM again.
             fatal_pattern = _classify_fatal_load_error(probe_log)
-            if fatal_pattern is not None and not _unsupported_box:
-                _record_unsupported_model(
-                    unsupported_path,
-                    UnsupportedModelEntry(
-                        model=model,
-                        reason_code=fatal_pattern.reason_code,
-                        recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        description=fatal_pattern.description,
-                    ),
-                )
+            if fatal_pattern is not None and not _unsupported_box and not _retryable_fatal_box:
+                if fatal_pattern.persist:
+                    _record_unsupported_model(
+                        unsupported_path,
+                        UnsupportedModelEntry(
+                            model=model,
+                            reason_code=fatal_pattern.reason_code,
+                            recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            description=fatal_pattern.description,
+                        ),
+                    )
+                    _unsupported_box.append(fatal_pattern)
+                else:
+                    _retryable_fatal_box.append(fatal_pattern)
                 logger.warning(
                     "  %s detected — aborting kv-cache search for model %s.",
                     fatal_pattern.reason_code,
                     model,
                 )
-                _unsupported_box.append(fatal_pattern)
 
             if fatal_pattern is not None:
                 _reason_kind, _reason_code, _reason_domain, _reason_needle = (

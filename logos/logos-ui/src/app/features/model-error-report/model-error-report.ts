@@ -48,7 +48,6 @@ type CalibrationStatus =
   | 'unknown';
 
 interface ErrorScope {
-  readonly type: 'global' | 'node';
   readonly nodes?: readonly string[];
 }
 
@@ -118,6 +117,10 @@ interface ModelLog {
   readonly node: string;
   readonly modelName: string;
   readonly success: boolean;
+  // The worker's own recorded_at, falling back to the DB row's
+  // updated_at (see upsert_calibration_probe_log) when the worker
+  // didn't send a timestamp.
+  readonly calibratedAt: string | null;
 }
 
 interface CalibrationProbeSummary {
@@ -514,6 +517,10 @@ const GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES: readonly string[] = [
 // follows its "failed to import" line).
 const GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW = 1;
 
+// Cap on trailing log lines kept as detail — mirrors
+// _GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES in calibration.py.
+const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
+
 
 @Component({
   selector: 'app-model-error-report',
@@ -712,6 +719,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     return this.summaryByProviderId().get(providerId) ?? null;
   });
 
+  readonly selectedCalibratedAt = computed(() => {
+    const calibratedAt = this.selectedLog()?.calibratedAt;
+    return calibratedAt ? this.formatBenchmarkTimestamp(calibratedAt) : null;
+  });
+
   readonly summaryTiles = computed<readonly { title: string; rows: { label: string; value: string }[] }[]>(() => {
     const summary = this.selectedSummary();
     if (!summary) {
@@ -902,6 +914,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           node: log.provider_name,
           modelName,
           success: log.success,
+          calibratedAt: log.recorded_at ?? log.updated_at,
         }))
       );
 
@@ -1359,10 +1372,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       return '';
     }
 
-    if (scope.type === 'global') {
-      return '100%';
-    }
-
     const totalNodes = this.availableLogs().length;
 
     if (totalNodes === 0) {
@@ -1384,10 +1393,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   getScopeDetails(scope?: ErrorScope): string {
     if (!scope) {
       return '';
-    }
-
-    if (scope.type === 'global') {
-      return 'Global';
     }
 
     return scope.nodes?.join(', ') ?? '';
@@ -1456,7 +1461,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   // needed at all. Only ever set for failed calibrations (see the
   // scope note in model-error-report's implementation plan).
   private buildProbeResultFromBackendStages(
-    backendStages: readonly BackendStageResult[]
+    backendStages: readonly BackendStageResult[],
+    success: boolean,
+    authoritativeReason?: AuthoritativeReason
   ): CalibrationProbeResult {
     const stages: CalibrationStageResult[] = backendStages.map(stage => {
       if (stage.status !== 'failure') {
@@ -1493,7 +1500,42 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       };
     });
 
-    const failedStage = stages.find(stage => stage.status === 'failure');
+    let failedStage = stages.find(stage => stage.status === 'failure');
+
+    // success=false but the backend didn't flag any stage — stale or
+    // inconsistent data (e.g. from before a calibration.py fix). Don't
+    // let the checklist silently render all-green for a failed run.
+    if (!failedStage && !success) {
+      const mappedIndex = authoritativeReason?.domain
+        ? stages.findIndex(
+            stage =>
+              CALIBRATION_DOMAINS.find(domain => domain.label === stage.name)
+                ?.id === authoritativeReason.domain
+          )
+        : -1;
+      const fallbackIndex = mappedIndex !== -1 ? mappedIndex : stages.length - 1;
+      const resolved = authoritativeReason
+        ? lookupReason(
+            authoritativeReason.kind,
+            authoritativeReason.code,
+            CALIBRATION_DOMAINS[fallbackIndex]?.id
+          )
+        : undefined;
+
+      const fallbackRaw = backendStages[fallbackIndex];
+      stages[fallbackIndex] = {
+        ...stages[fallbackIndex],
+        status: 'failure',
+        errorMessage:
+          resolved?.label ?? fallbackRaw?.generic_error_message ?? undefined,
+        errorDetail:
+          resolved?.description ?? fallbackRaw?.generic_error_detail ?? undefined,
+        reasonKind: authoritativeReason?.kind,
+        reasonCode: authoritativeReason?.code,
+        logAnchor: authoritativeReason?.needle,
+      };
+      failedStage = stages[fallbackIndex];
+    }
 
     return {
       probe: 1,
@@ -1507,6 +1549,21 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     };
   }
 
+  // Success sends log_text=null and stages=null (see
+  // BackendCalibrationLog) — nothing to parse. Without this,
+  // getCalibrationChecklistItems() sees `probes: []` and the node
+  // silently drops out of every domain's checklist row.
+  private buildSyntheticSuccessProbe(): CalibrationProbeResult {
+    return {
+      probe: 1,
+      status: 'success',
+      stages: CALIBRATION_DOMAINS.map(domain => ({
+        name: domain.label,
+        status: 'success',
+      })),
+    };
+  }
+
   private parseCalibrationResult(
     providerId: number,
     node: string,
@@ -1517,8 +1574,18 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     observedReason: string | null = null,
     backendStages: readonly BackendStageResult[] | null = null
   ): NodeCalibrationResult {
+    const authoritativeReason = this.resolveAuthoritativeReason(
+      unsupportedReason,
+      nodeUnhealthyReason,
+      observedReason
+    );
+
     if (backendStages && backendStages.length > 0) {
-      const probe = this.buildProbeResultFromBackendStages(backendStages);
+      const probe = this.buildProbeResultFromBackendStages(
+        backendStages,
+        success,
+        authoritativeReason
+      );
       return {
         providerId,
         node,
@@ -1527,12 +1594,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         probes: [probe],
       };
     }
-
-    const authoritativeReason = this.resolveAuthoritativeReason(
-      unsupportedReason,
-      nodeUnhealthyReason,
-      observedReason
-    );
 
     const probeBlocks = log
       .split(/(?=\s*Calibration probe\s*[—-])/)
@@ -1545,7 +1606,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       // (log format changed, or log_text is empty/unexpected) — fall
       // back to the calibration's actual recorded outcome.
       if (success) {
-        return { providerId, node, attempts: 0, status: 'success', probes: [] };
+        const probe = this.buildSyntheticSuccessProbe();
+        return {
+          providerId,
+          node,
+          attempts: 1,
+          status: 'success',
+          probes: [probe],
+        };
       }
       const error = this.getCalibrationError(log);
       const errorMessage =
@@ -1557,7 +1625,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       return {
         providerId,
         node,
-        attempts: 0,
+        // 1, not 0: a real (if minimal) probe is returned below —
+        // hasParseableCalibrationData() needs this to show the
+        // checklist's failure entry instead of "No logs available"
+        // when this is the only result for the model.
+        attempts: 1,
         status: 'failure',
         probes: [
           {
@@ -1672,7 +1744,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           domain => domain.id === authoritativeReason.domain
         )
       : -1;
-    const firstIncompleteIndex = completed.findIndex(done => !done);
+    // -1 when every domain looks complete — the probe still didn't
+    // succeed (we only reach here when it didn't), so fall back to the
+    // last domain rather than leaving no stage marked as the failure.
+    const notDoneIndex = completed.findIndex(done => !done);
+    const firstIncompleteIndex =
+      notDoneIndex !== -1 ? notDoneIndex : CALIBRATION_DOMAINS.length - 1;
     const effectiveIndex =
       mappedIndex !== -1 ? mappedIndex : firstIncompleteIndex;
 
@@ -1773,7 +1850,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
     return {
       summary: lines[index],
-      detail: lines.slice(index).join('\n'),
+      detail: lines
+        .slice(index, index + GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES)
+        .join('\n'),
     };
   }
 
@@ -1875,7 +1954,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           name: stage.label,
           status: 'failure',
           scope: {
-            type: 'node',
             nodes: uniqueFailedNodes,
           },
           errorMessage: firstError ?? 'Unknown calibration error',
@@ -1893,7 +1971,6 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           name: stage.label,
           status: 'success',
           scope: {
-            type: 'node',
             nodes: uniqueSuccessfulNodes,
           },
         });
