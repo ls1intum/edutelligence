@@ -356,10 +356,19 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
         # during uninstall, and the power settings outlive it.
         POWER_STATE_DIR="$HOME/Library/Application Support/$LAUNCH_AGENT_LABEL"
         mkdir -p "$POWER_STATE_DIR"
-        pmset -g custom 2>/dev/null \
-            | sed -n '/AC Power/,$p' \
-            | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ { print $1, $2 }' \
-            > "$POWER_STATE_DIR/power-state.saved" || true
+        {
+            # disablesleep belongs in the record too. Reaching this branch
+            # means it was NOT already 1 (the check above returned early
+            # otherwise), so Logos is about to become its owner — and the
+            # uninstaller must only reset settings it can prove it owns. An
+            # operator or MDM policy that already disabled sleep is left alone
+            # precisely because no record of it is ever written.
+            printf 'disablesleep %s\n' \
+                "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2; found=1} END {if (!found) print 0}')"
+            pmset -g custom 2>/dev/null \
+                | sed -n '/AC Power/,$p' \
+                | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ { print $1, $2 }'
+        } > "$POWER_STATE_DIR/power-state.saved" || true
         if [ -s "$POWER_STATE_DIR/power-state.saved" ]; then
             log "  saved previous power settings to $POWER_STATE_DIR/power-state.saved"
         else

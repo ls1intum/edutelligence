@@ -178,12 +178,13 @@ fi
 # to restore them. Look at both halves.
 power_changes_pending() {
     [ "$KEEP_POWER" -eq 0 ] || return 1
-    # disablesleep is unambiguous: nothing but the bootstrap sets it here.
-    [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" != "1" ] || return 0
-    # Otherwise the only evidence that Logos changed a timer is the file the
-    # bootstrap wrote before changing it. A zeroed timer on its own proves
-    # nothing — plenty of Macs legitimately run with powernap or disksleep at
-    # 0, and treating those as ours would overwrite settings we never touched.
+    # The recording the bootstrap wrote before changing anything is the ONLY
+    # evidence of ownership, disablesleep included. A machine can arrive with
+    # sleep already disabled by an operator or an MDM policy — and in that
+    # case the bootstrap returns early without writing a record, precisely so
+    # that removing the worker does not undo a policy it never set. Likewise a
+    # zeroed timer proves nothing on its own: plenty of Macs legitimately run
+    # with powernap or disksleep at 0.
     [ -s "$POWER_STATE_FILE" ]
 }
 POWER_PENDING=0
@@ -299,12 +300,16 @@ if [ "$KEEP_POWER" -eq 0 ]; then
     # half-completed restore is finished rather than skipped.
     if power_changes_pending; then
         log "Restoring power settings (sudo)"
-        sudo pmset -a disablesleep 0 || warn "Could not restore disablesleep — run: sudo pmset -a disablesleep 0"
-        # Put back exactly what was there, field by field, from the file the
-        # bootstrap wrote. Without it only disablesleep is undone: the timers
-        # cannot be restored to values nobody recorded, and inventing defaults
-        # would clobber the operator's own preferences.
+        # Every field comes from the record, disablesleep included — nothing is
+        # reset that Logos cannot prove it changed.
         if [ -s "$POWER_STATE_FILE" ]; then
+            saved_disablesleep="$(awk '$1 == "disablesleep" {print $2}' "$POWER_STATE_FILE")"
+            case "$saved_disablesleep" in
+                0|1)
+                    sudo pmset -a disablesleep "$saved_disablesleep" \
+                        || warn "Could not restore disablesleep — run: sudo pmset -a disablesleep $saved_disablesleep" ;;
+                *) warn "No disablesleep value recorded; leaving it as it is." ;;
+            esac
             restore_args=""
             while read -r field value; do
                 case "$field" in
@@ -326,7 +331,7 @@ if [ "$KEEP_POWER" -eq 0 ]; then
                 fi
             fi
         else
-            log "  no saved settings found; left the AC timers as they are"
+            log "  no recording from the bootstrap; left the power settings untouched"
         fi
     fi
 fi

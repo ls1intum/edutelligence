@@ -139,13 +139,24 @@ jobs:
           # still there — every following run would allocate another
           # -run<id> branch and open a duplicate PR for the same version, which
           # the cleanup keeps because the versions compare equal.
+          # Same three tests the cleanup step applies, for the same reason:
+          # a branch name is not proof of authorship. An unrelated or forked
+          # branch merely carrying this prefix would otherwise hold every
+          # scheduled run at needed=false indefinitely — the mirror image of
+          # the orphan-branch problem, and just as silent.
+          #
           # Pipe into a standalone jq: `gh --jq` takes ONE expression as its
-          # value, so passing `--arg` to it makes gh reject the whole call —
-          # and the `|| true` would then turn that error into an empty result,
-          # silently falling through to a duplicate PR on every run. Let a
-          # failing `gh pr list` fail the step instead of guessing.
-          EXISTING_PR=$(gh pr list --state open --limit 100 --json number,headRefName \
-            | jq -r --arg b "$BRANCH" 'map(select(.headRefName == $b or (.headRefName | startswith($b + "-run")))) | .[0].number // empty')
+          # value, so passing `--arg` to it makes gh reject the whole call.
+          # Let a failing `gh pr list` fail the step rather than be guessed past.
+          marker='created automatically by the `Logos - Update vllm-metal` workflow'
+          me=$(gh api user --jq .login)
+          EXISTING_PR=$(gh pr list --state open --limit 100 --json number,headRefName,body,author \
+            | jq -r --arg b "$BRANCH" --arg marker "$marker" --arg me "$me" '
+                map(select(
+                      (.headRefName == $b or (.headRefName | test("^" + ($b | gsub("[.]"; "\\.")) + "-run[0-9]+$")))
+                      and .author.login == $me
+                      and ((.body // "") | contains($marker))))
+                | .[0].number // empty')
           if [ -n "$EXISTING_PR" ]; then
             echo "An open PR (#$EXISTING_PR) already covers $BRANCH — nothing to do."
             echo "needed=false" >> "$GITHUB_OUTPUT"
