@@ -1022,6 +1022,78 @@ def test_calibrate_with_tp_escalation_stops_on_fatal_error_surfaced_after_wideni
     assert result.tensor_parallel_size == 8
 
 
+def test_calibrate_with_tp_escalation_skips_original_tp_fallback_on_capacity_exhaustion(tmp_path):
+    """A genuine VRAM shortfall at max tp (weights/kv don't fit anywhere in
+    the kv search range) must not fall back to a merely-defaulted original
+    tp — a lower tp needs *more* VRAM per GPU, not less, so the fallback
+    can only repeat the same failure."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="No working KV cache size found between 1024 MB and 40960 "
+            "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model"},  # no tensor_parallel_size — original_tp defaults to 1
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=2,
+        )
+
+    assert seen_tps == [2]  # tp=1 fallback skipped — not operator-pinned
+    assert not result.success
+
+
+def test_calibrate_with_tp_escalation_honors_explicit_tp_despite_capacity_exhaustion(tmp_path):
+    """The same VRAM-shortfall skip must not apply when the orchestrator
+    explicitly pinned the lower tp itself — an explicit pin is honored
+    regardless of what failed above it."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp == 1:
+            return _success_result("big-model", tensor_parallel_size=1)
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="No working KV cache size found between 1024 MB and 40960 "
+            "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "tensor_parallel_size": 1},  # explicit pin
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=2,
+        )
+
+    assert seen_tps == [2, 1]  # fallback attempted despite the shortfall
+    assert result.success
+    assert result.tensor_parallel_size == 1
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Group 6 — _format_kv_mb helper
 # ═══════════════════════════════════════════════════════════════════════

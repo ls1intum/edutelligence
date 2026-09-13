@@ -3531,6 +3531,10 @@ def calibrate_with_tp_escalation(
     # The slice length equals the max TP below, so the escalation is unchanged.
     plan = pin_plan_gpu_devices(plan, available_gpus)
 
+    # Whether the operator/orchestrator actually pinned a tp, as opposed to
+    # this function defaulting to 1 below. Only an explicit pin overrides
+    # the OOM-fallback guard further down — a bare default must not.
+    explicit_tp = plan.get("tensor_parallel_size") is not None
     original_tp = int(plan.get("tensor_parallel_size", 1))
     hardware_max_tp = _max_tp_for_plan(plan, available_gpus)
     max_tp = _max_tp_for_plan(plan, available_gpus, weight_derived_max_tp=plan.get("_hf_max_tp_ceiling"))
@@ -3581,6 +3585,13 @@ def calibrate_with_tp_escalation(
         _err = result.error or ""
         return "does not recognize this architecture" in _err or "Cannot access gated repo" in _err
 
+    def _is_capacity_exhausted(result: CalibrationResult) -> bool:
+        """True when weights/kv don't fit anywhere in the kv search range
+        at this tp — a real VRAM shortfall, not a config/arch quirk. A
+        lower tp needs *more* VRAM per GPU, not less, so it can't recover
+        from this (see ``min_feasible_tp``'s same math in the HF precheck)."""
+        return "exceed available GPU VRAM" in (result.error or "")
+
     tp = max_tp
     current_plan = {**plan, "tensor_parallel_size": tp}
     result = _try_calibrate(current_plan, **cal_kwargs)
@@ -3604,10 +3615,12 @@ def calibrate_with_tp_escalation(
         plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
         _fatal = _is_fatal(result)
 
-    # If max tp fails, try the configured (original) tp before giving up.
-    # Models may have attention-head counts that aren't divisible by max_tp
-    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-    if not result.success and not _fatal and tp > original_tp:
+    # If max tp fails, try the configured (original) tp before giving up —
+    # handles head-count divisibility quirks. Skip it on a genuine capacity
+    # shortfall (lower tp needs *more* VRAM/GPU, not less) unless the
+    # operator/orchestrator explicitly pinned that lower tp themselves.
+    _skip_capacity_fallback = _is_capacity_exhausted(result) and not explicit_tp
+    if not result.success and not _fatal and tp > original_tp and not _skip_capacity_fallback:
         logger.info(
             "  %s failed at max tp=%d — falling back to configured tp=%d",
             model_name,
@@ -3619,6 +3632,15 @@ def calibrate_with_tp_escalation(
         result = _try_calibrate(current_plan, **cal_kwargs)
         plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
         _fatal = _is_fatal(result)
+    elif _skip_capacity_fallback and tp > original_tp:
+        logger.info(
+            "  %s failed at tp=%d with a genuine VRAM shortfall — skipping "
+            "the tp=%d fallback (not operator-pinned, and fewer GPUs only "
+            "means more memory per GPU, not less)",
+            model_name,
+            tp,
+            original_tp,
+        )
 
     if not result.success or _fatal:
         return result
