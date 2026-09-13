@@ -166,8 +166,23 @@ fi
 # first time, leaves a Mac that cannot sleep — and if this branch returned
 # early just because the directories are already gone, re-running the script
 # could never put that right.
+#
+# Checking SleepDisabled alone is not enough: the bootstrap sets it AND zeroes
+# six AC timers, in two separate pmset calls. If the first succeeds and the
+# second fails, SleepDisabled reads 0 while sleep/standby/powernap are still
+# pinned at 0 — a rerun would see nothing pending and exit, with no way left
+# to restore them. Look at both halves.
+power_changes_pending() {
+    [ "$KEEP_POWER" -eq 0 ] || return 1
+    [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" != "1" ] || return 0
+    # Any managed AC timer still forced to 0 counts as outstanding work.
+    pmset -g custom 2>/dev/null \
+        | sed -n '/AC Power/,$p' \
+        | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ && $2 == "0" { found = 1 }
+               END { exit !found }'
+}
 POWER_PENDING=0
-if [ "$KEEP_POWER" -eq 0 ] && [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" = "1" ]; then
+if power_changes_pending; then
     POWER_PENDING=1
 fi
 if [ "$POWER_PENDING" -eq 1 ]; then
@@ -275,8 +290,9 @@ fi
 if [ "$KEEP_POWER" -eq 0 ]; then
     # Re-read rather than trusting POWER_PENDING from the summary above: the
     # removal steps in between take time, and this is the check that decides
-    # whether sudo is asked for at all.
-    if [ "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2}')" = "1" ]; then
+    # whether sudo is asked for at all. Both halves again, so a previously
+    # half-completed restore is finished rather than skipped.
+    if power_changes_pending; then
         log "Restoring sleep defaults (sudo)"
         sudo pmset -a disablesleep 0 || warn "Could not restore disablesleep — run: sudo pmset -a disablesleep 0"
         # Mirror every knob bootstrap-macos.sh turns off, standby and

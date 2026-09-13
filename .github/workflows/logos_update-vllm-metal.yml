@@ -97,6 +97,7 @@ jobs:
       - name: Check whether an update is needed
         id: check
         env:
+          GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           BRANCH: ${{ steps.version.outputs.branch }}
           INPUT_VERSION: ${{ inputs.vllm-metal-version }}
@@ -127,12 +128,25 @@ jobs:
               exit 0
             fi
           fi
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
-            echo "Branch $BRANCH already exists — update PR is already open/pending."
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          # A remote branch is not evidence of an open PR. If a previous run
+          # died between `git push` and `gh pr create`, or someone closed the
+          # PR without deleting its branch, the ref outlives the attempt — and
+          # treating its mere existence as "already handled" would suppress
+          # this bump forever, silently, on every future schedule.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null)" ]; then
+              echo "An open PR already exists for $BRANCH — nothing to do."
+              echo "needed=false" >> "$GITHUB_OUTPUT"
+              echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # Orphan ref: push to a collision-free name instead of giving up.
+            # The run id makes it unique and traceable back to the run.
+            BRANCH="${BRANCH}-run${GITHUB_RUN_ID}"
+            echo "::warning::Branch exists with no open PR (orphaned by an earlier run). Using $BRANCH instead."
           fi
           echo "needed=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Fetch and checksum the pinned artifacts
         id: artifacts
@@ -273,7 +287,7 @@ jobs:
           GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
-          BRANCH: ${{ steps.version.outputs.branch }}
+          BRANCH: ${{ steps.check.outputs.branch }}
           VLLM_VERSION: ${{ steps.artifacts.outputs.vllm_version }}
         run: |
           set -euo pipefail
@@ -312,7 +326,10 @@ jobs:
         if: steps.check.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ secrets.LOGOS_VLLM_UPDATE_PAT || github.token }}
-          BRANCH: ${{ steps.version.outputs.branch }}
+          # The branch actually pushed, which differs from the computed one
+          # when an orphan ref forced a recovery name — excluding the wrong
+          # branch here would close the PR just created.
+          BRANCH: ${{ steps.check.outputs.branch }}
           VERSION: ${{ steps.version.outputs.version }}
           NEW_PR_URL: ${{ steps.pr.outputs.url }}
         run: |
@@ -350,8 +367,8 @@ jobs:
                 | select(.headRefName != $branch)
                 | select(.author.login == $me)
                 | select((.body // "") | contains($marker))
-                | select(.headRefName | test("^logos/vllm-metal-[0-9][0-9a-z.]*$"))
-                | select((.headRefName | sub("^logos/vllm-metal-"; "") | ver) < ($version | ver))
+                | select(.headRefName | test("^logos/vllm-metal-[0-9][0-9a-z.]*(-run[0-9]+)?$"))
+                | select((.headRefName | sub("^logos/vllm-metal-"; "") | sub("-run[0-9]+$"; "") | ver) < ($version | ver))
                 | .number' \
             | while read -r pr; do
                 echo "Closing superseded update PR #$pr"
