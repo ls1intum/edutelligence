@@ -27,6 +27,15 @@ public class ModelCapabilities {
     @Column(nullable = false)
     private boolean supportsReasoning;
 
+    /**
+     * Input context window (tokens) as published by the upstream registry,
+     * reduced to the smallest window across all matching registry entries.
+     * NULL until the first catalog refresh after the column exists — the
+     * orchestrator treats NULL as "the catalog does not know this model".
+     */
+    @Column(name = "max_input_tokens")
+    private Integer maxInputTokens;
+
     public ModelCapabilities() {}
 
     public ModelCapabilities(Integer modelId, boolean supportsFunctionCalling, boolean supportsVision, boolean supportsReasoning) {
@@ -42,9 +51,11 @@ public class ModelCapabilities {
     public boolean getSupportsFunctionCalling() { return supportsFunctionCalling; }
     public boolean getSupportsVision() { return supportsVision; }
     public boolean getSupportsReasoning() { return supportsReasoning; }
+    public Integer getMaxInputTokens() { return maxInputTokens; }
 
     public void setModelId(Integer modelId) { this.modelId = modelId; }
     public void setSupportsFunctionCalling(boolean supportsFunctionCalling) { this.supportsFunctionCalling = supportsFunctionCalling; }
     public void setSupportsVision(boolean supportsVision) { this.supportsVision = supportsVision; }
     public void setSupportsReasoning(boolean supportsReasoning) { this.supportsReasoning = supportsReasoning; }
+    public void setMaxInputTokens(Integer maxInputTokens) { this.maxInputTokens = maxInputTokens; }
 }
