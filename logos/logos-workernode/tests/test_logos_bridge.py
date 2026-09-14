@@ -568,6 +568,61 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_vllm_metrics_forwards_merged_text(monkeypatch):
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        running_vllm_endpoints=lambda: [("lane-a", "model-a", 19001)]
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    collect = AsyncMock(return_value="vllm:num_requests_running 1.0\n")
+    monkeypatch.setattr("logos_worker_node.logos_bridge.collect_vllm_metrics_text", collect)
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    collect.assert_awaited_once_with([("lane-a", "model-a", 19001)])
+    assert sends == [
+        {
+            "type": "vllm_metrics",
+            "worker_id": client.worker_id,
+            "metrics_text": "vllm:num_requests_running 1.0\n",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_vllm_metrics_skips_empty_export(monkeypatch):
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(running_vllm_endpoints=lambda: [])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.collect_vllm_metrics_text",
+        AsyncMock(return_value=""),
+    )
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    assert sends == []
+
+
+@pytest.mark.asyncio
 async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
     """Idle worker (no lane churn) must still resend runtime status periodically.
 

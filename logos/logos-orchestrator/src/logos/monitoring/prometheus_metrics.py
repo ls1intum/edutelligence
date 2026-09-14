@@ -3,9 +3,15 @@
 Defines all custom metrics and exposes a WSGI app for the /metrics endpoint.
 """
 
+import logging
+import sys
 from typing import Any
 
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+
+from logos.monitoring.vllm_metrics_merge import merge_metric_families
+
+logger = logging.getLogger("LogosLogger")
 
 registry = CollectorRegistry()
 
@@ -455,6 +461,44 @@ def update_latency_store_metrics(
     finally:
         _PUBLISHED_LATENCY_STORE_KEYS.clear()
         _PUBLISHED_LATENCY_STORE_KEYS.update(current)
+
+
+class _VLLMForwardedMetricsCollector:
+    """Folds every connected worker's forwarded vLLM ``/metrics`` into this
+    registry's scrape output.
+
+    Each worker pushes its own already lane-merged text over the bridge (see
+    LogosNodeBridge._send_vllm_metrics); this collector only relabels those
+    snapshots by worker_id and merges them, doing no I/O of its own — a
+    single stuck or disconnected worker just means its last-known snapshot
+    (or nothing, if it never sent one) rather than a slow or failed scrape.
+    """
+
+    def collect(self):
+        # logos.main assembles this module before it finishes defining
+        # _logosnode_registry, so binding it at module level here would
+        # capture a not-yet-populated module — deferred to call time instead.
+        # A plain sys.modules lookup (rather than `import logos.main as _m`)
+        # avoids depending on `main` being resolvable as an attribute of the
+        # `logos` package, which importing it repeatedly at arbitrary call
+        # times cannot guarantee; it also degrades to "no data yet" instead
+        # of raising if this ever runs before logos.main has loaded.
+        main = sys.modules.get("logos.main")
+        registry = getattr(main, "_logosnode_registry", None)
+        if registry is None:
+            return iter(())
+
+        sources = []
+        for provider_id in registry.active_provider_ids():
+            found = registry.peek_vllm_metrics(provider_id)
+            if found is None:
+                continue
+            worker_id, metrics_text = found
+            sources.append(({"worker_id": worker_id}, metrics_text))
+        return iter(merge_metric_families(sources))
+
+
+registry.register(_VLLMForwardedMetricsCollector())
 
 
 def metrics_response() -> tuple[bytes, str]:

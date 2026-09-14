@@ -378,6 +378,10 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         )
             elif msg_type == "heartbeat":
                 await _main._logosnode_registry.mark_heartbeat(ticket.provider_id)
+            elif msg_type == "vllm_metrics":
+                await _main._logosnode_registry.on_vllm_metrics(
+                    ticket.provider_id, str(payload.get("metrics_text", ""))
+                )
             elif msg_type == "command_result":
                 await _main._logosnode_registry.on_command_result(ticket.provider_id, payload)
             elif msg_type == "stream_start":

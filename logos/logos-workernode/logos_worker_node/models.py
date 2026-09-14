@@ -568,6 +568,12 @@ class LogosConfig(BaseModel):
     # reporting the stale snapshot from the last lane transition. Signature
     # dedupe in _send_runtime_status still suppresses true no-op resends.
     status_refresh_interval_seconds: int = Field(default=15, ge=1)
+    # How often to push this worker's merged vLLM /metrics (all running
+    # lanes, relabeled by lane_id) to the orchestrator. Independent of
+    # status_refresh_interval_seconds: counters change on every scrape-worthy
+    # tick, so gating this on the status dedupe signature would mean sending
+    # it constantly instead of on a predictable cadence.
+    vllm_metrics_interval_seconds: int = Field(default=15, ge=1)
 
     @model_validator(mode="before")
     @classmethod

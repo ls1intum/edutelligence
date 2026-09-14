@@ -1487,6 +1487,21 @@ class LaneManager:
     def get_handle(self, lane_id: str) -> ProcessHandle | None:
         return self._handles.get(lane_id)
 
+    def running_vllm_endpoints(self) -> list[tuple[str, str, int]]:
+        """Return (lane_id, model, port) for every lane with a live vLLM process.
+
+        Used to fetch and forward each lane's native ``/metrics`` — a cold,
+        sleeping, or stopped lane has no server to scrape, so it is skipped.
+        """
+        endpoints: list[tuple[str, str, int]] = []
+        for lane_id, handle in self._handles.items():
+            if handle.status().state != ProcessState.RUNNING:
+                continue
+            lc = handle.lane_config
+            model = lc.model if lc is not None else ""
+            endpoints.append((lane_id, model, handle.port))
+        return endpoints
+
     def get_handle_for_model(self, model: str) -> ProcessHandle | None:
         """Find the process handle for a given model name."""
         matches: list[tuple[str, ProcessHandle]] = []
