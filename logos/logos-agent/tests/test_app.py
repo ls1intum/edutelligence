@@ -385,3 +385,120 @@ def _principal():
     from app.auth import Principal
 
     return Principal(subject="s", username="tobias", roles=frozenset({"agent-operator"}))
+
+
+class TestWhatEverySessionIsTold:
+    """The endpoint behind the editor on the page."""
+
+    async def test_it_reports_the_text_in_force(self, monkeypatch):
+        from app import conventions
+
+        async def stored():
+            return {"house_rules": "Be brief.", "environment_notes": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(conventions.db, "get_instructions", stored)
+        conventions.forget()
+
+        state = await main.get_instructions()
+
+        assert state.house_rules == "Be brief."
+        assert state.house_rules_default is False
+        # The half nobody has touched says so.
+        assert state.environment_notes_default is True
+
+    async def test_saving_stores_both_halves(self, monkeypatch):
+        from app import conventions
+        from app.schemas import InstructionUpdate
+
+        written: list = []
+
+        async def set_instructions(*, house_rules, environment_notes, updated_by):
+            written.append((house_rules, environment_notes, updated_by))
+
+        async def stored():
+            return {"house_rules": "Be brief.", "environment_notes": "A container.", "updated_by": "tobias"}
+
+        monkeypatch.setattr(conventions.db, "set_instructions", set_instructions)
+        monkeypatch.setattr(conventions.db, "get_instructions", stored)
+        conventions.forget()
+
+        await main.put_instructions(
+            InstructionUpdate(house_rules="Be brief.", environment_notes="A container."),
+            principal=_principal(),
+        )
+
+        assert written == [("Be brief.", "A container.", "tobias")]
+
+    async def test_a_reset_clears_that_half(self, monkeypatch):
+        from app import conventions
+        from app.schemas import InstructionUpdate
+
+        written: list = []
+
+        async def set_instructions(*, house_rules, environment_notes, updated_by):
+            written.append((house_rules, environment_notes))
+
+        async def stored():
+            return {"house_rules": None, "environment_notes": "A container.", "updated_by": "tobias"}
+
+        monkeypatch.setattr(conventions.db, "set_instructions", set_instructions)
+        monkeypatch.setattr(conventions.db, "get_instructions", stored)
+        conventions.forget()
+
+        await main.put_instructions(
+            InstructionUpdate(house_rules="ignored", environment_notes="A container.", reset_house_rules=True),
+            principal=_principal(),
+        )
+
+        # Null, not the text the page happened to have on screen: null is
+        # what means "use what the code ships with".
+        assert written == [(None, "A container.")]
+
+    async def test_a_half_nobody_mentioned_is_left_alone(self, monkeypatch):
+        from app import conventions, db
+        from app.schemas import InstructionUpdate
+
+        written: list = []
+
+        async def set_instructions(*, house_rules, environment_notes, updated_by):
+            written.append((house_rules, environment_notes))
+
+        async def stored():
+            return {"house_rules": None, "environment_notes": "A container.", "updated_by": "tobias"}
+
+        monkeypatch.setattr(conventions.db, "set_instructions", set_instructions)
+        monkeypatch.setattr(conventions.db, "get_instructions", stored)
+        conventions.forget()
+
+        # What the page sends when somebody resets one box: a statement
+        # about that box and nothing else. The other one may hold an edit
+        # nobody has saved, and saving it here would be saving it behind
+        # their back.
+        await main.put_instructions(
+            InstructionUpdate(reset_house_rules=True),
+            principal=_principal(),
+        )
+
+        assert written == [(None, db.UNCHANGED)]
+
+    async def test_an_empty_half_that_was_sent_is_stored_as_empty(self, monkeypatch):
+        from app import conventions
+        from app.schemas import InstructionUpdate
+
+        written: list = []
+
+        async def set_instructions(*, house_rules, environment_notes, updated_by):
+            written.append((house_rules, environment_notes))
+
+        async def stored():
+            return {"house_rules": "", "environment_notes": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(conventions.db, "set_instructions", set_instructions)
+        monkeypatch.setattr(conventions.db, "get_instructions", stored)
+        conventions.forget()
+
+        # Emptying a box is a decision — "say nothing here" — and it is not
+        # the same as leaving it alone or resetting it.
+        await main.put_instructions(InstructionUpdate(house_rules=""), principal=_principal())
+
+        assert written[0][0] == ""

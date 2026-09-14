@@ -127,7 +127,7 @@ def test_render_summary_shows_prefix_hit_and_mtp_acceptance() -> None:
 
 
 def test_render_summary_missing_hit_rates_show_dashes() -> None:
-    """Lanes without the metrics (ollama, idle vLLM) render -- placeholders."""
+    """Lanes without the metrics (idle vLLM, failed scrape) render -- placeholders."""
     snap = _snap(backend_metrics={})
     rendered = "\n".join(_render_lane_summary(snap))
     assert "prefix_hit=--" in rendered

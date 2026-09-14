@@ -104,6 +104,46 @@ def azure_host_from_base_url(base_url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def _warn_if_not_an_azure_endpoint(provider: Dict[str, Any]) -> None:
+    """Point out a cloud provider that is typed 'azure' but is not one.
+
+    Such a provider is discovered by nobody: this sync queries the Azure
+    data-plane route it does not serve, and the generic ``/v1/models`` sync
+    skips everything typed 'azure' on purpose. The catalogue then just stays
+    empty, with the Azure listing failure as the only hint. Say plainly which
+    provider it is and what to change.
+    """
+    base_url = provider.get("base_url") or ""
+    try:
+        host = urlsplit(base_url).hostname or ""
+    except ValueError:
+        # A bracketed authority that is not a valid IPv6 literal — "https://[x"
+        # — raises rather than returning None. This runs before any provider is
+        # synced and outside the per-provider guard, so letting it escape would
+        # abort the whole pass, and the initial one is awaited inline by
+        # start(): a single malformed base_url would take orchestrator startup
+        # down with it. It is also its own kind of misconfiguration, so it is
+        # reported rather than swallowed.
+        logger.warning(
+            "Azure deployment sync: provider %s (%s) has an unparseable base_url %r; it cannot be queried",
+            provider.get("id"),
+            provider.get("name"),
+            base_url,
+        )
+        return
+    if host.lower().rstrip(".").endswith("azure.com"):
+        return
+    logger.warning(
+        "Azure deployment sync: provider %s (%s) is typed 'azure' but its endpoint %r is not an Azure host. "
+        "Azure providers are excluded from the generic /v1/models sync, so this provider is discovered by "
+        "neither path and its model list will stay empty. Set its cloud provider type to the vendor it "
+        "actually is, or leave it unset for a plain OpenAI-compatible endpoint.",
+        provider.get("id"),
+        provider.get("name"),
+        provider.get("base_url"),
+    )
+
+
 def build_azure_endpoint(host: str, deployment_id: str, op: AzureOperation) -> str:
     """Build the per-model endpoint URL stored in the DB for a deployment.
 
@@ -224,6 +264,9 @@ class AzureDeploymentSyncService:
         if not providers:
             logger.debug("Azure deployment sync: no Azure providers configured")
             return
+
+        for provider in providers:
+            _warn_if_not_an_azure_endpoint(provider)
 
         # Track DB changes separately from new model rows: any link insert /
         # endpoint update / prune must refresh the runtime registry (so the

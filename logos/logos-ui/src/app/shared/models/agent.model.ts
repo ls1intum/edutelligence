@@ -48,6 +48,21 @@ export interface AgentSession {
   /** How urgent the work is (higher runs first), and why. */
   priority: number;
   priority_reason: string | null;
+  /**
+   * The environment notes this session was handed, as they stood when it
+   * started. Null for a session that never started and for ones that ran
+   * before the runner kept a copy.
+   */
+  environment_notes: string | null;
+}
+
+/** The standing text every session is given, and whether it is the default. */
+export interface AgentInstructions {
+  house_rules: string;
+  environment_notes: string;
+  house_rules_default: boolean;
+  environment_notes_default: boolean;
+  updated_by: string;
 }
 
 export interface AgentEvent {

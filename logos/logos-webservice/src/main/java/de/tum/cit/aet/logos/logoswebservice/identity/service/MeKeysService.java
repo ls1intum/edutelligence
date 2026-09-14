@@ -1,5 +1,8 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.MyKeyProjection;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.RateLimitUsageProjection;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelWindowClient;
 
 @Service
@@ -25,6 +29,19 @@ public class MeKeysService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Object> OBJ_TYPE = new TypeReference<>() {};
     private static final int API_KEY_TOKEN_LENGTH = 128;
+
+    /**
+     * The sliding window the orchestrator's rate limiter enforces rpm/tpm
+     * limits over; the usage numbers shown next to a limit must come from the
+     * same window to be comparable to it.
+     *
+     * This is a copy of the default of {@code RateLimitConfig.window_seconds}
+     * in {@code logos/logos-orchestrator/src/logos/rate_limiter.py} — the
+     * orchestrator is the source of truth. Keep the two in sync; the test
+     * {@code RateLimitWindowConsistencyTest} fails if they drift, and the
+     * corresponding comment in rate_limiter.py points back here.
+     */
+    private static final int RATE_LIMIT_WINDOW_SECONDS = 60;
 
     private final ApiKeyRepository apiKeyRepository;
     private final OrchestratorModelWindowClient modelWindowClient;
@@ -35,9 +52,29 @@ public class MeKeysService {
     }
 
     public List<Map<String, Object>> getKeysForUser(int userId) {
-        return apiKeyRepository.findKeysForUser(userId).stream()
-            .map(this::toMap)
+        List<MyKeyProjection> keys = apiKeyRepository.findKeysForUser(userId);
+        Map<Integer, RateLimitUsageProjection> usageByKey = findRateLimitUsage(userId);
+        return keys.stream()
+            .map(p -> toMap(p, usageByKey.get(p.getId())))
             .toList();
+    }
+
+    /**
+     * Rate-limit usage of the user's active keys inside one rate-limiter
+     * window (see {@link #RATE_LIMIT_WINDOW_SECONDS}), keyed by key id.
+     * Keys with no traffic in the window are absent — and stay absent: the
+     * caller must not render them at zero, because zero usage is the most
+     * reassuring possible reading for a rate-limit figure ("you have your
+     * entire budget available"). Unknown usage and genuinely-idle usage
+     * deserve different renderings; the UI shows an en dash for the former.
+     */
+    private Map<Integer, RateLimitUsageProjection> findRateLimitUsage(int userId) {
+        Timestamp since = Timestamp.from(Instant.now().minusSeconds(RATE_LIMIT_WINDOW_SECONDS));
+        Map<Integer, RateLimitUsageProjection> byKey = new HashMap<>();
+        for (RateLimitUsageProjection p : apiKeyRepository.findRateLimitUsageForUser(userId, since)) {
+            byKey.put(p.getKeyId(), p);
+        }
+        return byKey;
     }
 
     @Transactional
@@ -110,7 +147,7 @@ public class MeKeysService {
             "api_key", key.getKeyValue()));
     }
 
-    private Map<String, Object> toMap(MyKeyProjection p) {
+    private Map<String, Object> toMap(MyKeyProjection p, RateLimitUsageProjection usage) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());
         m.put("name", p.getName());
@@ -122,6 +159,7 @@ public class MeKeysService {
         m.put("used_micro_cents", p.getUsedMicroCents());
         m.put("settings", resolvedSettings(p));
         m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toString() : null);
+        m.put("rate_limit_usage", usage == null ? null : toRateLimitUsage(usage));
 
         Map<String, Object> team = new LinkedHashMap<>();
         team.put("id", p.getTeamId());
@@ -130,6 +168,16 @@ public class MeKeysService {
         team.put("budget_used_micro_cents", p.getTeamBudgetUsedMicroCents());
         m.put("team", team);
         return m;
+    }
+
+    private Map<String, Object> toRateLimitUsage(RateLimitUsageProjection usage) {
+        Map<String, Object> u = new LinkedHashMap<>();
+        u.put("window_seconds", RATE_LIMIT_WINDOW_SECONDS);
+        u.put("cloud_requests", usage.getCloudRequests());
+        u.put("cloud_tokens", usage.getCloudTokens());
+        u.put("local_requests", usage.getLocalRequests());
+        u.put("local_tokens", usage.getLocalTokens());
+        return u;
     }
 
     @SuppressWarnings("unchecked")

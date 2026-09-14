@@ -15,6 +15,7 @@ import {
   AgentControls,
   AgentRunnerMode,
   AgentEvent,
+  AgentInstructions,
   AgentModels,
   AgentSession,
   AgentSessionStatus,
@@ -312,6 +313,11 @@ export class Agents implements OnInit {
     } catch {
       this.triggers.set(null);
     }
+    try {
+      this.instructions.set(await this.agentService.getInstructions());
+    } catch {
+      this.instructions.set(null);
+    }
   }
 
   // ── session selection ────────────────────────────────────────────────────
@@ -381,6 +387,75 @@ export class Agents implements OnInit {
 
   private stream: AbortController | null = null;
   retrying = signal<number | null>(null);
+
+  // ── what every session is told ───────────────────────────────────────────
+  instructions = signal<AgentInstructions | null>(null);
+  instructionsOpen = signal(false);
+  houseRulesDraft = signal('');
+  environmentNotesDraft = signal('');
+  savingInstructions = signal(false);
+
+  /** Open the editor with the text that is actually in force. */
+  toggleInstructions(): void {
+    const open = !this.instructionsOpen();
+    this.instructionsOpen.set(open);
+    const current = this.instructions();
+    if (open && current) {
+      this.houseRulesDraft.set(current.house_rules);
+      this.environmentNotesDraft.set(current.environment_notes);
+    }
+  }
+
+  /**
+   * Change what every session is told.
+   *
+   * These are prompts, and prompts are the part of an unattended agent most
+   * worth adjusting after watching it work — and the part least worth
+   * waiting for a release to adjust.
+   */
+  async saveInstructions(): Promise<void> {
+    if (this.savingInstructions()) return;
+    this.savingInstructions.set(true);
+    try {
+      this.instructions.set(
+        await this.agentService.setInstructions({
+          house_rules: this.houseRulesDraft(),
+          environment_notes: this.environmentNotesDraft(),
+        }),
+      );
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not change what the sessions are told.'));
+    } finally {
+      this.savingInstructions.set(false);
+    }
+  }
+
+  /**
+   * Put one half back to the text the code ships with.
+   *
+   * Only that half is sent, and only that half's box is refilled. Reset is
+   * a statement about one box: the other one may hold an edit nobody has
+   * saved yet, and neither the database nor the screen may lose it here.
+   */
+  async resetInstructions(half: 'house_rules' | 'environment_notes'): Promise<void> {
+    if (this.savingInstructions()) return;
+    this.savingInstructions.set(true);
+    try {
+      const fresh = await this.agentService.setInstructions(
+        half === 'house_rules' ? { reset_house_rules: true } : { reset_environment_notes: true },
+      );
+      this.instructions.set(fresh);
+      if (half === 'house_rules') {
+        this.houseRulesDraft.set(fresh.house_rules);
+      } else {
+        this.environmentNotesDraft.set(fresh.environment_notes);
+      }
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not restore the default text.'));
+    } finally {
+      this.savingInstructions.set(false);
+    }
+  }
   moving = signal<number | null>(null);
 
   /**

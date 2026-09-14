@@ -16,7 +16,6 @@ export const routes: Routes = [
     canActivate: [authGuard],
     loadComponent: () => import('./core/layout/shell/shell').then(m => m.Shell),
     children: [
-      { path: 'dashboard',       title: 'Dashboard · Logos',       data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/dashboard/dashboard').then(m => m.Dashboard) },
       { path: 'statistics',      title: 'Statistics · Logos',      data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/statistics/statistics').then(m => m.Statistics) },
       { path: 'models',         title: 'Models · Logos',           data: { roles: ALL_ROLES },                canActivate: [roleGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
       { path: 'models/:id/details', title: 'Model Details · Logos', data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/model-error-report/model-error-report').then(m => m.ModelErrorReport) },
@@ -30,6 +29,7 @@ export const routes: Routes = [
       { path: 'agents',         title: 'Agent Sessions · Logos',   data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/agents/agents').then(m => m.Agents) },
       { path: 'my-workspace',    title: 'My Workspace · Logos',    canActivate: [hasKeysGuard], loadComponent: () => import('./features/my-workspace/my-workspace').then(m => m.MyWorkspace) },
       { path: 'ai-tools',        title: 'AI Tools · Logos',         canActivate: [hasKeysGuard], loadComponent: () => import('./features/ai-tools/ai-tools').then(m => m.AiTools) },
+      { path: 'batches',         title: 'Batches · Logos',          canActivate: [hasKeysGuard], loadComponent: () => import('./features/batches/batches').then(m => m.Batches) },
       { path: 'open-code',       redirectTo: 'ai-tools', pathMatch: 'full' },
       { path: 'claude-code',     redirectTo: 'ai-tools', pathMatch: 'full' },
       { path: 'no-access',       title: 'No Access · Logos',       loadComponent: () => import('./features/no-access/no-access').then(m => m.NoAccess) },

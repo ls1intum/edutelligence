@@ -132,6 +132,83 @@ async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+class Unchanged:
+    """ "Leave this alone", as a value.
+
+    Null already means something here — "clear the override" — so a half
+    nobody touched cannot be expressed as null, and a default of null would
+    quietly reset it.
+    """
+
+    __slots__ = ()
+
+
+UNCHANGED = Unchanged()
+
+
+async def get_instructions() -> dict[str, Any] | None:
+    """The standing instructions, or None when the row is missing."""
+    async with sessionmaker()() as db:
+        row = (
+            (
+                await db.execute(
+                    text(
+                        """
+                        SELECT house_rules, environment_notes, updated_by, updated_at
+                          FROM agent_instructions WHERE id = 1
+                        """
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
+async def set_instructions(
+    *,
+    house_rules: str | None | Unchanged = UNCHANGED,
+    environment_notes: str | None | Unchanged = UNCHANGED,
+    updated_by: str,
+) -> None:
+    """Store the standing instructions.
+
+    Three things can be meant about a half, and they are all different:
+    text replaces it, null clears the override back to what the code ships
+    with, and `UNCHANGED` leaves what is stored alone. The last one is why
+    the write is per-half — resetting the house rules must not save
+    whatever happens to be sitting in the other box on somebody's screen.
+    """
+    async with sessionmaker()() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO agent_instructions (id, house_rules, environment_notes, updated_by, updated_at)
+                VALUES (1, :house_rules, :environment_notes, :updated_by, :now)
+                ON CONFLICT (id) DO UPDATE SET
+                    house_rules = CASE WHEN :write_house
+                        THEN :house_rules ELSE agent_instructions.house_rules END,
+                    environment_notes = CASE WHEN :write_notes
+                        THEN :environment_notes ELSE agent_instructions.environment_notes END,
+                    updated_by = :updated_by,
+                    updated_at = :now
+                """
+            ),
+            {
+                # There is no row to keep on the insert path, so an untouched
+                # half starts out as no override at all.
+                "house_rules": None if isinstance(house_rules, Unchanged) else house_rules,
+                "environment_notes": None if isinstance(environment_notes, Unchanged) else environment_notes,
+                "write_house": not isinstance(house_rules, Unchanged),
+                "write_notes": not isinstance(environment_notes, Unchanged),
+                "updated_by": updated_by,
+                "now": _now(),
+            },
+        )
+        await db.commit()
+
+
 # --- what an operator changed while the runner was running ----------------
 
 
@@ -517,6 +594,7 @@ async def create_session(
     open_pull_request: bool,
     deploy_to_dev: bool,
     screenshot_paths: Sequence[str],
+    no_push: bool = False,
     trigger_kind: str | None = None,
     trigger_ref: str | None = None,
     branch: str | None = None,
@@ -549,12 +627,13 @@ async def create_session(
                     INSERT INTO agent_sessions
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
-                         trigger_kind, trigger_ref, branch_name, reply_target,
-                         reaction_target, priority, priority_reason)
+                         no_push, trigger_kind, trigger_ref, branch_name,
+                         reply_target, reaction_target, priority, priority_reason)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
                          :open_pr, :deploy, CAST(:paths AS jsonb),
-                         :trigger_kind, :trigger_ref, :branch, :reply_target,
+                         :no_push, :trigger_kind, :trigger_ref, :branch,
+                         :reply_target,
                          :reaction_target,
                          :priority, :priority_reason)
                     RETURNING id
@@ -568,6 +647,10 @@ async def create_session(
                     "open_pr": open_pull_request,
                     "deploy": deploy_to_dev,
                     "paths": json.dumps(list(screenshot_paths)),
+                    # Set only for the sessions that answer from a checkout
+                    # they may not write to: the finalizer is told by the
+                    # row, not by the task text, to leave the remote alone.
+                    "no_push": no_push,
                     "trigger_kind": trigger_kind,
                     "trigger_ref": trigger_ref,
                     # Set only when the work belongs on a branch that already
@@ -792,9 +875,9 @@ _SESSION_SELECT = """
            s.model, s.branch_name, s.pr_url, s.created_by, s.created_at,
            s.started_at, s.finished_at, s.exit_code, s.error,
            s.container_id, s.open_pull_request, s.deploy_to_dev,
-           s.screenshot_paths, s.trigger_kind, s.trigger_ref, s.reply_target,
-           s.reaction_target,
-           s.priority, s.priority_reason,
+           s.screenshot_paths, s.no_push, s.trigger_kind, s.trigger_ref,
+           s.reply_target, s.reaction_target,
+           s.priority, s.priority_reason, s.environment_notes,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -981,6 +1064,20 @@ async def next_queued_session(*, include_triggered: bool = True) -> dict[str, An
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
                            )
+                       -- Nor while another session holds the same branch.
+                       -- Two triggers on one pull request — a review and a
+                       -- question, minutes apart — are two requests about
+                       -- one piece of work, and two sessions in different
+                       -- workspaces would each commit to that branch from a
+                       -- checkout taken before the other one pushed. One
+                       -- waits; its checkout then contains the other's work.
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions same
+                              WHERE same.branch_name IS NOT NULL
+                                AND same.branch_name = s.branch_name
+                                AND same.id <> s.id
+                                AND same.status = ANY(:occupying)
+                           )
                      ORDER BY s.priority DESC, s.created_at
                      LIMIT 1
                     """
@@ -1014,6 +1111,14 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
     once, counted *inside this statement*. Counting it beforehand and
     claiming afterwards leaves a window in which two schedulers both see
     room — the automation would then take the places kept for people.
+
+    A session with a branch holds that branch's advisory lock while it
+    claims: the row lock alone cannot keep two claims on one branch apart —
+    each locks only its own row, and the branch check sees the other still
+    queued. The branch is written at insert and never changed, so the peek
+    names exactly the branch the claim checks; the lock is held to the
+    end of this transaction, and the check below re-reads the branch only
+    after the previous holder has committed.
     """
     async with sessionmaker()() as db:
         if trigger_quota is not None:
@@ -1023,6 +1128,17 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
             # below, taking the places kept for people. Held to the end of
             # this transaction, which is the claim.
             await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-admission'))"))
+        branch = (
+            await db.execute(
+                text("SELECT s.branch_name FROM agent_sessions s WHERE s.id = :session_id"),
+                {"session_id": session_id},
+            )
+        ).scalar_one_or_none()
+        if branch is not None:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-branch:' || :branch))"),
+                {"branch": branch},
+            )
         claimed = (
             await db.execute(
                 text(
@@ -1034,6 +1150,20 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
                              SELECT 1 FROM agent_sessions busy
                               WHERE busy.workspace_id = s.workspace_id
                                 AND busy.status = ANY(:occupying)
+                           )
+                       -- Nor while another session holds the same branch.
+                       -- Two triggers on one pull request — a review and a
+                       -- question, minutes apart — are two requests about
+                       -- one piece of work, and two sessions in different
+                       -- workspaces would each commit to that branch from a
+                       -- checkout taken before the other one pushed. One
+                       -- waits; its checkout then contains the other's work.
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions same
+                              WHERE same.branch_name IS NOT NULL
+                                AND same.branch_name = s.branch_name
+                                AND same.id <> s.id
+                                AND same.status = ANY(:occupying)
                            )
                        AND (
                              s.trigger_ref IS NULL
@@ -1075,89 +1205,257 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
     return dict(row) if row else None
 
 
+# The conditions under which a queued session may be claimed, shared by the
+# branch peek and the claim below so the two cannot drift apart. A session
+# is startable only when no other session is already occupying its workspace
+# — the workspace is one working copy on one volume, so two concurrent
+# sessions in it would write over each other — and when no other session
+# occupies its branch, for the same reason one level up: two workspaces
+# committing to one branch from checkouts taken before the other pushed.
+# Parallelism comes from running several *workspaces*, not several sessions
+# per workspace or per branch.
+_CLAIMABLE = """
+    s.status = 'queued'
+      -- The automation may fill the platform, but not the
+      -- last places in it: with its quota used up, only
+      -- work a person queued is claimable.
+      AND (:include_triggered OR s.trigger_ref IS NULL)
+      AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions busy
+             WHERE busy.workspace_id = s.workspace_id
+               AND busy.status = ANY(:occupying)
+           )
+      -- Nor while another session holds the same branch.
+      -- Two triggers on one pull request — a review and a
+      -- question, minutes apart — are two requests about
+      -- one piece of work, and two sessions in different
+      -- workspaces would each commit to that branch from a
+      -- checkout taken before the other one pushed. One
+      -- waits; its checkout then contains the other's work.
+      AND NOT EXISTS (
+            SELECT 1 FROM agent_sessions same
+             WHERE same.branch_name IS NOT NULL
+               AND same.branch_name = s.branch_name
+               AND same.id <> s.id
+               AND same.status = ANY(:occupying)
+           )
+      -- One candidate per workspace, so a workspace cannot
+      -- take several slots in a pass and then collide with
+      -- itself — and it is that workspace's most urgent
+      -- queued session, oldest among equals. Picking the
+      -- oldest outright would hide a security fix behind a
+      -- typo that happened to be queued into the same
+      -- checkout first, and the global order below could
+      -- never correct it.
+      AND s.id = (
+            SELECT peer.id FROM agent_sessions peer
+             WHERE peer.workspace_id = s.workspace_id
+               AND peer.status = 'queued'
+               -- The same trigger rule as the outer predicate: a pass that
+               -- may not take triggered rows must not let a triggered row
+               -- stand in as the workspace's best candidate either, or
+               -- every manual row behind it fails this comparison and the
+               -- workspace goes unclaimed while the quota is full.
+               AND (:include_triggered OR peer.trigger_ref IS NULL)
+             ORDER BY peer.priority DESC, peer.created_at, peer.id
+             LIMIT 1
+           )
+"""
+
+
 async def claim_queued_sessions(limit: int, *, include_triggered: bool = True) -> list[dict[str, Any]]:
     """Take up to `limit` startable queued sessions and mark them starting.
 
-    A session is startable only when no other session is already occupying its
-    workspace: the workspace is one working copy on one volume, so two
-    concurrent sessions in it would write over each other. Parallelism comes
-    from running several *workspaces*, not several sessions per workspace.
-
     ``FOR UPDATE SKIP LOCKED`` makes this safe to call from more than one
     replica: two schedulers never claim the same session.
+
+    Branches are the second axis the row locks cannot cover: one statement
+    can select several sessions that commit to one branch, and two replicas
+    can each select one. The peek therefore names every branch the pass
+    may touch, and those advisory locks are taken — sorted, so two passes
+    locking different sets cannot deadlock — before the claim re-checks
+    everything under the row locks.
+
+    The claim is bound to the branch set the peek named: it re-evaluates the
+    predicate on fresh data, and a row that becomes claimable *after* the peek
+    can name a branch this transaction never locked. Letting it through would
+    admit two sessions to one branch, so the claim only takes null branches
+    and the branches it already locked; a branch that appeared in the gap is
+    left to the next pass.
+
+    The claim selects *every* such candidate, not `limit`: dedup happens
+    before the limit, so a second session of one branch spends no slot the
+    platform would never admit it to, and null branches keep every slot they
+    earn.
     """
     if limit <= 0:
         return []
     async with sessionmaker()() as db:
-        ids = (
+        params = {
+            "include_triggered": include_triggered,
+            "occupying": [
+                SessionStatus.STARTING.value,
+                SessionStatus.RUNNING.value,
+                SessionStatus.PAUSED.value,
+                # The finalizer runs git in the working copy on
+                # the same volume: a new session admitted during
+                # finalization would write over it.
+                SessionStatus.FINALIZING.value,
+            ],
+        }
+        candidates = (
             (
                 await db.execute(
                     text(
-                        """
-                    SELECT s.id FROM agent_sessions s
-                     WHERE s.status = 'queued'
-                       -- The automation may fill the platform, but not the
-                       -- last places in it: with its quota used up, only
-                       -- work a person queued is claimable.
-                       AND (:include_triggered OR s.trigger_ref IS NULL)
-                       AND NOT EXISTS (
-                             SELECT 1 FROM agent_sessions busy
-                              WHERE busy.workspace_id = s.workspace_id
-                                AND busy.status = ANY(:occupying)
-                           )
-                       -- One candidate per workspace, so a workspace cannot
-                       -- take several slots in a pass and then collide with
-                       -- itself — and it is that workspace's most urgent
-                       -- queued session, oldest among equals. Picking the
-                       -- oldest outright would hide a security fix behind a
-                       -- typo that happened to be queued into the same
-                       -- checkout first, and the global order below could
-                       -- never correct it.
-                       AND s.id = (
-                             SELECT peer.id FROM agent_sessions peer
-                              WHERE peer.workspace_id = s.workspace_id
-                                AND peer.status = 'queued'
-                              ORDER BY peer.priority DESC, peer.created_at, peer.id
-                              LIMIT 1
-                           )
-                     -- Most urgent first, oldest among equals: sessions are
-                     -- admitted one per capacity reading, so this order is
-                     -- what the platform works on while it is busy.
-                     ORDER BY s.priority DESC, s.created_at
-                     LIMIT :limit
-                     FOR UPDATE OF s SKIP LOCKED
-                    """
+                        "SELECT s.id, s.branch_name FROM agent_sessions s WHERE "
+                        + _CLAIMABLE
+                        # Most urgent first, oldest among equals: sessions
+                        # are admitted one per capacity reading, so this
+                        # order is what the platform works on while it is
+                        # busy. The id tie-break keeps the order below
+                        # deterministic when two sessions share a moment.
+                        + " ORDER BY s.priority DESC, s.created_at, s.id"
                     ),
-                    {
-                        "limit": limit,
-                        "include_triggered": include_triggered,
-                        "occupying": [
-                            SessionStatus.STARTING.value,
-                            SessionStatus.RUNNING.value,
-                            SessionStatus.PAUSED.value,
-                            # The finalizer runs git in the working copy on
-                            # the same volume: a new session admitted during
-                            # finalization would write over it.
-                            SessionStatus.FINALIZING.value,
-                        ],
-                    },
+                    params,
                 )
             )
-            .scalars()
+            .mappings()
             .all()
         )
-        if not ids:
+        # Every branch the pass may touch, named by the peek and locked before
+        # the claim re-checks. The peek is a snapshot: under READ COMMITTED a
+        # row can become claimable after it runs, so the set locked here is the
+        # set the claim below is allowed to reach.
+        locked_branches = sorted({c["branch_name"] for c in candidates if c["branch_name"] is not None})
+        for branch in locked_branches:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext('logos-agent-branch:' || :branch))"),
+                {"branch": branch},
+            )
+        claimed = (
+            (
+                await db.execute(
+                    text(
+                        "SELECT s.id, s.branch_name FROM agent_sessions s WHERE "
+                        + _CLAIMABLE
+                        # Only branches this transaction locked, or none. The
+                        # claim re-evaluates the predicate on fresh data, and a
+                        # row that became claimable after the peek can name a
+                        # branch nobody in this pass locked — admitting it would
+                        # put two sessions on one branch. Such a row is left to
+                        # the next pass, not claimed beside a concurrent claimant.
+                        # The CAST, not a `::` cast: asyncpg mis-parses a
+                        # parameter directly followed by `::`, and the set is
+                        # empty on the common branch-free pass, so the type
+                        # must be given.
+                        + " AND (s.branch_name IS NULL OR s.branch_name = ANY(CAST(:locked_branches AS text[])))"
+                        + " ORDER BY s.priority DESC, s.created_at, s.id"
+                        + " FOR UPDATE OF s SKIP LOCKED"
+                    ),
+                    {**params, "locked_branches": locked_branches},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        taken: list[int] = []
+        seen_branches: set[str] = set()
+        for candidate in claimed:
+            if len(taken) >= limit:
+                break
+            branch = candidate["branch_name"]
+            if branch is not None:
+                if branch in seen_branches:
+                    continue
+                seen_branches.add(branch)
+            taken.append(candidate["id"])
+        if not taken:
             await db.rollback()
             return []
         await db.execute(
             text("UPDATE agent_sessions SET status = 'starting' WHERE id = ANY(:ids)"),
-            {"ids": list(ids)},
+            {"ids": list(taken)},
         )
         rows = (
-            (await db.execute(text(_SESSION_SELECT + " WHERE s.id = ANY(:ids)"), {"ids": list(ids)})).mappings().all()
+            (await db.execute(text(_SESSION_SELECT + " WHERE s.id = ANY(:ids)"), {"ids": list(taken)})).mappings().all()
         )
         await db.commit()
     return [dict(r) for r in rows]
+
+
+async def sessions_awaiting_checks() -> list[dict[str, Any]]:
+    """Finished sessions whose pushed commit nobody has judged yet.
+
+    The follow-up on a red build outlives the process that started it: a
+    redeploy in the couple of minutes between pushing and CI concluding
+    used to drop it silently. Asked on startup and on every scheduler pass,
+    and almost always empty.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id, workspace_id, task, model, branch_name, checks_sha,
+                           trigger_kind, trigger_ref, reply_target, reaction_target,
+                           priority, priority_reason, open_pull_request, finished_at
+                      FROM agent_sessions
+                     WHERE checks_watch = 'pending'
+                     ORDER BY id
+                    """
+                )
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
+async def sessions_owing_a_replacement(*, max_attempts: int, since: datetime) -> list[dict[str, Any]]:
+    """Failed requests that were never taken up again, and still could be.
+
+    Derived rather than flagged, and deliberately so. A row already says
+    everything needed to know whether a replacement is owed — it failed, it
+    came from a request, nothing newer has been tried for that request, and
+    the request has attempts left — so there is no intent to write, nothing
+    to keep in step with the rows it describes, and no way for the intent
+    and the fact to disagree. It also covers the sessions that failed
+    before any of this existed, which a flag written at settlement never
+    could.
+
+    ``id > s.id`` is what makes "nothing newer" cheap and exact: a
+    replacement that is queued, running or itself failed is a later row
+    with the same reference, and any of the three means this row is no
+    longer the one that owes anything.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text(
+                    """
+                    SELECT s.id, s.workspace_id, s.task, s.model, s.branch_name,
+                           s.trigger_kind, s.trigger_ref, s.reply_target, s.reaction_target,
+                           s.priority, s.priority_reason, s.open_pull_request, s.error,
+                           s.finished_at
+                      FROM agent_sessions s
+                     WHERE s.status = 'failed'
+                       AND COALESCE(s.trigger_ref, '') <> ''
+                       AND s.finished_at IS NOT NULL
+                       AND s.finished_at > :since
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions newer
+                              WHERE newer.trigger_ref = s.trigger_ref
+                                AND newer.id > s.id
+                           )
+                       AND (
+                             SELECT COUNT(*) FROM agent_sessions tried
+                              WHERE tried.trigger_ref = s.trigger_ref
+                           ) < :max_attempts
+                     ORDER BY s.id
+                    """
+                ),
+                {"since": since, "max_attempts": max_attempts},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
 
 
 async def update_session(session_id: int, **fields: Any) -> None:
@@ -1177,6 +1475,13 @@ async def update_session(session_id: int, **fields: Any) -> None:
         "tokens_out",
         "cost_usd",
         "deployed_at",
+        # The text this session was handed, as opposed to the text sessions
+        # are handed now — the instructions are editable.
+        "environment_notes",
+        # The commit whose checks somebody still has to look at, and whether
+        # anybody still owes that.
+        "checks_sha",
+        "checks_watch",
     }
     unknown = set(fields) - allowed
     if unknown:

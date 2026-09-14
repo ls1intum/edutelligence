@@ -126,6 +126,25 @@ export class StatisticsService {
     }));
   }
 
+  /**
+   * Recorded outcome of the most recent manual load of a model on a worker.
+   *
+   * `status` is `running | succeeded | failed | unknown`. `unknown` means the
+   * orchestrator holds no recorded outcome (it restarted, or the entry aged
+   * out) — callers must not render that as a failure.
+   */
+  getLaneLoadStatus(
+    providerId: number,
+    model: string,
+  ): Promise<{ status?: string; reason?: string; lane_id?: string }> {
+    return firstValueFrom(
+      this.http.post<{ status?: string; reason?: string; lane_id?: string }>(
+        '/api/logosdb/providers/logosnode/lanes/load_status',
+        { provider_id: providerId, model }
+      )
+    );
+  }
+
   unloadLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/delete', {
       provider_id: providerId,

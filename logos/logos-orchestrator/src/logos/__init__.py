@@ -100,6 +100,7 @@ _m._render_lane_summary = _render_lane_summary
 # These sub-packages are already in sys.modules (imported above via logos.main),
 # but logos.main itself has no attribute for them — add them explicitly.
 
+import logos.batch_api as _batch_api_mod  # noqa: E402
 import logos.pipeline as _pipeline_pkg  # noqa: E402
 import logos.responses as _responses_mod  # noqa: E402
 import logos.sdi as _sdi_pkg  # noqa: E402
@@ -107,6 +108,9 @@ import logos.sdi as _sdi_pkg  # noqa: E402
 _m.sdi = _sdi_pkg
 _m.pipeline = _pipeline_pkg
 _m.responses = _responses_mod
+# Without this, `from logos import batch_api` re-imports the file under a
+# second name and patches applied to it are invisible to the running code.
+_m.batch_api = _batch_api_mod
 
 # ── Replace logos package with logos.main ────────────────────────────────────
 # Preserve __path__ so `from logos.X import Y` submodule imports still work.

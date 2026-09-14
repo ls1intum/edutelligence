@@ -162,6 +162,87 @@
     </section>
   }
 
+  @if (instructions(); as text) {
+    <section class="panel">
+      <div class="panel__head">
+        <h2 class="section-title">What every session is told</h2>
+        <button class="btn btn--ghost" (click)="toggleInstructions()">
+          {{ instructionsOpen() ? 'Close' : 'Edit' }}
+        </button>
+      </div>
+      <p class="field__hint">
+        These two blocks are appended to every task: the conventions the agent works to, and the
+        description of the container it works in. They take effect on the next session — no
+        deployment.
+      </p>
+
+      @if (instructionsOpen()) {
+        <label class="controls__field">
+          <span class="field__label">
+            House rules
+            @if (text.house_rules_default) {
+              <span class="field__optional">(as shipped)</span>
+            } @else {
+              <button
+                class="btn btn--link"
+                (click)="resetInstructions('house_rules')"
+                [disabled]="savingInstructions()"
+              >
+                restore the default
+              </button>
+            }
+          </span>
+          <textarea
+            class="input prompt-editor"
+            rows="14"
+            [ngModel]="houseRulesDraft()"
+            (ngModelChange)="houseRulesDraft.set($event)"
+            [disabled]="savingInstructions()"
+            aria-label="The conventions every session is held to"
+          ></textarea>
+        </label>
+
+        <label class="controls__field">
+          <span class="field__label">
+            Environment notes
+            @if (text.environment_notes_default) {
+              <span class="field__optional">(as shipped)</span>
+            } @else {
+              <button
+                class="btn btn--link"
+                (click)="resetInstructions('environment_notes')"
+                [disabled]="savingInstructions()"
+              >
+                restore the default
+              </button>
+            }
+          </span>
+          <textarea
+            class="input prompt-editor"
+            rows="10"
+            [ngModel]="environmentNotesDraft()"
+            (ngModelChange)="environmentNotesDraft.set($event)"
+            [disabled]="savingInstructions()"
+            aria-label="What the sandbox is, told to the agent inside it"
+          ></textarea>
+        </label>
+
+        <div class="controls__row">
+          <button
+            class="btn btn--primary"
+            (click)="saveInstructions()"
+            [disabled]="savingInstructions()"
+          >
+            {{ savingInstructions() ? 'Saving…' : 'Save' }}
+          </button>
+          @if (text.updated_by) {
+            <span class="field__hint">last changed by {{ text.updated_by }}</span>
+          }
+        </div>
+      }
+    </section>
+  }
+
   @if (error(); as message) {
     <div class="alert alert--error" role="alert">{{ message }}</div>
   }
@@ -465,6 +546,24 @@
           @if (session.error) {
             <div class="alert alert--error" role="alert">{{ session.error }}</div>
           }
+
+          <details class="prompt">
+            <summary class="prompt__summary">The exact task this session was given</summary>
+            <pre class="prompt__text">{{ session.task }}</pre>
+            @if (session.environment_notes !== null) {
+              <pre class="prompt__text">{{ session.environment_notes }}</pre>
+              <p class="field__hint">
+                The second block is what the sandbox added when it started this agent, kept as it
+                was on the day — editing the instructions does not rewrite it.
+              </p>
+            } @else if (instructions(); as text) {
+              <pre class="prompt__text">{{ text.environment_notes }}</pre>
+              <p class="field__hint">
+                This session did not record what it was told, so the second block is the text in
+                force now. It is what a session starting today would be handed.
+              </p>
+            }
+          </details>
 
           <h3 class="detail-title">Transcript</h3>
           @if (logLines().length === 0) {
