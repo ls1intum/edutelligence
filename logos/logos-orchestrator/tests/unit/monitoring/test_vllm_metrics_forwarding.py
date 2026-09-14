@@ -97,10 +97,21 @@ def test_validated_vllm_metrics_text_rejects_oversized_payloads() -> None:
     assert _validated_vllm_metrics_text(oversized, provider_id=1) is None
 
 
-def test_validated_vllm_metrics_text_counts_lone_surrogates_as_real_bytes() -> None:
+def test_validated_vllm_metrics_text_rejects_a_huge_lone_surrogate_payload() -> None:
     """A string of lone surrogates must not sail under the cap for free —
 
     encoding with errors="ignore" would silently drop them (0 bytes for any
     count), letting an oversized payload bypass the limit entirely."""
     lone_surrogates = "\ud800" * (_MAX_VLLM_METRICS_BYTES + 1)
     assert _validated_vllm_metrics_text(lone_surrogates, provider_id=1) is None
+
+
+def test_validated_vllm_metrics_text_rejects_a_single_lone_surrogate() -> None:
+    """Even one unpaired surrogate must be rejected regardless of size — it
+
+    would otherwise reach the cache in an valid-looking HELP string or label,
+    and prometheus_client's generate_latest() strictly UTF-8-encodes the
+    merged output later, raising UnicodeEncodeError and breaking every
+    /metrics scrape until this worker's snapshot is replaced or cleared."""
+    small_but_poisoned = 'vllm:foo{label="\ud800"} 1.0\n'
+    assert _validated_vllm_metrics_text(small_but_poisoned, provider_id=1) is None

@@ -63,12 +63,24 @@ def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
             type(value).__name__,
         )
         return None
-    # "surrogatepass", not "ignore": a lone surrogate (valid inside a JSON
-    # string escape, e.g. an unpaired \uD800) encodes to zero bytes under
-    # "ignore", so a string built mostly out of them would sail under the
-    # cap while still costing real memory — surrogatepass counts it instead
-    # of dropping it, closing that bypass.
-    if len(value.encode("utf-8", errors="surrogatepass")) > _MAX_VLLM_METRICS_BYTES:
+    # Strict, not "ignore"/"surrogatepass": a lone surrogate is valid inside
+    # a JSON string escape (e.g. an unpaired \uD800), but prometheus_client's
+    # generate_latest() strictly UTF-8-encodes the merged exposition output
+    # later — one such character reaching the cache in an otherwise-valid
+    # HELP string or label would raise UnicodeEncodeError there and break
+    # every scrape of this orchestrator's /metrics, not just this worker's
+    # series. Rejecting it here, at the only point that still knows which
+    # worker sent it, keeps that failure a dropped update instead of a
+    # cluster-wide outage.
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        logger.warning(
+            "Dropping vllm_metrics from provider %s: metrics_text contains an unpaired surrogate",
+            provider_id,
+        )
+        return None
+    if encoded_length > _MAX_VLLM_METRICS_BYTES:
         logger.warning(
             "Dropping oversized vllm_metrics from provider %s (over %d bytes)",
             provider_id,
