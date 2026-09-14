@@ -355,6 +355,7 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
         # Kept outside the install root on purpose — that directory is deleted
         # during uninstall, and the power settings outlive it.
         POWER_STATE_DIR="$HOME/Library/Application Support/$LAUNCH_AGENT_LABEL"
+        power_record_ok=1
         mkdir -p "$POWER_STATE_DIR"
         if [ -s "$POWER_STATE_DIR/power-state.saved" ]; then
             # An existing record is the pre-Logos snapshot and must not be
@@ -366,6 +367,18 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
             # would faithfully restore the machine to zero.
             log "  keeping the existing power-state record (it holds the pre-Logos values)"
         else
+            # Build it in a temporary file and rename only once every field is
+            # present and numeric. A direct write can leave a non-empty but
+            # PARTIAL record — an interrupt after the first line, or a pmset
+            # that omits a field — and a partial record is worse than none: a
+            # later bootstrap preserves it as the snapshot, the timers are all
+            # zeroed anyway, and the uninstall then restores only the fields
+            # that happen to be listed, changing the rest for good.
+            # Clear stragglers from an earlier interrupted attempt so they
+            # cannot accumulate; only the validated rename ever produces the
+            # real file, so a leftover partial is inert but untidy.
+            rm -f "$POWER_STATE_DIR"/power-state.partial.*
+            power_tmp="$POWER_STATE_DIR/power-state.partial.$$"
             {
                 # disablesleep belongs in the record too. Reaching this branch
                 # means it was NOT already 1 (the check above returned early
@@ -378,15 +391,37 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
                 pmset -g custom 2>/dev/null \
                     | sed -n '/AC Power/,$p' \
                     | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ { print $1, $2 }'
-            } > "$POWER_STATE_DIR/power-state.saved" || true
-            if [ -s "$POWER_STATE_DIR/power-state.saved" ]; then
+            } > "$power_tmp" 2>/dev/null || true
+
+            # Exactly one numeric value for disablesleep and for each of the six
+            # AC timers this script is about to change — nothing more, nothing
+            # missing, no duplicates.
+            if awk '
+                    $1 ~ /^(disablesleep|sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ \
+                        && $2 ~ /^[0-9]+$/ && NF == 2 { seen[$1]++ }
+                    END {
+                        split("disablesleep sleep displaysleep disksleep standby autopoweroff powernap", want, " ")
+                        for (i in want) if (seen[want[i]] != 1) exit 1
+                        exit 0
+                    }' "$power_tmp" 2>/dev/null; then
+                mv "$power_tmp" "$POWER_STATE_DIR/power-state.saved"
                 log "  saved previous power settings to $POWER_STATE_DIR/power-state.saved"
             else
-                rm -f "$POWER_STATE_DIR/power-state.saved"
-                warn "  could not read the current power settings; uninstall will leave them alone"
+                rm -f "$power_tmp"
+                # Without a complete record there is no way back, so do not go
+                # forward either: leaving the machine asleep-capable is a far
+                # smaller problem than changing it irreversibly.
+                warn "  could not capture the current power settings completely — leaving them unchanged."
+                warn "  The node will sleep when idle. Set them by hand if that is not wanted:"
+                warn "    sudo pmset -a disablesleep 1"
+                warn "    sudo pmset -c sleep 0 displaysleep 0 disksleep 0 standby 0 autopoweroff 0 powernap 0"
+                power_record_ok=0
             fi
         fi
-        if sudo pmset -a disablesleep 1 2>/dev/null \
+        # Only change what can be changed back.
+        if [ "${power_record_ok:-1}" -eq 0 ]; then
+            :
+        elif sudo pmset -a disablesleep 1 2>/dev/null \
            && sudo pmset -c sleep 0 displaysleep 0 disksleep 0 standby 0 autopoweroff 0 powernap 0 2>/dev/null; then
             log "  sleep disabled, AC timers zeroed"
         else

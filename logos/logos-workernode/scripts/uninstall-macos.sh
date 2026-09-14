@@ -338,6 +338,10 @@ if [ "$KEEP_POWER" -eq 0 ]; then
             fi
             if [ "$restore_ok" -eq 1 ]; then
                 rm -f "$POWER_STATE_FILE"
+                # A partial from an interrupted bootstrap attempt would keep
+                # the directory alive; it is inert, but there is no reason to
+                # leave it behind once everything is restored.
+                rm -f "$POWER_STATE_DIR"/power-state.partial.*
                 rmdir "$POWER_STATE_DIR" 2>/dev/null || true
             else
                 warn "  keeping $POWER_STATE_FILE so the restore can be retried by re-running this script"
