@@ -20,8 +20,6 @@ from logos_worker_node.vllm_metrics_merge import merge_metric_families
 
 logger = logging.getLogger("logos_worker_node.vllm_metrics_export")
 
-_FETCH_TIMEOUT_S = 3.0
-
 
 class _StaticCollector:
     """Replays an already-computed list of metric families verbatim."""
@@ -33,9 +31,11 @@ class _StaticCollector:
         return iter(self._families)
 
 
-async def _fetch_lane_metrics_text(client: httpx.AsyncClient, port: int) -> str | None:
+async def _fetch_lane_metrics_text(
+    client: httpx.AsyncClient, port: int, metrics_path: str, timeout_s: float
+) -> str | None:
     try:
-        resp = await client.get(f"http://127.0.0.1:{port}/metrics", timeout=_FETCH_TIMEOUT_S)
+        resp = await client.get(f"http://127.0.0.1:{port}{metrics_path}", timeout=timeout_s)
     except httpx.HTTPError:
         return None
     if resp.status_code != 200:
@@ -43,19 +43,32 @@ async def _fetch_lane_metrics_text(client: httpx.AsyncClient, port: int) -> str 
     return resp.text
 
 
-async def collect_vllm_metrics_text(endpoints: list[tuple[str, str, int]]) -> str:
+async def collect_vllm_metrics_text(
+    endpoints: list[tuple[str, str, int]],
+    *,
+    metrics_path: str = "/metrics",
+    timeout_s: float = 5.0,
+) -> str:
     """Fetch and merge vLLM's raw ``/metrics`` from every (lane_id, model, port).
 
     Lanes are queried concurrently. A lane whose vLLM process doesn't answer
     in time is skipped — one stuck lane must not blank the export for every
-    other lane on this worker.
+    other lane on this worker. ``metrics_path``/``timeout_s`` come from the
+    worker's configured VllmEngineConfig, not a hardcoded default, so a
+    deployment that serves metrics under a different path or needs more
+    headroom under load doesn't have to fork this module.
     """
     if not endpoints:
         return ""
     async with httpx.AsyncClient() as client:
-        texts = await asyncio.gather(*(_fetch_lane_metrics_text(client, port) for _, _, port in endpoints))
+        texts = await asyncio.gather(
+            *(_fetch_lane_metrics_text(client, port, metrics_path, timeout_s) for _, _, port in endpoints)
+        )
 
-    sources = [({"lane_id": lane_id, "model": model}, text) for (lane_id, model, _port), text in zip(endpoints, texts) if text]
+    sources = []
+    for (lane_id, model, _port), text in zip(endpoints, texts):
+        if text:
+            sources.append(({"lane_id": lane_id, "model": model}, text))
     families = merge_metric_families(sources)
     if not families:
         return ""

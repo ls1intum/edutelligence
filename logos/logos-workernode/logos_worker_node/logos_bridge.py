@@ -372,9 +372,16 @@ class LogosBridgeClient:
     async def _send_vllm_metrics(self, ws) -> None:
         lane_manager = self._app.state.lane_manager
         endpoints = lane_manager.running_vllm_endpoints()
-        metrics_text = await collect_vllm_metrics_text(endpoints)
-        if not metrics_text:
-            return
+        vllm_engine_cfg = self._app.state.config.engines.vllm
+        metrics_text = await collect_vllm_metrics_text(
+            endpoints,
+            metrics_path=vllm_engine_cfg.metrics_path,
+            timeout_s=vllm_engine_cfg.metrics_timeout_seconds,
+        )
+        # Always send, even when empty: this is what tells the orchestrator
+        # the last lane is gone, so it drops the stale series instead of
+        # keeping the latest non-empty snapshot forever (see
+        # LogosNodeRuntimeRegistry.peek_vllm_metrics).
         await self._send_json(
             ws,
             {

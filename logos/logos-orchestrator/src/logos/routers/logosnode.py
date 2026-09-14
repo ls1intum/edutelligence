@@ -42,6 +42,36 @@ logger = logging.getLogger("LogosLogger")
 
 router = APIRouter()
 
+# A worker's merged vLLM /metrics text is otherwise unbounded — several lanes'
+# full native exposition text, forwarded as-is. Cap it well above any sane
+# per-worker payload so a misbehaving or compromised worker can't inflate the
+# orchestrator's own /metrics scrape with an unbounded blob.
+_MAX_VLLM_METRICS_BYTES = 4 * 1024 * 1024
+
+
+def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
+    """Return *value* if it's an acceptable vllm_metrics payload, else None.
+
+    Rejects (and logs) anything that isn't a string, or a string over
+    _MAX_VLLM_METRICS_BYTES, instead of forwarding it into the cache that
+    every Prometheus scrape of this orchestrator reads from.
+    """
+    if not isinstance(value, str):
+        logger.warning(
+            "Dropping vllm_metrics from provider %s: metrics_text was %s, not a string",
+            provider_id,
+            type(value).__name__,
+        )
+        return None
+    if len(value.encode("utf-8", errors="ignore")) > _MAX_VLLM_METRICS_BYTES:
+        logger.warning(
+            "Dropping oversized vllm_metrics from provider %s (over %d bytes)",
+            provider_id,
+            _MAX_VLLM_METRICS_BYTES,
+        )
+        return None
+    return value
+
 
 def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | None) -> None:
     for job_id, (job_provider_id, expected_session_id) in list(_benchmark_sessions_by_job.items()):
@@ -379,9 +409,11 @@ async def logosnode_session(websocket: WebSocket, token: str):
             elif msg_type == "heartbeat":
                 await _main._logosnode_registry.mark_heartbeat(ticket.provider_id)
             elif msg_type == "vllm_metrics":
-                await _main._logosnode_registry.on_vllm_metrics(
-                    ticket.provider_id, str(payload.get("metrics_text", ""))
+                metrics_text = _validated_vllm_metrics_text(
+                    payload.get("metrics_text", ""), provider_id=ticket.provider_id
                 )
+                if metrics_text is not None:
+                    await _main._logosnode_registry.on_vllm_metrics(ticket.provider_id, metrics_text)
             elif msg_type == "command_result":
                 await _main._logosnode_registry.on_command_result(ticket.provider_id, payload)
             elif msg_type == "stream_start":

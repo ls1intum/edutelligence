@@ -7,6 +7,7 @@ from __future__ import annotations
 import logos as _main
 from logos.logosnode_registry import LogosNodeRuntimeRegistry, ProviderSession
 from logos.monitoring.prometheus_metrics import _VLLMForwardedMetricsCollector
+from logos.routers.logosnode import _MAX_VLLM_METRICS_BYTES, _validated_vllm_metrics_text
 
 _TEXT = """# HELP vllm:num_requests_running desc
 # TYPE vllm:num_requests_running gauge
@@ -65,3 +66,32 @@ async def test_collector_merges_and_relabels_by_worker(monkeypatch) -> None:
 async def test_collector_yields_nothing_without_any_metrics_pushed() -> None:
     families = list(_VLLMForwardedMetricsCollector().collect())
     assert families == []
+
+
+async def test_empty_push_clears_a_stale_snapshot() -> None:
+    """The last lane on a worker stopping must not leave its final metrics
+    snapshot cached forever — the worker pushes an empty export precisely so
+    this clears it."""
+    registry = LogosNodeRuntimeRegistry()
+    _session(registry, 1, "worker-a")
+    await registry.on_vllm_metrics(1, _TEXT)
+    assert registry.peek_vllm_metrics(1) is not None
+
+    await registry.on_vllm_metrics(1, "")
+
+    assert registry.peek_vllm_metrics(1) is None
+
+
+def test_validated_vllm_metrics_text_accepts_a_plain_string() -> None:
+    assert _validated_vllm_metrics_text(_TEXT, provider_id=1) == _TEXT
+
+
+def test_validated_vllm_metrics_text_rejects_non_strings() -> None:
+    assert _validated_vllm_metrics_text(123, provider_id=1) is None
+    assert _validated_vllm_metrics_text({"not": "a string"}, provider_id=1) is None
+    assert _validated_vllm_metrics_text(None, provider_id=1) is None
+
+
+def test_validated_vllm_metrics_text_rejects_oversized_payloads() -> None:
+    oversized = "x" * (_MAX_VLLM_METRICS_BYTES + 1)
+    assert _validated_vllm_metrics_text(oversized, provider_id=1) is None
