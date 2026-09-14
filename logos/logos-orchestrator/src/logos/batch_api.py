@@ -1583,6 +1583,17 @@ async def handle_batch_api_request(request: Request) -> Response:
                     raise_openai_error(
                         502, "The provider holding this object is gone.", code="batch_upstream_unreachable"
                     )
+                # Ownership above only says the team minted this object;
+                # permissions can move after that — re-check them too (see
+                # _assert_still_permitted), against owner itself for a file
+                # resource, else the file it came from, if still on record.
+                input_file = (
+                    owner
+                    if operation.resource == "files"
+                    else db.get_batch_object("file", str(owner.get("input_file_id") or ""))
+                )
+                if input_file is not None:
+                    _assert_still_permitted(db, auth, provider, input_file)
                 # A result file is exposed under Logos's own id; the forward
                 # must address the provider's, which the mapping row keeps.
                 # The path was parsed with the id the client supplied, so it
