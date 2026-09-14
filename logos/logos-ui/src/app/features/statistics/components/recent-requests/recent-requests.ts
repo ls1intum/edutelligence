@@ -83,6 +83,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
   readonly payloadError = signal<string | null>(null);
   private payloadRequestId: string | null = null;
   private payloadGeneration = 0;
+  private payloadAwaitingCompletion = false;
 
   readonly payloadText = computed(() => {
     const data = this.payloads();
@@ -98,7 +99,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
     }
     this.expandedRequestId.set(item.request_id);
     this.payloadTab.set('request');
-    if (this.payloadRequestId !== item.request_id || (!this.payloads() && !this.payloadLoading())) {
+    if (this.payloadRequestId !== item.request_id || this.payloadAwaitingCompletion || (!this.payloads() && !this.payloadLoading())) {
+      this.payloadAwaitingCompletion = deriveStage(item) !== 'complete';
       void this.loadPayloads(item.request_id);
     }
   }
@@ -114,7 +116,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
       if (generation === this.payloadGeneration) this.payloads.set(payloads);
     } catch {
       if (generation === this.payloadGeneration) {
-        this.payloadError.set('Could not load request content. Try again.');
+        this.payloadError.set('Could not load request content. Close and reopen to try again.');
       }
     } finally {
       if (generation === this.payloadGeneration) this.payloadLoading.set(false);
@@ -125,6 +127,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
     ++this.payloadGeneration;
     this.expandedRequestId.set(null);
     this.payloadRequestId = null;
+    this.payloadAwaitingCompletion = false;
     this.payloads.set(null);
     this.payloadError.set(null);
     this.payloadLoading.set(false);
@@ -313,7 +316,15 @@ export class RecentRequests implements OnChanges, OnDestroy {
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
     // A new push is where the chase gets new ground to cover.
-    if (changes['liveRequests']) this.startChase();
+    if (changes['liveRequests']) {
+      this.startChase();
+      const expanded = this.liveRequests?.find(item => item.request_id === this.expandedRequestId());
+      if (expanded && this.payloadAwaitingCompletion && deriveStage(expanded) === 'complete') {
+        this.payloadAwaitingCompletion = false;
+        // Supersede even an in-flight fetch: it may contain the unfinished response.
+        void this.loadPayloads(expanded.request_id);
+      }
+    }
   }
 
   ngOnDestroy(): void {

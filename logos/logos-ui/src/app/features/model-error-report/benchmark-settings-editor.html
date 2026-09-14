@@ -1,27 +1,32 @@
 <div class="settings-editor">
   <h4>Next benchmark</h4>
-  <p>Choose a public Hugging Face dataset with a text column. GuideLLM downloads and caches the data when the run starts.</p>
+  <p>Choose a public Hugging Face dataset and the text column to use as the prompt.</p>
   <div class="dataset-search">
-    <label>Find a dataset
-      <input type="search" [ngModel]="query()" (ngModelChange)="query.set($event)"
-        (keydown.enter)="search(); $event.preventDefault()" placeholder="Dataset name or owner/name" />
-    </label>
-    <button type="button" (click)="search()" [disabled]="searching() || !query().trim()">{{ searching() ? 'Searching…' : 'Search Hugging Face' }}</button>
+    <label for="benchmark-dataset">Dataset</label>
+    <p-autocomplete inputId="benchmark-dataset" [fluid]="true" [ngModel]="query()" (ngModelChange)="setQuery($event)"
+      [suggestions]="results()" [delay]="300" [minLength]="2"
+      [dropdown]="true" dropdownMode="current" dropdownAriaLabel="Find datasets"
+      [showEmptyMessage]="true" [emptyMessage]="searchError() ? 'Search unavailable' : 'No datasets found'"
+      [disabled]="loading()" [inputStyle]="{ width: '100%', font: 'inherit', minHeight: '40px' }"
+      (completeMethod)="search($event.query)" (onSelect)="inspectDataset($event.value)"
+      [panelStyle]="{ fontSize: 'var(--font-size-sm)' }"
+      placeholder="Search by dataset name or owner/name" appendTo="body" />
   </div>
-  @if (results().length) {
-    <div class="dataset-results" aria-label="Dataset search results">
-      @for (result of results(); track result.id) {
-        <button type="button" (click)="inspectDataset(result.id)" [disabled]="loading()">{{ result.id }}</button>
-      }
+  @if (searchError()) {
+    <div class="settings-feedback"><p role="alert" class="settings-error">{{ searchError() }}</p>
+      <button type="button" (click)="search()" [disabled]="searching()">Retry search</button>
     </div>
   }
-  <div class="selected-dataset"><strong>{{ settings().dataset }}</strong>
-    <div class="dataset-actions">
-      <a [href]="viewerUrl()" target="_blank" rel="noopener noreferrer">Open in Hugging Face <span aria-hidden="true">↗</span><span class="sr-only"> (new tab)</span></a>
-      <button type="button" (click)="inspectDataset(settings().dataset, settings().subset, settings().split)" [disabled]="loading()">{{ loading() ? 'Loading options…' : 'Reload options' }}</button>
-    </div>
+  <div class="selected-dataset">
+    <span>Selected: <strong>{{ settings().dataset }}</strong></span>
+    <a [href]="viewerUrl()" target="_blank" rel="noopener noreferrer">View on Hugging Face <span aria-hidden="true">↗</span><span class="sr-only"> (new tab)</span></a>
   </div>
-  @if (error()) { <p role="alert" class="settings-error">{{ error() }}</p> }
+  @if (loading()) { <p role="status">Loading dataset options…</p> }
+  @if (error()) {
+    <div class="settings-feedback"><p role="alert" class="settings-error">{{ error() }}</p>
+      <button type="button" (click)="retryDataset()" [disabled]="loading()">Retry dataset</button>
+    </div>
+  }
   <div class="settings-grid">
     <label>Configuration
       <select [ngModel]="settings().subset" (ngModelChange)="inspectDataset(settings().dataset, $event)" [disabled]="loading()">
@@ -79,17 +84,21 @@
       <p>No preview available. Use the Hugging Face link above to explore this dataset.</p>
     }
   </details>
-  <details>
+  <details (toggle)="onServingToggle($event)">
     <summary>vLLM settings for the next run</summary>
     <p>Applies to the selected Logos worker before the benchmark and may reload the model. Changed settings remain active afterwards. Empty fields keep the current worker value.</p>
     @if (pair()?.provider_type === 'logosnode') {
       <p>{{ pair()!.provider_name }}: {{ limits()?.gpu_count ?? 'unknown' }} GPUs available for this model.
         Limits include GPU assignments. Model architecture and available memory can impose additional restrictions.</p>
-      <button type="button" (click)="loadLimits()" [disabled]="limitsLoading()">{{ limitsLoading() ? 'Loading limits…' : 'Reload worker limits' }}</button>
-      @if (limitsError()) { <p role="alert" class="settings-error">{{ limitsError() }}</p> }
+      @if (limitsLoading()) { <p role="status">Checking worker capacity…</p> }
+      @if (limitsError()) {
+        <div class="settings-feedback"><p role="alert" class="settings-error">{{ limitsError() }}</p>
+          <button type="button" (click)="loadLimits()" [disabled]="limitsLoading()">Retry worker limits</button>
+        </div>
+      }
     }
     @for (message of validationErrors(); track message) { <p role="alert" class="settings-error">{{ message }}</p> }
-    <button type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">Keep current worker settings</button>
+    <button type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">Reset overrides</button>
     <div class="settings-grid">
       @for (field of fields; track field.key) {
         <label>{{ field.label }}

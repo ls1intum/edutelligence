@@ -155,8 +155,6 @@
                     (keydown.arrowleft)="payloadTab.set('request'); requestTab.focus()"
                     #responseTab>Response</button>
                 </div>
-                <button type="button" class="rr-content-button" [disabled]="payloadLoading()"
-                  (click)="loadPayloads(item.request_id)">Refresh</button>
               </div>
               <div role="tabpanel" id="rr-payload-panel" tabindex="0"
                 [attr.aria-labelledby]="payloadTab() === 'request' ? 'rr-request-tab' : 'rr-response-tab'"
@@ -170,7 +168,7 @@
                 } @else {
                   <p>No {{ payloadTab() }} content stored.
                     @if (payloadTab() === 'response' && stageOf(item) !== 'complete') {
-                      The request is still in progress. Refresh after it finishes.
+                      The response will load automatically when the request finishes.
                     } @else {
                       Content is only available when payload logging was enabled.
                     }

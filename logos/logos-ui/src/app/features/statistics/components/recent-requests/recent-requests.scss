@@ -271,7 +271,8 @@
 }
 
 .rr-content-button {
-  padding: 5px 10px;
+  min-height: 34px;
+  padding: 7px 12px;
   border: 1px solid rgb(var(--color-outline-200));
   border-radius: 6px;
   background: rgb(var(--color-surface-0));
@@ -294,6 +295,7 @@
   font-size: var(--font-size-sm);
 
   pre {
+    margin-top: 12px;
     max-height: 320px;
     overflow: auto;
     white-space: pre-wrap;
@@ -308,5 +310,5 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  [role='tablist'] { display: flex; gap: 6px; }
+  [role='tablist'] { display: flex; flex-wrap: wrap; gap: 12px; }
 }

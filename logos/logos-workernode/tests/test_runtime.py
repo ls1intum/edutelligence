@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from logos_worker_node.models import (
+    AppConfig,
     DeviceInfo,
     DeviceSummary,
     LaneConfig,
@@ -124,19 +125,9 @@ class _Bridge:
         )
 
 
-def _make_app(lanes, collector=None):
-    worker_cfg = SimpleNamespace(
-        name="logos-workernode",
-        max_lanes=0,
-        gpu_performance_score=100,
-    )
-    # build_runtime_status reads engines.vllm.disable_sleep_mode for the
-    # worker-wide sleep-mode kill switch reported in WorkerRuntimeStatus.
-    engines_cfg = SimpleNamespace(
-        vllm=SimpleNamespace(disable_sleep_mode=False), ollama=SimpleNamespace(gpu_devices="all")
-    )
+def _make_app(lanes, collector=None, *, config=None):
     state = SimpleNamespace(
-        config=SimpleNamespace(worker=worker_cfg, engines=engines_cfg),
+        config=config if config is not None else AppConfig(),
         lane_manager=_LaneManager(lanes),
         gpu_collector=collector or _GpuCollector(),
         logos_bridge=_Bridge(),
@@ -245,3 +236,20 @@ async def test_build_runtime_status_preserves_measured_nvidia_telemetry(monkeypa
     assert runtime.devices.nvidia_smi_available is True
     assert runtime.devices.total_memory_mb == 8192.0
     assert runtime.capacity.free_memory_mb == 7168.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_config,expected",
+    [
+        ({}, "all"),
+        ({"worker": {"gpu_devices": "1,2"}}, "1,2"),
+        ({"worker": {"gpu_devices": "none"}}, "none"),
+        ({"engines": {"ollama": {"gpu_devices": "0,1"}}}, "0,1"),
+        ({"worker": {"gpu_devices": "2"}, "engines": {"ollama": {"gpu_devices": "0,1"}}}, "2"),
+    ],
+)
+async def test_runtime_reports_worker_gpu_selection(raw_config, expected):
+    config = AppConfig.model_validate(raw_config)
+    runtime = await build_runtime_status(_make_app([], _NvidiaCollector(), config=config))
+    assert runtime.gpu_devices == expected

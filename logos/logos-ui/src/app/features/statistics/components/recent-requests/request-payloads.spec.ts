@@ -13,7 +13,7 @@ function deferred<T>() {
 describe('Recent request payloads', () => {
   let component: RecentRequests;
   let getRequestPayloads: ReturnType<typeof vi.fn>;
-  const row = { request_id: 'a' } as RequestItem;
+  const row = { request_id: 'a', request_complete_ts: '2026-09-14T12:00:00Z' } as RequestItem;
 
   beforeEach(() => {
     getRequestPayloads = vi.fn();
@@ -47,6 +47,34 @@ describe('Recent request payloads', () => {
     expect(component.payloadText()).toBeNull();
     await component.loadPayloads('a');
     expect(component.payloadText()).toContain('42');
+  });
+
+  it('automatically loads the final response once, superseding an unfinished fetch', async () => {
+    const initial = deferred<RequestPayloads>();
+    getRequestPayloads.mockReturnValueOnce(initial.promise)
+      .mockResolvedValue({ input_payload: 'prompt', response_payload: 'finished' });
+    component.togglePayloads({ ...row, request_complete_ts: null });
+    component.liveRequests = [row];
+    component.ngOnChanges({ liveRequests: new SimpleChange([], [row], false) });
+    await Promise.resolve();
+    initial.resolve({ input_payload: 'prompt', response_payload: null });
+    await Promise.resolve();
+    component.payloadTab.set('response');
+    expect(component.payloadText()).toBe('finished');
+    component.ngOnChanges({ liveRequests: new SimpleChange([row], [row], false) });
+    expect(getRequestPayloads).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits until reopening to fetch the final response of a closed row', async () => {
+    getRequestPayloads.mockResolvedValue({ input_payload: 'prompt', response_payload: null });
+    component.togglePayloads({ ...row, request_complete_ts: null });
+    await Promise.resolve();
+    component.togglePayloads(row);
+    component.liveRequests = [row];
+    component.ngOnChanges({ liveRequests: new SimpleChange([], [row], false) });
+    expect(getRequestPayloads).toHaveBeenCalledTimes(1);
+    component.togglePayloads(row);
+    expect(getRequestPayloads).toHaveBeenCalledTimes(2);
   });
 
   it('ignores an earlier request that finishes after selecting another row', async () => {

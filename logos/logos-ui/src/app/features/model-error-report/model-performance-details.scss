@@ -33,7 +33,7 @@
 .performance-card__actions {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 12px;
 }
 
 .benchmark-run-selector {
@@ -44,6 +44,7 @@
 
   select {
     max-width: 280px;
+    min-height: 40px;
     padding: 7px 9px;
     border: 1px solid rgb(var(--color-outline-200));
     border-radius: 7px;
@@ -55,8 +56,8 @@
 
 .benchmark-delete-button {
   display: inline-grid;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   place-items: center;
   border: 1px solid rgb(var(--color-error) / var(--opacity-border));
   border-radius: 7px;
@@ -344,6 +345,7 @@
   justify-content: center;
   gap: 7px;
   min-width: 138px;
+  min-height: 40px;
   padding: 8px 12px;
   border: 0;
   border-radius: 8px;
@@ -415,7 +417,7 @@
   align-items: center;
   justify-content: center;
   align-self: flex-start;
-  min-height: 34px;
+  min-height: 40px;
   min-width: 110px;
   margin-top: 6px;
   padding: 6px 12px;
