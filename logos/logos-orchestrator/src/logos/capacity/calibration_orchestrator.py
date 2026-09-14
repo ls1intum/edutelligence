@@ -55,16 +55,16 @@ class CalibrationConfig:
     All values can be overridden via environment variables so that
     operators can tune them without touching YAML.
 
-    LOGOS_CALIB_WINDOW_START  e.g. "02:00" (HH:MM, default 02:00)
-    LOGOS_CALIB_WINDOW_END    e.g. "05:00" (HH:MM, default 05:00)
+    LOGOS_CALIB_WINDOW_START  e.g. "03:00" (HH:MM, default 03:00)
+    LOGOS_CALIB_WINDOW_END    e.g. "08:00" (HH:MM, default 08:00)
     LOGOS_CALIB_TIMEZONE      e.g. "Europe/Berlin" (default Europe/Berlin)
     LOGOS_CALIB_ENABLED       "true" / "false" (default true)
     LOGOS_CALIB_SLEEP_LEVEL   "1" or "2" (default 1)
     LOGOS_CALIB_TICK_SECONDS  trigger-loop tick interval in seconds (default 60)
     """
 
-    window_start: time = field(default_factory=lambda: time(2, 0))
-    window_end: time = field(default_factory=lambda: time(5, 0))
+    window_start: time = field(default_factory=lambda: time(3, 0))
+    window_end: time = field(default_factory=lambda: time(8, 0))
     timezone: str = "Europe/Berlin"
     enabled: bool = True
     sleep_level: int = 1
@@ -104,13 +104,17 @@ class CalibrationConfig:
             except ValueError:
                 return default
 
+        # Single source of truth for defaults: the field declarations above.
+        # Falling back to literals here let them drift from those fields
+        # unnoticed (see the 02:00-05:00 vs 03:00-08:00 window mismatch).
+        defaults = cls()
         return cls(
-            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), time(3, 0)),
-            window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), time(8, 0)),
-            timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "Europe/Berlin").strip() or "Europe/Berlin",
-            enabled=_parse_bool(os.getenv("LOGOS_CALIB_ENABLED", ""), True),
-            sleep_level=_parse_int(os.getenv("LOGOS_CALIB_SLEEP_LEVEL", ""), 1),
-            tick_seconds=_parse_float(os.getenv("LOGOS_CALIB_TICK_SECONDS", ""), 60.0),
+            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), defaults.window_start),
+            window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), defaults.window_end),
+            timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "").strip() or defaults.timezone,
+            enabled=_parse_bool(os.getenv("LOGOS_CALIB_ENABLED", ""), defaults.enabled),
+            sleep_level=_parse_int(os.getenv("LOGOS_CALIB_SLEEP_LEVEL", ""), defaults.sleep_level),
+            tick_seconds=_parse_float(os.getenv("LOGOS_CALIB_TICK_SECONDS", ""), defaults.tick_seconds),
         )
 
 
