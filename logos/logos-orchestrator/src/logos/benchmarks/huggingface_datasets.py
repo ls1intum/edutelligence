@@ -2,17 +2,23 @@
 
 import json
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import HTTPException
 
 
-async def _get_json(url: str, params: dict[str, Any]) -> Any:
+async def _get_json(url: str, params: dict[str, Any], *, with_cursor: bool = False) -> Any:
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if with_cursor:
+                next_url = response.links.get("next", {}).get("url", "")
+                cursor = parse_qs(urlsplit(next_url).query).get("cursor", [None])[0]
+                return data, cursor
+            return data
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in {400, 401, 403, 404, 422}:
             raise HTTPException(
@@ -24,21 +30,24 @@ async def _get_json(url: str, params: dict[str, Any]) -> Any:
         raise HTTPException(503, "Could not load Hugging Face metadata. Try again.") from exc
 
 
-async def search_datasets(query: str) -> dict[str, Any]:
+async def search_datasets(query: str, cursor: str | None = None) -> dict[str, Any]:
     """Search the Hub for public datasets, returning identifiers only."""
-    rows = await _get_json(
+    rows, next_cursor = await _get_json(
         "https://huggingface.co/api/datasets",
         {
             "search": query,
             "limit": 20,
             "sort": "downloads",
             "direction": -1,
+            **({"cursor": cursor} if cursor else {}),
         },
+        with_cursor=True,
     )
     return {
         "datasets": [
             {"id": row["id"]} for row in rows if row.get("id") and not row.get("private") and not row.get("gated")
-        ]
+        ],
+        "next_cursor": next_cursor,
     }
 
 

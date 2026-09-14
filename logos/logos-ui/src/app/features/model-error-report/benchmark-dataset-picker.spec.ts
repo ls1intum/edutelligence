@@ -14,8 +14,6 @@ describe('Benchmark dataset picker', () => {
     getBenchmarkWorkerLimits: ReturnType<typeof vi.fn>;
   };
   beforeEach(() => {
-    // jsdom has no media-query implementation; PrimeNG uses it for overlays.
-    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     service = {
       searchBenchmarkDatasets: vi.fn().mockResolvedValue({ datasets: [{ id: 'org/questions' }] }),
       getBenchmarkDatasetMetadata: vi.fn().mockImplementation(async (...args) => metadata(...args)),
@@ -28,7 +26,6 @@ describe('Benchmark dataset picker', () => {
 
   afterEach(() => {
     TestBed.resetTestingModule();
-    vi.unstubAllGlobals();
   });
 
   async function setup() {
@@ -38,37 +35,74 @@ describe('Benchmark dataset picker', () => {
     return fixture;
   }
 
-  it('searches while typing and loads options after keyboard selection', async () => {
+  it('starts collapsed, loads on opening and closes with focus restored after selection', async () => {
     const fixture = await setup();
-    const input: HTMLInputElement = fixture.nativeElement.querySelector('[role="combobox"]');
-    input.value = 'questions';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 350));
+    expect(service.searchBenchmarkDatasets).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.querySelector('.dataset-grid')).toBeNull();
+    const toggle: HTMLButtonElement = fixture.nativeElement.querySelector('.dataset-picker__toggle');
+    toggle.click();
     await fixture.whenStable();
-    fixture.detectChanges();
-    expect(service.searchBenchmarkDatasets).toHaveBeenCalledWith('questions');
-    expect(input.value).toBe('questions');
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+    expect(service.searchBenchmarkDatasets).toHaveBeenCalledWith('', undefined);
+    expect(fixture.nativeElement.querySelector('[aria-pressed="true"]')?.textContent).toContain('openai/gsm8k');
+    const choice = Array.from<HTMLButtonElement>(fixture.nativeElement.querySelectorAll('.dataset-grid__option'))
+      .find(button => button.textContent?.includes('org/questions'))!;
+    choice.click();
     await fixture.whenStable();
     expect(fixture.componentInstance.settings().dataset).toBe('org/questions');
-    expect(service.getBenchmarkDatasetMetadata).toHaveBeenLastCalledWith('org/questions', undefined, undefined);
-    expect(fixture.nativeElement.textContent).not.toContain('Reload options');
+    expect(fixture.nativeElement.querySelector('.dataset-grid')).toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+    toggle.click();
+    await fixture.whenStable();
+    expect(service.searchBenchmarkDatasets).toHaveBeenCalledTimes(1);
   });
 
-  it('discards old results as soon as the query changes, including clearing it', async () => {
+  it('discards an old page when the user changes the search', async () => {
     const fixture = await setup();
     const component = fixture.componentInstance;
-    let resolve!: (value: { datasets: { id: string }[] }) => void;
+    let resolve!: (value: { datasets: { id: string }[]; next_cursor: string }) => void;
     service.searchBenchmarkDatasets.mockReturnValueOnce(new Promise(r => { resolve = r; }));
-    component.setQuery('old');
-    const pending = component.search();
-    component.setQuery('');
-    resolve({ datasets: [{ id: 'org/old' }] });
+    const pending = component.search('old-page');
+    component.setQuery('questions');
+    resolve({ datasets: [{ id: 'org/old' }], next_cursor: 'stale' });
     await pending;
     expect(component.results()).toEqual([]);
-    expect(component.searching()).toBe(false);
-    expect(component.settings().dataset).toBe('openai/gsm8k');
+    expect(component.nextCursor()).toBeNull();
+    await new Promise(resolve => setTimeout(resolve, 350));
+    await fixture.whenStable();
+    expect(service.searchBenchmarkDatasets).toHaveBeenLastCalledWith('questions', undefined);
+    expect(component.results()).toEqual(['org/questions']);
+  });
+
+  it('appends more results without duplicates and retries the failed page', async () => {
+    const fixture = await setup();
+    const component = fixture.componentInstance;
+    service.searchBenchmarkDatasets.mockResolvedValueOnce({ datasets: [{ id: 'org/first' }], next_cursor: 'page-2' });
+    component.toggleDatasetPicker();
+    await fixture.whenStable();
+    service.searchBenchmarkDatasets.mockRejectedValueOnce(new Error('Offline'));
+    await component.search(component.nextCursor()!);
+    expect(component.results()).toEqual(['org/first']);
+    expect(component.searchError()).toBeTruthy();
+    service.searchBenchmarkDatasets.mockResolvedValueOnce({ datasets: [{ id: 'org/first' }, { id: 'org/second' }], next_cursor: null });
+    component.retrySearch();
+    await fixture.whenStable();
+    expect(service.searchBenchmarkDatasets).toHaveBeenLastCalledWith('', 'page-2');
+    expect(component.results()).toEqual(['org/first', 'org/second']);
+    expect(component.nextCursor()).toBeNull();
+  });
+
+  it('keeps the picker open on selection errors and closes on Escape', async () => {
+    const fixture = await setup();
+    fixture.componentInstance.toggleDatasetPicker();
+    await fixture.whenStable();
+    service.getBenchmarkDatasetMetadata.mockRejectedValueOnce(new Error('Offline'));
+    await fixture.componentInstance.selectDataset('org/broken');
+    expect(fixture.componentInstance.pickerOpen()).toBe(true);
+    expect(fixture.componentInstance.settings().dataset).toBe('openai/gsm8k');
+    fixture.nativeElement.querySelector('.dataset-picker').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await fixture.whenStable();
+    expect(fixture.componentInstance.pickerOpen()).toBe(false);
   });
 
   it('retries the failed dataset selection without replacing the last valid settings', async () => {

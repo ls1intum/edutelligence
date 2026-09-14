@@ -8,10 +8,17 @@ input.ng-invalid { border-color: rgb(var(--color-error)); }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid rgb(var(--color-outline-200)); border-radius: 6px; color: rgb(var(--color-primary-500)); background: rgb(var(--color-surface-0)); font: inherit; font-size: var(--model-detail-font-size, var(--font-size-sm)); cursor: pointer; }
 button:disabled, input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid rgb(var(--color-primary-500)); outline-offset: 2px; }
-.dataset-search { display: grid; gap: 8px; }
-p-autocomplete { width: 100%; --p-autocomplete-border-color: rgb(var(--color-outline-200)); --p-autocomplete-background: rgb(var(--color-surface-0)); --p-autocomplete-color: rgb(var(--color-typography-100)); --p-autocomplete-dropdown-background: rgb(var(--color-surface-50)); --p-autocomplete-dropdown-color: rgb(var(--color-primary-500)); --p-autocomplete-border-radius: 6px; }
-.selected-dataset { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; margin-top: 12px; color: rgb(var(--color-typography-500)); }
-.selected-dataset strong { overflow-wrap: anywhere; color: rgb(var(--color-typography-100)); }
+.dataset-picker { display: grid; gap: 8px; color: rgb(var(--color-typography-100)); }
+.dataset-picker__toggle { width: 100%; justify-content: space-between; text-align: left; color: inherit; }
+.dataset-picker__toggle span, .dataset-grid__option span { min-width: 0; overflow-wrap: anywhere; }
+.dataset-picker__panel { padding: 16px; border: 1px solid rgb(var(--color-outline-200)); border-radius: 6px; }
+.dataset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-height: 360px; overflow-y: auto; margin-top: 16px; padding: 3px; }
+.dataset-grid__option { justify-content: space-between; text-align: left; color: rgb(var(--color-typography-100)); }
+.dataset-grid__option[aria-pressed='true'] { border-color: rgb(var(--color-primary-500)); background: rgb(var(--color-primary-500) / var(--opacity-faint)); color: rgb(var(--color-primary-500)); }
+.dataset-picker__more { margin-top: 16px; }
+.dataset-link { display: flex; justify-content: flex-end; margin-top: 12px; }
+@media (max-width: 720px) { .dataset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .dataset-grid { grid-template-columns: 1fr; } }
 .settings-feedback { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
 .settings-feedback p { margin: 0; }
 summary { padding: 8px 0; cursor: pointer; color: rgb(var(--color-typography-100)); font-size: var(--model-detail-font-size, var(--font-size-sm)); }

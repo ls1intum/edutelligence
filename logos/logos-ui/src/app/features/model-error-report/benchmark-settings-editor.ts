@@ -1,12 +1,11 @@
-import { Component, computed, effect, inject, input, model, output, signal } from '@angular/core';
+import { Component, computed, DestroyRef, effect, ElementRef, inject, input, model, output, signal, viewChild } from '@angular/core';
 import { ModelBenchmarkPair } from '../../shared/models/provider.model';
 import { FormsModule } from '@angular/forms';
-import { AutoCompleteModule } from 'primeng/autocomplete';
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { benchmarkErrorMessage, BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES, servingValidationErrors, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
 
 @Component({
-  selector: 'app-benchmark-settings-editor', standalone: true, imports: [FormsModule, AutoCompleteModule],
+  selector: 'app-benchmark-settings-editor', standalone: true, imports: [FormsModule],
   templateUrl: './benchmark-settings-editor.html', styleUrl: './benchmark-settings-editor.scss',
 })
 export class BenchmarkSettingsEditor {
@@ -22,10 +21,18 @@ export class BenchmarkSettingsEditor {
   private limitsPairId: number | null = null;
   readonly validChange = output<boolean>();
   readonly fields: readonly { key: string; label: string; type: string; min?: number; max?: number; step?: number }[] = SERVING_FIELDS;
-  readonly query = signal(DEFAULT_BENCHMARK_SETTINGS.dataset);
+  readonly query = signal('');
+  readonly pickerOpen = signal(false);
+  readonly pickerToggle = viewChild<ElementRef<HTMLButtonElement>>('pickerToggle');
+  readonly nextCursor = signal<string | null>(null);
+  private searchTimer?: ReturnType<typeof setTimeout>;
+  private hasSearched = false;
+  private failedCursor: string | undefined;
   readonly searchError = signal<string | null>(null);
   private lastInspection: [string, string?, string?] | null = null;
   readonly results = signal<string[]>([]);
+  readonly datasetOptions = computed(() => this.query().trim()
+    ? this.results() : [...new Set([this.settings().dataset, ...this.results()])]);
   readonly metadata = signal<DatasetMetadata | null>(null);
   readonly loading = signal(false);
   readonly searching = signal(false);
@@ -49,6 +56,12 @@ export class BenchmarkSettingsEditor {
   readonly hfOverrides = computed(() => this.settings().serving_overrides['hf_overrides'] ? JSON.stringify(this.settings().serving_overrides['hf_overrides'], null, 2) : '');
 
   constructor() {
+    inject(DestroyRef).onDestroy(() => {
+      clearTimeout(this.searchTimer);
+      ++this.searchVersion;
+      ++this.metadataVersion;
+      ++this.limitsVersion;
+    });
     effect(() => {
       const pair = this.pair();
       const id = pair?.model_provider_id ?? null;
@@ -108,55 +121,76 @@ export class BenchmarkSettingsEditor {
     this.settings.update(s => ({ ...s, [key]: value }));
   }
 
-  setQuery(value: string | null): void {
-    this.query.set(value ?? '');
-    ++this.searchVersion;
-    this.results.set([]);
-    this.searching.set(false);
-    this.searchError.set(null);
+  toggleDatasetPicker(): void {
+    this.pickerOpen.update(open => !open);
+    if (this.pickerOpen() && !this.hasSearched) void this.search();
   }
 
-  async search(query = this.query()): Promise<void> {
-    query = query.trim();
-    if (!query) {
-      this.results.set([this.settings().dataset]);
-      return;
-    }
+  closeDatasetPicker(): void {
+    this.pickerOpen.set(false);
+    this.pickerToggle()?.nativeElement.focus();
+  }
+
+  async selectDataset(dataset: string): Promise<void> {
+    if (await this.inspectDataset(dataset)) this.closeDatasetPicker();
+  }
+
+  setQuery(value: string): void {
+    clearTimeout(this.searchTimer);
+    this.query.set(value);
+    ++this.searchVersion;
+    this.results.set([]);
+    this.nextCursor.set(null);
+    this.searching.set(true);
+    this.searchError.set(null);
+    this.searchTimer = setTimeout(() => void this.search(), 300);
+  }
+
+  async search(cursor?: string): Promise<void> {
+    clearTimeout(this.searchTimer);
     const version = ++this.searchVersion;
+    this.hasSearched = true;
+    this.failedCursor = cursor;
     this.searching.set(true);
     this.searchError.set(null);
     try {
-      const result = await this.service.searchBenchmarkDatasets(query);
-      if (version === this.searchVersion) this.results.set(result.datasets.map(dataset => dataset.id));
+      const result = await this.service.searchBenchmarkDatasets(this.query().trim(), cursor);
+      if (version !== this.searchVersion) return;
+      const ids = result.datasets.map(dataset => dataset.id);
+      this.results.update(previous => cursor ? [...new Set([...previous, ...ids])] : ids);
+      this.nextCursor.set(result.next_cursor ?? null);
     } catch {
-      if (version === this.searchVersion) {
-        this.results.set([]);
-        this.searchError.set('Could not search Hugging Face. Try again.');
-      }
+      if (version === this.searchVersion) this.searchError.set('Could not load datasets. Try again.');
+    } finally {
+      if (version === this.searchVersion) this.searching.set(false);
     }
-    finally { if (version === this.searchVersion) this.searching.set(false); }
   }
 
-  async inspectDataset(dataset: string, subset?: string, split?: string): Promise<void> {
+  retrySearch(): void {
+    void this.search(this.failedCursor);
+  }
+
+  async inspectDataset(dataset: string, subset?: string, split?: string): Promise<boolean> {
     this.lastInspection = [dataset, subset, split];
     const version = ++this.metadataVersion;
     this.loading.set(true);
     this.error.set(null);
     try {
       const meta = await this.service.getBenchmarkDatasetMetadata(dataset, subset, split);
-      if (version !== this.metadataVersion) return;
+      if (version !== this.metadataVersion) return false;
       this.metadata.set(meta);
       this.settings.update(s => ({ ...s, dataset: meta.dataset, subset: meta.subset, split: meta.split,
         text_column: meta.text_columns.includes(s.text_column) ? s.text_column
           : meta.text_columns.includes('question') ? 'question' : meta.text_columns[0] }));
-      this.setQuery(meta.dataset);
+      return true;
     } catch (error: any) {
       if (version === this.metadataVersion) this.error.set(benchmarkErrorMessage(error, 'Could not inspect this dataset. Choose a public dataset with a text column.'));
+      return false;
     } finally { if (version === this.metadataVersion) this.loading.set(false); }
   }
 
-  retryDataset(): void {
-    if (this.lastInspection) void this.inspectDataset(...this.lastInspection);
+  async retryDataset(): Promise<void> {
+    if (this.lastInspection && await this.inspectDataset(...this.lastInspection)) this.closeDatasetPicker();
   }
 
   onServingToggle(event: Event): void {

@@ -41,9 +41,9 @@ export class ModelManagementService {
     ));
   }
 
-  searchBenchmarkDatasets(query: string): Promise<{ datasets: { id: string }[] }> {
-    return firstValueFrom(this.http.post<{ datasets: { id: string }[] }>(
-      '/api/logosdb/model_benchmarks/datasets/search', { query },
+  searchBenchmarkDatasets(query: string, cursor?: string): Promise<{ datasets: { id: string }[]; next_cursor?: string | null }> {
+    return firstValueFrom(this.http.post<{ datasets: { id: string }[]; next_cursor?: string | null }>(
+      '/api/logosdb/model_benchmarks/datasets/search', { query, ...(cursor ? { cursor } : {}) },
     ));
   }
 

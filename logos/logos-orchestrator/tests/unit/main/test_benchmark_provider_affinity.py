@@ -486,7 +486,8 @@ async def test_sync_request_records_affinity_http_errors_on_the_request_log(monk
 @pytest.mark.parametrize(
     "path,body,helper,expected_args",
     [
-        ("search", {"query": "math"}, "search_datasets", ("math",)),
+        ("search", {"query": "math"}, "search_datasets", ("math", None)),
+        ("search", {"query": "", "cursor": "page-2"}, "search_datasets", ("", "page-2")),
         (
             "metadata",
             {"dataset": "org/prompts", "subset": "main", "split": "test"},

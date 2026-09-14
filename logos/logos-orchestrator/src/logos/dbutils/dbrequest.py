@@ -117,7 +117,8 @@ class InternalBenchmarkRequest(BenchmarkSettings):
 
 
 class DatasetSearchRequest(BaseModel):
-    query: str = Field(default="gsm8k", min_length=1, max_length=200)
+    query: str = Field(default="", max_length=200)
+    cursor: str | None = Field(default=None, max_length=4096)
 
 
 class DatasetMetadataRequest(BaseModel):

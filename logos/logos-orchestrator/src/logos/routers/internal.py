@@ -442,7 +442,7 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
 async def internal_search_benchmark_datasets(data: DatasetSearchRequest, request: Request):
     """Search public Hugging Face datasets for the benchmark picker."""
     _require_internal_secret(request)
-    return await search_datasets(data.query)
+    return await search_datasets(data.query, data.cursor)
 
 
 @router.post("/internal/model_benchmarks/datasets/metadata", tags=["admin"])

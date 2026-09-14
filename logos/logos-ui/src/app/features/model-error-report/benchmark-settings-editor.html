@@ -1,24 +1,46 @@
 <div class="settings-editor">
   <h4>Next benchmark</h4>
   <p>Choose a public Hugging Face dataset and the text column to use as the prompt.</p>
-  <div class="dataset-search">
-    <label for="benchmark-dataset">Dataset</label>
-    <p-autocomplete inputId="benchmark-dataset" [fluid]="true" [ngModel]="query()" (ngModelChange)="setQuery($event)"
-      [suggestions]="results()" [delay]="300" [minLength]="2"
-      [dropdown]="true" dropdownMode="current" dropdownAriaLabel="Find datasets"
-      [showEmptyMessage]="true" [emptyMessage]="searchError() ? 'Search unavailable' : 'No datasets found'"
-      [disabled]="loading()" [inputStyle]="{ width: '100%', font: 'inherit', minHeight: '40px' }"
-      (completeMethod)="search($event.query)" (onSelect)="inspectDataset($event.value)"
-      [panelStyle]="{ fontSize: 'var(--font-size-sm)' }"
-      placeholder="Search by dataset name or owner/name" appendTo="body" />
+  <div class="dataset-picker" (keydown.escape)="closeDatasetPicker(); $event.stopPropagation()">
+    <span id="benchmark-dataset-label">Dataset</span>
+    <button #pickerToggle type="button" class="dataset-picker__toggle"
+      aria-labelledby="benchmark-dataset-label benchmark-dataset-value" aria-controls="benchmark-dataset-options"
+      [attr.aria-expanded]="pickerOpen()" (click)="toggleDatasetPicker()">
+      <span id="benchmark-dataset-value">{{ settings().dataset }}</span>
+      <i class="pi" [class.pi-chevron-down]="!pickerOpen()" [class.pi-chevron-up]="pickerOpen()" aria-hidden="true"></i>
+    </button>
+    @if (pickerOpen()) {
+      <div id="benchmark-dataset-options" class="dataset-picker__panel">
+        <label class="dataset-search">Find a dataset
+          <input type="search" [ngModel]="query()" (ngModelChange)="setQuery($event)"
+            (keydown.enter)="search(); $event.preventDefault()" placeholder="Dataset name or owner/name" />
+        </label>
+        @if (searchError()) {
+          <div class="settings-feedback"><p role="alert" class="settings-error">{{ searchError() }}</p>
+            <button type="button" (click)="retrySearch()" [disabled]="searching()">Retry search</button>
+          </div>
+        }
+        <div class="dataset-grid" role="group" aria-label="Available datasets" [attr.aria-busy]="searching()">
+          @for (dataset of datasetOptions(); track dataset) {
+            <button type="button" class="dataset-grid__option" [attr.aria-pressed]="dataset === settings().dataset"
+              [disabled]="loading()" (click)="selectDataset(dataset)">
+              <span>{{ dataset }}</span>
+              @if (dataset === settings().dataset) { <i class="pi pi-check" aria-hidden="true"></i> }
+            </button>
+          }
+        </div>
+        @if (searching()) {
+          <p role="status">Loading datasets…</p>
+        } @else if (!searchError() && !results().length) {
+          <p role="status">No matching datasets found. Try another search.</p>
+        }
+        @if (nextCursor() && !searchError()) {
+          <button type="button" class="dataset-picker__more" (click)="search(nextCursor()!)" [disabled]="searching()">Load more</button>
+        }
+      </div>
+    }
   </div>
-  @if (searchError()) {
-    <div class="settings-feedback"><p role="alert" class="settings-error">{{ searchError() }}</p>
-      <button type="button" (click)="search()" [disabled]="searching()">Retry search</button>
-    </div>
-  }
-  <div class="selected-dataset">
-    <span>Selected: <strong>{{ settings().dataset }}</strong></span>
+  <div class="dataset-link">
     <a [href]="viewerUrl()" target="_blank" rel="noopener noreferrer">View on Hugging Face <span aria-hidden="true">↗</span><span class="sr-only"> (new tab)</span></a>
   </div>
   @if (loading()) { <p role="status">Loading dataset options…</p> }

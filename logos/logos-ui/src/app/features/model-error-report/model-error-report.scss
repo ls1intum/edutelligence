@@ -1039,11 +1039,11 @@
 .benchmark-worker-select {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 12px 0;
-  font-size: 12px;
+  gap: 8px;
+  margin: 16px;
+  font-size: var(--model-detail-font-size);
   select {
-    max-width: 540px;
+    min-height: 40px;
     padding: 8px 10px;
     font: inherit;
     color: inherit;
