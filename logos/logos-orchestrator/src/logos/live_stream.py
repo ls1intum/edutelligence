@@ -377,15 +377,22 @@ class _StreamingLogAccumulator:
 
     def _consume_line(self, line: str) -> None:
         stripped = line.strip()
-        if not stripped:
+        if not stripped.startswith("data:"):
             return
-        if stripped == "data: [DONE]":
+        # The field separator is a colon plus one optional space or tab;
+        # "data:{...}" without the space is valid SSE. The pre-commit gate
+        # accepts the same frames, and the bytes are forwarded to the
+        # client either way — a frame the client reads must be parsed here
+        # too, or full_text misses it (no resume prefix) and the no-space
+        # terminal leaves the stream unmarked complete.
+        value = stripped[5:]
+        if value[:1] in (" ", "\t"):
+            value = value[1:]
+        if value == "[DONE]":
             self.terminal_event_received = True
             return
-        if not stripped.startswith("data: "):
-            return
         try:
-            blob = json.loads(stripped[6:])
+            blob = json.loads(value)
         except json.JSONDecodeError:
             return
         if not isinstance(blob, dict):

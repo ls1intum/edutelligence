@@ -593,3 +593,22 @@ def test_response_payload_survives_a_malformed_first_chunk():
 
     # The unassignable first entry is kept as received and carries no delta.
     assert acc.response_payload() == {"id": "c1", "choices": [None]}
+
+
+def test_no_space_data_frames_parse_like_their_spaced_twins():
+    """The single space after "data:" is optional in SSE — a provider that
+    omits it sends the same stream, and the frames must reach full_text,
+    the usage, and the terminal flag the same way the spaced ones do.
+    The bytes are forwarded to the client either way; a frame the client
+    reads but the parser missed is a frame Logos never saw."""
+    acc = _StreamingLogAccumulator()
+    acc.feed(b'data:{"id":"c1","choices":[{"delta":{"content":"Hel"}}]}\n\n')
+    acc.feed(b'data:{"id":"c2","choices":[{"delta":{"content":"lo"}}]}\n\n')
+    acc.feed(b'data:{"id":"c2","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n')
+    acc.feed(b"data:[DONE]\n\n")
+    acc.finish()
+
+    assert acc.full_text == "Hello"
+    assert acc.usage() == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert acc.terminal_event_received is True
+    assert acc.response_payload()["choices"][0]["delta"] == {"content": "Hello"}

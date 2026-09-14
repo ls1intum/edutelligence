@@ -2423,3 +2423,163 @@ async def test_a_responses_api_incomplete_event_is_still_a_billed_success(monkey
     assert calls[-1]["result_status"] == "success"
     assert calls[-1]["error_message"] is None
     assert calls[-1]["usage_tokens"]["billed_requests"] == 1
+
+
+# ---------------------------------------------------------------------------
+# No-space SSE framing (data:{...} / data:[DONE]) in the streamer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_no_space_done_marks_the_stream_complete_when_the_worker_closes(monkeypatch):
+    """The worker closes its transport right after the terminal (GuideLLM
+    does), and a provider that frames its events without the space after
+    the colon — valid SSE — sends the terminal as data:[DONE]. The close
+    must still read as completion: with the terminal unrecognised, the
+    answer that just finished in full is re-reported as a failed stream."""
+    from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
+
+    import logos as main
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        yield b'data: {"id": "c1", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+        yield b"data:[DONE]\n\n"
+        # The normal close after the terminal surfaces as a transport error.
+        raise RuntimeError("stream closed by worker")
+
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+    completion_calls: list[dict] = []
+    pipeline, _c, _r = _make_pipeline(completion_calls=completion_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-nospace-done",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    # The full answer plus the terminal reached the client — the close after
+    # it is completion, not a failure.
+    assert b'"ok"' in body
+    assert b"error" not in body
+    assert completion_calls[-1]["result_status"] == "success"
+    assert completion_calls[-1]["error_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_no_space_first_frame_still_resumes_when_the_lane_then_fails(monkeypatch):
+    """End to end: the single space after "data:" is optional SSE, so the
+    lane's first content frame can arrive as data:{...} without it. The
+    bytes are forwarded to the client either way, so the accumulator must
+    parse them the same way — a frame it missed leaves full_text empty,
+    and with no text prefix the resume guard refuses to continue an answer
+    the client has already partly read."""
+    from fastapi.responses import StreamingResponse
+
+    import logos as main
+
+    registry, websockets, facade, pipeline = _resume_env(monkeypatch, provider_ids=(_FAILED_PROVIDER_ID, PROVIDER_ID))
+    failed_ws = websockets[_FAILED_PROVIDER_ID]
+    peer_ws = websockets[PROVIDER_ID]
+
+    ctx = await _dispatch_initial(pipeline, (_FAILED_PROVIDER_ID, PROVIDER_ID), "req-nospace-resume")
+    assert ctx.provider_id == _FAILED_PROVIDER_ID
+
+    first_frame = (
+        b'data:{"id": "chatcmpl-1", "object": "chat.completion.chunk", '
+        b'"choices": [{"index": 0, "delta": {"content": "Hello"}}]}\n\n'
+    )
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            ctx,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            _FAILED_PROVIDER_ID,
+            _RESUME_MODEL_ID,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-nospace-resume",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 0,
+                "is_cold_start": False,
+            },
+            request_path="v1/chat/completions",
+            deployments=[_deployment(_FAILED_PROVIDER_ID), _deployment(PROVIDER_ID)],
+            # A real-clock budget: the stream is opened with its deadline,
+            # which must stay in the future in real monotonic time.
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(failed_ws.stream_command_sent.wait(), timeout=1)
+    await _feed_pid(
+        registry, _FAILED_PROVIDER_ID, _sent_stream_cmd_id(failed_ws), {"type": "stream_start", "status_code": 200}
+    )
+    await _feed_pid(
+        registry, _FAILED_PROVIDER_ID, _sent_stream_cmd_id(failed_ws), {"type": "stream_chunk", "chunk": first_frame}
+    )
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    consumer, body = await _fail_the_stream_mid_answer(registry, _FAILED_PROVIDER_ID, failed_ws, response, first_frame)
+    try:
+        # The takeover is scheduled on the peer while the read above is
+        # pending — wait for its stream command, then deliver the
+        # continuation.
+        await _wait_for_stream_cmd_count(peer_ws, 1, timeout=2)
+        takeover_cmd = _stream_cmd_ids(peer_ws)[0]
+        resumed_frame = _chat_frame(" there")
+        done_frame = b"data: [DONE]\n\n"
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_start", "status_code": 200})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": resumed_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": done_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_end", "success": True})
+
+        assert await asyncio.wait_for(consumer, timeout=2) == resumed_frame
+        assert [chunk async for chunk in body] == [done_frame]
+
+        # The no-space frame's text is the resume prefix — the takeover
+        # continues after it, a resume, not a restart.
+        takeover = next(m["params"] for m in peer_ws.sent if m.get("action") == "infer_stream")
+        assert takeover["lane_id"] == f"lane-{PROVIDER_ID}"
+        assert takeover["payload"]["messages"][-1] == {"role": "assistant", "content": "Hello"}
+        assert takeover["payload"]["continue_final_message"] is True
+        assert len(_stream_cmd_ids(failed_ws)) == 1
+    finally:
+        if not consumer.done():
+            consumer.cancel()
+        await _drain_pending_tasks()
+
+    # Both providers' ledgers end clean, as in the spaced-frame resume.
+    assert facade._providers[_FAILED_PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[_FAILED_PROVIDER_ID]._active_request_ids == {}
+    assert facade._providers[PROVIDER_ID]._active_request_ids == {}
+    assert facade._request_tracking == {}
