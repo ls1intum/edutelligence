@@ -3,7 +3,16 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from logos_worker_node.models import LaneConfig, LaneSetRequest, LogosConfig, VllmConfig
+from logos_worker_node.models import (
+    LEGACY_OLLAMA_MODELS_PATH,
+    NEW_MODELS_PATH,
+    AppConfig,
+    LaneConfig,
+    LaneSetRequest,
+    LogosConfig,
+    VllmConfig,
+    WorkerConfig,
+)
 
 
 def test_lane_config_normalizes_gpu_devices() -> None:
@@ -16,18 +25,75 @@ def test_lane_config_rejects_invalid_gpu_devices() -> None:
         LaneConfig(model="demo", gpu_devices="gpu0")
 
 
-def test_lane_config_rejects_vllm_block_on_ollama_backend() -> None:
-    with pytest.raises(ValidationError):
-        LaneConfig(
-            model="demo",
-            vllm=False,
-            vllm_config=VllmConfig(gpu_memory_utilization=0.75),
-        )
+def test_lane_config_rejects_vllm_false() -> None:
+    """The Ollama engine was removed — every lane is a vLLM lane."""
+    with pytest.raises(ValidationError, match="vllm=false"):
+        LaneConfig(model="demo", vllm=False)
+
+
+def test_lane_config_rejects_removed_ollama_lane_fields() -> None:
+    with pytest.raises(ValidationError, match="keep_alive"):
+        LaneConfig(model="demo", keep_alive="10m")
 
 
 def test_vllm_config_gpu_memory_utilization_is_optional() -> None:
     cfg = VllmConfig()
     assert cfg.gpu_memory_utilization is None
+
+
+def test_app_config_migrates_legacy_ollama_engine_fields() -> None:
+    """engines.ollama.models_path/gpu_devices move to worker.* (with a warning)."""
+    cfg = AppConfig.model_validate(
+        {
+            "worker": {"name": "w1"},
+            "engines": {"ollama": {"models_path": "/custom/models", "gpu_devices": "0,1"}},
+        }
+    )
+    assert cfg.worker.models_path == "/custom/models"
+    assert cfg.worker.gpu_devices == "0,1"
+
+
+def test_app_config_prefers_explicit_worker_fields_over_legacy_ollama() -> None:
+    cfg = AppConfig.model_validate(
+        {
+            "worker": {"models_path": "/new/path"},
+            "engines": {"ollama": {"models_path": "/custom/models"}},
+        }
+    )
+    assert cfg.worker.models_path == "/new/path"
+
+
+def test_worker_config_translates_legacy_ollama_models_path() -> None:
+    """A config left on the Ollama-era container path is rewritten to the new mount."""
+    cfg = WorkerConfig(models_path=LEGACY_OLLAMA_MODELS_PATH)
+    assert cfg.models_path == NEW_MODELS_PATH
+
+
+def test_worker_config_translates_legacy_ollama_models_subpath() -> None:
+    """A subpath under the old container root keeps its tail after the rewrite."""
+    cfg = WorkerConfig(models_path=f"{LEGACY_OLLAMA_MODELS_PATH}/blobs/sha256-abc")
+    assert cfg.models_path == f"{NEW_MODELS_PATH}/blobs/sha256-abc"
+
+
+def test_worker_config_keeps_non_legacy_models_path() -> None:
+    """Arbitrary (already-migrated or custom) paths pass through untouched."""
+    assert WorkerConfig(models_path="/data/models").models_path == "/data/models"
+    assert WorkerConfig(models_path=NEW_MODELS_PATH).models_path == NEW_MODELS_PATH
+
+
+def test_app_config_migrates_and_translates_legacy_ollama_models_path() -> None:
+    """Full chain: engines.ollama.models_path migrates to worker.* AND is translated.
+
+    An Ollama-era config carrying the old container path must end up pointing
+    at the volume the container actually mounts today.
+    """
+    cfg = AppConfig.model_validate(
+        {
+            "engines": {"ollama": {"models_path": LEGACY_OLLAMA_MODELS_PATH, "gpu_devices": "0,1"}},
+        }
+    )
+    assert cfg.worker.models_path == NEW_MODELS_PATH
+    assert cfg.worker.gpu_devices == "0,1"
 
 
 def test_lane_config_rejects_tensor_parallel_size_above_explicit_gpu_count() -> None:

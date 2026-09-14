@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 import logos as main_mod
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
+from logos.routers import internal as internal_mod
 
 
 def _make_request(authorization: str = "") -> MagicMock:
@@ -18,23 +19,23 @@ def _make_request(authorization: str = "") -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_returns_403_when_secret_not_configured(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", None)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", None)
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer secret"))
+        await internal_mod.internal_compatibility_precheck("org/model", _make_request("Bearer secret"))
     assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_returns_401_when_secret_is_wrong(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer wrong-secret"))
+        await internal_mod.internal_compatibility_precheck("org/model", _make_request("Bearer wrong-secret"))
     assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_single_provider_id_returns_one_result(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: {"worker_id": "node-a"}
     registry.send_command = AsyncMock(
@@ -42,7 +43,7 @@ async def test_single_provider_id_returns_one_result(monkeypatch):
     )
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.internal_compatibility_precheck(
+    response = await internal_mod.internal_compatibility_precheck(
         "org/model", _make_request("Bearer correct-secret"), provider_id=7
     )
     body = json.loads(response.body)
@@ -59,7 +60,7 @@ async def test_single_provider_id_returns_one_result(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fans_out_across_all_active_providers_when_provider_id_omitted(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = MagicMock()
     registry.active_provider_ids = lambda: [1, 2]
     registry.peek_runtime_snapshot = lambda pid: {"worker_id": f"node-{pid}"}
@@ -70,7 +71,7 @@ async def test_fans_out_across_all_active_providers_when_provider_id_omitted(mon
     registry.send_command = AsyncMock(side_effect=_send_command)
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
     body = json.loads(response.body)
 
     provider_ids = sorted(r["provider_id"] for r in body["results"])
@@ -79,12 +80,12 @@ async def test_fans_out_across_all_active_providers_when_provider_id_omitted(mon
 
 @pytest.mark.asyncio
 async def test_no_active_providers_returns_empty_results(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = MagicMock()
     registry.active_provider_ids = lambda: []
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
     body = json.loads(response.body)
 
     assert body["results"] == []
@@ -100,13 +101,13 @@ async def test_no_active_providers_returns_empty_results(monkeypatch):
     ],
 )
 async def test_send_command_failure_reported_as_error_not_raised(monkeypatch, exc, expected_error):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: None
     registry.send_command = AsyncMock(side_effect=exc)
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.internal_compatibility_precheck(
+    response = await internal_mod.internal_compatibility_precheck(
         "org/model", _make_request("Bearer correct-secret"), provider_id=3
     )
     body = json.loads(response.body)
@@ -121,7 +122,7 @@ async def test_one_providers_unexpected_failure_does_not_lose_the_others(monkeyp
     ANY node" — one provider blowing up with something neither
     LogosNodeOfflineError nor LogosNodeCommandError must not take down the
     results already gathered for every other provider too."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = MagicMock()
     registry.active_provider_ids = lambda: [1, 2]
     registry.peek_runtime_snapshot = lambda pid: {"worker_id": f"node-{pid}"}
@@ -134,7 +135,7 @@ async def test_one_providers_unexpected_failure_does_not_lose_the_others(monkeyp
     registry.send_command = AsyncMock(side_effect=_send_command)
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
     body = json.loads(response.body)
 
     by_provider = {r["provider_id"]: r for r in body["results"]}
@@ -148,7 +149,7 @@ async def test_null_result_payload_does_not_lose_the_others(monkeypatch):
     "result": null in the worker's reply bypasses its own .get() default
     (see logosnode_registry.send_command) and comes back as None — must
     not TypeError on **result and take every other provider down with it."""
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     registry = MagicMock()
     registry.active_provider_ids = lambda: [1, 2]
     registry.peek_runtime_snapshot = lambda pid: {"worker_id": f"node-{pid}"}
@@ -161,7 +162,7 @@ async def test_null_result_payload_does_not_lose_the_others(monkeypatch):
     registry.send_command = AsyncMock(side_effect=_send_command)
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
 
-    response = await main_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
+    response = await internal_mod.internal_compatibility_precheck("org/model", _make_request("Bearer correct-secret"))
     body = json.loads(response.body)
 
     by_provider = {r["provider_id"]: r for r in body["results"]}

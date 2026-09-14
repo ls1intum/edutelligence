@@ -327,6 +327,7 @@ use it the way you use a person's:
 | assign it an issue | works on it and opens a pull request |
 | assign it a pull request | takes it over, on that pull request's own branch |
 | request changes on one of its pull requests | addresses that review on its branch |
+| add it as a reviewer | reviews the diff, and fixes what it found if the branch is ours |
 | comment on a pull request it is responsible for | reads the thread and answers (within a day of writing) |
 | mention it anywhere by name | answers there (within a day); changes code only if that is what was asked |
 
@@ -349,6 +350,16 @@ reconstructing one from the diff — on production, every handover was losing
 between six and seventeen comments that way. They direct nothing: no review
 of theirs starts a session and no comment of theirs steers one. Setting the
 variable to nothing removes the exception.
+
+**It reads the pull request it is asked about.** A question on somebody
+else's pull request used to be answered from a checkout of the default
+branch — the agent was asked about a diff it had never seen, and could only
+say so. It now starts from that pull request's own code
+(`refs/pull/<n>/head`, which exists for forks too). Whether it may *change*
+anything is a separate question with a plain answer: it gets the branch when
+somebody who may direct this runner asked, and the head is in this
+repository and not protected. A fork's branch and a protected one are never
+pushed to, whoever asks; there the answer is words.
 
 **It does not take over its own work.** This repository assigns every pull
 request to its author, so one the agent opens comes back a moment later as

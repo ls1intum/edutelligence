@@ -36,7 +36,7 @@
 #     logos/benchmarks/run_bench.sh
 #
 # ── Environment variables ───────────────────────────────────────────────────
-# Required (unless ONLY_OLLAMA=1):
+# Required:
 #   LOGOS_KEY                 Logos API key (lg-...).
 #
 # Optional (defaults shown):
@@ -80,8 +80,7 @@
 #   SHELLY_INGEST_IMAGE=python:3-alpine   docker image for the http ingest sidecar
 #
 #   # Misc:
-#   BENCHMARK_LOCAL_CACHE=    redirect OLLAMA_MODELS_MOUNT on GPU nodes (e.g. NVMe)
-#   ONLY_OLLAMA=0             1 = only the Ollama scenario (no LOGOS_KEY needed)
+#   BENCHMARK_LOCAL_CACHE=    redirect LOGOS_MODELS_MOUNT on GPU nodes (e.g. NVMe)
 #   REQUEST_TIMEOUT_S=1800    per-request client timeout (large models like the 35B
 #                             need >600s or they fail with ReadTimeout)
 #   MANAGE_CALIB_WINDOW=1     1 = disable the orchestrator's nightly calibration
@@ -141,7 +140,6 @@ CALIBRATION_PROVIDER_IDS="${CALIBRATION_PROVIDER_IDS:-3 2}"
 # data are independent. Useful for a fast run when models are already loadable.
 SKIP_CALIBRATION="${SKIP_CALIBRATION:-0}"
 BENCHMARK_LOCAL_CACHE="${BENCHMARK_LOCAL_CACHE:-}"
-ONLY_OLLAMA="${ONLY_OLLAMA:-0}"
 MANAGE_CALIB_WINDOW="${MANAGE_CALIB_WINDOW:-1}"
 SHELLY="${SHELLY:-0}"
 SHELLY_PORT="${SHELLY_PORT:-9876}"
@@ -176,8 +174,8 @@ PATTERNS="${PATTERNS:-}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 LOGOS_KEY="${LOGOS_KEY:-}"
 
-if [[ "$ONLY_OLLAMA" != "1" && -z "$LOGOS_KEY" ]]; then
-  echo "[run_bench] ERROR: LOGOS_KEY is required (or set ONLY_OLLAMA=1)." >&2
+if [[ -z "$LOGOS_KEY" ]]; then
+  echo "[run_bench] ERROR: LOGOS_KEY is required." >&2
   echo "[run_bench]        Load it from a git-ignored env file, e.g.:" >&2
   echo "[run_bench]        set -a; . /root/bench-secrets.env; set +a" >&2
   exit 1
@@ -218,7 +216,6 @@ bench_args_base=(
 [[ -n "$SCENARIOS" ]] && bench_args_base+=(--scenarios "$SCENARIOS")
 [[ -n "$PATTERNS" ]] && bench_args_base+=(--patterns "$PATTERNS")
 [[ "$SKIP_WARMUP" == "1" ]] && bench_args_base+=(--skip-warmup)
-[[ "$ONLY_OLLAMA" == "1" ]] && bench_args_base+=(--only-ollama)
 [[ "$MANAGE_CALIB_WINDOW" == "0" ]] && bench_args_base+=(--no-manage-calibration-window)
 [[ "$SHELLY" == "1" ]] && bench_args_base+=(--shelly --shelly-port "$SHELLY_PORT" --shelly-transport "$SHELLY_TRANSPORT" --shelly-ingest-image "$SHELLY_INGEST_IMAGE")
 # Provider IDs are ALWAYS forwarded — they feed the live lane-state poller that

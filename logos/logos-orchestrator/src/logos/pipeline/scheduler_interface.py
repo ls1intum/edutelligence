@@ -40,7 +40,7 @@ class SchedulingResult:
 
     model_id: int
     provider_id: int
-    provider_type: str  # 'ollama' | 'azure'
+    provider_type: str  # 'logosnode' | 'cloud'
     queue_entry_id: Optional[str]  # For local models with queue tracking
     was_queued: bool
     queue_depth_at_schedule: int

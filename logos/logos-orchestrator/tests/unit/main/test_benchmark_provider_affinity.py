@@ -3,13 +3,16 @@ import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 import logos as main
+from logos.benchmarks.guidellm_runner import benchmark_affinity_headers
+from logos.routers import internal as internal_mod
 
 
 @pytest.fixture(autouse=True)
 def mock_dataset_metadata(monkeypatch):
-    monkeypatch.setattr(main, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
+    monkeypatch.setattr(internal_mod, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
 
 
 def _job(*, status="running", provider_id=20, model_id=1, model_name="org/model"):
@@ -29,10 +32,10 @@ async def test_cancel_benchmark_releases_job(monkeypatch):
     request = MagicMock()
     request.headers = {"authorization": "Bearer internal-secret"}
     cancel = MagicMock(return_value=True)
-    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
-    monkeypatch.setattr(main, "_cancel_benchmark_job", cancel)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(internal_mod, "_cancel_benchmark_job", cancel)
 
-    response = await main.internal_cancel_model_benchmark(7, request)
+    response = await internal_mod.internal_cancel_model_benchmark(7, request)
 
     assert response == {"job_id": 7, "status": "failed"}
     cancel.assert_called_once_with(7, "Benchmark cancelled by administrator")
@@ -60,7 +63,7 @@ def _install_job_db(monkeypatch, job):
 
 
 def _headers(secret="internal-secret", provider_id=20, model="org/model"):
-    return main.benchmark_affinity_headers(
+    return benchmark_affinity_headers(
         secret=secret,
         job_id=7,
         provider_id=provider_id,
@@ -69,7 +72,10 @@ def _headers(secret="internal-secret", provider_id=20, model="org/model"):
 
 
 @pytest.mark.asyncio
-async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monkeypatch):
+@pytest.mark.parametrize("overrides", [{}, {"enable_prefix_caching": False}])
+async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monkeypatch, overrides):
+    job_payloads = []
+
     class DummyDB:
         def __enter__(self):
             return self
@@ -95,6 +101,7 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
             return None
 
         def create_job_record(self, **kwargs):
+            job_payloads.append(kwargs["payload"])
             return 7
 
     runner = AsyncMock()
@@ -103,21 +110,38 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
         "session_id": "session-1",
         "last_heartbeat": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "first_status_received": True,
-        "runtime": {"lanes": []},
+        "runtime": {
+            "lanes": [],
+            "devices": {
+                "nvidia_smi_available": True,
+                "devices": [{"kind": "nvidia", "memory_total_mb": 24000}],
+            },
+        },
     }
     planner = MagicMock()
     planner.prepare_benchmark_lane = AsyncMock(return_value=True)
+    planner.prepare_configured_benchmark_lane = AsyncMock(return_value=True)
     request = MagicMock()
     request.headers = {"authorization": "Bearer internal-secret"}
 
-    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
-    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(internal_mod, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     monkeypatch.setattr(main, "_capacity_planner", planner)
-    monkeypatch.setattr(main, "run_benchmark_job", runner)
+    monkeypatch.setattr(internal_mod, "run_benchmark_job", runner)
 
-    response = await main.internal_run_model_benchmark(
-        main._InternalBenchmarkRequest(model_provider_id=31, samples=15),
+    response = await internal_mod.internal_run_model_benchmark(
+        main.InternalBenchmarkRequest(
+            model_provider_id=31,
+            samples=15,
+            dataset="org/prompts",
+            subset="default",
+            split="validation",
+            concurrency=3,
+            profile="concurrent",
+            seed=7,
+            serving_overrides=overrides,
+        ),
         request,
     )
     await asyncio.sleep(0)
@@ -127,7 +151,24 @@ async def test_worker_benchmark_start_needs_no_provider_endpoint_or_api_key(monk
     assert runner.await_args.kwargs["api_key"] is None
     assert runner.await_args.kwargs["request_headers"][main.BENCHMARK_PROVIDER_HEADER] == "20"
     assert await runner.await_args.kwargs["worker_preparer"]() is True
-    planner.prepare_benchmark_lane.assert_awaited_once_with(20, "org/model")
+    settings = runner.await_args.kwargs["settings"]
+    assert settings.dataset == "org/prompts"
+    assert settings.serving_overrides.model_dump(exclude_none=True) == overrides
+    assert job_payloads[0]["dataset"] == "org/prompts"
+    assert job_payloads[0]["subset"] == "default"
+    assert job_payloads[0]["split"] == "validation"
+    assert job_payloads[0]["concurrency"] == 3
+    assert job_payloads[0]["seed"] == 7
+    if overrides:
+        planner.prepare_configured_benchmark_lane.assert_awaited_once()
+        assert planner.prepare_configured_benchmark_lane.await_args.args == (
+            20,
+            "org/model",
+            settings.serving_overrides,
+        )
+        planner.prepare_benchmark_lane.assert_not_awaited()
+    else:
+        planner.prepare_benchmark_lane.assert_awaited_once_with(20, "org/model")
 
 
 @pytest.mark.asyncio
@@ -153,12 +194,12 @@ async def test_external_benchmark_rejects_api_key_over_plaintext_http(monkeypatc
 
     request = MagicMock()
     request.headers = {"authorization": "Bearer internal-secret"}
-    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
-    monkeypatch.setattr(main, "DBManager", DummyDB)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(internal_mod, "DBManager", DummyDB)
 
     with pytest.raises(main.HTTPException) as exc_info:
-        await main.internal_run_model_benchmark(
-            main._InternalBenchmarkRequest(model_provider_id=31, samples=5),
+        await internal_mod.internal_run_model_benchmark(
+            main.InternalBenchmarkRequest(model_provider_id=31, samples=5),
             request,
         )
 
@@ -169,10 +210,10 @@ async def test_external_benchmark_rejects_api_key_over_plaintext_http(monkeypatc
 def test_internal_secret_rejects_non_ascii_token_without_compare_digest_type_error(monkeypatch):
     request = MagicMock()
     request.headers = {"authorization": "Bearer töken"}
-    monkeypatch.setattr(main, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "internal-secret")
 
     with pytest.raises(main.HTTPException) as exc_info:
-        main._require_internal_secret(request)
+        internal_mod._require_internal_secret(request)
 
     assert exc_info.value.status_code == 401
 
@@ -375,13 +416,15 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
     planner = MagicMock()
     planner.prepare_benchmark_lane = AsyncMock(return_value=True)
     execute = AsyncMock(return_value="response")
-    monkeypatch.setattr(main, "DBManager", DummyDB)
-    monkeypatch.setattr(main, "_benchmark_provider_affinity", MagicMock(return_value=20))
+    monkeypatch.setattr(internal_mod, "DBManager", DummyDB)
+    monkeypatch.setattr(internal_mod, "_benchmark_provider_affinity", MagicMock(return_value=20))
     monkeypatch.setattr(main, "_capacity_planner", planner)
-    monkeypatch.setattr(main, "_filter_logosnode_deployments", AsyncMock(side_effect=lambda rows, payload: rows))
-    monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", execute)
+    monkeypatch.setattr(
+        internal_mod, "_filter_logosnode_deployments", AsyncMock(side_effect=lambda rows, payload: rows)
+    )
+    monkeypatch.setattr(internal_mod, "_execute_cancelling_on_disconnect", execute)
 
-    response = await main.internal_model_benchmark_completion(7, "chat/completions", request)
+    response = await internal_mod.internal_model_benchmark_completion(7, "chat/completions", request)
 
     assert response == "response"
     assert logged == [
@@ -438,3 +481,33 @@ async def test_sync_request_records_affinity_http_errors_on_the_request_log(monk
     failure.assert_called_once()
     assert failure.call_args.args[0] == 99
     assert failure.call_args.args[2] == "Invalid benchmark worker affinity"
+
+
+@pytest.mark.parametrize(
+    "path,body,helper,expected_args",
+    [
+        ("search", {"query": "math"}, "search_datasets", ("math",)),
+        (
+            "metadata",
+            {"dataset": "org/prompts", "subset": "main", "split": "test"},
+            "dataset_metadata",
+            ("org/prompts", "main", "test"),
+        ),
+    ],
+)
+async def test_dataset_routes_are_registered_and_secret_gated(monkeypatch, path, body, helper, expected_args):
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "internal-secret")
+    lookup = AsyncMock(return_value={"result": "ok"})
+    monkeypatch.setattr(internal_mod, helper, lookup)
+    async with AsyncClient(transport=ASGITransport(app=main.app), base_url="http://test") as client:
+        denied = await client.post(f"/internal/model_benchmarks/datasets/{path}", json=body)
+        assert denied.status_code == 401
+        lookup.assert_not_awaited()
+        response = await client.post(
+            f"/internal/model_benchmarks/datasets/{path}",
+            json=body,
+            headers={"Authorization": "Bearer internal-secret"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"result": "ok"}
+    lookup.assert_awaited_once_with(*expected_args)

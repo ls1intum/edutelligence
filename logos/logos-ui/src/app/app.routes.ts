@@ -29,6 +29,7 @@ export const routes: Routes = [
       { path: 'agents',         title: 'Agent Sessions · Logos',   data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/agents/agents').then(m => m.Agents) },
       { path: 'my-workspace',    title: 'My Workspace · Logos',    canActivate: [hasKeysGuard], loadComponent: () => import('./features/my-workspace/my-workspace').then(m => m.MyWorkspace) },
       { path: 'ai-tools',        title: 'AI Tools · Logos',         canActivate: [hasKeysGuard], loadComponent: () => import('./features/ai-tools/ai-tools').then(m => m.AiTools) },
+      { path: 'batches',         title: 'Batches · Logos',          canActivate: [hasKeysGuard], loadComponent: () => import('./features/batches/batches').then(m => m.Batches) },
       { path: 'open-code',       redirectTo: 'ai-tools', pathMatch: 'full' },
       { path: 'claude-code',     redirectTo: 'ai-tools', pathMatch: 'full' },
       { path: 'no-access',       title: 'No Access · Logos',       loadComponent: () => import('./features/no-access/no-access').then(m => m.NoAccess) },

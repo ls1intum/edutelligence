@@ -77,6 +77,7 @@ async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch)
     import importlib
 
     main = importlib.import_module("logos.main")
+    internal = importlib.import_module("logos.routers.internal")
 
     db = MagicMock()
     db.__enter__.return_value = db
@@ -87,16 +88,16 @@ async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch)
         "model_name": "m",
     }
     db.find_active_model_benchmark_job.return_value = None
-    monkeypatch.setattr(main, "DBManager", lambda: db)
+    monkeypatch.setattr(internal, "DBManager", lambda: db)
     monkeypatch.setattr(main, "_capacity_planner", MagicMock())
-    monkeypatch.setattr(main, "_require_internal_secret", lambda _: None)
+    monkeypatch.setattr(internal, "_require_internal_secret", lambda _: None)
     registry = MagicMock()
     registry.peek_runtime_snapshot.return_value = snapshot()
     monkeypatch.setattr(main, "_logosnode_registry", registry)
-    monkeypatch.setattr(main, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
+    monkeypatch.setattr(internal, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
     with pytest.raises(HTTPException, match="only 2 available") as error:
-        await main.internal_run_model_benchmark(
-            main._InternalBenchmarkRequest(model_provider_id=31, serving_overrides={"tensor_parallel_size": 38}),
+        await internal.internal_run_model_benchmark(
+            internal.InternalBenchmarkRequest(model_provider_id=31, serving_overrides={"tensor_parallel_size": 38}),
             MagicMock(),
         )
     assert error.value.status_code == 400

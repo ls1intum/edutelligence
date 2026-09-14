@@ -232,8 +232,11 @@ export class AiTools implements OnInit, OnDestroy {
       favours: 'claudecode',
     },
     {
+      // The cells keep the same order as the table: the features both tools
+      // support stand first in each list, in the same order, and the
+      // tool-specific ones follow, so this row can be read across too.
       dimension: 'Agent features',
-      claudecode: 'Subagents, hooks, skills, MCP',
+      claudecode: 'MCP, subagents, hooks, skills',
       opencode: 'MCP, smaller agent toolkit',
       favours: 'claudecode',
     },

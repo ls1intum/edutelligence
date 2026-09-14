@@ -1,17 +1,30 @@
 @if (collapseWhenSingle && options.length <= 1) {
   <span class="app-select__static">{{ selectedLabel }}</span>
 } @else {
+  <!--
+    Selection is expressed on the options, not as [value] on the <select>.
+    A binding on the <select> is applied before the @for has produced any
+    <option>, so the browser drops it and falls back to index 0 — the provider
+    dialog opened on "cloud" but read "logosnode". [selected] is evaluated when
+    each option is created, and again whenever the list is recomputed, so it
+    holds for both the first render and later updates.
+  -->
   <select
     class="app-select"
     [class.app-select--compact]="compact"
-    [value]="value ?? ''"
     [disabled]="disabled"
     [attr.id]="id ?? null"
     [attr.aria-label]="ariaLabel ?? null"
     (change)="onChange($event)"
   >
     @for (opt of options; track opt.value) {
-      <option [value]="opt.value" [disabled]="opt.disabled ?? false">{{ opt.label }}</option>
+      <option
+        [value]="opt.value"
+        [selected]="opt.value === (value ?? '')"
+        [disabled]="opt.disabled ?? false"
+      >
+        {{ opt.label }}
+      </option>
     }
   </select>
 }

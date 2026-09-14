@@ -467,6 +467,69 @@ async def authored_pull_requests(login: str) -> list[dict[str, Any]]:
     ]
 
 
+async def review_requests(login: str) -> list[dict[str, Any]]:
+    """Open pull requests that have asked this account for a review.
+
+    The ordinary way to ask a colleague to look at something, and until
+    now the one gesture the runner did not answer: an operator added the
+    agent as a reviewer and nothing happened at all.
+
+    Read off the pull requests themselves rather than through search, so
+    the answer is the repository's current state rather than an index that
+    lags behind it by a minute or two.
+    """
+    payload = await _get_all(
+        f"/repos/{settings.repo_slug}/pulls",
+        {"state": "open", "sort": "updated", "direction": "desc"},
+    )
+    wanted = login.strip().lower()
+    asked = []
+    for pull in payload:
+        if not isinstance(pull, dict):
+            continue
+        reviewers = [
+            str((person or {}).get("login") or "").lower() for person in (pull.get("requested_reviewers") or [])
+        ]
+        if wanted in reviewers:
+            asked.append(pull)
+    return asked
+
+
+async def who_asked_for_a_review(number: int, login: str) -> tuple[str, int | None] | None:
+    """The account that last asked `login` to review this pull request, and
+    the timeline event that said so.
+
+    From the timeline, because the pull request itself only says who is
+    being asked and not who did the asking — and who did the asking is what
+    decides whether the runner acts on it. The event's identity comes with
+    the actor because the asking is an event, not a state: removing the
+    agent and adding it back is a *new* request, and the memory of the old
+    one must not answer for the new.
+
+    A complete read answers with the actor, or the empty string when the
+    timeline names none. An incomplete read answers with None instead: the
+    timeline is read oldest-first, so what a long pull request loses to the
+    page ceiling is precisely its *newest* events — where the request that
+    decides this question sits. The oldest matching actor the remainder
+    still holds is some old gesture, and acting on it would be a guess the
+    timeline no longer supports.
+    """
+    events, truncated = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/timeline")
+    if truncated:
+        return None
+    wanted = login.strip().lower()
+    actor = ""
+    event_id: int | None = None
+    for event in events:
+        if not isinstance(event, dict) or event.get("event") != "review_requested":
+            continue
+        requested = str(((event.get("requested_reviewer") or {}).get("login")) or "").lower()
+        if requested == wanted:
+            actor = str(((event.get("actor") or {}).get("login")) or "")
+            event_id = event.get("id") if isinstance(event.get("id"), int) else None
+    return actor, event_id
+
+
 async def pull_request(number: int) -> dict[str, Any]:
     """The full pull request, including its head branch and author."""
     payload = await _get(f"/repos/{settings.repo_slug}/pulls/{number}")
@@ -536,6 +599,20 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     of the requested changes in it.
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}/comments")
+    return [comment for comment in payload if isinstance(comment, dict)]
+
+
+async def pull_inline_comments(number: int) -> list[dict[str, Any]]:
+    """Every inline comment on a pull request, across all reviews.
+
+    A reviewer's inline notes and standalone inline comments all live under
+    the pull request's comments, but a conversation the agent is handed is
+    one *thread* at a time. The comment that points at another thread's note
+    — "address the reviewer's comment" — reaches the agent alone, so it can
+    only reply that it cannot see the other one. This returns the whole set,
+    so the caller can hand over the threads the one it is answering refers to.
+    """
+    payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/comments")
     return [comment for comment in payload if isinstance(comment, dict)]
 
 

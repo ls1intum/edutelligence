@@ -438,6 +438,9 @@ async def retry_session(session_id: int, principal: Principal = Depends(require_
             model=row.get("model"),
             created_by=principal.username or "operator",
             open_pull_request=bool(row.get("open_pull_request")),
+            # Read-only is a property of the work, not the attempt: a
+            # retried answer still must not push.
+            no_push=bool(row.get("no_push")),
             # Deploying is a decision per attempt, not a property of the work.
             deploy_to_dev=False,
             screenshot_paths=[],

@@ -1,4 +1,6 @@
 import {
+  extractProviderHostRamMb,
+  formatPercent,
   formatTokenCount,
   normalizeFeedStatus,
   resolveFeedTotal,
@@ -62,7 +64,6 @@ describe('resolveFeedTotal', () => {
   });
 });
 
-
 /**
  * The scale token counts are displayed on.
  *
@@ -118,5 +119,143 @@ describe('formatTokenCount', () => {
   it('stays on T once the scale is exhausted', () => {
     expect(formatTokenCount(2_000_000_000_000)).toBe('2 T');
     expect(formatTokenCount(15_000_000_000_000)).toBe('15 T');
+  });
+});
+
+
+/**
+ * Host RAM of a provider's latest sample.
+ *
+ * The distinction that matters here is "reported" vs "not reported": the
+ * numbers travel on the runtime's host_memory summary, which older workers
+ * never sent and non-Linux hosts report all-zero. Both have to read as "no
+ * data" on the page, never as a machine with 0 MB of RAM.
+ */
+describe('extractProviderHostRamMb', () => {
+  it('reads the three figures from the provider signals', () => {
+    const sample = {
+      timestamp: '2026-03-16T18:00:00Z',
+      scheduler_signals: {
+        provider: {
+          host_ram_total_mb: 516_096,
+          host_ram_used_mb: 204_048,
+          host_ram_available_mb: 312_048,
+        },
+      },
+    };
+    expect(extractProviderHostRamMb(sample)).toEqual({
+      totalMb: 516_096,
+      usedMb: 204_048,
+      freeMb: 312_048,
+      reported: true,
+    });
+  });
+
+  it('treats a sample without host RAM as not reported, not as zero', () => {
+    // An older worker: the field is simply absent.
+    expect(extractProviderHostRamMb({ timestamp: 't', scheduler_signals: { provider: {} } })).toEqual({
+      totalMb: 0,
+      usedMb: 0,
+      freeMb: 0,
+      reported: false,
+    });
+    expect(extractProviderHostRamMb(null)).toEqual({
+      totalMb: 0,
+      usedMb: 0,
+      freeMb: 0,
+      reported: false,
+    });
+    expect(extractProviderHostRamMb(undefined)).toEqual({
+      totalMb: 0,
+      usedMb: 0,
+      freeMb: 0,
+      reported: false,
+    });
+  });
+
+  it('treats the all-zero non-Linux summary as not reported', () => {
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { host_ram_total_mb: 0, host_ram_used_mb: 0, host_ram_available_mb: 0 },
+      },
+    };
+    expect(extractProviderHostRamMb(sample).reported).toBe(false);
+  });
+
+  it('keeps a legitimately used host that is down to 0 MB available', () => {
+    // 0 free is a real reading on an exhausted host — the page wants to show
+    // that, so "reported" keys off the total, not the free figure.
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { host_ram_total_mb: 65_536, host_ram_used_mb: 65_536, host_ram_available_mb: 0 },
+      },
+    };
+    expect(extractProviderHostRamMb(sample)).toEqual({
+      totalMb: 65_536,
+      usedMb: 65_536,
+      freeMb: 0,
+      reported: true,
+    });
+  });
+});
+
+/**
+ * The share of a part in a total, as the cold-start KPI card shows it.
+ *
+ * The point is the small end: a share that integer rounding collapses to
+ * "0%" — 694 of 317.265 local starts — must read as the percentage it is,
+ * while an everyday share like 34% stays plain and a genuinely zero share
+ * still reads "0%".
+ */
+describe('formatPercent', () => {
+  it('reads "0%" when the total is not a positive finite number', () => {
+    expect(formatPercent(5, 0)).toBe('0%');
+    expect(formatPercent(5, -100)).toBe('0%');
+    expect(formatPercent(5, Number.NaN)).toBe('0%');
+    expect(formatPercent(5, Number.POSITIVE_INFINITY)).toBe('0%');
+    expect(formatPercent(5, null)).toBe('0%');
+    expect(formatPercent(5, undefined)).toBe('0%');
+  });
+
+  it('reads "0%" when the share is zero or the part is not a number', () => {
+    expect(formatPercent(0, 317_265)).toBe('0%');
+    expect(formatPercent(null, 100)).toBe('0%');
+    expect(formatPercent(undefined, 100)).toBe('0%');
+    expect(formatPercent(Number.NaN, 100)).toBe('0%');
+  });
+
+  it('keeps everyday shares of 10% and up plain', () => {
+    expect(formatPercent(34, 100)).toBe('34%');
+    expect(formatPercent(1, 2)).toBe('50%');
+    expect(formatPercent(10, 10)).toBe('100%');
+  });
+
+  it('keeps one decimal for single-digit shares, dropped when it is zero', () => {
+    expect(formatPercent(35, 1000)).toBe('3.5%');
+    expect(formatPercent(1, 32)).toBe('3.1%'); // 3.125 keeps its first decimal
+    expect(formatPercent(3, 100)).toBe('3%');
+  });
+
+  it('shows two decimals below one percent', () => {
+    // The case the helper exists for: 694 of 317.265 is 0.22%, not "0%".
+    expect(formatPercent(694, 317_265)).toBe('0.22%');
+    expect(formatPercent(1, 10_000)).toBe('0.01%');
+  });
+
+  it('widens the decimals until the share reads non-zero', () => {
+    expect(formatPercent(1, 300_000)).toBe('0.0003%');
+    expect(formatPercent(1, 10_000_000)).toBe('0.00001%');
+  });
+
+  it('bounds a share too small for six decimals instead of reading "0%"', () => {
+    // Past the widening loop's cap toFixed(6) still rounds to zero. A single
+    // cold start among billions of starts is vanishingly rare, not absent —
+    // reporting it as "0%" would contradict the point of the helper.
+    expect(formatPercent(1, 10_000_000_000)).toBe('<0.000001%');
+    expect(formatPercent(1, 1_000_000_000)).toBe('<0.000001%');
+    // The last share that still fits six decimals keeps its exact reading.
+    expect(formatPercent(1, 100_000_000)).toBe('0.000001%');
   });
 });

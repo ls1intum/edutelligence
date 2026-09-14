@@ -250,15 +250,26 @@ class Executor:
     def _streaming_payload(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare the payload for a streaming request.
 
-        ``stream_options.include_usage`` is a Chat-Completions-only parameter:
-        the Responses API rejects it as unknown and instead always reports
-        usage in its terminal ``response.completed`` event, so it is skipped
-        for ``/responses`` upstreams (both OpenAI ``/v1/responses`` and Azure
-        ``/openai/responses``).
+        ``stream_options.include_usage`` is a Chat-Completions-only parameter.
+        The Responses API rejects it as unknown and reports usage in its
+        terminal ``response.completed`` event instead, and the Anthropic
+        Messages API rejects it too — it reports usage in ``message_start`` and
+        ``message_delta``. So it is added only for the surface that needs it.
         """
-        if is_multipart_payload(payload) or Executor._is_responses_url(url):
+        if is_multipart_payload(payload) or not Executor._takes_stream_options(url):
             return set_payload_field(payload, "stream", True)
         return {**payload, "stream": True, "stream_options": {"include_usage": True}}
+
+    @staticmethod
+    def _takes_stream_options(url: str) -> bool:
+        """Whether this upstream surface accepts ``stream_options``."""
+        return not (Executor._is_responses_url(url) or Executor._is_messages_url(url))
+
+    @staticmethod
+    def _is_messages_url(url: str) -> bool:
+        """Whether the upstream URL targets the Anthropic Messages API."""
+        path = (url or "").split("?", 1)[0].rstrip("/")
+        return path.endswith("/messages")
 
     @staticmethod
     def _request_kwargs(payload: Dict[str, Any]) -> Dict[str, Any]:

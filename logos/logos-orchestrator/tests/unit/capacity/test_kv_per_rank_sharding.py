@@ -185,7 +185,6 @@ def test_fleet_kv_rebalance_sends_per_rank_budget_at_tp_greater_than_one():
         model_name="test/model",
         runtime_state="running",
         sleep_state="awake",
-        is_vllm=True,
         active_requests=0,  # a lane with active requests is deferred, not reconfigured now
         queue_waiting=0.0,
         requests_running=0.0,
