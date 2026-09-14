@@ -2447,6 +2447,146 @@ def test_kv_search_stops_climbing_on_genuine_cuda_oom(tmp_path: Path):
     assert managers["spawn"].call_count == 1
 
 
+# ── Real-log regression fixtures ──────────────────────────────────────
+# Trimmed excerpts from real calibration runs across different worker
+# nodes, kept only to protect the OOM/Mamba classifiers against real
+# vLLM wording — not sourced from any path that belongs in this repo.
+
+# openai/gpt-oss-120b: MoE model, gpt_oss_mxfp4 quantization. OOM during
+# KV-cache allocation at engine init. Exercises the cumem allocator's
+# capitalized "CUDA Error: out of memory" alongside torch's own message.
+_REAL_OOM_LOG_MOE_MXFP4 = (
+    "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163\n"
+    "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163\n"
+    "[rank1]:[W910 10:05:43.303605224 CUDACachingAllocator.cpp:3933] memory "
+    "allocation failed with OOM on device 1 while trying to allocate "
+    "21474836480 bytes (free: 12385452032, total: 50865307648).\n"
+    "(Worker_TP0 pid=1500571) ERROR 09-10 10:05:43 [multiproc_executor.py:1055] "
+    "WorkerProc hit an exception.\n"
+    "(Worker_TP0 pid=1500571) ERROR 09-10 10:05:43 [multiproc_executor.py:1055] "
+    "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 GiB. "
+    "GPU 0 has a total capacity of 47.37 GiB of which 11.34 GiB is free. "
+    "Process 1366462 has 496.00 MiB memory in use. Including non-PyTorch "
+    "memory, this process has 35.54 GiB memory in use. Of the allocated "
+    "memory 36.64 GiB is allocated by PyTorch, with 1.90 GiB allocated in "
+    "private pools (e.g., CUDA Graphs), and 21.56 MiB is reserved by PyTorch "
+    "but unallocated.\n"
+)
+
+# microsoft/Phi-4-reasoning: dense model, no quantization. Same OOM shape,
+# different GPU/allocation sizes — confirms the classifier isn't keyed to
+# one model's exact numbers.
+_REAL_OOM_LOG_DENSE = (
+    "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163\n"
+    "[rank0]:[W820 23:42:35.933877218 CUDACachingAllocator.cpp:3933] memory "
+    "allocation failed with OOM on device 0 while trying to allocate "
+    "914358272 bytes (free: 507904000, total: 50865307648).\n"
+    "(Worker_TP0 pid=1293421) ERROR 08-20 23:42:35 [multiproc_executor.py:1018] "
+    "WorkerProc hit an exception.\n"
+    "(Worker_TP0 pid=1293421) ERROR 08-20 23:42:35 [multiproc_executor.py:1018] "
+    "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 872.00 MiB. "
+    "GPU 0 has a total capacity of 47.37 GiB of which 788.38 MiB is free. "
+    "Process 1200636 has 496.00 MiB memory in use. Including non-PyTorch "
+    "memory, this process has 46.10 GiB memory in use.\n"
+)
+
+# RedHatAI/Llama-3.3-70B-Instruct-quantized.w4a16: dense 70B, INT4 weights
+# via compressed-tensors. OOM surfaces later than the others — during
+# warmup/sampling (flashinfer), not KV-cache init — so this also checks
+# the classifier doesn't depend on which phase the traceback comes from.
+_REAL_OOM_LOG_INT4_QUANTIZED_70B = (
+    "(Worker_TP1 pid=2019503) ERROR 08-27 01:05:46 [multiproc_executor.py:1047] "
+    '    File "/opt/venv/lib/python3.12/site-packages/flashinfer/sampling.py", '
+    "line 1548, in top_k_top_p_sampling_from_logits\n"
+    "(Worker_TP1 pid=2019503) ERROR 08-27 01:05:46 [multiproc_executor.py:1047] "
+    "    probs = torch.softmax(masked_logits, dim=-1)\n"
+    "(Worker_TP1 pid=2019503) ERROR 08-27 01:05:46 [multiproc_executor.py:1047] "
+    "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 502.00 MiB. "
+    "GPU 1 has a total capacity of 94.97 GiB of which 184.25 MiB is free. "
+    "Including non-PyTorch memory, this process has 94.78 GiB memory in use.\n"
+)
+
+# Qwen/Qwen3.6-35B-A3B: MoE + Mamba hybrid (Qwen3_5MoeForConditionalGeneration).
+# NOT an OOM — vLLM's own recoverable "lower max_num_seqs" rejection, which
+# must stay distinguishable from a genuine capacity shortfall.
+_REAL_MAMBA_MAX_NUM_SEQS_LOG = (
+    "(Worker_TP1 pid=1205145) ERROR 08-20 21:41:53 [multiproc_executor.py:1018] "
+    "ValueError: max_num_seqs (256) exceeds available Mamba cache blocks (99). "
+    "Each decode sequence requires one Mamba cache block, so CUDA graph "
+    "capture cannot proceed. Please lower max_num_seqs to at most 99 or "
+    "increase gpu_memory_utilization.\n"
+)
+
+
+def test_is_cuda_oom_log_matches_cumem_allocator_line_alone():
+    """vLLM's cumem allocator (used for --enable-sleep-mode) prints its own
+    "CUDA Error: out of memory" (capital E) ahead of torch's. Must be
+    caught on its own, not just when torch's differently-cased message
+    happens to also be present in the same window."""
+    assert _is_cuda_oom_log("CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163")
+
+
+def test_is_cuda_oom_log_matches_real_traces_across_architectures():
+    """The classifier must catch real OOM wording from three different
+    shapes: a quantized MoE model, a dense model, and a quantized 70B
+    dense model whose OOM surfaces during warmup rather than kv-cache
+    init — not just the synthetic text used above."""
+    assert _is_cuda_oom_log(_REAL_OOM_LOG_MOE_MXFP4)
+    assert _is_cuda_oom_log(_REAL_OOM_LOG_DENSE)
+    assert _is_cuda_oom_log(_REAL_OOM_LOG_INT4_QUANTIZED_70B)
+
+
+def test_is_cuda_oom_log_does_not_match_real_mamba_max_num_seqs_error():
+    """A real Mamba/MoE hybrid's max_num_seqs rejection must not be
+    mistaken for a capacity OOM (it's fixed by a flag, not more VRAM),
+    and its suggested ceiling must still parse correctly from real text."""
+    assert not _is_cuda_oom_log(_REAL_MAMBA_MAX_NUM_SEQS_LOG)
+    assert _extract_vllm_max_num_seqs_suggestion(_REAL_MAMBA_MAX_NUM_SEQS_LOG) == 99
+
+
+def test_real_oom_trace_is_not_misclassified_as_fatal_or_node_transient():
+    """A real capacity OOM must not also trip the fatal (unsupported
+    architecture/repo) or node-transient (storage/EIO) classifiers —
+    those gate permanent or node-wide effects the OOM path doesn't."""
+    for log in (_REAL_OOM_LOG_MOE_MXFP4, _REAL_OOM_LOG_DENSE, _REAL_OOM_LOG_INT4_QUANTIZED_70B):
+        assert _classify_fatal_load_error(log) is None
+        assert _classify_node_transient_error(log) is None
+
+
+def test_kv_search_stops_climbing_on_real_cuda_oom_trace(tmp_path: Path):
+    """End-to-end version of the synthetic short-circuit test above, using
+    a real MoE/quantized model's OOM trace verbatim — confirms the fix
+    holds against actual vLLM wording, not just a hand-written stand-in."""
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    log_path = log_dir / "openai__gpt-oss-120b.log"
+
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+        gpu_vram_total_mb=48000.0,
+    )
+    patches["spawn"] = _spawn_writing_log(log_path, _REAL_OOM_LOG_MOE_MXFP4)
+
+    plan = {"model": "openai/gpt-oss-120b"}
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    assert "exceed available GPU VRAM" in result.error
+    assert managers["spawn"].call_count == 1
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # KV cache envelope (min_kv_cache_mb / max_kv_cache_mb on CalibrationResult)
 # ═══════════════════════════════════════════════════════════════════════

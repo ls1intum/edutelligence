@@ -664,9 +664,10 @@ def _extract_vllm_max_num_seqs_suggestion(log_tail: str) -> int | None:
 
 
 # A genuine CUDA/torch allocator OOM — distinct from the KV-too-small and
-# max-num-seqs validation rejections above, which name a fix (shrink
-# max_model_len / max_num_seqs) rather than exhausting the GPU itself.
-_CUDA_OOM_MARKERS: tuple[str, ...] = ("CUDA out of memory", "CUDA error: out of memory")
+# max-num-seqs validation rejections above, which name their own fix
+# instead of exhausting the GPU. Lowercase: matched case-insensitively,
+# since vLLM's cumem allocator capitalizes "Error" where torch doesn't.
+_CUDA_OOM_MARKERS: tuple[str, ...] = ("cuda out of memory", "cuda error: out of memory")
 
 
 def _is_cuda_oom_log(log_tail: str) -> bool:
@@ -674,7 +675,10 @@ def _is_cuda_oom_log(log_tail: str) -> bool:
     recoverable validation rejections handled by the suggestion-based
     retries. Weights are fixed for a given tp, so once this appears, a
     larger kv can only need more memory — never less."""
-    return bool(log_tail) and any(m in log_tail for m in _CUDA_OOM_MARKERS)
+    if not log_tail:
+        return False
+    lowered = log_tail.lower()
+    return any(m in lowered for m in _CUDA_OOM_MARKERS)
 
 
 # vLLM prints the achievable concurrency at every engine init, e.g.
