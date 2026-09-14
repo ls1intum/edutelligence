@@ -42,7 +42,7 @@ describe('Benchmark dataset picker', () => {
     const toggle: HTMLButtonElement = fixture.nativeElement.querySelector('.dataset-picker__toggle');
     toggle.click();
     await fixture.whenStable();
-    expect(service.searchBenchmarkDatasets).toHaveBeenCalledWith('', undefined);
+    expect(service.searchBenchmarkDatasets).toHaveBeenCalledWith('gsm8k', undefined);
     expect(fixture.nativeElement.querySelector('[aria-pressed="true"]')?.textContent).toContain('openai/gsm8k');
     const choice = Array.from<HTMLButtonElement>(fixture.nativeElement.querySelectorAll('.dataset-grid__option'))
       .find(button => button.textContent?.includes('org/questions'))!;
@@ -55,6 +55,38 @@ describe('Benchmark dataset picker', () => {
     toggle.click();
     await fixture.whenStable();
     expect(service.searchBenchmarkDatasets).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps OpenAI first and falls back to GSM8K variants when clearing search', async () => {
+    const fixture = await setup();
+    const component = fixture.componentInstance;
+    service.searchBenchmarkDatasets.mockResolvedValue({ datasets: [{ id: 'org/gsm8k' }, { id: 'openai/gsm8k' }] });
+    component.toggleDatasetPicker();
+    await fixture.whenStable();
+    expect(component.datasetOptions()).toEqual(['openai/gsm8k', 'org/gsm8k']);
+    await component.selectDataset('org/gsm8k');
+    component.setQuery('');
+    await component.search();
+    expect(service.searchBenchmarkDatasets).toHaveBeenLastCalledWith('gsm8k', undefined);
+    expect(component.datasetOptions()).toEqual(['openai/gsm8k', 'org/gsm8k']);
+    component.toggleDatasetPicker();
+    await fixture.whenStable();
+    expect(fixture.nativeElement.querySelector('.dataset-grid__option')?.textContent).toContain('openai/gsm8k');
+  });
+
+  it('keeps loaded datasets available and restores their configuration without fetching again', async () => {
+    const fixture = await setup();
+    const component = fixture.componentInstance;
+    await component.inspectDataset('org/gsm8k', 'alternate', 'train');
+    await component.selectDataset('openai/gsm8k');
+    await component.selectDataset('org/gsm8k');
+    expect(service.getBenchmarkDatasetMetadata).toHaveBeenCalledTimes(2);
+    expect(component.settings().subset).toBe('alternate');
+    expect(component.settings().split).toBe('train');
+    expect(component.datasetOptions().slice(0, 2)).toEqual(['openai/gsm8k', 'org/gsm8k']);
+    await component.inspectDataset('org/gsm8k', 'alternate', 'test');
+    expect(service.getBenchmarkDatasetMetadata).toHaveBeenCalledTimes(3);
+    expect(component.settings().split).toBe('test');
   });
 
   it('discards an old page when the user changes the search', async () => {
@@ -87,7 +119,7 @@ describe('Benchmark dataset picker', () => {
     service.searchBenchmarkDatasets.mockResolvedValueOnce({ datasets: [{ id: 'org/first' }, { id: 'org/second' }], next_cursor: null });
     component.retrySearch();
     await fixture.whenStable();
-    expect(service.searchBenchmarkDatasets).toHaveBeenLastCalledWith('', 'page-2');
+    expect(service.searchBenchmarkDatasets).toHaveBeenLastCalledWith('gsm8k', 'page-2');
     expect(component.results()).toEqual(['org/first', 'org/second']);
     expect(component.nextCursor()).toBeNull();
   });

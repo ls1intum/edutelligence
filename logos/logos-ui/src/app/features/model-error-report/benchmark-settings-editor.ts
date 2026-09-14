@@ -21,7 +21,7 @@ export class BenchmarkSettingsEditor {
   private limitsPairId: number | null = null;
   readonly validChange = output<boolean>();
   readonly fields: readonly { key: string; label: string; type: string; min?: number; max?: number; step?: number }[] = SERVING_FIELDS;
-  readonly query = signal('');
+  readonly query = signal('gsm8k');
   readonly pickerOpen = signal(false);
   readonly pickerToggle = viewChild<ElementRef<HTMLButtonElement>>('pickerToggle');
   readonly nextCursor = signal<string | null>(null);
@@ -31,8 +31,11 @@ export class BenchmarkSettingsEditor {
   readonly searchError = signal<string | null>(null);
   private lastInspection: [string, string?, string?] | null = null;
   readonly results = signal<string[]>([]);
-  readonly datasetOptions = computed(() => this.query().trim()
-    ? this.results() : [...new Set([this.settings().dataset, ...this.results()])]);
+  private readonly loadedDatasets = signal<string[]>([]);
+  private readonly datasetCache = new Map<string, DatasetMetadata>();
+  readonly datasetOptions = computed(() => [...new Set([
+    DEFAULT_BENCHMARK_SETTINGS.dataset, ...this.loadedDatasets(), ...this.results(),
+  ])]);
   readonly metadata = signal<DatasetMetadata | null>(null);
   readonly loading = signal(false);
   readonly searching = signal(false);
@@ -154,7 +157,7 @@ export class BenchmarkSettingsEditor {
     this.searching.set(true);
     this.searchError.set(null);
     try {
-      const result = await this.service.searchBenchmarkDatasets(this.query().trim(), cursor);
+      const result = await this.service.searchBenchmarkDatasets(this.query().trim() || 'gsm8k', cursor);
       if (version !== this.searchVersion) return;
       const ids = result.datasets.map(dataset => dataset.id);
       this.results.update(previous => cursor ? [...new Set([...previous, ...ids])] : ids);
@@ -176,8 +179,12 @@ export class BenchmarkSettingsEditor {
     this.loading.set(true);
     this.error.set(null);
     try {
-      const meta = await this.service.getBenchmarkDatasetMetadata(dataset, subset, split);
+      const cached = this.datasetCache.get(dataset);
+      const meta = cached && (subset == null || cached.subset === subset) && (split == null || cached.split === split)
+        ? cached : await this.service.getBenchmarkDatasetMetadata(dataset, subset, split);
       if (version !== this.metadataVersion) return false;
+      this.datasetCache.set(dataset, meta);
+      this.loadedDatasets.update(ids => ids.includes(dataset) ? ids : [...ids, dataset]);
       this.metadata.set(meta);
       this.settings.update(s => ({ ...s, dataset: meta.dataset, subset: meta.subset, split: meta.split,
         text_column: meta.text_columns.includes(s.text_column) ? s.text_column
