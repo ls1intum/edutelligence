@@ -58,6 +58,20 @@ def is_messages_path(request_path: Optional[str]) -> bool:
     return path == MESSAGES_PATH
 
 
+def is_responses_path(request_path: Optional[str]) -> bool:
+    """Whether an inbound request path addresses the OpenAI Responses API.
+
+    The last segment decides — every prefix the route layer normalises to
+    (``v1/``, ``v2/``, ``openai/``) still ends on ``responses``, and no other
+    operation does. A Responses client reads ``event: response.*`` frames, so
+    any synthetic frame written to its stream must be one of them.
+    """
+    if not request_path:
+        return False
+    path = request_path.split("?", 1)[0].strip("/")
+    return path.rsplit("/", 1)[-1] == "responses"
+
+
 def is_reasoning_model(model_name: Optional[str]) -> bool:
     """Whether this model is one of the OpenAI reasoning families.
 

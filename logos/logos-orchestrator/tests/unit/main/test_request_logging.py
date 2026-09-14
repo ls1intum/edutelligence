@@ -133,14 +133,17 @@ def _make_pipeline(
     completion_calls=None,
     release_calls=None,
     sync_payloads=None,
+    sync_deadlines=None,
 ):
     completion_calls = completion_calls if completion_calls is not None else []
     release_calls = release_calls if release_calls is not None else []
     sync_payloads = sync_payloads if sync_payloads is not None else []
+    sync_deadlines = sync_deadlines if sync_deadlines is not None else []
 
     class DummyExecutor:
-        async def execute_sync(self, url, headers, payload):  # noqa: ARG002
+        async def execute_sync(self, url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
             sync_payloads.append(payload)
+            sync_deadlines.append(deadline_at)
             return sync_result
 
         async def execute_streaming(
@@ -150,6 +153,9 @@ def _make_pipeline(
             payload,
             on_headers=None,
             status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
         ):  # noqa: ARG002
             if on_headers:
                 on_headers(stream_headers or {})
@@ -161,8 +167,11 @@ def _make_pipeline(
                 status.error = terminal_status_error
 
     class DummyScheduler:
-        def release(self, model_id, provider_id, provider_type, request_id):
+        def release(self, model_id, provider_id, provider_type, request_id, *, reevaluate: bool = True):  # noqa: ARG002
             release_calls.append((model_id, provider_id, provider_type, request_id))
+
+        def reevaluate_model_queues(self, model_name: str):  # noqa: ARG002
+            return None
 
     class DummyPipeline:
         executor = DummyExecutor()
@@ -176,7 +185,9 @@ def _make_pipeline(
         def record_completion(**kwargs):
             completion_calls.append(kwargs)
 
-    return DummyPipeline(), completion_calls, release_calls
+    pipeline = DummyPipeline()
+    pipeline.sync_deadlines = sync_deadlines
+    return pipeline, completion_calls, release_calls
 
 
 @pytest.mark.asyncio
@@ -212,7 +223,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -297,7 +308,7 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
         {"messages": [{"role": "user", "content": "hi"}]},
         43,
         12,

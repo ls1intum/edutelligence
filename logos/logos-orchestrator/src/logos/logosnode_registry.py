@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import math
 import secrets
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
+from logos.errors import RetryDeadlineExceeded, UpstreamStreamError
 from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
@@ -1216,7 +1218,18 @@ class LogosNodeRuntimeRegistry:
         params: dict[str, Any] | None = None,
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
+        deadline_at: float | None = None,
     ) -> AsyncIterator[bytes]:
+        # The read loop below checks ``deadline_at`` only *after* the command
+        # is dispatched. The dispatch itself — session lookup, the send-lock
+        # wait (the WebSocket is shared by every command to the node), and
+        # the send — can cross the budget's wall on a near-expiry call,
+        # handing the worker a command it starts generating one read before
+        # we tear it down. So the wall is enforced before the session is even
+        # fetched, and again once the send lock is held, right before the
+        # bytes go out.
+        if deadline_at is not None and time.monotonic() >= deadline_at:
+            raise RetryDeadlineExceeded("stream execution passed its retry deadline")
         session = await self._get_active_session(provider_id, stale_after_seconds)
         cmd_id = str(uuid.uuid4())
         stream_queue: asyncio.Queue = asyncio.Queue()
@@ -1230,26 +1243,77 @@ class LogosNodeRuntimeRegistry:
         }
         try:
             async with session.send_lock:
+                # Re-check once the lock is held: a contended send_lock can
+                # hold us past the wall, and a command written past it would
+                # start a generation the caller has already stopped waiting
+                # for.
+                if deadline_at is not None and time.monotonic() >= deadline_at:
+                    raise RetryDeadlineExceeded("stream execution passed its retry deadline")
                 await session.websocket.send_json(message)
         except Exception as exc:  # noqa: BLE001
             session.pending_streams.pop(cmd_id, None)
+            if isinstance(exc, RetryDeadlineExceeded):
+                # A spent deadline is not a send failure — keep its identity
+                # so the caller does not same-lane-retry it as a flaky worker.
+                raise
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
 
         # Whether the worker told us the stream is over. False means we are
         # unwinding early — the consumer went away — and the worker is still
         # generating unless we say otherwise.
         stream_finished = False
+        # A lane can answer with an error status (429/5xx) instead of tokens:
+        # the worker sends the status in stream_start, the error body as the
+        # following chunk, then a failing stream_end. That status must reach
+        # the caller before any body bytes are committed, or FastAPI commits a
+        # 200 StreamingResponse for the error body and the transient status is
+        # never retried. So a non-2xx start is buffered and surfaced as an
+        # UpstreamStreamError at stream_end, never yielded. Every status
+        # outside the 2xx range counts — a 3xx the worker did not follow is a
+        # redirect page, not a token stream.
+        error_status = None
+        error_body: list[bytes] = []
         try:
             while True:
+                # ``timeout_seconds`` is a per-read idle bound: a worker that
+                # keeps streaming can never trip it, so a stream could run
+                # indefinitely. ``deadline_at`` (the retry budget's absolute
+                # wall, monotonic) closes that: every read is clamped to the
+                # time left in it, and a spent deadline fails the stream
+                # before the next read, however often the worker sends.
+                read_timeout = max(1, timeout_seconds)
+                if deadline_at is not None:
+                    remaining = deadline_at - time.monotonic()
+                    if remaining <= 0:
+                        raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+                    read_timeout = min(read_timeout, remaining)
                 try:
-                    event = await asyncio.wait_for(stream_queue.get(), timeout=max(1, timeout_seconds))
+                    event = await asyncio.wait_for(stream_queue.get(), timeout=read_timeout)
                 except asyncio.TimeoutError as exc:
+                    # A read clamped to the deadline's remaining time fires
+                    # when the wall is reached, not when the worker went
+                    # idle: that is the budget's absolute deadline expiring,
+                    # and it must keep its identity — a spent deadline must
+                    # not be same-lane-retried as a flaky worker. A read that
+                    # ran the full idle bound with the deadline still ahead
+                    # is the worker going quiet.
+                    if deadline_at is not None and time.monotonic() >= deadline_at:
+                        raise RetryDeadlineExceeded("stream execution passed its retry deadline") from exc
                     raise LogosNodeOfflineError("Stream timeout waiting for worker response") from exc
                 event_type = event.get("type")
                 if event_type == "stream_start":
+                    status_code = event.get("status_code")
+                    if isinstance(status_code, int) and not 200 <= status_code < 300:
+                        error_status = status_code
                     continue
                 if event_type == "stream_chunk":
                     chunk = event.get("chunk")
+                    if error_status is not None:
+                        if isinstance(chunk, bytes):
+                            error_body.append(chunk)
+                        elif isinstance(chunk, str):
+                            error_body.append(chunk.encode("utf-8"))
+                        continue
                     if isinstance(chunk, bytes):
                         yield chunk
                     elif isinstance(chunk, str):
@@ -1257,6 +1321,13 @@ class LogosNodeRuntimeRegistry:
                     continue
                 if event_type == "stream_end":
                     stream_finished = True
+                    if error_status is not None:
+                        raw = b"".join(error_body)
+                        try:
+                            error_payload = json.loads(raw)
+                        except (json.JSONDecodeError, ValueError):
+                            error_payload = raw
+                        raise UpstreamStreamError(error_status, error_payload)
                     if not bool(event.get("success", False)):
                         raise LogosNodeCommandError(str(event.get("error", "unknown worker stream error")))
                     break

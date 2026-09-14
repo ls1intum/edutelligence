@@ -403,7 +403,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_fails():
                 queue_depth_at_schedule=0,
             )
 
-        def release(self, model_id, provider_id, provider_type, request_id):
+        def release(self, model_id, provider_id, provider_type, request_id, *, reevaluate: bool = True):  # noqa: ARG002
             self.released.append((model_id, provider_id, provider_type, request_id))
 
         def get_total_queue_depth(self):
@@ -462,7 +462,7 @@ async def test_pipeline_rejects_scheduler_result_from_wrong_required_provider():
                 queue_depth_at_schedule=0,
             )
 
-        def release(self, model_id, provider_id, provider_type, request_id):
+        def release(self, model_id, provider_id, provider_type, request_id, *, reevaluate: bool = True):  # noqa: ARG002
             self.released.append((model_id, provider_id, provider_type, request_id))
 
         def get_total_queue_depth(self):
@@ -523,7 +523,7 @@ async def test_pipeline_releases_capacity_when_context_resolution_raises():
                 queue_depth_at_schedule=0,
             )
 
-        def release(self, model_id, provider_id, provider_type, request_id):
+        def release(self, model_id, provider_id, provider_type, request_id, *, reevaluate: bool = True):  # noqa: ARG002
             self.released.append((model_id, provider_id, provider_type, request_id))
 
         def get_total_queue_depth(self):

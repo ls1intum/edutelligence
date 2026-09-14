@@ -11,10 +11,9 @@ import logging
 from typing import List, Optional, Tuple
 
 from logos.queue.priority_queue import Priority
-from logos.timeouts import global_timeout_s
 
 from .base_scheduler import BaseScheduler
-from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
+from .scheduler_interface import DEFAULT_QUEUE_TIMEOUT_S, QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +97,7 @@ class UtilizationAwareScheduler(BaseScheduler):
         provider_type = deployment["type"]
         provider_id = deployment["provider_id"]
 
-        priority = Priority.from_int(priority_int)
+        priority = Priority.from_resolved(priority_int)
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
@@ -109,6 +108,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             provider_id,
             priority,
             provider_affinity=request.required_provider_id,
+            eligible_provider_ids=request.eligible_provider_ids,
         )
         logger.info(
             "Request %s queued for model %s provider %s (depth=%s)",
@@ -119,22 +119,25 @@ class UtilizationAwareScheduler(BaseScheduler):
         )
 
         try:
-            timeout = request.timeout_s if request.timeout_s else global_timeout_s(1200)
+            timeout = request.timeout_s if request.timeout_s else DEFAULT_QUEUE_TIMEOUT_S
             result = await asyncio.wait_for(future, timeout=timeout)
 
             if provider_type == "logosnode":
+                # The model-wide queue may dispatch to an eligible peer
+                # rather than the deployment enqueued against — account the
+                # request on the worker that actually runs it.
                 try:
                     if result.was_queued:
                         self._logosnode.on_request_start(
                             request.request_id,
                             model_id=result.model_id,
-                            provider_id=provider_id,
+                            provider_id=result.provider_id,
                             priority=priority.name.lower(),
                         )
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
                         increment_active=False,
-                        provider_id=provider_id,
+                        provider_id=result.provider_id,
                     )
                 except KeyError:
                     pass
