@@ -60,7 +60,8 @@
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
 # =============================================================================
 
-ARG BASE_IMAGE=ubuntu:24.04
+# Update this digest deliberately to keep the build cache stable.
+ARG BASE_IMAGE=ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254
 # The [audio] extra is required, not cosmetic: the speech-to-text endpoints
 # (/v1/audio/transcriptions, /v1/audio/translations) decode uploads through
 # vllm.multimodal.media.audio.load_audio, whose only two backends are
@@ -133,9 +134,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     uv venv --seed --python python3.12 /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Keep the expensive vLLM/CUDA layer independent of worker requirements.
-# Scope these args here: changing a vLLM pin or override must not invalidate
-# the preceding Python, APT and virtualenv layers through RUN's environment.
+# Version changes keep the Python and APT layers cached.
 ARG VLLM_PIP_SPEC
 ARG TORCH_INDEX_URL
 ARG NCCL_PIP_SPEC
@@ -179,9 +178,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     && { find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
          -path '*/torch/*' -exec rm -rf {} + || true; }
 
-# Install the small worker dependency set after vLLM so requirements changes
-# only rebuild this layer and the steps below. Keep CUDA checks and registry
-# generation after both installs so they inspect the final environment.
+# Requirement changes keep the vLLM layer cached.
 WORKDIR /app
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \

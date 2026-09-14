@@ -71,7 +71,8 @@ jobs:
                 { owner, repo, run_id: run.id, filter: "latest", per_page: 100 },
               );
               const successfulWorker = jobs.some(job =>
-                job.name.startsWith("Build Logos Worker Node (vLLM) / build (") &&
+                (job.name === "Build Logos Worker Node (vLLM)" ||
+                 job.name.startsWith("Build Logos Worker Node (vLLM) / build (")) &&
                 job.conclusion === "success"
               );
 
@@ -283,39 +284,51 @@ jobs:
     name: Build Logos Worker Node (vLLM)
     needs: check-workernode-build
     if: ${{ needs.check-workernode-build.outputs.build == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence') }}
-    uses: docker/github-builder/.github/workflows/build.yml@v1
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-    with:
-      output: image
-      push: true
-      context: ./logos/logos-workernode
-      file: Dockerfile
-      platforms: linux/amd64
-      runner: ubuntu-latest
-      # min mode (the default) stays here: everything runs in the final
-      # stage, and this is by far the largest image — max mode would
-      # export every intermediate CUDA/vLLM layer and could consume the
-      # 10 GB per-repo GHA cache budget on its own, LRU-evicting the
-      # other caches.
-      cache: true
-      cache-scope: logos-workernode-vllm
-      sign: false
-      build-args: |
-        BASE_IMAGE=ubuntu:24.04
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
-      meta-tags: |
-        type=ref,event=pr
-        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
-        type=semver,pattern={{version}}
-      meta-flavor: |
-        latest=false
-    secrets:
-      registry-auths: |
-        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Log in to Harbor
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
+          tags: |
+            type=ref,event=pr
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+            type=semver,pattern={{version}}
+          flavor: |
+            latest=false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-workernode
+          file: ./logos/logos-workernode/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          # Reuse the PR image, with main as a fallback.
+          cache-from: |
+            type=registry,ref=${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm:${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'latest' }}
+            type=registry,ref=${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm:latest
+          # Keep cache metadata in Harbor; no separate GitHub cache upload.
+          cache-to: type=inline
 
   # ── Apple Silicon / MLX worker node ────────────────────────────────────────
   # Pushed to ghcr.io, NOT Harbor, and deliberately so: this image is pulled by
