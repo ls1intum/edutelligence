@@ -1249,6 +1249,44 @@ def test_first_attempt_succeeds():
     assert mocks["spawn"].call_count == 1
 
 
+def test_baseline_vram_retry_uses_short_first_delay():
+    """A single transient nvidia-smi failure at Phase 1 must retry after
+    the short 2s delay, not the old flat 15s — the common, quick-blip
+    case no longer pays the full wait just to check again."""
+    patches = _patch_calibration_infra(
+        sample_vram_sequence=[RuntimeError("nvidia-smi busy"), 500.0, 7500.0, 600.0],
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert result.success
+    sleep_calls = [c.args[0] for c in mocks["sleep"].call_args_list if c.args]
+    assert 2.0 in sleep_calls
+
+
+def test_baseline_vram_last_retry_keeps_original_safety_margin():
+    """Three straight nvidia-smi failures still give up cleanly, having
+    used the short first delay (2s) and the ORIGINAL 15s on the last
+    retry — that margin is deliberately not shortened (see calibration.py
+    _BASELINE_VRAM_RETRY_DELAYS_S)."""
+    patches = _patch_calibration_infra(
+        sample_vram_sequence=[
+            RuntimeError("nvidia-smi busy"),
+            RuntimeError("nvidia-smi busy"),
+            RuntimeError("nvidia-smi busy"),
+        ],
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert not result.success
+    assert "nvidia-smi baseline failed" in result.error
+    assert mocks["sample"].call_count == 3
+    sleep_calls = [c.args[0] for c in mocks["sleep"].call_args_list if c.args]
+    assert 2.0 in sleep_calls
+    assert 15.0 in sleep_calls
+
+
 def test_explicit_kv_ignores_stale_blacklist_and_spawns():
     """An operator-pinned kv_cache_memory_bytes has no search fallback, so a
     blacklist skip would convert a maybe-recoverable case into certain

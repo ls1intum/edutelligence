@@ -75,6 +75,11 @@ _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # sweep step and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
 _FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
+# Delay before each retry of the Phase-1 baseline VRAM read. First retry
+# short (most nvidia-smi blips clear in seconds); last keeps the original
+# 15s — no telemetry rules out a slower teardown after a huge model, so
+# the last chance stays unshortened.
+_BASELINE_VRAM_RETRY_DELAYS_S: tuple[float, ...] = (2.0, 15.0)
 _LOG_DIAGNOSTIC_TAIL_LINES = 80  # lines of probe log echoed into worker logs on failure
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
@@ -1832,23 +1837,26 @@ def _calibrate_model_probe(
         return partial
 
     # Phase 1 — Baseline: measure before any model process exists.
-    # Retry up to 3 times with a short delay — nvidia-smi can be temporarily
-    # sluggish right after a previous heavy calibration run (GPU driver busy).
+    # Retry a few times with a short, growing delay — nvidia-smi can be
+    # temporarily sluggish right after a heavy calibration run (GPU driver
+    # busy), but that's usually gone within seconds, not 15s per retry.
     logger.info("  [1/5] Baseline VRAM...")
     baseline_mb: float | None = None
-    for _attempt in range(3):
+    for _attempt in range(1 + len(_BASELINE_VRAM_RETRY_DELAYS_S)):
         try:
             baseline_mb = sample_vram_mb(gpu_indices)
             break
         except Exception as exc:
             last_exc = exc
-            if _attempt < 2:
+            if _attempt < len(_BASELINE_VRAM_RETRY_DELAYS_S):
+                delay = _BASELINE_VRAM_RETRY_DELAYS_S[_attempt]
                 logger.warning(
-                    "  nvidia-smi baseline attempt %d failed: %s — retrying in 15s",
+                    "  nvidia-smi baseline attempt %d failed: %s — retrying in %.0fs",
                     _attempt + 1,
                     exc,
+                    delay,
                 )
-                time.sleep(15)
+                time.sleep(delay)
     if baseline_mb is None:
         partial.error = f"nvidia-smi baseline failed: {last_exc}"
         logger.warning("  ERROR: %s", partial.error)
