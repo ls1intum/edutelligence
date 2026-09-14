@@ -303,11 +303,18 @@ if [ "$KEEP_POWER" -eq 0 ]; then
         # Every field comes from the record, disablesleep included — nothing is
         # reset that Logos cannot prove it changed.
         if [ -s "$POWER_STATE_FILE" ]; then
+            # The record may only be discarded once EVERY field it describes is
+            # back. Deleting it after a partial success would strand the rest:
+            # the next run finds no record, concludes Logos owns nothing, and
+            # leaves the machine on the settings the worker imposed with no way
+            # left to undo them.
+            restore_ok=1
             saved_disablesleep="$(awk '$1 == "disablesleep" {print $2}' "$POWER_STATE_FILE")"
             case "$saved_disablesleep" in
                 0|1)
                     sudo pmset -a disablesleep "$saved_disablesleep" \
-                        || warn "Could not restore disablesleep — run: sudo pmset -a disablesleep $saved_disablesleep" ;;
+                        || { restore_ok=0
+                             warn "Could not restore disablesleep — run: sudo pmset -a disablesleep $saved_disablesleep"; } ;;
                 *) warn "No disablesleep value recorded; leaving it as it is." ;;
             esac
             restore_args=""
@@ -324,11 +331,16 @@ if [ "$KEEP_POWER" -eq 0 ]; then
                 # shellcheck disable=SC2086 -- deliberate word splitting into pmset arguments
                 if sudo pmset -c $restore_args; then
                     log "  restored:$restore_args"
-                    rm -f "$POWER_STATE_FILE"
-                    rmdir "$POWER_STATE_DIR" 2>/dev/null || true
                 else
-                    warn "Could not restore the AC settings — check 'pmset -g custom'; saved values are in $POWER_STATE_FILE"
+                    restore_ok=0
+                    warn "Could not restore the AC settings — check 'pmset -g custom'"
                 fi
+            fi
+            if [ "$restore_ok" -eq 1 ]; then
+                rm -f "$POWER_STATE_FILE"
+                rmdir "$POWER_STATE_DIR" 2>/dev/null || true
+            else
+                warn "  keeping $POWER_STATE_FILE so the restore can be retried by re-running this script"
             fi
         else
             log "  no recording from the bootstrap; left the power settings untouched"
