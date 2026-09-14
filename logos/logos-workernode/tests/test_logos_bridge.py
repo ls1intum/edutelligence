@@ -778,24 +778,60 @@ async def test_start_calibration_session_refuses_when_node_unhealthy(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_start_calibration_session_refuses_on_metal_backend(tmp_path, monkeypatch):
-    """Calibration measures against nvidia-smi and samples /proc/meminfo —
-    neither exists on macOS, so the Metal backend must refuse the session up
-    front, by construction and without any operator flag. The refusal must
-    start no session and name model_profile_overrides as the alternative."""
+async def test_start_calibration_session_routes_metal_backend_to_metal_probe(tmp_path, monkeypatch):
+    """On Metal, the session must start (not refuse) and route each model
+    to calibrate_model_metal — never calibrate_with_tp_escalation, which
+    would call nvidia-smi. sleep_level is forced to 0 regardless of what
+    was requested: CuMemAllocator sleep is CUDA-only."""
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["some/model"],
+    )
     client = LogosBridgeClient(app, cfg)
 
+    seen_kwargs: dict = {}
+
+    def _fake_calibrate_metal(plan, **kwargs):
+        seen_kwargs.update(kwargs)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=8192.0,
+        )
+
+    def _must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("calibrate_with_tp_escalation must not run on the Metal backend")
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration_metal.calibrate_model_metal",
+        _fake_calibrate_metal,
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        _must_not_be_called,
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
     response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
-    assert response["ok"] is False
-    assert response.get("calibration_unavailable") is True
-    assert response.get("reason_code") == "metal-backend"
-    assert "model_profile_overrides" in response["error"]
-    assert client._active_calibration_session is None  # noqa: SLF001
+    assert response["ok"] is True
+    assert response["sleep_level"] == 0
+    await _drain_session(client)
+
+    assert "cancel_event" in seen_kwargs  # reached the Metal probe with real kwargs
     events = [e.event for e in app.state.lane_manager._event_log]
-    assert "calibration_session_started" not in events
+    assert "calibration_session_started" in events
+    assert "calibration_session_finished" in events
 
 
 @pytest.mark.asyncio

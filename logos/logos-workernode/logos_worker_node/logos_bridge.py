@@ -1197,32 +1197,12 @@ class LogosBridgeClient:
         back to the server. The server does not poll status and does not
         choose models; it only sends start/stop session RPCs.
         """
-        # Refuse up front on the Metal backend: calibration.py measures
-        # against nvidia-smi and samples /proc/meminfo, neither of which
-        # exists on macOS, so no probe here can ever succeed. Capacity
-        # profiles on this backend come from model_profile_overrides
-        # (config.example.mlx.yml) — no flag is needed to keep the worker
-        # away from a dead measurement path.
-        if is_metal_backend():
-            logger.info(
-                "[Calibration] refusing start_calibration_session: calibration is "
-                "unavailable on the Metal backend (nvidia-smi / /proc/meminfo "
-                "do not exist on macOS) — profiles must come from "
-                "model_profile_overrides"
-            )
-            return {
-                "ok": False,
-                "error": (
-                    "calibration is unavailable on the Metal backend: it measures "
-                    "against nvidia-smi and /proc/meminfo, which do not exist on "
-                    "macOS. Supply capacity profiles via model_profile_overrides "
-                    "instead."
-                ),
-                "calibration_unavailable": True,
-                "reason_code": "metal-backend",
-            }
-
         sleep_level = int(params.get("sleep_level", 1))
+        # Sleep is unsupported on Metal regardless of config (CuMemAllocator
+        # is CUDA-only) — force it off rather than let the probe fail at
+        # a /sleep call that can never succeed on this backend.
+        if is_metal_backend():
+            sleep_level = 0
 
         # Refuse start when a session is already running — caller should
         # have stopped the previous session first. The event channel told
@@ -1552,6 +1532,7 @@ class LogosBridgeClient:
                 result_to_profile_dict,
                 save_profiles,
             )
+            from logos_worker_node.calibration_metal import calibrate_model_metal  # noqa: PLC0415
             from logos_worker_node.config import get_state_dir  # noqa: PLC0415
 
             cfg = self._app.state.config
@@ -1758,21 +1739,36 @@ class LogosBridgeClient:
                         return False
 
                 try:
-                    result = await loop.run_in_executor(
-                        None,
-                        lambda p=plan, sl=model_sleep_level: calibrate_with_tp_escalation(
-                            p,
-                            vllm_binary=_DEFAULT_VLLM,
-                            port=_CALIBRATION_PORT,
-                            log_dir=log_dir,
-                            sleep_level=sl,
-                            ready_timeout_s=_READY_TIMEOUT_S,
-                            nccl_p2p_available=nccl_p2p,
-                            model_cache=_mc,
-                            cancel_event=session.cancel_event,
-                            establish_host_ram_floor=_establish_host_ram_floor_for_probe,
-                        ),
-                    )
+                    if is_metal_backend():
+                        # No TP escalation, no KV sweep, no sleep/wake — see
+                        # calibration_metal's module docstring for why.
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda p=plan: calibrate_model_metal(
+                                p,
+                                vllm_binary=_DEFAULT_VLLM,
+                                port=_CALIBRATION_PORT,
+                                log_dir=log_dir,
+                                ready_timeout_s=_READY_TIMEOUT_S,
+                                cancel_event=session.cancel_event,
+                            ),
+                        )
+                    else:
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda p=plan, sl=model_sleep_level: calibrate_with_tp_escalation(
+                                p,
+                                vllm_binary=_DEFAULT_VLLM,
+                                port=_CALIBRATION_PORT,
+                                log_dir=log_dir,
+                                sleep_level=sl,
+                                ready_timeout_s=_READY_TIMEOUT_S,
+                                nccl_p2p_available=nccl_p2p,
+                                model_cache=_mc,
+                                cancel_event=session.cancel_event,
+                                establish_host_ram_floor=_establish_host_ram_floor_for_probe,
+                            ),
+                        )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("[Calibration] Unexpected error for model=%s", model_name)
                     self._record_calibration_event(
