@@ -386,14 +386,24 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
                 # uninstaller must only reset settings it can prove it owns. An
                 # operator or MDM policy that already disabled sleep is left alone
                 # precisely because no record of it is ever written.
-                # Print nothing when pmset gives no value. Substituting a 0
-                # would fabricate an ownership baseline: validation would pass,
-                # the settings would be changed, and the uninstaller would
-                # later "restore" a value that was never read from the machine.
-                # An absent line fails validation instead, which leaves the
-                # power settings untouched — the safe direction.
-                pmset -g 2>/dev/null \
-                    | awk '/SleepDisabled/ { print "disablesleep", $2 }'
+                # Two different situations produce no SleepDisabled row, and
+                # they must not be conflated:
+                #
+                #   pmset ran and printed no such row -> sleep is ENABLED. This
+                #     is the ordinary state of a fresh Mac (verified: a machine
+                #     with sleep on prints no SleepDisabled line at all), so 0
+                #     is a genuine reading, not a guess.
+                #   pmset failed -> nothing is known. Emitting a value here
+                #     would fabricate an ownership baseline, and the
+                #     uninstaller would later "restore" something never read
+                #     from this machine.
+                #
+                # So the line is written only when pmset itself succeeded; a
+                # failure leaves it out and the record is rejected downstream.
+                if sleep_disabled_now="$(pmset -g 2>/dev/null)"; then
+                    printf 'disablesleep %s\n' \
+                        "$(printf '%s\n' "$sleep_disabled_now" | awk '/SleepDisabled/ { print $2; exit }' | grep -E '^[0-9]+$' || echo 0)"
+                fi
                 pmset -g custom 2>/dev/null \
                     | sed -n '/AC Power/,$p' \
                     | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ { print $1, $2 }'
