@@ -27,7 +27,10 @@ knows at all, the Azure family first among them — the input context window the
 upstream registry publishes for the model. The webservice refreshes
 `model_capabilities` from that registry once a day; the orchestrator folds the
 value in only for models nothing else reports, so it never widens a window a
-source measured.
+source measured. And only for models a cloud provider is associated with: a
+cloud upstream serves a catalog model at its published size, but a local
+model's window is a property of the calibrated lane, so a local-only model
+with no lane up must not be reported as serving the registry's figure.
 
 | Field                       | Meaning                                                                    |
 | --------------------------- | -------------------------------------------------------------------------- |

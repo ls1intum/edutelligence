@@ -1390,6 +1390,13 @@ class DBManager:
         smallest published window wins, because a request may land on any
         deployment of the model and only the narrowest holds unconditionally.
 
+        Scoped to models with a cloud ``model_provider`` association, because
+        the value stands in for what a provider *serves*: a cloud upstream
+        serves a catalog model at its published size, but a local model's
+        window is a property of the calibrated lane, and a local-only model
+        with no lane up has nothing being served — advertising the registry's
+        figure for it would report a window no deployment holds.
+
         Only positive values are returned, so a model the catalog does not
         know (or that it lists without a window) is absent and callers treat
         it as unknown rather than zero.
@@ -1397,10 +1404,13 @@ class DBManager:
         rows = self.session.execute(
             text(
                 """
-                SELECT m.name, c.max_input_tokens
+                SELECT DISTINCT m.name, c.max_input_tokens
                 FROM model_capabilities c
                 JOIN models m ON m.id = c.model_id
-                WHERE c.max_input_tokens IS NOT NULL AND c.max_input_tokens > 0
+                JOIN model_provider mp ON mp.model_id = m.id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE p.provider_type = 'cloud'
+                  AND c.max_input_tokens IS NOT NULL AND c.max_input_tokens > 0
                 """
             )
         ).fetchall()
