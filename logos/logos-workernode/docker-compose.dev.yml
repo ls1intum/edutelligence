@@ -2,14 +2,13 @@
 # Usage: docker compose -f docker-compose.dev.yml up --build
 #
 # vLLM is always installed (CUDA toolkit comes from vLLM's pip wheels —
-# pinned Ubuntu base from the Dockerfile).
+# plain Ubuntu base, default BASE_IMAGE=ubuntu:24.04).
 services:
   logos-workernode:
     build:
       context: .
       args:
-        # Use the Dockerfile pin unless BASE_IMAGE is set.
-        BASE_IMAGE:
+        BASE_IMAGE: ${BASE_IMAGE:-ubuntu:24.04}
         # [audio] mirrors the Dockerfile default: without it the speech-to-text
         # endpoints cannot decode any upload (see the pin comment there).
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm[audio]}

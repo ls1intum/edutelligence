@@ -60,8 +60,7 @@
 # Host (GPU): driver 590.48.01 | CUDA 13.1 | 2× Quadro RTX 5000 (16 GB each)
 # =============================================================================
 
-# Update this digest deliberately to keep the build cache stable.
-ARG BASE_IMAGE=ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254
+ARG BASE_IMAGE=ubuntu:24.04
 # The [audio] extra is required, not cosmetic: the speech-to-text endpoints
 # (/v1/audio/transcriptions, /v1/audio/translations) decode uploads through
 # vllm.multimodal.media.audio.load_audio, whose only two backends are
@@ -134,6 +133,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     uv venv --seed --python python3.12 /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+WORKDIR /app
 # Version changes keep the Python and APT layers cached.
 ARG VLLM_PIP_SPEC
 ARG TORCH_INDEX_URL
@@ -179,10 +179,10 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
          -path '*/torch/*' -exec rm -rf {} + || true; }
 
 # Requirement changes keep the vLLM layer cached.
-WORKDIR /app
+COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
-    --mount=type=bind,source=requirements.txt,target=/tmp/requirements.txt \
-    uv pip install --no-cache -r /tmp/requirements.txt
+    uv pip install --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # ── CUDA toolkit prefix from the pip wheels ───────────────────────────────────
 # CUDA_HOME/PATH make FlashInfer & friends resolve nvcc/headers/libs from the
