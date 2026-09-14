@@ -400,9 +400,20 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
                 #
                 # So the line is written only when pmset itself succeeded; a
                 # failure leaves it out and the record is rejected downstream.
+                # Held to the same standard as the AC timers: zero rows means
+                # sleep is enabled (0 is a real reading), exactly one row with
+                # 0 or 1 is that value, and anything else — duplicate rows, a
+                # non-numeric value — emits nothing, so the record is rejected
+                # and no setting is touched. Taking the first of several rows
+                # or coercing junk to 0 would hand the uninstaller a policy to
+                # "restore" that this machine never had.
                 if sleep_disabled_now="$(pmset -g 2>/dev/null)"; then
-                    printf 'disablesleep %s\n' \
-                        "$(printf '%s\n' "$sleep_disabled_now" | awk '/SleepDisabled/ { print $2; exit }' | grep -E '^[0-9]+$' || echo 0)"
+                    printf '%s\n' "$sleep_disabled_now" | awk '
+                        /SleepDisabled/ { rows++; value = $2 }
+                        END {
+                            if (rows == 0) { print "disablesleep 0"; exit }
+                            if (rows == 1 && (value == "0" || value == "1")) { print "disablesleep", value }
+                        }'
                 fi
                 pmset -g custom 2>/dev/null \
                     | sed -n '/AC Power/,$p' \
