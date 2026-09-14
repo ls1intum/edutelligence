@@ -82,9 +82,9 @@ async def test_collect_vllm_metrics_text_skips_failed_lane(monkeypatch) -> None:
         ]
     )
 
-    assert "lane_id=\"lane-good\"" in text
-    assert "lane_id=\"lane-dead\"" not in text
-    assert "model=\"foo-model\"" in text
+    assert 'lane_id="lane-good"' in text
+    assert 'lane_id="lane-dead"' not in text
+    assert 'model="foo-model"' in text
 
 
 @pytest.mark.asyncio

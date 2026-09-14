@@ -55,11 +55,7 @@ async def collect_vllm_metrics_text(endpoints: list[tuple[str, str, int]]) -> st
     async with httpx.AsyncClient() as client:
         texts = await asyncio.gather(*(_fetch_lane_metrics_text(client, port) for _, _, port in endpoints))
 
-    sources = [
-        ({"lane_id": lane_id, "model": model}, text)
-        for (lane_id, model, _port), text in zip(endpoints, texts)
-        if text
-    ]
+    sources = [({"lane_id": lane_id, "model": model}, text) for (lane_id, model, _port), text in zip(endpoints, texts) if text]
     families = merge_metric_families(sources)
     if not families:
         return ""

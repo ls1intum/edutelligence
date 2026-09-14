@@ -571,9 +571,7 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
 async def test_send_vllm_metrics_forwards_merged_text(monkeypatch):
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     app = _DummyApp()
-    app.state.lane_manager = SimpleNamespace(
-        running_vllm_endpoints=lambda: [("lane-a", "model-a", 19001)]
-    )
+    app.state.lane_manager = SimpleNamespace(running_vllm_endpoints=lambda: [("lane-a", "model-a", 19001)])
     client = LogosBridgeClient(app, cfg)
 
     collect = AsyncMock(return_value="vllm:num_requests_running 1.0\n")
