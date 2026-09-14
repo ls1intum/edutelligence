@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- model_capabilities persisted only the three boolean flags of the
+         upstream registry; its per-model context size went unread. That size
+         is the only one known for a cloud model whose upstream publishes no
+         window of its own (Azure included), so /v1/models carried no
+         max_model_len for it and a wrapper sizing a session from the listing
+         fell back to a blind constant.
+
+         The new column carries the registry's max_input_tokens for the
+         model. The updater reduces several matching registry entries to the
+         smallest window, because a request may land on any deployment of the
+         model and only the narrowest holds unconditionally. The orchestrator
+         folds it into its context view only for models no measured source
+         knows, so a local lane running the model narrower is never
+         advertised wider.
+
+         Nullable: rows written before this changeSet hold NULL until the
+         next catalog refresh fills them. -->
+    <changeSet id="034-model-capabilities-max-input-tokens" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="model_capabilities" columnName="max_input_tokens"/></not>
+        </preConditions>
+        <addColumn tableName="model_capabilities">
+            <column name="max_input_tokens" type="INTEGER"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="model_capabilities" columnName="max_input_tokens"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1380,6 +1380,40 @@ class DBManager:
                     entry[field] = max(entry[field], value)
         return {model: entry for model, entry in stats.items() if entry}
 
+    def get_catalog_context_by_model(self) -> Dict[str, int]:
+        """Model name -> the input context window the model catalog publishes for it.
+
+        The webservice refreshes ``model_capabilities`` from the upstream
+        registry, and its ``max_input_tokens`` is the only size known for a
+        cloud model whose upstream publishes no window of its own — the Azure
+        family first among them. Reduced like every other source of this: the
+        smallest published window wins, because a request may land on any
+        deployment of the model and only the narrowest holds unconditionally.
+
+        Only positive values are returned, so a model the catalog does not
+        know (or that it lists without a window) is absent and callers treat
+        it as unknown rather than zero.
+        """
+        rows = self.session.execute(
+            text(
+                """
+                SELECT m.name, c.max_input_tokens
+                FROM model_capabilities c
+                JOIN models m ON m.id = c.model_id
+                WHERE c.max_input_tokens IS NOT NULL AND c.max_input_tokens > 0
+                """
+            )
+        ).fetchall()
+
+        contexts: Dict[str, int] = {}
+        for row in rows:
+            value = _positive_or_none(row.max_input_tokens)
+            if value is None:
+                continue
+            name = str(row.name)
+            contexts[name] = min(contexts[name], value) if name in contexts else value
+        return contexts
+
     def get_provider_config(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
         Retrieve SDI provider-level configuration from providers table.
