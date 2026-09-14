@@ -1,14 +1,18 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
@@ -28,21 +32,27 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
 @Service
 public class ProviderService {
 
+    // Mirrors the Postgres enum threshold_enum (liquibase 000 + 024) and
+    // ThresholdLevel in this package — keep in sync.
     private static final Set<String> VALID_PRIVACY_LEVELS = Set.of(
         "LOCAL", "CLOUD_IN_EU_BY_EU_PROVIDER",
-        "CLOUD_IN_EU_BY_US_PROVIDER", "CLOUD_NOT_IN_EU_BY_US_PROVIDER"
+        "CLOUD_IN_EU_BY_US_PROVIDER", "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+        "THIRD_PARTY_HARDWARE"
     );
 
     private final ProviderRepository providerRepository;
     private final ModelProviderRepository modelProviderRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final JdbcTemplate jdbc;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
-                           OrchestratorNotificationService orchestratorNotificationService) {
+                           OrchestratorNotificationService orchestratorNotificationService,
+                           JdbcTemplate jdbc) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.jdbc = jdbc;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
@@ -58,18 +68,41 @@ public class ProviderService {
         if (req.privacyLevel() == null || !VALID_PRIVACY_LEVELS.contains(req.privacyLevel())) {
             throw new IllegalArgumentException("privacy_level is required and must be one of " + VALID_PRIVACY_LEVELS);
         }
+        ProviderType providerType = parseProviderType(req.providerType());
+
         Provider p = new Provider();
         p.setName(req.providerName());
         p.setBaseUrl(normalizeBaseUrl(req.baseUrl()));
-        p.setApiKey(req.apiKey());
         p.setAuthName(req.authName() != null ? req.authName() : "");
         p.setAuthFormat(req.authFormat() != null ? req.authFormat() : "");
-        p.setProviderType(parseProviderType(req.providerType()));
+        p.setProviderType(providerType);
         p.setCloudProviderType(parseCloudProviderType(req.cloudProviderType()));
         p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
+
+        // Logosnode providers authenticate their worker node with a shared key.
+        // When the caller did not supply one, generate a random key (mirroring
+        // the orchestrator's logosnode_register bootstrap) and echo it back in
+        // the response so the operator can use it to configure the worker.
+        // Cloud providers keep whatever key was sent.
+        String apiKey = req.apiKey();
+        if (providerType == ProviderType.logosnode && (apiKey == null || apiKey.isBlank())) {
+            apiKey = generateApiKey();
+        }
+        p.setApiKey(apiKey);
+
         p = providerRepository.save(p);
-        orchestratorNotificationService.notifyRefresh(false);
-        return Map.of("result", "Created Provider.", "provider-id", p.getId());
+        // A cloud provider is created empty: its models come from the orchestrator's
+        // /v1/models scrape. Ask for that pass now instead of leaving the operator
+        // looking at an empty list until the next interval tick.
+        orchestratorNotificationService.notifyRefresh(false, providerType == ProviderType.cloud);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("result", "Created Provider.");
+        response.put("provider-id", p.getId());
+        if (providerType == ProviderType.logosnode && apiKey != null) {
+            response.put("api_key", apiKey);
+        }
+        return response;
     }
 
     @Transactional
@@ -90,7 +123,9 @@ public class ProviderService {
             p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         }
         providerRepository.save(p);
-        orchestratorNotificationService.notifyRefresh(false);
+        // Base URL, key and cloud type all change what the upstream lists, so a
+        // cloud provider is re-scraped on every edit.
+        orchestratorNotificationService.notifyRefresh(false, p.getProviderType() == ProviderType.cloud);
         return Map.of("result", "Updated Provider.");
     }
 
@@ -98,6 +133,27 @@ public class ProviderService {
     public Map<String, Object> deleteProvider(Integer providerId) {
         if (!providerRepository.existsById(providerId)) {
             throw new IllegalArgumentException("Provider not found: " + providerId);
+        }
+        // Lock the provider row before checking: inserting a batch_object
+        // takes a FOR KEY SHARE lock on the referenced row, so no concurrent
+        // registration can commit while the count and the delete run.
+        // Without it, a creation could land an unsettled batch between the
+        // count and the delete, and the cascade would erase its row while
+        // the upstream job keeps running.
+        jdbc.queryForObject("SELECT id FROM providers WHERE id = ? FOR UPDATE", Long.class, providerId);
+        // Deleting the provider cascades its batch_objects rows away. For a
+        // batch that still runs upstream — or finished there without its
+        // usage being booked yet — that would leave the job unreachable and
+        // its spend unbillable, so the deletion waits for it. Settled
+        // records are safe to cascade: the job is terminal and metered.
+        Long unsettled = jdbc.queryForObject(
+            "SELECT count(*) FROM batch_objects WHERE kind = 'batch' AND provider_id = ? AND settled_at IS NULL",
+            Long.class, providerId);
+        if (unsettled != null && unsettled > 0) {
+            throw new ConflictException(
+                "Provider " + providerId + " still has " + unsettled
+                    + " batch(es) running or not yet settled; they must finish and be metered "
+                    + "before the provider can be deleted.");
         }
         providerRepository.deleteById(providerId);
         orchestratorNotificationService.notifyRefresh(false);
@@ -152,10 +208,31 @@ public class ProviderService {
         return raw == null || raw.isBlank() ? null : raw;
     }
 
+    // Shared across calls — mirrors ApiKeyFactory's static SecureRandom.
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final Base64.Encoder API_KEY_ENCODER = Base64.getUrlEncoder().withoutPadding();
+
+    /**
+     * Generate a URL-safe random API key. Matches the orchestrator's
+     * {@code secrets.token_urlsafe(48)} (48 random bytes, base64url, no
+     * padding) so a key minted here is interchangeable with one minted by the
+     * {@code logosnode_register} bootstrap endpoint.
+     */
+    private static String generateApiKey() {
+        byte[] bytes = new byte[48];
+        SECURE_RANDOM.nextBytes(bytes);
+        return API_KEY_ENCODER.encodeToString(bytes);
+    }
+
     private static ProviderType parseProviderType(String raw) {
         if (raw == null) return ProviderType.logosnode;
         String normalized = raw.toLowerCase();
-        if (List.of("node", "node_controller", "ollama", "logos_worker_node").contains(normalized)) {
+        if ("ollama".equals(normalized)) {
+            throw new IllegalArgumentException(
+                "provider_type 'ollama' is no longer supported: every worker lane runs vLLM. "
+                + "Use 'logosnode' for worker-backed providers.");
+        }
+        if (List.of("node", "node_controller", "logos_worker_node").contains(normalized)) {
             return ProviderType.logosnode;
         }
         try { return ProviderType.valueOf(normalized); }

@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import math
 import secrets
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator, Callable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
@@ -29,6 +30,9 @@ from logos.terminal_logging import (
     render_section,
     wrap_plain,
 )
+
+if TYPE_CHECKING:
+    from logos.pipeline.latency_store import LatencyStore
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +354,7 @@ class LogosNodeRuntimeRegistry:
     def __init__(
         self,
         on_capabilities_changed: Callable[[int, list[str]], None] | None = None,
+        latency_store: LatencyStore | None = None,
     ) -> None:
         self._tickets: dict[str, AuthTicket] = {}
         self._sessions: dict[int, ProviderSession] = {}
@@ -381,6 +386,82 @@ class LogosNodeRuntimeRegistry:
         # In-flight stream cancellations. Held only so the loop keeps a strong
         # reference to fire-and-forget tasks until they complete.
         self._cancellation_tasks: set[asyncio.Task] = set()
+        self._latency_store = latency_store
+        # Per-(provider_id, model_name) last-ingested values for idempotency.
+        # Workers retain cold/wake fields across heartbeats; histogram counts are
+        # cumulative — only record when a value has actually changed or new samples
+        # arrived, to avoid inflating EWMA counts with duplicate observations.
+        self._prev_lane_cold_s: dict[tuple[int, str], float] = {}
+        self._prev_lane_wake_s: dict[tuple[int, str], float] = {}
+        self._prev_lane_tpot_count: dict[tuple[int, str], float] = {}
+        self._prev_lane_e2e_count: dict[tuple[int, str], float] = {}
+
+    def _absorb_latency_observations(self, provider_id: int, runtime: dict[str, Any]) -> None:
+        """Extract timing observations from a worker status update and feed them
+        to the LatencyStore so the scheduler can use learned values."""
+        assert self._latency_store is not None
+        # Lazy import to avoid a circular dependency at module load time:
+        # logosnode_registry ← latency_store ← ettft_estimator ← sdi.models
+        #   ← sdi.providers.logosnode_provider ← logosnode_registry
+        from logos.pipeline.ettft_estimator import ReadinessTier  # noqa: PLC0415
+
+        for lane in runtime.get("lanes") or []:
+            if not isinstance(lane, dict):
+                continue
+            model_name: str = lane.get("model") or ""
+            if not model_name:
+                continue
+
+            _lane_key = (provider_id, model_name)
+
+            # Cold load timing — workers retain the last value across heartbeats,
+            # so only record when it changes to avoid inflating the EWMA count.
+            cold_s = lane.get("last_cold_load_s")
+            if isinstance(cold_s, (int, float)) and cold_s > 0:
+                if self._prev_lane_cold_s.get(_lane_key) != cold_s:
+                    self._latency_store.record_overhead(model_name, provider_id, ReadinessTier.COLD, float(cold_s))
+                    self._prev_lane_cold_s[_lane_key] = cold_s
+
+            # Wake-from-sleep timing — same retention pattern as cold_s.
+            wake_s = lane.get("last_wake_from_sleep_s")
+            if isinstance(wake_s, (int, float)) and wake_s > 0:
+                if self._prev_lane_wake_s.get(_lane_key) != wake_s:
+                    self._latency_store.record_overhead(model_name, provider_id, ReadinessTier.SLEEPING, float(wake_s))
+                    self._prev_lane_wake_s[_lane_key] = wake_s
+
+            # TPOT and e2e latency from vLLM Prometheus histograms.
+            # Both histograms are cumulative; use the +Inf bucket (total count) as a
+            # generation marker — only ingest when new samples have actually arrived.
+            bm = lane.get("backend_metrics")
+            if isinstance(bm, dict):
+                tpot_hist = bm.get("tpot_histogram") or {}
+                tpot_total = float(tpot_hist.get("+Inf", 0.0))
+                if tpot_total > 0 and tpot_total != self._prev_lane_tpot_count.get(_lane_key, 0.0):
+                    tpot_p50 = _histogram_quantile(tpot_hist, 0.50)
+                    if tpot_p50 > 0.0:
+                        self._latency_store.record_ttft(model_name, provider_id, tpot_p50)
+                    self._prev_lane_tpot_count[_lane_key] = tpot_total
+
+                e2e_hist = bm.get("e2e_latency_histogram") or {}
+                e2e_total = float(e2e_hist.get("+Inf", 0.0))
+                if e2e_total > 0 and e2e_total != self._prev_lane_e2e_count.get(_lane_key, 0.0):
+                    e2e_p50 = _histogram_quantile(e2e_hist, 0.50)
+                    if e2e_p50 > 0.0:
+                        self._latency_store.record_e2e_latency(model_name, provider_id, e2e_p50)
+                    self._prev_lane_e2e_count[_lane_key] = e2e_total
+                # Prefill timing: the worker reports the wall time and prompt-token
+                # count for the most recently completed prefill so the scheduler can
+                # learn the per-token rate and estimate cost for future requests.
+                prefill_s = bm.get("last_prefill_s")
+                prefill_tokens = bm.get("last_prefill_tokens")
+                if (
+                    isinstance(prefill_s, (int, float))
+                    and isinstance(prefill_tokens, (int, float))
+                    and math.isfinite(prefill_s)
+                    and math.isfinite(prefill_tokens)
+                    and prefill_tokens > 0
+                ):
+                    self._latency_store.record_prefill(model_name, provider_id, float(prefill_s), float(prefill_tokens))
 
     def set_on_runtime_updated(self, callback: Callable[[int], None] | None) -> None:
         """Register the post-status hook. See ``_on_runtime_updated``."""
@@ -793,9 +874,16 @@ class LogosNodeRuntimeRegistry:
                 )
             )
 
-        # Fresh measurements are in: whatever the scheduler was holding back
-        # against the previous ones can be reconsidered now.
+        # Notify the scheduler immediately so it can reconsider held requests
+        # using the fresh lane states.  EWMA/DB updates follow but must not
+        # delay this wake-up: DB commits are synchronous and can be slow.
         self._fire_runtime_updated(provider_id)
+
+        # Feed per-lane timing data into the LatencyStore.  Runs after the
+        # scheduler wake-up so DB latency does not block the event loop before
+        # requests can be re-evaluated.
+        if self._latency_store is not None and isinstance(runtime, dict):
+            self._absorb_latency_observations(provider_id, runtime)
 
     async def record_runtime_sample(self, provider_id: int, sample: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)

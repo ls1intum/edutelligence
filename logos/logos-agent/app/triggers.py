@@ -5,7 +5,7 @@ usable like a person's. The gestures are the ordinary ones:
 
 | What you do on GitHub | What the agent does |
 |---|---|
-| assign it an issue | works on the issue and opens a draft pull request |
+| assign it an issue | works on the issue and opens a pull request |
 | assign it a pull request | takes that pull request over, on its own branch |
 | ask one of its pull requests for changes | addresses the review on that branch |
 | comment on a pull request it is responsible for | reads the comment and answers it |
@@ -79,6 +79,9 @@ MAX_COMMENT_LOOKBACK = timedelta(days=7)
 
 # At most this many comments are carried into one task, and this much of each.
 MAX_THREAD_COMMENTS = 20
+# How many comments of a conversation fit in one task.
+MAX_CONVERSATION = 40
+
 MAX_COMMENT_CHARS = 3000
 
 # The account sessions are attributed to when the runner queued them itself.
@@ -86,6 +89,14 @@ CREATED_BY = "logos-agent (trigger)"
 
 # Where a session writes an answer for the runner to post.
 REPLY_FILE = "reply.md"
+
+# The head of a pull request the pass could not read. Not the same as None:
+# None is an answer — the lookup succeeded and the head is confirmed not
+# ours to push (a fork's branch, a protected one). This is the absence of
+# an answer, and a candidate about it is deferred to the next pass rather
+# than worked, because neither a branch nor a read-only answer is something
+# a failed lookup may stand behind.
+_HEAD_UNKNOWN = object()
 
 
 _NAME_SAFE = re.compile(r"[^a-z0-9]+")
@@ -166,18 +177,20 @@ def is_bot(login: str) -> bool:
 # --- what the agent is asked to do ----------------------------------------
 
 
-def issue_task(issue: dict[str, Any]) -> str:
+async def issue_task(issue: dict[str, Any], conversation: str = "") -> str:
     """The task text for an issue assigned to the agent."""
     number = issue.get("number")
     title = str(issue.get("title") or "").strip()
     body = str(issue.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[issue body truncated]"
-    return for_task(
-        f"You have been assigned issue #{number}. Work on it and open a draft pull "
-        f"request with your result.\n\n"
+    return await for_task(
+        f"You have been assigned issue #{number}. Work on it; the harness opens "
+        f"a pull request with your result.\n\n"
         f"Issue #{number}: {title}\n\n"
-        f"{body}\n\n"
+        f"{body or '(no description in the issue body)'}\n\n"
+        f"{conversation}"
+        f"That is the whole issue as it stands — you cannot fetch more of it. "
         f"Scope your change to what the issue asks for: the smallest change that "
         f"answers it, with tests for what you changed. If the issue is unclear or turns "
         f"out to be larger than it looks, do the part you are confident about and say "
@@ -221,12 +234,12 @@ def conversation_block(entries: list[dict[str, Any]], missing: list[str] | None 
     return gap + "The conversation so far, oldest first:\n\n" + "\n\n---\n\n".join(rendered) + "\n\n"
 
 
-def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
+async def takeover_task(number: int, title: str, body: str, branch: str, conversation: str = "") -> str:
     """The task text for a pull request handed to the agent."""
     text = (body or "").strip()
     if len(text) > 6000:
         text = text[:6000] + "\n\n[description truncated]"
-    return for_task(
+    return await for_task(
         f"Pull request #{number} ('{title}') has been assigned to you: somebody wants you "
         f"to carry it the rest of the way. You are working in a checkout of its own "
         f"branch `{branch}`, and your commit updates that pull request — do not open a "
@@ -266,14 +279,57 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
     return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
 
 
-def review_task(number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None) -> str:
+async def review_request_task(number: int, title: str, body: str, requester: str, *, branch: str | None = None) -> str:
+    """The task text for a pull request that asked to be reviewed.
+
+    A review first: what came back has to be an opinion about this diff,
+    whether or not anything is changed. Where the head is ours to push, the
+    agent may also fix what it found — somebody who may direct this runner
+    asked it onto the pull request, and answering "here is what I would
+    change" to a request to change it is not much of an answer.
+    """
+    description = (body or "").strip()
+    if len(description) > 4000:
+        description = description[:4000] + "\n\n[description truncated]"
+    return await for_task(
+        f"{requester} asked you to review #{number} ('{title}').\n\n"
+        f"{description or '(the pull request has no description)'}\n\n"
+        f"You are working in a checkout of that pull request's own code, so read the diff "
+        f"against the default branch — `git diff origin/main...HEAD` — and then read the "
+        f"files it touches, in full, before you say anything about them.\n\n"
+        f"Write your review to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}`; the runner posts it on the "
+        f"pull request. Write it as the review itself: English, specific, and about this "
+        f"diff. Name the file and line for anything you raise, say why it matters, and "
+        f"prefer a small number of things that are actually wrong over a list of "
+        f"observations. If the change looks right, say that plainly and say what you "
+        f"checked — a review that finds nothing is a useful review when it says what it "
+        f"looked at.\n\n"
+        + (
+            f"You are on that pull request's own branch `{branch}`, so you can fix what you "
+            f"find. Do: formatting, lint failures, a clear bug, a missing test for the code "
+            f"in the diff. Do not: rewrite the approach, rename things to your taste, or "
+            f"change files the pull request does not touch — it is somebody else's work and "
+            f"they will read every commit you add to it. Whatever you change, say so in the "
+            f"review and say why; leave anything you are unsure about as a remark rather "
+            f"than a commit."
+            if branch
+            else "You cannot push here and must not try: this pull request's branch is not "
+            "one this runner may write to. Where you would change something, quote the code "
+            "and show what you would put there instead."
+        )
+    )
+
+
+async def review_task(
+    number: int, title: str, review: dict[str, Any], comments: list[dict[str, Any]] | None = None
+) -> str:
     """The task text for a review that asked a pull request for changes."""
     reviewer = str((review.get("user") or {}).get("login") or "a reviewer")
     body = str(review.get("body") or "").strip()
     if len(body) > 6000:
         body = body[:6000] + "\n\n[review body truncated]"
     inline = _inline_block(comments or [])
-    return for_task(
+    return await for_task(
         f"A review on pull request #{number} ('{title}') asked for changes. You are working "
         f"in a checkout of that pull request's own branch, and your commit updates it — "
         f"there is no new pull request to open.\n\n"
@@ -290,12 +346,25 @@ def review_task(number: int, title: str, review: dict[str, Any], comments: list[
     )
 
 
-def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, branch: str | None) -> str:
+async def thread_task(
+    number: int,
+    title: str,
+    comments: list[dict[str, Any]],
+    *,
+    branch: str | None,
+    reading: bool = False,
+    other_inline: list[dict[str, Any]] | None = None,
+) -> str:
     """The task text for comments addressed to the agent.
 
     The answer is the deliverable. Whether code changes at all is the
     comment's business: "why does this fail?" wants an explanation, "can you
     also handle X?" wants a commit. Saying so plainly beats guessing.
+
+    ``other_inline`` are the pull request's review comments that live in
+    *other* threads. The comment being answered often points at them — "act
+    on the reviewer's note" — and a task that carried only the answering
+    thread left the agent unable to see what it was asked to act on.
     """
     rendered = []
     for comment in comments[:MAX_THREAD_COMMENTS]:
@@ -307,28 +376,68 @@ def thread_task(number: int, title: str, comments: list[dict[str, Any]], *, bran
         where = f" on {path}:{comment.get('line') or comment.get('original_line') or '?'}" if path else ""
         rendered.append(f"{author}{where} wrote:\n{body}")
     conversation = "\n\n---\n\n".join(rendered)
+    others = ""
+    if other_inline:
+        listed = []
+        # _get_all answers oldest-first, so the tail is the recent review
+        # the comment you are answering actually points at. Keep the newest
+        # MAX_THREAD_COMMENTS (still oldest-to-newest within the tail) rather
+        # than the stale head, which would drop the note that matters.
+        for comment in other_inline[-MAX_THREAD_COMMENTS:]:
+            author = str((comment.get("user") or {}).get("login") or "somebody")
+            body = str(comment.get("body") or "").strip()
+            if not body:
+                continue
+            if len(body) > MAX_COMMENT_CHARS:
+                body = body[:MAX_COMMENT_CHARS] + " […]"
+            path = comment.get("path")
+            where = f" on {path}:{comment.get('line') or comment.get('original_line') or '?'}" if path else ""
+            listed.append(f"{author}{where} wrote:\n{body}")
+        if listed:
+            others = (
+                "The comment you are answering refers to review comments on this pull "
+                "request that are not in your own thread. They are here so you can act on "
+                "what was asked rather than say you cannot see them:\n\n"
+                + "\n\n---\n\n".join(listed)
+                + (
+                    "\n\n[more review comments on this pull request were not included]"
+                    if len(other_inline) > MAX_THREAD_COMMENTS
+                    else ""
+                )
+            )
     if branch:
         place = (
             f"You are working in a checkout of that pull request's own branch `{branch}`. "
             f"If — and only if — answering means changing code, commit it there; it updates "
-            f"the existing pull request rather than opening a new one."
+            f"the existing pull request rather than opening a new one. Change what was "
+            f"asked for and nothing else: the pull request may be somebody else's, and they "
+            f"will read every commit you add to it."
+        )
+    elif reading:
+        place = (
+            "You are working in a checkout of that pull request's own code, so read the diff "
+            "— `git diff origin/main...HEAD` — and the files it touches before you answer. "
+            "You cannot push here and must not try: this pull request's branch is not one "
+            "this runner may write to. Answer in words, and where you would change "
+            "something, quote the code and show what you would put there instead."
         )
     else:
         place = (
-            "You are working in a checkout of the default branch, and you have no business "
-            "pushing to this pull request — it is somebody else's. Answer in words. If the "
+            "You are working in a checkout of the default branch. Answer in words. If the "
             "answer needs a code change, say what you would change and why, and leave it to "
             "the people on the thread."
         )
-    return for_task(
-        f"You were asked something on #{number} ('{title}').\n\n"
-        f"{conversation}\n\n"
+    text = f"You were asked something on #{number} ('{title}').\n\n{conversation}\n\n"
+    if others:
+        text += others + "\n\n"
+    text += (
         f"Write your answer to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` — the runner posts it in "
         f"the thread for you, so write it as the reply itself: English, to the point, no "
         f"preamble about being an agent. Answer what was actually asked; read the code "
         f"before you claim anything about it, and say plainly when you do not know. "
         f"{place}"
     )
+    return await for_task(text)
 
 
 class TriggerPoller:
@@ -342,6 +451,12 @@ class TriggerPoller:
         self._queued_total = 0
         # login -> may push, for the duration of one pass.
         self._writers: dict[str, bool] = {}
+        # Which numbers are pull requests, for the length of one pass.
+        self._pulls: dict[int, dict[str, Any] | None] = {}
+        # Each pull request's inline comments, read once per pass: a pull
+        # request with several open threads would otherwise be listed once
+        # per thread.
+        self._inline: dict[int, list[dict[str, Any]]] = {}
         # Called after a pass queued something, so the work starts on the
         # next admission rather than at the scheduler's own tick. Set by the
         # service on startup; the poller does not import the session manager
@@ -427,6 +542,8 @@ class TriggerPoller:
         # Permission answers are cached per pass: they can change, and a
         # pass is short enough that reading them once is honest.
         self._writers = {}
+        self._pulls = {}
+        self._inline = {}
         candidates = await self._candidates(now)
         self._last_pass = now
         self._last_error = ""
@@ -448,6 +565,15 @@ class TriggerPoller:
         deferred = False
         for candidate in candidates:
             if candidate["ref"] in handled:
+                continue
+            if candidate.get("deferred"):
+                # The head of its pull request could not be read this
+                # pass, and no shape of the candidate is an answer the
+                # pass may back up. Nothing is recorded, and the mark
+                # below must not move past the conversation either: the
+                # next pass reads the head again and asks the same
+                # question.
+                deferred = True
                 continue
             if room <= 0:
                 deferred = True
@@ -491,6 +617,44 @@ class TriggerPoller:
         except Exception as exc:
             logger.warning("could not record how far the comment scan got: %s", exc)
 
+    async def _issue_conversation(self, number: int, issue: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+        """What has been said under an issue, and what was left out.
+
+        An issue's description is not always in its body: a title, an empty
+        body and the whole report in the first comment is an ordinary way to
+        file one, and a session handed the title alone can only say that it
+        was handed the title alone.
+
+        Kept: what people the runner trusts have said. Not the reporter by
+        virtue of having reported — anybody can open an issue on a public
+        repository, and the session that reads this will push a branch. If
+        the description only exists in an outsider's comment, the agent is
+        told that comments were withheld and a maintainer can repeat what
+        matters in their own words, which is a small cost against letting a
+        stranger write the task.
+        """
+        try:
+            entries, missing = await github.issue_conversation(number)
+        except Exception as exc:
+            logger.info("could not read the conversation of issue #%s: %s", number, exc)
+            return [], ["the issue's comments"]
+        allowed: list[dict[str, Any]] = []
+        outsiders = 0
+        for entry in entries:
+            author = str(entry.get("author") or "")
+            if author and await self._worth_reading(author):
+                allowed.append(entry)
+            else:
+                outsiders += 1
+        if outsiders:
+            missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
+        if len(allowed) > MAX_CONVERSATION:
+            # Said, not silently dropped: the task claims to carry the whole
+            # issue, and the oldest comment is often the report itself.
+            missing = [*missing, f"{len(allowed) - MAX_CONVERSATION} older comment(s), beyond what fits in a task"]
+            allowed = allowed[-MAX_CONVERSATION:]
+        return allowed, missing
+
     async def _conversation(self, number: int) -> tuple[list[dict[str, Any]], list[str]]:
         """The conversation a handover may act on, and what is missing from it.
 
@@ -512,7 +676,7 @@ class TriggerPoller:
         outsiders = 0
         for entry in entries:
             author = str(entry.get("author") or "")
-            if author and await self._writer(author):
+            if author and await self._worth_reading(author):
                 allowed.append(entry)
             else:
                 outsiders += 1
@@ -522,7 +686,13 @@ class TriggerPoller:
                 outsiders,
                 number,
             )
-            missing = [*missing, f"{outsiders} comment(s) from accounts without write access"]
+            missing = [*missing, f"{outsiders} comment(s) from accounts the runner does not take direction from"]
+        if len(allowed) > MAX_CONVERSATION:
+            # After the filter, never before it: a pull request whose review
+            # is fifteen comments long would otherwise spend its allowance
+            # on entries that are about to be dropped.
+            missing = [*missing, f"{len(allowed) - MAX_CONVERSATION} older comment(s), beyond what fits in a task"]
+            allowed = allowed[-MAX_CONVERSATION:]
         return allowed, missing
 
     async def _acknowledge(self, candidate: dict[str, Any]) -> None:
@@ -558,7 +728,10 @@ class TriggerPoller:
                 {
                     "ref": f"issue-{number}",
                     "kind": "issue",
-                    "task": issue_task(issue),
+                    "task": await issue_task(
+                        issue,
+                        conversation_block(*await self._issue_conversation(number, issue)),
+                    ),
                     "workspace": workspace_name("issue", number, title),
                     "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
                     # Every session says something back on the thread it came
@@ -577,6 +750,11 @@ class TriggerPoller:
         consumed: set[int] = set()
         for number, pull in responsible.items():
             branch = pull["branch"]
+            if branch is _HEAD_UNKNOWN:
+                # Neither a review nor a takeover is an answer a failed
+                # lookup allows. Both are read from the repository's state,
+                # so the next pass finds them again; nothing is recorded.
+                continue
             review = await github.latest_changes_requested_review(number)
             if review is not None:
                 review_id = int(review["id"])
@@ -606,7 +784,7 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-review-{review_id}",
                         "kind": "review",
-                        "task": review_task(number, pull["title"], review, comments),
+                        "task": await review_task(number, pull["title"], review, comments),
                         "branch": branch,
                         "workspace": workspace_name("pr", number, pull["title"]),
                         # A submitted review is not a review *comment*: the
@@ -622,7 +800,7 @@ class TriggerPoller:
                     {
                         "ref": f"pr-{number}-assigned",
                         "kind": "takeover",
-                        "task": takeover_task(
+                        "task": await takeover_task(
                             number,
                             pull["title"],
                             pull["body"],
@@ -636,7 +814,102 @@ class TriggerPoller:
                     }
                 )
 
+        found.extend(await self._review_requests(login, responsible))
         found.extend(await self._comment_candidates(now, responsible, consumed))
+        return found
+
+    async def _review_requests(self, login: str, responsible: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+        """Pull requests that have asked this account to review them.
+
+        The ordinary gesture — adding somebody as a reviewer — and until now
+        the one the runner did not answer at all: an operator added the
+        agent and nothing happened.
+
+        A review is words, not commits. The session reads the pull
+        request's own code (`refs/pull/<n>/head`, which exists for forks
+        too) and writes what it found; it gets no branch, so nothing it
+        thinks can reach somebody else's work by itself.
+        """
+        found: list[dict[str, Any]] = []
+        try:
+            asked = await github.review_requests(login)
+        except Exception as exc:
+            logger.info("could not read who wants a review: %s", exc)
+            return found
+        for pull in asked:
+            number = pull.get("number")
+            if not isinstance(number, int):
+                continue
+            if number in responsible:
+                # Its own pull request, or one handed to it. Reviewing that
+                # is a different thing from working on it, and the work
+                # comes first.
+                continue
+            answer = await github.who_asked_for_a_review(number, login)
+            if answer is None:
+                # The timeline is longer than the runner can read, and what
+                # was read is its oldest part — the newest request is not in
+                # it. An old matching actor from the remainder is not the
+                # authorization for acting now.
+                logger.info(
+                    "the timeline of pull request #%s is longer than the runner can read; not acting",
+                    number,
+                )
+                continue
+            requester, request_event_id = answer
+            if not requester or not await self._writer(requester):
+                logger.info(
+                    "the review request on #%s comes from %s, who does not direct this runner",
+                    number,
+                    requester or "an account the timeline does not name",
+                )
+                continue
+            title = str(pull.get("title") or f"#{number}")
+            # Somebody who may direct this runner asked it onto this pull
+            # request, so it arrives able to do something about what it
+            # finds: the head is its branch when the head is ours to push
+            # — in this repository and not protected. A fork's head is not,
+            # and there the review is words and only words.
+            try:
+                branch = await self._writable_head(number)
+            except Exception as exc:
+                # The request stays unacknowledged and the next pass finds
+                # it again; answering it now would spend it on a shape this
+                # pass may not back up.
+                logger.info("could not read the head of pull request %s: %s", number, exc)
+                continue
+            found.append(
+                {
+                    # One request per timeline event, not per person: asking
+                    # again after the agent has answered means removing and
+                    # re-adding it, which writes a new event. The event's
+                    # identity keeps the new request from being mistaken
+                    # for the one already answered — a ref built from the
+                    # requester alone would suppress it forever.
+                    "ref": (
+                        f"pr-{number}-review-requested-{requester.lower()}-event-{request_event_id}"
+                        if request_event_id is not None
+                        else f"pr-{number}-review-requested-{requester.lower()}"
+                    ),
+                    "kind": "review-request",
+                    "task": await review_request_task(
+                        number, title, str(pull.get("body") or ""), requester, branch=branch
+                    ),
+                    "branch": branch,
+                    # A fork's head is nobody's to push to. The task says so
+                    # in words, but a prompt is a request, not a gate: the
+                    # launch still derives a local branch and the finalizer
+                    # still holds the credential, so the row says it too.
+                    "no_push": branch is None,
+                    # Nothing to push to: read the pull request's own code
+                    # so the review is at least about the right diff.
+                    "read_ref": None if branch else f"refs/pull/{number}/head",
+                    "workspace": workspace_name("pr", number, title),
+                    "reaction": f"/repos/{settings.repo_slug}/issues/{number}",
+                    "reply_target": f"issue:{number}",
+                    "urgency": priority.of("review", pull.get("labels")),
+                }
+            )
         return found
 
     async def _responsible_pulls(self, login: str) -> dict[int, dict[str, Any]]:
@@ -653,38 +926,145 @@ class TriggerPoller:
             number = entry.get("number")
             if not isinstance(number, int) or number in pulls:
                 return
+            try:
+                branch = await self._writable_head(number)
+            except Exception as exc:
+                # A head that cannot be read is not a read-only head:
+                # read-only is what a successful lookup concludes, and the
+                # difference is the one a transient failure must not blur.
+                logger.info("could not read the head of pull request %s: %s", number, exc)
+                branch = _HEAD_UNKNOWN
             pulls[number] = {
                 "title": str(entry.get("title") or ""),
                 "body": str(entry.get("body") or ""),
                 "labels": entry.get("labels") or (),
                 "assigned": assigned,
-                "branch": await self._writable_head(number),
+                "branch": branch,
             }
 
-        for entry in await github.assigned_pull_requests(login):
-            await remember(entry, assigned=True)
+        # Its own first, and deliberately so: `remember` keeps the first
+        # answer for a number, and this repository assigns every pull
+        # request to its author. Without this order the agent opens a pull
+        # request, is assigned it seconds later, and takes over its own
+        # work — a session to "carry it the rest of the way" when it has
+        # just carried it. Reviews and questions on those pull requests
+        # still reach it; a handover of its own work does not.
         for entry in await github.authored_pull_requests(login):
             await remember(entry, assigned=False)
+        for entry in await github.assigned_pull_requests(login):
+            await remember(entry, assigned=True)
         return pulls
 
     async def _writer(self, login: str) -> bool:
-        """Whether an account may write to this repository.
+        """Whether this account's word may direct the agent.
+
+        Team membership decides where it can be established: a session
+        pushes branches and answers in the repository's name, and who may
+        ask it to is a question about people, not about a permission that
+        happens to come with a fork or a triage role.
+
+        Where it cannot be established — no teams configured, or a token
+        without `read:org` — the older rule applies: whoever may write to
+        this repository. An unanswerable question is not a refusal; treating
+        it as one would silence the whole repository the first time somebody
+        reissued the token without the scope.
 
         Cached for the pass: one conversation is usually one person, and a
         lookup per comment would spend requests on the same answer.
         """
         key = login.lower()
         if key not in self._writers:
-            self._writers[key] = await github.may_push(login)
+            member = await github.in_a_trusted_team(login)
+            self._writers[key] = await github.may_push(login) if member is None else member
         return self._writers[key]
 
-    async def _may_direct_changes(self, comments: list[dict[str, Any]]) -> bool:
-        """Whether anyone in this conversation may direct a code change."""
+    async def _worth_reading(self, login: str) -> bool:
+        """Whether this account's words belong in a task.
+
+        Wider than :meth:`_writer`, and only here. Directing the agent is a
+        decision about people; *reading* a review is not, and this
+        repository's review runs on two apps that are in no team and may
+        push nothing. Dropping them left a session taking over its own pull
+        request to address a review it had not been shown.
+
+        They still direct nothing: no review of theirs starts a session and
+        no comment of theirs steers one — a person the runner listens to has
+        already decided that this work happens.
+        """
+        return login.lower() in settings.review_bots or await self._writer(login)
+
+    async def _trusted_comments(self, comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The comments in this conversation whose authors may direct a code change."""
+        directed = []
         for comment in comments:
             author = str((comment.get("user") or {}).get("login") or "")
             if author and await self._writer(author):
-                return True
-        return False
+                directed.append(comment)
+        return directed
+
+    async def _readable_comments(self, comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The comments this session may read, once trusted work has been authorized.
+
+        Wider than :meth:`_trusted_comments`: the session was already handed a
+        branch by somebody who may direct a change, and the note it was told to
+        address may sit with a configured review app — in no team and pushing
+        nothing, but one the operator named. Reading what was asked is not
+        obeying a stranger, so a bot the repository already trusts comes over
+        the line. An untrusted account does not: this is where a foreign review
+        note would steer code, and the allowlist stays the wall.
+        """
+        readable = []
+        for comment in comments:
+            author = str((comment.get("user") or {}).get("login") or "")
+            if author and await self._worth_reading(author):
+                readable.append(comment)
+        return readable
+
+    async def _other_inline_comments(self, number: int, thread: dict[str, Any]) -> list[dict[str, Any]]:
+        """The pull request's inline comments that are not in this thread.
+
+        A thread the agent answers carries its own comments, but the comment
+        it answers often points at review notes in another thread — "address
+        the reviewer's comment" — which it was never shown. This hands over
+        the rest of the pull request's inline comments, so the agent acts on
+        what was asked rather than replying that it cannot see the other one.
+
+        The listing is fetched per pull request and kept for the pass; a
+        thread that cannot read it degrades to the thread alone rather than
+        losing the whole conversation.
+        """
+        if number not in self._inline:
+            try:
+                self._inline[number] = await github.pull_inline_comments(number)
+            except Exception as exc:
+                logger.info("could not read the inline comments of #%s: %s", number, exc)
+                self._inline[number] = []
+        here = {c.get("id") for c in (thread.get("comments") or []) if isinstance(c.get("id"), int)}
+        return [c for c in self._inline[number] if isinstance(c.get("id"), int) and c["id"] not in here]
+
+    async def _pull_request(self, number: int) -> dict[str, Any] | None:
+        """That number as a pull request, or None when it is an issue.
+
+        Only the 404 of a plain issue is read as None. Any other failure of
+        the lookup — a rate limit, a dead credential, a network blip —
+        propagates: answering a question from the default branch and
+        recording its ref would make a momentary failure permanent, and the
+        next pass is the one that asks again.
+
+        Cached for the pass: one thread asks about one number, and a poll
+        that answered three questions about the same pull request would
+        otherwise ask GitHub three times.
+        """
+        if number not in self._pulls:
+            try:
+                self._pulls[number] = await github.pull_request(number) or None
+            except github.GitHubError as exc:
+                if exc.status != 404:
+                    raise
+                # A plain issue answers 404 here, which is the ordinary
+                # case rather than a failure.
+                self._pulls[number] = None
+        return self._pulls[number]
 
     async def _writable_head(self, number: int) -> str | None:
         """The branch of a pull request the agent may push to, or None.
@@ -696,12 +1076,15 @@ class TriggerPoller:
         required: a pull request handed over by a person keeps its own
         branch name, because renaming it would abandon the pull request it
         belongs to.
+
+        ``None`` is an answer, not a shrug: it means the lookup succeeded
+        and the head is confirmed not ours to push. A lookup that fails
+        raises instead — a caller that mistook a rate limit or a dead
+        network for a fork's head would answer a code-change request in
+        words and record its reference, spending the request the failure
+        was standing in the way of.
         """
-        try:
-            pull = await github.pull_request(number)
-        except Exception as exc:
-            logger.warning("could not read pull request %s: %s", number, exc)
-            return None
+        pull = await github.pull_request(number)
         ref, repo = github.head_of(pull)
         if not ref:
             return None
@@ -776,17 +1159,91 @@ class TriggerPoller:
         for (kind, key), thread in threads.items():
             number = thread["number"]
             pull = responsible.get(number)
-            title = pull["title"] if pull else f"#{number}"
+            # A thread the runner is not responsible for is still a thread
+            # about something: asked on a pull request, the answer is about
+            # that pull request's code, and it used to be written from a
+            # checkout of the default branch by an agent that had never
+            # seen the diff. Its title was `#882` for the same reason.
+            other = None if pull else await self._pull_request(number)
+            title = pull["title"] if pull else str((other or {}).get("title") or f"#{number}")
+            # About a pull request's code when it is one this runner
+            # answers for or one it read: the checkout must carry that
+            # pull request's own head even when the head is not a branch
+            # it may push to — its own protected branch, for instance —
+            # or the answer would be written from main, a diff it was
+            # never shown.
+            about_pull = pull is not None or other is not None
+            newest = thread["newest_id"]
+            inline = kind == "inline"
             # Anybody may comment on a public repository; not everybody may
             # direct a change to it. A conversation with no writer in it is
             # answered in words and gets no branch, so the credentialed
             # finalizer cannot be made to push on a stranger's say-so.
-            branch = pull["branch"] if pull else None
-            if branch is not None and not await self._may_direct_changes(thread["comments"]):
-                logger.info("comments on #%s come from outside the repository; answering without a branch", number)
+            # Its own pull requests carry their branch. On somebody else's,
+            # the branch comes from the head when the head is ours to push:
+            # "@agent please fix the linting" is a request to change code,
+            # and answering it with a description of the change is not what
+            # was asked.
+            if pull:
+                branch = pull["branch"]
+            elif other:
+                try:
+                    branch = await self._writable_head(number)
+                except Exception as exc:
+                    logger.info("could not read the head of pull request %s: %s", number, exc)
+                    branch = _HEAD_UNKNOWN
+            else:
                 branch = None
-            newest = thread["newest_id"]
-            inline = kind == "inline"
+            if branch is _HEAD_UNKNOWN:
+                # Read-only is an answer a failed lookup does not give, and
+                # queueing this conversation in any shape would spend the
+                # request the failure was standing in the way of. The
+                # candidate still exists, with nothing queued for it, so
+                # the comment mark does not move past it: the next pass
+                # reads the head again and then answers it for real.
+                candidates.append(
+                    {
+                        "ref": (
+                            f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"
+                        ),
+                        "kind": "comment",
+                        "deferred": True,
+                    }
+                )
+                continue
+            comments = thread["comments"]
+            if branch is not None:
+                # A writable branch makes the answer a code change, and a
+                # code change may only be steered by people who may direct
+                # changes. A conversation holds as many words as it holds:
+                # with one writer among strangers, the strangers' words
+                # would otherwise reach the session that carries the push
+                # credential. They stay out of the task; the conversation
+                # as a whole is still answered, so the ref and the reaction
+                # are built from every comment in it.
+                directed = await self._trusted_comments(comments)
+                if not directed:
+                    logger.info("comments on #%s come from outside the repository; answering without a branch", number)
+                    branch = None
+                else:
+                    comments = directed
+            # An inline thread on a pull request is often answered "address
+            # the reviewer's note" — pointing at review comments that sit in
+            # other threads. Hand those over too, so the agent acts on what
+            # was asked rather than replying that it cannot see the other one.
+            other_inline = await self._other_inline_comments(number, thread) if inline and about_pull else []
+            if branch is not None and other_inline:
+                # A writable session hears people who may direct a change and
+                # the review apps the operator named, and no one else. The
+                # other threads' notes are foreign text the agent is about to
+                # be handed a push credential beside, and a stranger's review
+                # note steering a code change is the injection that filter
+                # exists to stop — so the allowlist stays the wall. A named
+                # review bot is over it: the session was already authorized to
+                # act, and the note it was told to address may well be the
+                # bot's. A read-only answer keeps every note: it can only be
+                # explained, not acted on.
+                other_inline = await self._readable_comments(other_inline)
             candidates.append(
                 {
                     # The reference names the conversation and its latest
@@ -795,9 +1252,23 @@ class TriggerPoller:
                     # one pull request has many of them.
                     "ref": (f"thread-{number}-inline-{key}-{newest}" if inline else f"thread-{number}-issue-{newest}"),
                     "kind": "comment",
-                    "task": thread_task(number, title, thread["comments"], branch=branch),
+                    "task": await thread_task(
+                        number,
+                        title,
+                        comments,
+                        branch=branch,
+                        reading=about_pull,
+                        other_inline=other_inline,
+                    ),
                     "branch": branch,
-                    "workspace": workspace_name("pr", number, title) if branch else None,
+                    # A thread with no writer in it is answered in words:
+                    # the row tells the credentialed finalizer as much,
+                    # because the task text is written before the session
+                    # launches and could in principle be anything else.
+                    "no_push": branch is None,
+                    # No branch to push to, but a pull request to read.
+                    "read_ref": f"refs/pull/{number}/head" if about_pull and not branch else None,
+                    "workspace": workspace_name("pr", number, title) if branch or about_pull else None,
                     "urgency": priority.of("comment", pull["labels"] if pull else ()),
                     "reaction": (
                         f"/repos/{settings.repo_slug}/pulls/comments/{newest}"
@@ -828,8 +1299,13 @@ class TriggerPoller:
             logger.info("not queueing %s: %s", candidate["ref"], urgency.reason)
             return None
         branch = candidate.get("branch")
+        # What the checkout starts from. A branch the session may push to
+        # when it has one; otherwise the pull request it is about to talk
+        # about, so it can read the code in question instead of answering
+        # from the default branch — which is what it used to do, and it
+        # could only say that it had no diff to look at.
         workspace_id = await self._free_workspace(
-            base_branch=branch or "main",
+            base_branch=branch or candidate.get("read_ref") or "main",
             preferred_name=candidate.get("workspace"),
         )
         if workspace_id is None:
@@ -856,6 +1332,11 @@ class TriggerPoller:
                 # made per session in the UI.
                 deploy_to_dev=False,
                 screenshot_paths=[],
+                # Kept on the row for the same reason as everything else
+                # the finalizer needs: it runs minutes later, in another
+                # process, and is told what the session may do by the
+                # database, not by the task it was queued with.
+                no_push=bool(candidate.get("no_push")),
                 trigger_kind=candidate["kind"],
                 trigger_ref=candidate["ref"],
                 reply_target=candidate.get("reply_target"),

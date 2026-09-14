@@ -10,20 +10,32 @@ A parser for logos model strings. Implements the grammar:
 
 <extra-params> ::= <pair> { "__" <pair> }*
 
-<key> ::= LETTER { LETTER | DIGIT | "_" | "-" }*
-<value> ::= LETTER { LETTER | DIGIT | "." | ":" | "-" }*
+<key> ::= LETTER { LETTER | DIGIT | "-" }*
+<value> ::= LETTER { LETTER | DIGIT | "." | ":" | "-" | "_" }*
 <version> ::= DIGIT { "." DIGIT }*
 """
 
+import re
 from typing import Dict, Union
 
 ALLOWED_FIELDS = {"policy"}
 POLICY_FIELDS = {"accuracy", "latency", "quality", "cost", "privacy", "default"}
+# Pairs inside the policy section are delimited by "<key>=" for one of the
+# known keys. Splitting on that — not on bare "_" — is what keeps values that
+# contain underscores (the privacy tiers) intact: a plain split("_") shreds
+# privacy=THIRD_PARTY_HARDWARE into "privacy=THIRD", "PARTY", "HARDWARE".
+_POLICY_PAIR_SPLIT = re.compile(
+    r"(?:^|_)(?=" + "|".join(re.escape(key) for key in sorted(POLICY_FIELDS, key=len, reverse=True)) + "=)"
+)
+# Keep in sync with ThresholdLevel in logos/dbutils/dbmodules.py (the single
+# ordered definition) — a literal set here because this module must stay
+# import-free of the ORM layer.
 PRIVACY_VALUES = {
     "LOCAL",
     "CLOUD_IN_EU_BY_EU_PROVIDER",
     "CLOUD_IN_EU_BY_US_PROVIDER",
     "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
+    "THIRD_PARTY_HARDWARE",
 }
 
 
@@ -59,8 +71,11 @@ def parse_model_string(model_str: str) -> ParserTransferDTO:
         for param in params[1:]:
             if "policy_" in param:
                 vals = param.replace("policy_", "", count=1)
-                # Get all "k=v"-Pairs
-                for kv in vals.split("_"):
+                # Get all "k=v"-Pairs, delimited by "<known-key>=" — a bare
+                # split("_") would split underscore-containing values apart.
+                for kv in _POLICY_PAIR_SPLIT.split(vals):
+                    if not kv:
+                        continue
                     k, v = kv.split("=", maxsplit=1)
                     if k not in POLICY_FIELDS:
                         raise ValueError(

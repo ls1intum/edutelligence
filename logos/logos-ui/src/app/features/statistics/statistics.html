@@ -113,7 +113,7 @@
         <app-stats-kpi-card
           label="Cold starts"
           [accent]="CHART_ROLE.local"
-          [value]="coldPct() + '%'"
+          [value]="formatColdPct()"
         >
           <app-stats-sparkline kpiRight [data]="sparkLocal()" [color]="CHART_ROLE.local" />
           <span kpiHint>
@@ -195,6 +195,14 @@
                   /
                   <strong>{{ allProviderVramSummary().totalGb.toFixed(0) }} GB</strong>
                   VRAM
+                </div>
+              }
+              @if (allProviderRamSummary().reported) {
+                <div>
+                  <strong>{{ allProviderRamSummary().usedGb.toFixed(1) }}</strong>
+                  /
+                  <strong>{{ allProviderRamSummary().totalGb.toFixed(0) }} GB</strong>
+                  RAM
                 </div>
               }
             </div>

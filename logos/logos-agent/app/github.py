@@ -37,7 +37,17 @@ _DEPLOY_REF = "main"
 
 
 class GitHubError(RuntimeError):
-    pass
+    """A call to GitHub that did not go through, and what it answered.
+
+    The status is part of the failure, not decoration: "this account is not
+    in that team" and "this token may not ask" both arrive as an exception,
+    and only the code tells them apart. Losing it made every non-member look
+    like an unanswerable question.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class IdentityError(RuntimeError):
@@ -291,12 +301,74 @@ async def wait_for_pr_builds(
         return "failed", f"could not observe the image build run: {exc}"
 
 
+# Conclusions that mean the change is broken, as opposed to merely not
+# green. `cancelled` and `stale` are somebody else's doing, `skipped` and
+# `neutral` are a check saying it had nothing to judge, and
+# `action_required` is a deployment waiting for a human to approve it —
+# none of those is something an agent can fix, and taking the work up again
+# over one would put a session on the queue for nothing.
+_BROKEN = frozenset({"failure", "timed_out", "startup_failure"})
+
+
+async def wait_for_checks(
+    head_sha: str,
+    *,
+    timeout_s: float = 20 * 60,
+    poll_s: float = 20.0,
+) -> tuple[str, str]:
+    """Wait for every check on ``head_sha`` to conclude, and say how it went.
+
+    All of them, deliberately. The build workflow has its own waiter because
+    a dev deploy needs that specific image, but "did this change pass CI" is
+    a question about the lint and test workflows just as much — and those
+    are the ones an unattended agent actually breaks. Watching the build
+    alone reported success on a commit whose linter was red.
+
+    A failing check ends the wait immediately: the rest of CI has nothing to
+    add once there is something to fix.
+
+    Returns ``(status, detail)`` where status is ``"success"``, ``"failed"``
+    or ``"timeout"``. Timeout means "not known yet" — the checks may still
+    be running, or may not have been queued at all — and it is not the same
+    as failure, which is why the caller may not treat it as one.
+    """
+    path = f"/repos/{settings.repo_slug}/commits/{head_sha}/check-runs"
+    deadline = asyncio.get_running_loop().time() + timeout_s
+
+    try:
+        while True:
+            runs = (await _get(path, {"per_page": 100})).get("check_runs", [])
+            broken = [run for run in runs if (run.get("conclusion") or "") in _BROKEN]
+            if broken:
+                named = ", ".join(f"{run.get('name')} ({run.get('conclusion')})" for run in broken[:5])
+                first = broken[0].get("html_url") or ""
+                return "failed", f"{named}\n{first}".strip()
+            # No checks at all is not success: GitHub takes a moment to
+            # queue them, and a commit pushed seconds ago has none yet.
+            if runs and all(run.get("status") == "completed" for run in runs):
+                return "success", f"all {len(runs)} check(s) on {head_sha[:7]} passed"
+            if asyncio.get_running_loop().time() >= deadline:
+                waiting = [run.get("name") for run in runs if run.get("status") != "completed"]
+                still = ", ".join(str(name) for name in waiting[:5]) if waiting else "none reported yet"
+                return "timeout", f"checks on {head_sha[:7]} had not concluded after {timeout_s:.0f}s: {still}"
+            await asyncio.sleep(poll_s)
+    except Exception as exc:
+        # Unknown, not red. The caller keeps the follow-up owed and asks
+        # again rather than queueing a session to fix a failure that may
+        # never have happened.
+        logger.warning("could not read the checks of %s: %s", head_sha[:7], exc)
+        return "timeout", f"could not read the checks of {head_sha[:7]}: {exc}"
+
+
 async def _get(path: str, params: dict[str, Any] | None = None, *, timeout_s: float = 30.0) -> Any:
     """One authenticated read of the repository. Raises on anything but 200."""
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         response = await client.get(f"{_API}{path}", headers=_headers(), params=params or {})
     if response.status_code != 200:
-        raise GitHubError(f"GET {path} failed ({response.status_code}): {response.text[:200]}")
+        raise GitHubError(
+            f"GET {path} failed ({response.status_code}): {response.text[:200]}",
+            status=response.status_code,
+        )
     return response.json()
 
 
@@ -395,6 +467,69 @@ async def authored_pull_requests(login: str) -> list[dict[str, Any]]:
     ]
 
 
+async def review_requests(login: str) -> list[dict[str, Any]]:
+    """Open pull requests that have asked this account for a review.
+
+    The ordinary way to ask a colleague to look at something, and until
+    now the one gesture the runner did not answer: an operator added the
+    agent as a reviewer and nothing happened at all.
+
+    Read off the pull requests themselves rather than through search, so
+    the answer is the repository's current state rather than an index that
+    lags behind it by a minute or two.
+    """
+    payload = await _get_all(
+        f"/repos/{settings.repo_slug}/pulls",
+        {"state": "open", "sort": "updated", "direction": "desc"},
+    )
+    wanted = login.strip().lower()
+    asked = []
+    for pull in payload:
+        if not isinstance(pull, dict):
+            continue
+        reviewers = [
+            str((person or {}).get("login") or "").lower() for person in (pull.get("requested_reviewers") or [])
+        ]
+        if wanted in reviewers:
+            asked.append(pull)
+    return asked
+
+
+async def who_asked_for_a_review(number: int, login: str) -> tuple[str, int | None] | None:
+    """The account that last asked `login` to review this pull request, and
+    the timeline event that said so.
+
+    From the timeline, because the pull request itself only says who is
+    being asked and not who did the asking — and who did the asking is what
+    decides whether the runner acts on it. The event's identity comes with
+    the actor because the asking is an event, not a state: removing the
+    agent and adding it back is a *new* request, and the memory of the old
+    one must not answer for the new.
+
+    A complete read answers with the actor, or the empty string when the
+    timeline names none. An incomplete read answers with None instead: the
+    timeline is read oldest-first, so what a long pull request loses to the
+    page ceiling is precisely its *newest* events — where the request that
+    decides this question sits. The oldest matching actor the remainder
+    still holds is some old gesture, and acting on it would be a guess the
+    timeline no longer supports.
+    """
+    events, truncated = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/timeline")
+    if truncated:
+        return None
+    wanted = login.strip().lower()
+    actor = ""
+    event_id: int | None = None
+    for event in events:
+        if not isinstance(event, dict) or event.get("event") != "review_requested":
+            continue
+        requested = str(((event.get("requested_reviewer") or {}).get("login")) or "").lower()
+        if requested == wanted:
+            actor = str(((event.get("actor") or {}).get("login")) or "")
+            event_id = event.get("id") if isinstance(event.get("id"), int) else None
+    return actor, event_id
+
+
 async def pull_request(number: int) -> dict[str, Any]:
     """The full pull request, including its head branch and author."""
     payload = await _get(f"/repos/{settings.repo_slug}/pulls/{number}")
@@ -464,6 +599,20 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     of the requested changes in it.
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}/comments")
+    return [comment for comment in payload if isinstance(comment, dict)]
+
+
+async def pull_inline_comments(number: int) -> list[dict[str, Any]]:
+    """Every inline comment on a pull request, across all reviews.
+
+    A reviewer's inline notes and standalone inline comments all live under
+    the pull request's comments, but a conversation the agent is handed is
+    one *thread* at a time. The comment that points at another thread's note
+    — "address the reviewer's comment" — reaches the agent alone, so it can
+    only reply that it cannot see the other one. This returns the whole set,
+    so the caller can hand over the threads the one it is answering refers to.
+    """
+    payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/comments")
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
@@ -543,7 +692,25 @@ async def open_pull_request_for(branch: str) -> dict[str, Any] | None:
     return None
 
 
-async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[list[dict[str, Any]], list[str]]:
+async def issue_conversation(number: int) -> tuple[list[dict[str, Any]], list[str]]:
+    """What has been said under an issue, oldest last, and what is missing.
+
+    An issue's description is not always in its body. A title and an empty
+    body with the whole report in the first comment is an ordinary way to
+    file one — and a session handed the title alone can only say that it
+    was handed the title alone.
+
+    Everything that was read is returned. Cutting it to what fits in a task
+    is the caller's business, and it has to happen *after* the caller has
+    decided whose comments count: forty comments from passers-by would
+    otherwise push out the one from a maintainer that the whole feature is
+    for.
+    """
+    answer = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments")
+    return _as_conversation({"comments": answer}, number)
+
+
+async def pull_request_conversation(number: int) -> tuple[list[dict[str, Any]], list[str]]:
     """Everything said on a pull request, oldest last, and what is missing.
 
     The second half of the answer is the point: a source that failed reads
@@ -566,6 +733,24 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[li
         _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments"),
         return_exceptions=True,
     )
+    entries, missing = _as_conversation({"reviews": reviews, "inline comments": inline, "comments": discussion}, number)
+    entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
+    # Everything that was read, oldest first. Cutting it to what fits in a
+    # task belongs to the caller and has to happen after it has decided
+    # whose entries count — a pull request with fifteen review comments on
+    # it would otherwise spend its whole allowance on entries the runner is
+    # about to drop, and the review would fall off the end.
+    return entries, missing
+
+
+def _as_conversation(sources: dict[str, object], number: int) -> tuple[list[dict[str, Any]], list[str]]:
+    """Normalise GitHub's several comment shapes into one list.
+
+    Reviews, inline comments and plain discussion are three endpoints with
+    three shapes; a session reads one conversation. The second return value
+    names the sources that could not be read, because a failed listing looks
+    exactly like an empty one.
+    """
     entries: list[dict[str, Any]] = []
     missing: list[str] = []
 
@@ -600,17 +785,10 @@ async def pull_request_conversation(number: int, *, limit: int = 40) -> tuple[li
                 }
             )
 
-    add(reviews, "reviews")
-    add(inline, "inline comments")
-    add(discussion, "comments")
+    for kind, answer in sources.items():
+        add(answer, kind)
     entries.sort(key=lambda entry: entry["at"] or datetime.min.replace(tzinfo=timezone.utc))
-    # The newest are the ones still open; an old conversation is history.
-    # Said rather than silently dropped, though: an early review comment
-    # nobody answered is exactly the kind of thing that falls off the end,
-    # and the task built from this claims to be complete.
-    if len(entries) > limit:
-        missing = [*missing, f"{len(entries) - limit} older comment(s), beyond what fits in a task"]
-    return entries[-limit:], missing
+    return entries, missing
 
 
 async def recent_issue_comments(since: datetime) -> list[dict[str, Any]]:
@@ -729,6 +907,56 @@ async def may_push(login: str) -> bool:
 REACTION_QUEUED = "eyes"
 REACTION_RUNNING = "rocket"
 REACTION_FAILED = "confused"
+
+
+async def in_a_trusted_team(login: str) -> bool | None:
+    """Whether this account belongs to one of the trusted teams.
+
+    ``None`` means the question could not be answered — no teams
+    configured, or a token without `read:org`, which is not the same as
+    "no". The caller falls back to the coarser rule rather than treating an
+    unanswerable question as a refusal, because that would silence the
+    whole repository the first time a token was reissued without the scope.
+    """
+    if not login or not settings.trusted_teams:
+        return None
+    org = settings.repo_slug.split("/", 1)[0]
+    answered = False
+    for team in settings.trusted_teams:
+        try:
+            membership = await _get(f"/orgs/{org}/teams/{team}/memberships/{login}")
+        except GitHubError as exc:
+            if exc.status == 404 and await _team_exists(org, team):
+                # A 404 says two different things: this account is not in
+                # that team, or the token cannot see the team at all. Asking
+                # for the team itself separates them — and only the first is
+                # an answer.
+                answered = True
+                continue
+            logger.info("could not ask whether %s is in %s/%s: %s", login, org, team, exc)
+            continue
+        except Exception as exc:
+            logger.info("could not ask whether %s is in %s/%s: %s", login, org, team, exc)
+            continue
+        answered = True
+        if str((membership or {}).get("state") or "").lower() == "active":
+            return True
+    return False if answered else None
+
+
+async def _team_exists(org: str, team: str) -> bool:
+    """Whether this token can see that team at all.
+
+    Only asked when a membership lookup came back 404, which is why it is
+    worth a request: without it a token missing `read:org` looks exactly
+    like an org where nobody is a member, and the runner would answer the
+    difference by falling back to "anyone who may push".
+    """
+    try:
+        await _get(f"/orgs/{org}/teams/{team}")
+    except Exception:
+        return False
+    return True
 
 
 async def react(path: str, content: str = REACTION_QUEUED) -> bool:

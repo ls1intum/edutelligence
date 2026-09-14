@@ -146,6 +146,41 @@ export function formatTokenCount(count: number | null | undefined): string {
   return `${(tenths / 10).toFixed(1).replace(/\.0$/, '')} ${unit.label}`;
 }
 
+// ── Percentage scale ──────────────────────────────────────────────────────────
+
+/**
+ * The share of `part` in `total` as a percentage that never collapses a
+ * non-zero share to "0%": 694 of 317.265 local starts is 0.22%, not the "0%"
+ * an integer rounding shows. Shares of 10% and up stay plain, single-digit
+ * shares keep one decimal, and below 1% the decimals widen (two by default,
+ * up to six) until the value reads non-zero. A share too small even for six
+ * decimals reads "<0.000001%" rather than "0%" — the card must not report a
+ * cold start that happened as none at all. A zero share — or an input that is
+ * not a positive finite total — reads "0%".
+ */
+export function formatPercent(
+  part: number | null | undefined,
+  total: number | null | undefined,
+): string {
+  if (
+    typeof part !== 'number' ||
+    typeof total !== 'number' ||
+    !Number.isFinite(part) ||
+    !Number.isFinite(total) ||
+    total <= 0
+  ) {
+    return '0%';
+  }
+  const pct = (part / total) * 100;
+  if (pct >= 10) return `${Math.round(pct)}%`;
+  let decimals = pct >= 1 ? 1 : 2;
+  while (pct > 0 && decimals < 6 && Number(pct.toFixed(decimals)) === 0) decimals += 1;
+  // Below the six-decimal cap the widening loop runs out and toFixed still
+  // rounds to zero. Bound it instead of printing "0%" for a share that is not.
+  if (pct > 0 && Number(pct.toFixed(decimals)) === 0) return '<0.000001%';
+  return `${pct.toFixed(decimals).replace(/\.0+$/, '')}%`;
+}
+
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────
 
 export interface TimeAxisLabel {
@@ -567,6 +602,31 @@ export const extractProviderVramMb = (
   const freeMb = prov?.free_memory_mb ?? sample?.remaining_vram_mb ?? 0;
   const usedMb = prov?.used_memory_mb ?? Math.max(0, totalMb - freeMb);
   return { totalMb, usedMb, freeMb };
+};
+
+/**
+ * Host RAM of one provider's latest sample, in MiB.
+ *
+ * Parallel to extractProviderVramMb, but the answer can be "not reported":
+ * the numbers travel on the runtime's host_memory summary, which older
+ * workers never sent and non-Linux hosts report all-zero. `reported` is the
+ * flag callers gate on, so a missing summary reads as no data instead of a
+ * machine with 0 MB of RAM.
+ */
+export const extractProviderHostRamMb = (
+  sample: VramV2Sample | null | undefined
+): { totalMb: number; usedMb: number; freeMb: number; reported: boolean } => {
+  const prov = sample?.scheduler_signals?.provider;
+  const totalMb = prov?.host_ram_total_mb ?? 0;
+  if (totalMb <= 0) {
+    return { totalMb: 0, usedMb: 0, freeMb: 0, reported: false };
+  }
+  return {
+    totalMb,
+    usedMb: prov?.host_ram_used_mb ?? 0,
+    freeMb: prov?.host_ram_available_mb ?? 0,
+    reported: true,
+  };
 };
 
 export const buildVramSignature = (

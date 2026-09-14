@@ -10,6 +10,7 @@ logosnode + Azure (or two logosnode providers) produces separate scored candidat
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import random
 import time
 from typing import Dict, List, Optional, Tuple
 
+from logos.context_budget import estimate_prompt_tokens
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
@@ -35,6 +37,7 @@ from .ettft_estimator import (
     estimate_ettft_cloud,
     estimate_ettft_local,
 )
+from .latency_store import LatencyStore
 from .prefix_affinity import PrefixAffinityRouter
 from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
@@ -68,6 +71,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         ettft_enabled: bool = True,
         on_capacity_needed=None,
         prefix_router: Optional[PrefixAffinityRouter] = None,
+        latency_store: Optional[LatencyStore] = None,
     ):
         super().__init__(
             queue_manager,
@@ -78,6 +82,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         )
         self._ettft_enabled = ettft_enabled
         self._prefix_router = prefix_router if prefix_router is not None else PrefixAffinityRouter()
+        self._latency_store = latency_store
 
         # Decision logging (JSON-lines): set ECCS_DECISION_LOG=/path/to/log.jsonl
         self._decision_log_path = os.environ.get("ECCS_DECISION_LOG")
@@ -165,10 +170,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 deployment for deployment in deployments if deployment["provider_id"] == request.required_provider_id
             ]
 
+        input_tokens = estimate_prompt_tokens(request.payload)
         scored = self._compute_candidate_scores(
             request.classified_models or [],
             deployments,
             affinity,
+            input_tokens=input_tokens,
         )
 
         # Try immediate selection
@@ -297,6 +304,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         candidates: List[Tuple[int, float, int]],
         deployments: list,
         affinity: Optional[Dict[int, int]] = None,
+        input_tokens: int = 0,
     ) -> list:
         """Build scored list with ETTFT annotations.
 
@@ -349,7 +357,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     )
                     continue
 
-                ettft = self._estimate_ettft(model_id, provider_id, provider_type)
+                ettft = self._estimate_ettft(model_id, provider_id, provider_type, input_tokens=input_tokens)
 
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
                     logger.debug(
@@ -441,7 +449,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         return scored
 
-    def _estimate_ettft(self, model_id: int, provider_id: int, provider_type: str) -> EttftEstimate:
+    def _estimate_ettft(
+        self, model_id: int, provider_id: int, provider_type: str, input_tokens: int = 0
+    ) -> EttftEstimate:
         """Get ETTFT estimate for a model using the appropriate provider facade."""
         if provider_type == "logosnode":
             try:
@@ -459,12 +469,58 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
             if view is None:
                 # No lanes visible — treat as COLD (capacity planner can
-                # cold-load during context resolution)
+                # cold-load during context resolution).  Consult the latency
+                # store so that the provider-specific learned cold overhead
+                # (or size-derived prior) is used instead of the static
+                # constant, which matters for cold-provider selection when a
+                # lane has been removed but history is still persisted.
+                cold_s = OVERHEAD_COLD_S
+                _nl_learned_ttft: Optional[float] = None
+                _nl_prefill_s: Optional[float] = None
+                if self._latency_store is not None:
+                    _no_lane_model_name = self._logosnode.get_model_name(model_id, provider_id)
+                    if _no_lane_model_name:
+                        _nl_vram_mb = 0.0
+                        _nl_tp_size = 1
+                        try:
+                            _profiles = self._logosnode.get_model_profiles(provider_id)
+                            if _no_lane_model_name in _profiles:
+                                _p = _profiles[_no_lane_model_name]
+                                _nl_vram_mb = _p.estimate_vram_mb()
+                                _nl_tp_size = int(_p.tensor_parallel_size or 1)
+                        except KeyError:
+                            pass
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "Unexpected error reading model profile for no-lane estimate" " model=%s provider=%s",
+                                model_id,
+                                provider_id,
+                                exc_info=True,
+                            )
+                        cold_s = self._latency_store.get_overhead_s(
+                            _no_lane_model_name,
+                            provider_id,
+                            ReadinessTier.COLD,
+                            model_vram_mb=_nl_vram_mb,
+                            tp_size=_nl_tp_size,
+                        )
+                        _nl_learned_ttft = self._latency_store.get_ttft_s(_no_lane_model_name, provider_id)
+                        if input_tokens > 0:
+                            _nl_prefill_s = self._latency_store.get_prefill_s(
+                                _no_lane_model_name, provider_id, input_tokens
+                            )
+                _nl_added = (_nl_learned_ttft or 0.0) + (_nl_prefill_s or 0.0)
+                _nl_parts: list[str] = [f"cold {cold_s:.2f}s"]
+                if _nl_learned_ttft is not None:
+                    _nl_parts.append(f"TTFT {_nl_learned_ttft:.2f}s")
+                if _nl_prefill_s is not None:
+                    _nl_parts.append(f"prefill {_nl_prefill_s:.2f}s ({input_tokens} tok)")
                 return EttftEstimate(
-                    expected_wait_s=OVERHEAD_COLD_S,
+                    expected_wait_s=cold_s + _nl_added,
                     tier=ReadinessTier.COLD,
-                    reasoning=f"No lanes for logosnode model {model_id}, cold-load required",
-                    state_overhead_s=OVERHEAD_COLD_S,
+                    reasoning=f"No lanes for logosnode model {model_id}: {' + '.join(_nl_parts)}",
+                    state_overhead_s=cold_s,
+                    prefill_s=_nl_prefill_s or 0.0,
                     warmth_state=-1,
                 )
 
@@ -484,6 +540,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
             model_vram_mb = 0.0
             kv_budget_mb = 0.0
+            tp_size = 1
             try:
                 model_name = self._logosnode.get_model_name(model_id, provider_id)
                 if model_name:
@@ -492,6 +549,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         profile = profiles[model_name]
                         model_vram_mb = profile.estimate_vram_mb()
                         kv_budget_mb = float(profile.kv_budget_mb or 0)
+                        tp_size = int(profile.tensor_parallel_size or 1)
             except (KeyError, Exception):
                 pass
 
@@ -510,7 +568,49 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             except (KeyError, Exception):
                 pass
 
-            return estimate_ettft_local(
+            # Build per-tier overhead overrides from the latency store when
+            # available. COLD and SLEEPING always get an override (prior or
+            # learned). COLD_RECLAIM and SLEEPING_RECLAIM are only included
+            # when real observations exist: without learned data the estimator's
+            # context-aware _estimate_reclaim_overhead_s() is more accurate than
+            # a static prior.
+            overhead_overrides: dict[ReadinessTier, float] | None = None
+            learned_ttft: Optional[float] = None
+            estimated_prefill_s: Optional[float] = None
+            if self._latency_store is not None:
+                model_name_for_store = view.model_name or ""
+                _store_kwargs = dict(
+                    model_vram_mb=model_vram_mb,
+                    tp_size=tp_size,
+                )
+                overhead_overrides = {
+                    tier: self._latency_store.get_overhead_s(model_name_for_store, provider_id, tier, **_store_kwargs)
+                    for tier in (ReadinessTier.COLD, ReadinessTier.SLEEPING)
+                }
+                for tier in (ReadinessTier.COLD_RECLAIM, ReadinessTier.SLEEPING_RECLAIM):
+                    if self._latency_store.get_observation_count(model_name_for_store, provider_id, tier) > 0:
+                        overhead_overrides[tier] = self._latency_store.get_overhead_s(
+                            model_name_for_store, provider_id, tier, **_store_kwargs
+                        )
+                # Replace the live e2e p50 with the learned value when the
+                # store has sufficient history (learned value is more stable
+                # across the session than a single-lane histogram p50).
+                learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store, provider_id)
+                if learned_e2e is not None:
+                    observed_e2e_p50_s = learned_e2e
+                # Learned TTFT (decode-only first-token time) for this provider —
+                # added once for this request (queue_wait already embeds TTFT of
+                # preceding requests via e2e_p50 as service time, no double-counting).
+                learned_ttft = self._latency_store.get_ttft_s(model_name_for_store, provider_id)
+                # Estimated prefill: context-length-dependent prompt-ingestion cost.
+                # learned_ttft intentionally excludes prefill; this is the separate
+                # component that scales with input_tokens.
+                if input_tokens > 0:
+                    estimated_prefill_s = self._latency_store.get_prefill_s(
+                        model_name_for_store, provider_id, input_tokens
+                    )
+
+            estimate = estimate_ettft_local(
                 view,
                 effective_parallel=effective_parallel,
                 generation_time_s=DEFAULT_GENERATION_TIME_S,
@@ -520,7 +620,24 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 scheduler_queue_depth=scheduler_queue_depth,
                 observed_e2e_p50_s=observed_e2e_p50_s,
                 all_provider_lanes=all_provider_lanes,
+                overhead_overrides=overhead_overrides,
             )
+            if (learned_ttft is not None or estimated_prefill_s is not None) and (
+                estimate.tier != ReadinessTier.UNAVAILABLE
+            ):
+                added = (learned_ttft or 0.0) + (estimated_prefill_s or 0.0)
+                parts: list[str] = []
+                if learned_ttft is not None:
+                    parts.append(f"TTFT {learned_ttft:.2f}s")
+                if estimated_prefill_s is not None:
+                    parts.append(f"prefill {estimated_prefill_s:.2f}s ({input_tokens} tok)")
+                estimate = dataclasses.replace(
+                    estimate,
+                    expected_wait_s=estimate.expected_wait_s + added,
+                    prefill_s=estimated_prefill_s or 0.0,
+                    reasoning=f"{estimate.reasoning} + {' + '.join(parts)}",
+                )
+            return estimate
 
         if provider_type == "azure":
             try:

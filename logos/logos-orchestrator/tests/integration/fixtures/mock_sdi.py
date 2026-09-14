@@ -1,5 +1,5 @@
 """
-Mock Ollama /ps endpoint for scheduling data.
+Mock worker model-status endpoint for scheduling data.
 Simulates cold-start and warm model scenarios.
 """
 
@@ -8,7 +8,7 @@ from typing import Dict, List
 
 
 class SDIMocker:
-    """Mock Ollama /ps endpoint for scheduling data."""
+    """Mock worker model-status endpoint for scheduling data."""
 
     def __init__(self, mocker):
         self.mocker = mocker
@@ -34,7 +34,7 @@ class SDIMocker:
 
             self._loaded_models[model["name"]] = {
                 "name": model["name"],
-                "model": model["name"],  # Ollama API returns both 'name' and 'model'
+                "model": model["name"],
                 "size_vram": model.get("size_vram", 8 * 1024 * 1024 * 1024),  # Default 8GB
                 "expires_at": expires_at,
             }
@@ -59,16 +59,16 @@ class SDIMocker:
         self._loaded_models = {}
 
     def apply_mock(self):
-        """Apply the mock to OllamaDataProvider._fetch_ps_via_http."""
+        """Apply the mock to LogosNodeDataProvider._fetch_ps_data."""
         if self._mock_applied:
             return  # Already applied
 
         def mock_fetch_ps(*args, **kwargs):
-            # Return the mocked /ps response
+            # Return the mocked model-status response
             return {"models": list(self._loaded_models.values())}
 
         self.mocker.patch(
-            "logos.sdi.providers.ollama_provider.OllamaDataProvider._fetch_ps_via_http",
+            "logos.sdi.providers.logosnode_provider.LogosNodeDataProvider._fetch_ps_data",
             side_effect=mock_fetch_ps,
         )
         self._mock_applied = True

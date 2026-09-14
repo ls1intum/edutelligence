@@ -9,8 +9,10 @@ the policy build their own.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
-from app import controls, db, docker_engine, model_policy
+from app import controls, conventions, db, docker_engine, model_policy, sessions
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +82,17 @@ def session_image_present(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def state_root_off_the_host(tmp_path, monkeypatch):
+    """The launch creates the runner's per-session state directory.
+
+    Unstubbed it would be created where the default points, on the host
+    this suite runs on — and a run as root would leave it behind. Tests
+    that are about the state root set it themselves.
+    """
+    monkeypatch.setattr(sessions, "settings", replace(sessions.settings, state_root=str(tmp_path / "state")))
+
+
+@pytest.fixture(autouse=True)
 def no_sessions_by_default(monkeypatch):
     """Nothing is running unless a test says so.
 
@@ -116,6 +129,41 @@ def no_triggered_sessions_by_default(monkeypatch):
         return 0
 
     monkeypatch.setattr(db, "count_active_trigger_sessions", none)
+
+
+@pytest.fixture(autouse=True)
+def nothing_owed_by_default(monkeypatch):
+    """Both reconciles run beside every scheduler pass and on startup.
+
+    Unstubbed they ask a database that is not there. Tests about either one
+    answer for themselves.
+    """
+
+    async def no_checks():
+        return []
+
+    async def no_replacements(*, max_attempts, since):
+        return []
+
+    monkeypatch.setattr(db, "sessions_awaiting_checks", no_checks)
+    monkeypatch.setattr(db, "sessions_owing_a_replacement", no_replacements)
+
+
+@pytest.fixture(autouse=True)
+def default_instructions(monkeypatch):
+    """The standing instructions as the code ships them.
+
+    They are overridable at runtime, which means reading a row: unstubbed
+    every task builder would ask a database that is not there.
+    """
+
+    async def none():
+        return None
+
+    monkeypatch.setattr(db, "get_instructions", none)
+    conventions.forget()
+    yield
+    conventions.forget()
 
 
 @pytest.fixture(autouse=True)

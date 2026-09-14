@@ -248,6 +248,35 @@ def _reset_agent_home() -> None:
     elif home.exists():
         home.unlink()
     home.mkdir(parents=True, exist_ok=True)
+    _seed_hook_store(home)
+
+
+def _seed_hook_store(home: Path) -> None:
+    """Give this session a writable pre-commit store of its own.
+
+    The hook environments are baked into the image, which is exactly what
+    lets a session with no network run the linters CI runs. What cannot be
+    baked in is the store itself: pre-commit takes a lock file and records
+    the config it just ran in a small sqlite database, and the image's root
+    filesystem is read-only — so the advertised offline command failed on
+    the first thing it tried to write.
+
+    Only the database is copied. Its rows hold the paths of the installed
+    environments, which stay where they are: pre-commit reads and executes
+    them, and writes to neither.
+    """
+    store = Path(os.environ.get("PRE_COMMIT_HOME") or (home / "pre-commit"))
+    seeded = Path(os.environ.get("PRE_COMMIT_STORE") or "/opt/pre-commit")
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+        database = seeded / "db.db"
+        if database.is_file():
+            shutil.copy2(database, store / "db.db")
+    except OSError as exc:
+        # Not fatal: pre-commit falls back to installing the hooks itself,
+        # fails without a network, and says so. Better a linter the agent
+        # is told is unavailable than a session that never starts.
+        print(f"[setup] could not prepare the pre-commit store: {exc}", flush=True)
 
 
 def _clear_checkout() -> None:
@@ -312,6 +341,61 @@ def _rebuild_git_metadata(repo_url: str) -> None:
     run(["git", "remote", "add", "origin", repo_url], cwd=CHECKOUT, quiet=True)
 
 
+def _remote_default_branch() -> str | None:
+    """The branch the remote's HEAD points at, or None when it cannot be read."""
+    process = run(["git", "ls-remote", "--symref", "origin", "HEAD"], cwd=CHECKOUT, quiet=True, check=False)
+    for line in (process.stdout or "").splitlines():
+        match = re.match(r"ref: (refs/heads/\S+)\s+HEAD", line)
+        if match:
+            return match.group(1)[len("refs/heads/") :].strip()
+    return None
+
+
+# The clone and the branch fetches start at this shallow depth, so the merge
+# base of two tips is present only when they came apart within so many
+# commits. When it is not, _deepen_until_merge_base pulls more in this step
+# size, stopping at the ceiling: past it, a missing base is not a shallow
+# history to outwait but a checkout that cannot be diffed.
+_HISTORY_DEPTH = 50
+_DEEPEN_STEP = 250
+_MAX_HISTORY_DEPTH = 5000
+
+
+def _deepen_until_merge_base(default: str) -> None:
+    """Make `git merge-base origin/<default> HEAD` resolvable, or fail.
+
+    A reviewing session is handed a diff against the default branch
+    (`origin/<default>...HEAD`), and a triple-dot diff is only a diff from the
+    point the two lines last met. A depth-50 history holds that point only
+    when the tips came apart within fifty commits; a pull request older than
+    that — or based on main before main moved on — cannot be diffed until both
+    histories are deep enough to reach the common ancestor. So deepen them in
+    steps until the base computes. A base that still cannot be found at the
+    ceiling fails the preparation rather than handing the agent a checkout it
+    cannot diff: an agent told to review a pull request has to be able to see
+    it, and guessing at a diff it cannot see is worse than no session.
+    """
+    deepened = 0
+    while True:
+        process = run(
+            ["git", "merge-base", f"origin/{default}", "HEAD"],
+            cwd=CHECKOUT,
+            check=False,
+            quiet=True,
+        )
+        if (process.stdout or "").strip():
+            return
+        if deepened >= _MAX_HISTORY_DEPTH:
+            raise RuntimeError(
+                f"no merge base between origin/{default} and HEAD within {_MAX_HISTORY_DEPTH} commits; "
+                "the checkout cannot be diffed against the default branch"
+            )
+        deepened += _DEEPEN_STEP
+        # No refspec: deepens every shallow boundary at once, so the base's
+        # line and the default's line both grow, not just one.
+        run(["git", "fetch", f"--deepen={_DEEPEN_STEP}", "origin"], cwd=CHECKOUT)
+
+
 def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> None:
     """Get a clean working copy of `base_branch` on a fresh `branch`.
 
@@ -342,23 +426,71 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
         # is not a working copy of this workspace, so the path is unlinked
         # and the repository comes back as a fresh clone.
         CHECKOUT.unlink()
-    if not (CHECKOUT / ".git").is_dir():
+    # A base that names a ref rather than a branch is a pull request the
+    # session may read and may not push to — `refs/pull/<n>/head`, which
+    # exists for every pull request including the ones from forks. A
+    # question about somebody else's pull request used to be answered from
+    # a checkout of the default branch: the agent was asked about a diff it
+    # could not see, and could only say so.
+    #
+    # There is no remote-tracking branch for such a ref, which is the point:
+    # the checkout is the code under discussion and there is nothing here to
+    # push back to.
+    reading = base_branch.startswith("refs/")
+    cloned = not (CHECKOUT / ".git").is_dir()
+    if cloned:
         log(f"cloning {repo_url} at {base_branch}")
         CHECKOUT.parent.mkdir(parents=True, exist_ok=True)
         _clear_checkout()
-        run(["git", "clone", "--depth", "50", "--branch", base_branch, repo_url, str(CHECKOUT)])
+        clone = ["git", "clone", "--depth", "50"]
+        if not reading:
+            # A ref is not a branch name; the clone takes the default head
+            # and the fetch below moves it to what was asked for.
+            clone += ["--branch", base_branch]
+        run([*clone, repo_url, str(CHECKOUT)])
     else:
         log("reusing existing checkout; rebuilding trusted git metadata")
         _rebuild_git_metadata(repo_url)
+    if reading or not cloned:
         run(["git", "fetch", "--depth", "50", "origin", base_branch], cwd=CHECKOUT)
         # Discard whatever a previous session left behind: a session starts
-        # from the base branch, never from another session's leftovers.
-        run(["git", "reset", "--hard", f"origin/{base_branch}"], cwd=CHECKOUT)
+        # from the base it was given, never from another session's leftovers.
+        run(["git", "reset", "--hard", "FETCH_HEAD" if reading else f"origin/{base_branch}"], cwd=CHECKOUT)
         run(["git", "clean", "-fdx"], cwd=CHECKOUT, check=False)
+
+    # The task a reviewing agent is given tells it to run
+    # `git diff origin/<default>...HEAD` — and that ref is not in every
+    # checkout this function builds. A clone of a feature branch
+    # materialises only that branch, and a fetch of a pull request's ref
+    # writes only FETCH_HEAD, so a checkout prepared for either one holds
+    # the code under discussion but nothing to diff it against. Fetch the
+    # remote's default branch into its remote-tracking ref so the command
+    # works however the checkout was built. A failure here does not fail
+    # the preparation: the base is already where the session needs it.
+    default = _remote_default_branch()
+    default_available = False
+    if default:
+        process = run(
+            ["git", "fetch", "--depth", "50", "origin", f"{default}:refs/remotes/origin/{default}"],
+            cwd=CHECKOUT,
+            check=False,
+        )
+        default_available = process.returncode == 0
+        if not default_available:
+            log(f"could not fetch the default branch {default!r}; the checkout keeps its base only")
 
     _configure_git_identity()
     # -B so a retried session reuses its branch name instead of failing.
     run(["git", "checkout", "-B", branch], cwd=CHECKOUT)
+
+    # With the branch checked out, `HEAD` is the tip the session is to be
+    # diffed against the default branch from, so this is the same ref the
+    # review command uses. Deepen until that diff has a base to start from.
+    # Skipped when the default branch could not be fetched at all: the base
+    # alone is still a usable working copy, and there is nothing to deepen
+    # toward.
+    if default_available:
+        _deepen_until_merge_base(default)
 
 
 def agent_login() -> str:
@@ -458,11 +590,20 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     # Re-anchor the session's branch on the base it was given (the rebuild
     # removed its ref, see above).
     run(["git", "update-ref", f"refs/heads/{branch}", "FETCH_HEAD"], cwd=CHECKOUT, quiet=True)
-    # Track the remote branch when a previous run left one, so the
-    # force-with-lease push below verifies against what is actually there.
-    # A first run has none; the lease then requires the remote branch to be
-    # absent, which it is.
-    run(["git", "fetch", "--depth", "50", "origin", branch], cwd=CHECKOUT, check=False, quiet=True)
+    # Bring the remote branch back as a ref of this checkout when a previous
+    # run left one: the rebuild removed its tracking ref, and without an
+    # explicit destination the fetch would leave the tip in FETCH_HEAD alone,
+    # while the run that changes nothing reads the tip from
+    # refs/remotes/origin/<branch> and the force-with-lease push below
+    # verifies against it. A first run has no remote branch: the fetch fails
+    # quietly, the tracking ref stays absent, and the lease then requires the
+    # remote branch to be absent, which it is.
+    run(
+        ["git", "fetch", "--depth", "50", "origin", f"{branch}:refs/remotes/origin/{branch}"],
+        cwd=CHECKOUT,
+        check=False,
+        quiet=True,
+    )
     run(["git", "symbolic-ref", "HEAD", f"refs/heads/{branch}"], cwd=CHECKOUT, quiet=True)
     # Mixed reset: the index follows the branch, the working tree — the
     # agent's work — is left exactly as it stands.
@@ -486,6 +627,15 @@ def build_prompt(task: str) -> str:
             "Look at them before you decide anything — on a visual report they "
             "are usually the whole description.\n"
         )
+    # What this container is, as the runner describes it — an operator can
+    # adjust that text, and the page shows exactly what was handed over. The
+    # text below is the fallback for a session started by an older runner,
+    # which is why the test is whether the runner said anything at all: an
+    # operator who empties the notes has decided nothing should be said
+    # here, and answering that decision with a page of defaults ignores it.
+    if "LOGOS_SESSION_ENVIRONMENT_NOTES" in os.environ:
+        notes = os.environ["LOGOS_SESSION_ENVIRONMENT_NOTES"].strip()
+        return f"{task}{pictures}\n\n{notes}\n" if notes else f"{task}{pictures}\n"
     return (
         f"{task}"
         f"{pictures}\n\n"
@@ -501,8 +651,21 @@ def build_prompt(task: str) -> str:
         "does — 'Cancel the queued request when the client goes away', not "
         "'Fixed stuff' and not a description of the task you were given. No "
         "body, no bullet points, no issue numbers.\n"
-        "- Run the project's tests or linters for the code you touch, and fix "
-        "what you break.\n"
+        "- Run the project's tests for the code you touch, and fix what you "
+        "break, where they can run. The services' dependencies are not "
+        "installed and there is no network to install them with, so pytest "
+        "is often absent: try once, and if it is not there say so in your "
+        "final message rather than spending turns looking for a way round "
+        "it.\n"
+        "- Lint what you changed: from the top of the checkout, `pre-commit "
+        "run --files <the files you changed>`. Same command and same pinned "
+        "hooks as CI, installed in this image, no network needed. Several of "
+        "them reformat in place, so a hook that says it modified your files "
+        "has already fixed them — run it once more and it passes. To chase one "
+        "hook, name it: `pre-commit run flake8 --files <files>`. "
+        "The `pylint` and `mypy` hooks under iris/ and memiris/ go through "
+        "poetry and cannot run in here; say so if one of those is what "
+        "failed.\n"
         "- If the task turns out to be impossible or already done, say so "
         "plainly instead of inventing changes.\n"
         f"- Changing nothing is a legitimate outcome, but it is never a silent "
@@ -524,16 +687,39 @@ _INTERRUPTIONS = (
     "connection lost mid-response",
     "connection error",
     "api error: request timed out",
+    # What it printed in production the day two sessions were failed after
+    # an hour each, because it was in no list.
+    "the response stopped arriving",
+    "response above may be incomplete",
     "fetch failed",
     "socket hang up",
     "econnreset",
 )
 
-# How many times a run may be picked up again after such an interruption.
-# The work itself is in the checkout, so continuing costs a prompt and the
-# conversation it resumes; three is enough for a busy afternoon of pauses
-# and few enough that a genuinely broken gateway stops being retried.
+# What the runner appends to whenever it freezes this session, in the
+# runner's state directory the runner mounts into us read-only. The
+# authoritative signal, and the reason the list above is no longer
+# load-bearing: matching an upstream tool's prose means a session dies
+# quietly the next time somebody rewrites a sentence. The runner froze us;
+# it knows, and it says so. The mark is not in the artefact directory:
+# that one is ours to write, and a line we could append would reclassify
+# our own failures as platform pauses.
+INTERRUPTION_FILE = "interruptions"
+
+# How many times a run may be picked up again after an interruption nobody
+# claimed. The work itself is in the checkout, so continuing costs a prompt
+# and the conversation it resumes; three is few enough that a genuinely
+# broken gateway stops being retried.
 _MAX_CONTINUATIONS = 3
+
+# And how many times after an interruption the runner *did* claim, by
+# freezing this session to give a user their slot. A different number
+# because it is a different situation: nothing is broken, the platform is
+# busy, and the only question is whether an afternoon of being useful ends
+# with the work or without it. Production froze one session twenty-one
+# times in eighty minutes — against a bound of three, every session on a
+# busy afternoon would be thrown away just short of finishing.
+_MAX_PAUSED_CONTINUATIONS = 60
 
 
 def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
@@ -559,10 +745,34 @@ def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
     return cmd
 
 
-def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
-    """Run one invocation. Returns its exit code, usage, and whether it was cut off."""
+def _pauses_so_far() -> int:
+    """How many times the runner has frozen this session.
+
+    Counted rather than flagged: a run has to know whether it was frozen
+    during *itself*, and a flag set by an earlier pause would make every
+    later failure look like an interruption.
+
+    The directory is the runner's state, mounted read-only: whatever else
+    this container can write, it cannot add a line here, so a count greater
+    than the one taken before the run began is a pause that really happened.
+    """
+    path = Path(os.environ.get("LOGOS_STATE_DIR", "/logos/state")) / INTERRUPTION_FILE
+    try:
+        return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
+def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool, bool]:
+    """Run one invocation.
+
+    Returns its exit code, its usage, whether it was cut off, and whether
+    the runner is the one that cut it off — the last two are separate
+    because they are allowed different numbers of second chances.
+    """
     usage: dict[str, object] = {}
     interrupted = False
+    pauses_before = _pauses_so_far()
     process = subprocess.Popen(cmd, cwd=CHECKOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert process.stdout is not None
     for line in process.stdout:
@@ -581,7 +791,14 @@ def _drive_agent(cmd: list[str]) -> tuple[int, dict[str, object], bool]:
         _render_event(event)
         if event.get("type") == "result":
             usage = event
-    return process.wait(), usage, interrupted
+            _account_for(event)
+    code = process.wait()
+    # The platform froze this session while the run was in flight and cut it
+    # off the model network. Whatever the CLI made of that, the answer died
+    # because we took the capacity back — which is a thing to continue from,
+    # not a thing to fail on.
+    frozen = _pauses_so_far() > pauses_before
+    return code, usage, interrupted or frozen, frozen
 
 
 def run_agent(task: str) -> dict[str, object]:
@@ -619,15 +836,21 @@ def run_agent(task: str) -> dict[str, object]:
     # event of the invocation that finished only describes that one.
     spent_in = spent_out = 0
     spent_cost = 0.0
-    for attempt in range(_MAX_CONTINUATIONS + 1):
+    attempt = 0
+    # Counted apart, because they mean different things. One says the
+    # platform is busy and took its capacity back; the other says something
+    # is wrong that nobody has explained.
+    after_a_pause = 0
+    unexplained = 0
+    while True:
         resuming = attempt > 0 or carry_on
         if attempt > 0:
-            log(f"the agent's connection was cut; continuing where it left off ({attempt}/{_MAX_CONTINUATIONS})")
+            log(f"the agent's connection was cut; continuing where it left off (attempt {attempt + 1})")
         # The first run of a continued session carries the new work — the
         # review that just came in — into the conversation that did the
         # earlier rounds. A later run carries only "you were cut off".
         text = CONTINUE_PROMPT if attempt > 0 else prompt
-        code, run_usage, interrupted = _drive_agent(_agent_command(text, resuming=resuming))
+        code, run_usage, interrupted, frozen = _drive_agent(_agent_command(text, resuming=resuming))
         run_in, run_out, run_cost = usage_totals(run_usage)
         if not run_usage:
             # Cut off before it could report: what the assistant events
@@ -640,10 +863,23 @@ def run_agent(task: str) -> dict[str, object]:
         if code == 0:
             log(f"agent finished in {elapsed:.0f}s with exit code {code}")
             return _totalled(spent_in, spent_out, spent_cost)
-        if not interrupted or attempt == _MAX_CONTINUATIONS:
+        if not interrupted:
             log(f"agent finished in {elapsed:.0f}s with exit code {code}")
             raise RuntimeError(f"agent exited with code {code}")
-    raise RuntimeError("agent exited without a result")
+        if frozen:
+            after_a_pause += 1
+            spent, ceiling, why = after_a_pause, _MAX_PAUSED_CONTINUATIONS, "pauses"
+        else:
+            unexplained += 1
+            spent, ceiling, why = unexplained, _MAX_CONTINUATIONS, "unexplained interruptions"
+        if spent > ceiling:
+            # Said rather than left to be inferred from a bare exit code:
+            # "this session was interrupted more times than it is allowed to
+            # come back from" and "the agent failed" are different endings,
+            # and only one of them is about the agent.
+            log(f"agent finished in {elapsed:.0f}s after {spent} {why}, which is past the {ceiling} allowed")
+            raise RuntimeError(f"the session was cut off {spent} times ({why}) and could not be continued")
+        attempt += 1
 
 
 def _totalled(tokens_in: int, tokens_out: int, cost: float) -> dict[str, object]:
@@ -682,6 +918,14 @@ def _report_usage(message: dict) -> None:
     tokens against no output at all, which is a true sum of a meaningless
     quantity. What is counted is what the model had to take in anew —
     fresh input and cache writes — and what it wrote.
+
+    What it wrote is usually not there yet. The usage on an assistant event
+    is the count as the turn *began*, so the output figure is zero all the
+    way through a run and only the result event knows the total — which is
+    why a session that had written a hundred thousand tokens spent its whole
+    life reporting `out=0` on the page. So the number is printed when there
+    is one, and left out when there is not: an absent figure reads as
+    unknown, and a zero reads as nothing written.
     """
     usage = message.get("usage")
     if not isinstance(usage, dict):
@@ -694,7 +938,30 @@ def _report_usage(message: dict) -> None:
     _spent["in"] += read
     _spent["out"] += written if isinstance(written, int) else 0
     if _spent != before:
-        print(f"[usage] in={_spent['in']} out={_spent['out']}", flush=True)
+        _print_usage()
+
+
+def _print_usage() -> None:
+    """One transcript line for the running total."""
+    written = f" out={_spent['out']}" if _spent["out"] else ""
+    print(f"[usage] in={_spent['in']}{written}", flush=True)
+
+
+def _account_for(result: dict) -> None:
+    """Take the authoritative totals of a finished invocation.
+
+    The result event is the only place the output count appears, so it is
+    folded into the running figures rather than left to the settlement: a
+    paused session, a continued one, and the page in between all read the
+    transcript, and the transcript should not be the one account that is
+    permanently missing half the number.
+    """
+    tokens_in, tokens_out, _cost = usage_totals(result)
+    if tokens_out > _spent["out"]:
+        _spent["out"] = tokens_out
+    if tokens_in > _spent["in"]:
+        _spent["in"] = tokens_in
+    _print_usage()
 
 
 def _render_event(event: dict) -> None:
@@ -930,14 +1197,24 @@ def _as_subject(text: str) -> str:
     return f"`Logos`: {cleaned}"
 
 
-def _asked_for(task: str) -> str:
-    """The request, without the standing conventions appended to every task.
+def _closed_issues(closes: str) -> str:
+    """The pull request's body, and nothing else.
 
-    The house rules are the same in every session; repeating them in every
-    pull request buries the one part that differs.
+    The issue the work closes, named the way GitHub reads the reference:
+    merging the pull request closes it. The number is the session's own — the
+    issue it was assigned — carried in by the runner, not read out of the
+    task: the task renders the issue's body and its conversation, and those
+    name other issues all the time, a "see #948" pointer among them. A
+    pointer is not an authorization to close, so the body names only what the
+    runner says the session is the work on. Empty when there is no number,
+    which is also the safe default: never close a reference nobody gave. What
+    the change does belongs in the commit subject; why it was made belongs to
+    whoever picks it up.
     """
-    body = task.split("--- How work is done here ---", 1)[0].strip()
-    return (body or task.strip())[:4000]
+    number = closes.strip().lstrip("#")
+    if not number.isdigit():
+        return ""
+    return f"closes #{number}"
 
 
 def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
@@ -946,18 +1223,14 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
         log("no repository slug configured; skipping pull request")
         return None
 
+    # The title says what the change does; the body says what it closes —
+    # and a pull request opened with more words than that buries the diff
+    # under boilerplate and gives the reviewer a page of things they
+    # already know. The closing issue comes from the runner, not the task:
+    # the task renders the issue's body and conversation, which name other
+    # issues that are pointers, not authorizations to close.
     title = _commit_subject(task)
-    body = (
-        "## Summary\n\n"
-        "Opened by an unattended Logos agent session running on spare platform "
-        "capacity. **Nothing here has been reviewed by a human yet.**\n\n"
-        "## Task given to the agent\n\n"
-        f"```\n{_asked_for(task)}\n```\n\n"
-        "## Steps for Testing\n\n"
-        "1. Read the diff — this is the first point a person sees this work.\n"
-        "2. Check that the tests the agent ran actually cover the change.\n\n"
-        f"Session: `{os.environ.get('LOGOS_SESSION_ID', '?')}`\n"
-    )
+    body = _closed_issues(os.environ.get("LOGOS_SESSION_CLOSES", ""))
     process = run(
         [
             "gh",
@@ -971,28 +1244,51 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
             branch,
             "--title",
             title,
+            # Present rather than absent: `gh` prompts for a body it was
+            # not given, and a session has no terminal to prompt at.
+            # Empty when the session has no issue to close.
             "--body",
             body,
-            "--draft",
         ],
         cwd=CHECKOUT,
         check=False,
     )
     if process.returncode != 0:
         # An existing pull request for this branch is not a failure: a retried
-        # session should reuse it.
+        # session reuses it. A retry usually changed what the change does —
+        # "refuse it" becomes "serve it" — so bring the title and body back in
+        # line with the commit subject this run wrote. Without this the pull
+        # request keeps the first run's words: the one titled "Refuse X" that,
+        # after its second round, is the one that serves X.
         existing = run(
-            ["gh", "pr", "view", branch, "--repo", slug, "--json", "url", "--jq", ".url"],
+            ["gh", "pr", "view", branch, "--repo", slug, "--json", "number", "url"],
             cwd=CHECKOUT,
             check=False,
             quiet=True,
         )
-        url = existing.stdout.strip()
-        if url:
-            log(f"reusing existing pull request {url}")
-            return url
-        fail("could not open a pull request")
-        return None
+        try:
+            info = json.loads(existing.stdout)
+        except ValueError:
+            info = {}
+        number = info.get("number")
+        if not number:
+            fail("could not open a pull request")
+            return None
+        refreshed = run(
+            ["gh", "pr", "edit", str(number), "--repo", slug, "--title", title, "--body", body],
+            cwd=CHECKOUT,
+            check=False,
+            quiet=True,
+        )
+        url = str(info.get("url") or "")
+        if refreshed.returncode == 0:
+            log(f"reused existing pull request {url} and refreshed its title")
+        else:
+            # The pull request exists and the code is pushed; only its words
+            # could not be brought in line. Say so rather than claim a refresh
+            # that did not happen, but still hand over the link.
+            log(f"reused existing pull request {url}; could not refresh its title")
+        return url or None
 
     for line in process.stdout.splitlines():
         if line.startswith("https://"):
@@ -1082,7 +1378,15 @@ def run_finalize(result: Result) -> None:
     # fresh ref: a retried session force-pushes a new commit onto it, and a
     # completed run of the earlier commit would otherwise still be "the
     # build of this branch".
-    result.data["pushed_sha"] = _ref_sha("HEAD") if count else _ref_sha(f"refs/remotes/origin/{branch}", "HEAD")
+    #
+    # And nothing at all when this session's branch has never been pushed.
+    # It used to fall back to HEAD, which on a session that only answered a
+    # question is the tip of the *default branch*: the runner then watched
+    # main's checks, found them red for reasons that had nothing to do with
+    # this session, and took the work up again — twice, until the request
+    # ran out of attempts. A commit this session did not make is not a
+    # commit it can be answerable for.
+    result.data["pushed_sha"] = _ref_sha("HEAD") if count else _ref_sha(f"refs/remotes/origin/{branch}")
 
 
 def main() -> int:

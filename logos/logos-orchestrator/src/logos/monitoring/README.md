@@ -26,7 +26,7 @@ from logos import SimpleScheduler
 from logos import RequestPipeline
 
 recorder = MonitoringRecorder()
-scheduler = SimpleScheduler(queue_manager, ollama_facade, azure_facade, model_registry)
+scheduler = SimpleScheduler(queue_manager, logosnode_facade, azure_facade, model_registry)
 pipeline = RequestPipeline(classifier, scheduler, executor, context_resolver, recorder)
 ```
 

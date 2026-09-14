@@ -22,7 +22,7 @@ VALUES
    '{"request_rate":2.5,"request_latency_ms":{"p50":420.0,"p95":690.0}}'::jsonb,
    TIMESTAMPTZ '2026-08-24 12:00:00+00');
 
-INSERT INTO ollama_provider_snapshots
+INSERT INTO provider_snapshots
   (id, provider_id, snapshot_ts, poll_success,
    total_vram_used_bytes, total_memory_bytes, free_memory_bytes,
    total_models_loaded, loaded_models, scheduler_signals)
@@ -50,5 +50,12 @@ VALUES
   (93001, 91002, 9001, 4),
   (93002, 91002, 9002, 3);
 
-INSERT INTO token_prices (id, type_id, price_per_k_token, valid_from, model_id)
-VALUES (92001, 91001, 1000, NOW() - INTERVAL '1 year', 5001);
+-- The seeded usage above is completion_tokens (-> billed_output_text), so price
+-- that dimension or log_entry_cost stays NULL and budget_usage reports 0. The
+-- billed_input_uncached row backs the model-list price projection.
+INSERT INTO token_prices (id, type_id, price_per_k_unit, valid_from, model_id)
+SELECT 92001, tt.id, 1000, NOW() - INTERVAL '1 year', 5001
+FROM token_types tt WHERE tt.name = 'billed_input_uncached';
+INSERT INTO token_prices (id, type_id, price_per_k_unit, valid_from, model_id)
+SELECT 92002, tt.id, 2000, NOW() - INTERVAL '1 year', 5001
+FROM token_types tt WHERE tt.name = 'billed_output_text';

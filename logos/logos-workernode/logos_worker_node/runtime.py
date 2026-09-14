@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,11 @@ from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary,
 logger = logging.getLogger(__name__)
 
 SERVICE_VERSION = "2.0.0"
+
+
+def _on_macos() -> bool:
+    """True when running on macOS, where /proc does not exist."""
+    return sys.platform == "darwin"
 
 
 def _read_proc_meminfo_kb() -> dict[str, float] | None:
@@ -42,6 +48,11 @@ def _read_proc_meminfo_kb() -> dict[str, float] | None:
 
 def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
     """Read MemTotal/MemAvailable in MiB. Returns (total, used, free) or None."""
+    if _on_macos():
+        from logos_worker_node.metal import read_host_memory_mb  # noqa: PLC0415
+
+        return read_host_memory_mb()
+
     values_kb = _read_proc_meminfo_kb()
     if values_kb is None:
         return None
@@ -58,6 +69,32 @@ def _read_proc_meminfo_mb() -> tuple[float, float, float] | None:
 def _build_host_memory_summary() -> HostMemorySummary:
     """Always-on host RAM telemetry. Falls back to zeros when /proc is absent."""
     now = datetime.now(timezone.utc)
+
+    if _on_macos():
+        # source="sysctl" rather than "proc-meminfo" is deliberate. The master's
+        # capacity planner gates cold loads on host RAM *in addition to* VRAM
+        # (see _get_host_ram_available_mb, which requires "proc-meminfo" and
+        # otherwise fails open). On unified memory those are the same pool, so
+        # letting that second gate run would charge the same bytes twice and
+        # reject lanes that fit. Reporting the real source keeps the planner on
+        # the device gate alone, which is the correct one here.
+        from logos_worker_node.metal import read_host_memory_mb, read_swap_mb  # noqa: PLC0415
+
+        memory = read_host_memory_mb()
+        if memory is None:
+            return HostMemorySummary(timestamp=now, source="unavailable")
+        total_mb, used_mb, available_mb = memory
+        swap_total_mb, swap_used_mb = read_swap_mb()
+        return HostMemorySummary(
+            timestamp=now,
+            source="sysctl",
+            total_mb=total_mb,
+            available_mb=available_mb,
+            used_mb=used_mb,
+            swap_total_mb=swap_total_mb,
+            swap_used_mb=swap_used_mb,
+        )
+
     values_kb = _read_proc_meminfo_kb()
     if values_kb is None:
         return HostMemorySummary(timestamp=now, source="unavailable")
@@ -147,7 +184,19 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
 
     lanes = await lane_manager.get_all_statuses()
     devices = await gpu_collector.get_snapshot()
-    if not devices.nvidia_smi_available:
+    # The derived summary is the last resort: it is built only when the
+    # collector has no device data at all (mode "none"). Both collectors
+    # leave mode "none" exclusively for that state, so this also covers the
+    # cases the availability flags describe — and keeps the degraded Metal
+    # snapshot (mode "metal", telemetry_available False), which must not be
+    # discarded: on macOS the derived summary would report the full host
+    # hw.memsize as the device budget, overstating the Metal working set by
+    # ~22% (see the metal.py design notes). A degraded snapshot still carries
+    # the conservative sysctl working-set estimate plus the real wired-page
+    # usage, and its telemetry_available=False already tells the flag-gating
+    # consumers (main.py reporting, logosnode_provider) to keep their
+    # conservative values until a real mlx probe succeeds.
+    if devices.mode == "none":
         devices = _build_derived_device_summary(lanes)
 
     capacity = CapacitySummary(
