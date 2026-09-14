@@ -15,10 +15,10 @@ export const MENU_ITEMS: MenuItem[] = [
   // Management (app_admin and above)
   { label: 'Users',      path: '/user-management', piIcon: 'users',          group: 'management', roles: ADMIN_AND_ABOVE },
   { label: 'Teams',      path: '/team-management', piIcon: 'sitemap',        group: 'management', roles: ADMIN_AND_ABOVE },
+  { label: 'Batches',    path: '/batches',         piIcon: 'clone',          group: 'management', roles: ADMIN_AND_ABOVE },
   // Personal (all roles)
   { label: 'My Workspace', path: '/my-workspace',  piIcon: 'objects-column', group: 'personal',   roles: ALL_ROLES },
   { label: 'AI Tools',    path: '/ai-tools',       piIcon: 'code',           group: 'personal',   roles: ALL_ROLES },
-  { label: 'Batches',     path: '/batches',        piIcon: 'clone',          group: 'personal',   roles: ALL_ROLES },
 ];
 
 export const HOME_ROUTE: Record<UserRole, string> = {
