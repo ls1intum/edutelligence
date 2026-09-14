@@ -692,6 +692,8 @@
               <app-error-message variant="banner" [message]="error" />
             }
 
+            <app-benchmark-comparison [runs]="performance()" />
+
             <div class="performance-list">
 
               @for (group of benchmarkGroups(); track group.modelProviderId) {

@@ -1,0 +1,98 @@
+<section class="comparison" aria-label="Benchmark run comparison">
+  <header>
+    <div>
+      <h3>Compare benchmark runs</h3>
+      <p>One metric in the chart. All three in the table.</p>
+    </div>
+    <label class="metric-picker">Chart metric
+      <select [value]="metric()" (change)="metric.set($any($event.target).value)">
+        @for (item of metrics; track item.key) {
+          <option [value]="item.key">{{ item.label }} ({{ item.unit }})</option>
+        }
+      </select>
+    </label>
+  </header>
+
+  <details class="run-picker">
+    <summary>Choose runs <span>{{ selected().length }} / 5 selected</span></summary>
+    <div class="filters">
+      <label>Worker / provider
+        <select [value]="providerFilter()" (change)="providerFilter.set($any($event.target).value)">
+          <option value="">All providers</option>
+          @for (provider of providers(); track provider[0]) {
+            <option [value]="provider[0]">{{ provider[1] }}</option>
+          }
+        </select>
+      </label>
+      <label>Dataset
+        <select [value]="datasetFilter()" (change)="datasetFilter.set($any($event.target).value)">
+          <option value="">All datasets</option>
+          @for (dataset of datasets(); track dataset) {
+            <option [value]="dataset">{{ dataset }}</option>
+          }
+        </select>
+      </label>
+    </div>
+    <p class="picker-hint">Select up to five runs. Filters only narrow this list; selected runs stay in the comparison.</p>
+    <div class="run-options" role="group" aria-label="Runs to compare">
+      @for (run of filteredRuns(); track run.id) {
+        <label class="run-option">
+          <input type="checkbox" [checked]="isSelected(run.id)"
+            [disabled]="!isSelected(run.id) && selected().length >= 5" (change)="toggleRun(run.id)" />
+          <span><strong>#{{ run.id }} · {{ run.provider_name }}</strong>
+            <small>{{ run.recorded_at | date:'medium' }} · {{ run.dataset }} · {{ run.sample_size }} requests</small>
+          </span>
+        </label>
+      } @empty {
+        <p>No runs match these filters.</p>
+      }
+    </div>
+  </details>
+
+  @if (selected().length > 0) {
+    @if (differentInputs()) {
+      <p class="comparison-note">These runs use different datasets, sample sizes or prompt settings. Check the settings when comparing their results.</p>
+    }
+    <figure aria-label="Selected benchmark metric as a horizontal bar chart">
+      <figcaption><strong>{{ activeMetric().label }} ({{ activeMetric().unit }})</strong><span>{{ activeMetric().hint }}</span></figcaption>
+      <div class="chart-axis" aria-hidden="true"><span>0</span><span>{{ format(chartMax() / 2) }}</span><span>{{ format(chartMax()) }} {{ activeMetric().unit }}</span></div>
+      @for (row of chartRows(); track row.run.id) {
+        <div class="chart-row" [attr.aria-label]="'Run ' + row.run.id + ', ' + row.run.provider_name + ': ' + (row.value === null ? 'Not captured' : format(row.value) + ' ' + activeMetric().unit)"
+          [title]="row.run.dataset + ' · ' + configuration(row.run)">
+          <span class="chart-label">#{{ row.run.id }}<small>{{ row.run.provider_name }}</small></span>
+          <div class="chart-track" aria-hidden="true"><div class="chart-bar" [style.width.%]="(row.value ?? 0) / chartMax() * 100"></div></div>
+          <strong class="chart-value">{{ format(row.value) }}</strong>
+        </div>
+      }
+    </figure>
+
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Benchmark comparison table, scroll horizontally for all columns">
+      <table>
+        <caption>Selected runs · times in seconds · throughput in output tokens per second</caption>
+        <thead><tr>
+          <th scope="col">Run / provider</th><th scope="col">Dataset</th><th scope="col">Requests</th><th scope="col">Configuration</th>
+          @for (item of metrics; track item.key) {
+            <th scope="col" class="numeric" [class.active-metric]="metric() === item.key">{{ item.label }}<small>{{ item.unit }}</small></th>
+          }
+        </tr></thead>
+        <tbody>
+          @for (run of selected(); track run.id) {
+            <tr>
+              <th scope="row">#{{ run.id }} · {{ run.provider_name }}<small>{{ run.recorded_at | date:'medium' }}</small></th>
+              <td>{{ run.dataset }}<small>{{ datasetDetails(run) }}</small></td>
+              <td class="numeric">{{ run.sample_size }}</td>
+              <td class="configuration">{{ configuration(run) }}</td>
+              @for (item of metrics; track item.key) {
+                <td class="numeric" [class.active-metric]="metric() === item.key">{{ value(run, item.key) }}</td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    <p class="definitions">TTFT: time to first token. TTLT: total response time (GuideLLM request latency). Both show the arithmetic mean across successful requests.
+      Throughput: GuideLLM’s aggregate output token rate across requests. — means no measurement was captured.</p>
+  } @else {
+    <p class="empty">Choose runs above to compare their results.</p>
+  }
+</section>

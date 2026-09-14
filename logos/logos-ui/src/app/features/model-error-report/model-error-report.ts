@@ -9,6 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { NgClass } from '@angular/common';
+import { BenchmarkComparison } from './benchmark-comparison';
 import { BenchmarkSettingsEditor } from './benchmark-settings-editor';
 import { BenchmarkSettings, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
 import {
@@ -258,6 +259,7 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
     RouterLink,
     NgClass,
     BenchmarkSettingsEditor,
+    BenchmarkComparison,
     ScrollingModule,
     ErrorMessageComponent,
     DataTableComponent,
