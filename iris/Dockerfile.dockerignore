@@ -1,0 +1,22 @@
+# Build-context ignore rules for iris/Dockerfile.
+#
+# The iris image is built with the repo root as the context (it COPYs both
+# `iris/` and its sibling `memiris/`). The repo-root .dockerignore, however, is
+# scoped to the logos build — it ignores everything except `logos/*` to keep
+# that image slim (see #682). Applied to the iris build it empties the context,
+# so every COPY fails with "not found".
+#
+# BuildKit prefers a `<Dockerfile>.dockerignore` next to the Dockerfile over the
+# context-root `.dockerignore`, so these rules apply to the iris build only and
+# leave the logos context untouched. Patterns are relative to the context root
+# (the repo root). Keep only what iris/Dockerfile needs, minus caches/VCS noise.
+*
+!iris
+!memiris
+
+**/__pycache__
+**/.venv
+**/.pytest_cache
+**/.mypy_cache
+**/.git
+**/node_modules
