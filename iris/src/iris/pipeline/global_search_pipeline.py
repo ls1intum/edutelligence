@@ -395,6 +395,13 @@ class GlobalSearchPipeline(SubPipeline):
         # the one light models weight most, and the model itself is the only
         # reliable language identifier for messy queries (typos, Arabizi,
         # code-switching) — no string-level detector handles those.
+        #
+        # Citation placement is repeated here for the same measured reason. Stated
+        # only as rule 2 of the system prompt it was ignored (observed live: every
+        # sentence ended in a run like [1][4][5], which attributes the sentence and
+        # tells the reader nothing about which source backed which clause). It is a
+        # formatting habit the model falls back into, so it needs the position the
+        # model actually weights rather than a more strongly worded rule upstream.
         self.answer_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", answer_system_prompt),
@@ -403,7 +410,11 @@ class GlobalSearchPipeline(SubPipeline):
                     "Course content:\n{context}\n\nQuestion: {query}\n\n"
                     "ANSWER LANGUAGE = the language of the question above. "
                     "The sources' language is irrelevant — translate what "
-                    "you use into the question's language.{today_line}",
+                    "you use into the question's language.{today_line}\n\n"
+                    "CITATION PLACEMENT = put each [n] immediately after the words it supports, "
+                    "INSIDE the sentence. Never gather markers at the end. A sentence drawing on "
+                    "sources 1, 2 and 3 reads: 'The exam is on 12 March[1], runs for 90 minutes[2] "
+                    "and is worth 40 points[3].' — NOT '... is worth 40 points.[1][2][3]'.",
                 ),
             ]
         )
