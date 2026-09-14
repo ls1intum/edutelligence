@@ -1904,11 +1904,12 @@ class _SsePreCommitGate:
     therefore keeps the trailing line until its newline arrives and
     classifies only complete lines:
 
-    - a data line that parses to a completion frame carrying no generated
-      text — a chat frame whose deltas have neither content nor a
-      structured key (tool calls, function calls, audio), a legacy
-      ``/v1/completions`` frame whose ``choices[].text`` is empty — or to
-      a native-dialect event that carries no output (the Messages
+    - a data line — the single space after the colon is optional, so
+      ``data:{...}`` is valid SSE — that parses to a completion frame
+      carrying no generated text — a chat frame whose deltas have neither
+      content nor a structured key (tool calls, function calls, audio), a
+      legacy ``/v1/completions`` frame whose ``choices[].text`` is empty —
+      or to a native-dialect event that carries no output (the Messages
       ``message_start`` / ``ping`` envelope, the Responses
       ``response.created`` / ``response.in_progress`` envelope, a
       block/item/part announcement that is provably empty) — is protocol
@@ -1916,10 +1917,14 @@ class _SsePreCommitGate:
     - an ``event:`` line makes no decision: the native dialects name every
       event on its own line, the name carries no output, and the data line
       that follows decides;
+    - the remaining control lines — an SSE comment (``: keepalive``) and
+      the ``id:`` / ``retry:`` fields — are connection bookkeeping that
+      providers send before any delta, and make no decision either;
     - anything else — real content, a structured delta, a native event
       that carries text or structure, a legacy ``choices[].text`` that
-      carries text, data that does not parse, a non-data line, a terminal
-      event — is output: the stream starts, when in doubt.
+      carries text, data that does not parse, an unknown field, a
+      non-SSE body, a terminal event — is output: the stream starts, when
+      in doubt.
 
     Binary (audio-upload) streams are never gated: their payload is not SSE
     and every byte is output.
@@ -1948,17 +1953,31 @@ class _SsePreCommitGate:
         text = line.decode("utf-8", errors="replace").strip()
         if not text:
             return False  # event separator — no decision
+        if text.startswith(":"):
+            # SSE comment — providers send ": keepalive" lines to hold the
+            # connection open; the comment carries no output.
+            return False
         if text.startswith("event:"):
             # Native dialects (Messages, Responses) name every event on its
             # own line; the name carries no generated output — the data
             # line that follows decides.
             return False
-        if not text.startswith("data: "):
-            return True  # non-data SSE field or a non-SSE body — output
-        if text == "data: [DONE]":
+        if text.startswith("id:") or text.startswith("retry:"):
+            # The remaining SSE control fields — the last-event id and the
+            # reconnect delay — steer the client's connection, not the
+            # answer.
+            return False
+        if not text.startswith("data:"):
+            return True  # unknown field or a non-SSE body — output
+        # The field separator is the colon plus one optional space or tab;
+        # "data:{...}" without the space is valid SSE.
+        value = text[5:]
+        if value[:1] in (" ", "\t"):
+            value = value[1:]
+        if value == "[DONE]":
             return True
         try:
-            blob = json.loads(text[6:])
+            blob = json.loads(value)
         except json.JSONDecodeError:
             return True  # complete data line that does not parse — output
         if not isinstance(blob, dict):

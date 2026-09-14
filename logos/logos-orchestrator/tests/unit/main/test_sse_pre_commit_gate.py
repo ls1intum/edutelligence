@@ -76,3 +76,47 @@ def test_has_output_fires_on_first_reasoning_chunk():
     # the stream — no ordinary text is ever needed.
     assert gate.has_output(b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n') is False
     assert gate.has_output(b'data: {"choices": [{"delta": {"reasoning_content": "thinking"}}]}\n') is True
+
+
+# --- SSE framing: comments, control fields, no-space data ------------------
+
+
+def test_sse_comments_are_metadata():
+    """: keepalive comments hold the connection open and carry no output —
+    they must not open the gate."""
+    assert _SsePreCommitGate._line_is_output(b": keepalive") is False
+    assert _SsePreCommitGate._line_is_output(b":") is False
+
+
+def test_id_and_retry_fields_are_metadata():
+    """The last-event id and the reconnect delay steer the client's
+    connection, not the answer."""
+    assert _SsePreCommitGate._line_is_output(b"id: 1") is False
+    assert _SsePreCommitGate._line_is_output(b"retry: 3000") is False
+
+
+def test_no_space_data_line_is_parsed():
+    """The single space after "data:" is optional — data:{...} is valid
+    SSE, so a role-only frame without the space is still metadata, a
+    content frame without it is still output, and data:[DONE] is the
+    terminal either way."""
+    assert _SsePreCommitGate._line_is_output(b'data:{"choices": [{"delta": {"role": "assistant"}}]}') is False
+    assert _SsePreCommitGate._line_is_output(b'data:{"choices": [{"delta": {"content": "hi"}}]}') is True
+    assert _SsePreCommitGate._line_is_output(b"data:[DONE]") is True
+
+
+def test_unknown_field_is_output():
+    """A field name the SSE spec does not define is no proof of a non-SSE
+    body either way — the gate starts the stream, when in doubt."""
+    assert _SsePreCommitGate._line_is_output(b"foo: bar") is True
+
+
+def test_has_output_holds_across_keepalives_and_control_fields():
+    """The full prefix a provider can send before the first delta —
+    keepalive, id, retry, and a no-space role-only frame — must all stay
+    behind the gate; the content delta that follows opens it."""
+    gate = _SsePreCommitGate(text_stream=True)
+    assert gate.has_output(b": keepalive\n\n") is False
+    assert gate.has_output(b"id: 1\nretry: 3000\n\n") is False
+    assert gate.has_output(b'data:{"choices": [{"delta": {"role": "assistant", "content": ""}}]}\n\n') is False
+    assert gate.has_output(b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n') is True

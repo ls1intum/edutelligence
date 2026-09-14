@@ -437,6 +437,76 @@ async def test_a_role_only_cloud_prefix_failure_is_retried_before_commit(retry_e
     assert body == content + done
 
 
+async def test_sse_control_prefix_failure_is_retried_before_commit(retry_env):
+    """Providers hold the connection open with SSE metadata before the
+    first delta — ": keepalive" comments, id:/retry: control fields, and
+    data lines without the space after the colon (valid SSE syntax). None
+    of it is generated output, so a failure after the prefix must still
+    come back pre-commit and the funnel must re-dispatch — the same hole
+    the role-only prefix test covers, for the framing lines around it."""
+    prefix = (
+        b": keepalive\n\n"
+        b"id: 1\n\n"
+        b"retry: 3000\n\n"
+        b'data:{"id": "c1", "choices": [{"delta": {"role": "assistant", "content": ""}}]}\n\n'
+    )
+    content = b'data: {"id": "c2", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+    done = b"data: [DONE]\n\n"
+    emit_flags = []
+
+    class _CloudExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):  # noqa: ARG002
+            emit_flags.append(emit_recovery_frames)
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            if len(emit_flags) == 1:
+                yield prefix
+                raise RuntimeError("upstream disconnected")
+            yield content
+            yield done
+
+    pipeline = _FakePipeline([_ok_cloud_result(provider_id=1), _ok_cloud_result(provider_id=2)])
+    pipeline.executor = _CloudExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=_auth(),
+        log_id=None,
+        is_async_job=False,
+        request_id="req-1",
+        request_path="v1/chat/completions",
+    )
+
+    # The control-field prefix failed pre-commit, so the funnel
+    # re-dispatched instead of returning a committed stream...
+    assert isinstance(response, StreamingResponse)
+    assert len(pipeline.requests) == 2
+    # ...and the streamer owns the recovery terminal on both attempts.
+    assert emit_flags == [False, False]
+
+    body = b"".join([part async for part in response.body_iterator])
+    assert body == content + done
+
+
 async def test_async_job_dict_terminal_status_is_retried(retry_env):
     pipeline = _run_sync_response(
         retry_env,
