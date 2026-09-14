@@ -63,7 +63,12 @@ def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
             type(value).__name__,
         )
         return None
-    if len(value.encode("utf-8", errors="ignore")) > _MAX_VLLM_METRICS_BYTES:
+    # "surrogatepass", not "ignore": a lone surrogate (valid inside a JSON
+    # string escape, e.g. an unpaired \uD800) encodes to zero bytes under
+    # "ignore", so a string built mostly out of them would sail under the
+    # cap while still costing real memory — surrogatepass counts it instead
+    # of dropping it, closing that bypass.
+    if len(value.encode("utf-8", errors="surrogatepass")) > _MAX_VLLM_METRICS_BYTES:
         logger.warning(
             "Dropping oversized vllm_metrics from provider %s (over %d bytes)",
             provider_id,

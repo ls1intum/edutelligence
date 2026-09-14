@@ -95,3 +95,12 @@ def test_validated_vllm_metrics_text_rejects_non_strings() -> None:
 def test_validated_vllm_metrics_text_rejects_oversized_payloads() -> None:
     oversized = "x" * (_MAX_VLLM_METRICS_BYTES + 1)
     assert _validated_vllm_metrics_text(oversized, provider_id=1) is None
+
+
+def test_validated_vllm_metrics_text_counts_lone_surrogates_as_real_bytes() -> None:
+    """A string of lone surrogates must not sail under the cap for free —
+
+    encoding with errors="ignore" would silently drop them (0 bytes for any
+    count), letting an oversized payload bypass the limit entirely."""
+    lone_surrogates = "\ud800" * (_MAX_VLLM_METRICS_BYTES + 1)
+    assert _validated_vllm_metrics_text(lone_surrogates, provider_id=1) is None
