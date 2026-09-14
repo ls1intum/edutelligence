@@ -31,6 +31,60 @@ class LectureUnitSchema(Enum):
     VIDEO_LINK = "video_link"
     RELEASE_DATE = "release_date"
     SLIDE_VISIBILITY = "slide_visibility"
+    CONTENT_FINGERPRINT = "content_fingerprint"
+    INGESTION_RUN_ID = "ingestion_run_id"
+    EXPECTED_CHUNK_COUNTS = "expected_chunk_counts"
+    PIPELINE_VERSION = "ingestion_pipeline_version"
+    QUALITY_SCORE = "quality_score"
+    QUALITY_FLAGS = "quality_flags"
+
+
+def _ledger_properties() -> list[Property]:
+    """Properties of the per-unit ingestion ledger stamped by the write path."""
+    return [
+        Property(
+            name=LectureUnitSchema.CONTENT_FINGERPRINT.value,
+            description="Fingerprint of the ingested source content, stamped verbatim as sent by Artemis",
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.INGESTION_RUN_ID.value,
+            description=(
+                "Id of the ingestion run that wrote this row; rows of "
+                "other runs are swept after a successful write"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value,
+            description=(
+                "JSON map of page number to prepared chunk count, so "
+                "completeness is verifiable below page granularity"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.PIPELINE_VERSION.value,
+            description="Ingestion pipeline version that produced this unit's content",
+            data_type=DataType.INT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.QUALITY_SCORE.value,
+            description="Deterministic quality score of the ingested content (0..1)",
+            data_type=DataType.NUMBER,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.QUALITY_FLAGS.value,
+            description="JSON list of deterministic quality findings for this unit",
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+    ]
 
 
 def _add_property_if_missing(collection: Collection, new_property: Property) -> None:
@@ -71,6 +125,17 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
         )
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.COURSE_LANGUAGE.value,
+                description="The language of the course",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
+        for ledger_property in _ledger_properties():
+            _add_property_if_missing(collection, ledger_property)
         return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,
@@ -164,5 +229,6 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            *_ledger_properties(),
         ],
     )
