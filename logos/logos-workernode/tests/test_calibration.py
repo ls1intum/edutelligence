@@ -41,7 +41,6 @@ from logos_worker_node.calibration import (
     _parse_kv_to_mb,
     _plan_needs_gpu_pin,
     _record_unsupported_model,
-    _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
     calibrate_with_tp_escalation,
@@ -2157,7 +2156,7 @@ def test_fatal_classifier_registry_has_expected_codes():
 
 
 def test_unsupported_file_roundtrip(tmp_path: Path):
-    """Record → load → remove preserves contents and round-trips cleanly."""
+    """Record → load preserves contents and round-trips cleanly."""
     path = tmp_path / _UNSUPPORTED_MODELS_FILE
     entry = UnsupportedModelEntry(
         model="Qwen/Bogus-Model",
@@ -2170,10 +2169,6 @@ def test_unsupported_file_roundtrip(tmp_path: Path):
     assert "Qwen/Bogus-Model" in loaded
     assert loaded["Qwen/Bogus-Model"].reason_code == "invalid-repo-id"
     assert loaded["Qwen/Bogus-Model"].recorded_at == "2026-06-04T19:46:51Z"
-
-    removed = _remove_unsupported_model(path, "Qwen/Bogus-Model")
-    assert removed == 1
-    assert _load_unsupported_models(path) == {}
 
 
 def test_unsupported_file_ignores_comments_and_blank_lines(tmp_path: Path):

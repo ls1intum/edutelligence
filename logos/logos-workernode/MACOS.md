@@ -290,18 +290,25 @@ and restarting them instead. No capability is lost, only the mechanism differs.
 
 ### Calibration
 
-`calibration.py` measures against `nvidia-smi` and samples `/proc/meminfo`,
-neither of which exists on macOS. Calibration is therefore unavailable on the
-Metal backend *by construction* — no flag to set: the worker refuses
-server-driven calibration sessions automatically (the refusal carries
-`reason_code=metal-backend`), and its startup calibration path skips itself.
-Provide `model_profile_overrides` by hand instead; a profile with
-`residency_source="override"` counts as valid, so the model is advertised
-normally. `config.example.mlx.yml` has worked examples.
+`calibration.py`'s CUDA path (TP escalation, the KV-cache sweep, sleep/wake
+measurement) does not run on Metal — none of that hardware exists here.
+Server-driven calibration sessions instead use `calibration_metal.py`: a
+single-point probe that loads the model with no explicit memory-fraction
+override (letting vllm-metal size itself, same as a production lane),
+warms it up, and reads the memory delta via `vm_stat`. No KV sweep (there
+is no per-request KV-size flag to search over on this backend, only the
+whole-process `VLLM_METAL_MEMORY_FRACTION`), no TP (single GPU), no sleep
+(see above). The result still lands in `model_profiles.yml` with
+`residency_source="calibrated"` — nightly ticks and the "Calibrate
+uncalibrated" admin action both work on Metal nodes now.
 
-To measure `base_residency_mb`: start the lane, let it idle, then read
-`used_memory_mb` from `GET /runtime`. Round up — underestimating makes the
-planner over-subscribe the node.
+`model_profile_overrides` remains available as a manual fallback (e.g. to
+pin a number before the automatic probe has run, or to work around a
+model that fails the probe) — a profile with `residency_source="override"`
+still counts as valid. `config.example.mlx.yml` has worked examples. To
+measure `base_residency_mb` by hand: start the lane, let it idle, then
+read `used_memory_mb` from `GET /runtime`. Round up — underestimating
+makes the planner over-subscribe the node.
 
 ---
 

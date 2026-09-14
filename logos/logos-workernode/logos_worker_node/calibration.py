@@ -42,7 +42,6 @@ import subprocess
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -429,31 +428,6 @@ def _record_unsupported_model(path: Path, entry: UnsupportedModelEntry) -> None:
         entry.model,
         entry.reason_code,
     )
-
-
-def _remove_unsupported_model(path: Path, model: str) -> int:
-    """Remove all entries for *model* from the file. Returns the number of
-    lines removed. Used when calibration succeeds despite a prior entry
-    (operator manually cleared the underlying issue and re-ran).
-    """
-    if not path.exists():
-        return 0
-    lines = path.read_text(encoding="utf-8").splitlines()
-    remaining: list[str] = []
-    removed = 0
-    for ln in lines:
-        stripped = ln.strip()
-        if not stripped or stripped.startswith("#"):
-            remaining.append(ln)
-            continue
-        head = stripped.split("\t", 1)[0].strip()
-        if head == model:
-            removed += 1
-            continue
-        remaining.append(ln)
-    if removed:
-        path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
-    return removed
 
 
 def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | None:
@@ -1840,7 +1814,7 @@ def _calibrate_model_probe(
     # Retry a few times with a short, growing delay — nvidia-smi can be
     # temporarily sluggish right after a heavy calibration run (GPU driver
     # busy), but that's usually gone within seconds, not 15s per retry.
-    logger.info("  [1/5] Baseline VRAM...")
+    logger.info("  [1/6] Baseline VRAM...")
     baseline_mb: float | None = None
     for _attempt in range(1 + len(_BASELINE_VRAM_RETRY_DELAYS_S)):
         try:

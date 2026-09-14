@@ -26,7 +26,7 @@ from logos_worker_node.metal import read_host_memory_mb
 
 logger = logging.getLogger(__name__)
 
-_READY_POLL_SETTLE_S = 2.0  # let the allocator settle before the final read
+_METAL_SETTLE_S = 2.0  # let the allocator settle before the final read
 
 
 def _build_metal_calibration_cmd(
@@ -71,20 +71,16 @@ def _build_metal_calibration_cmd(
     return cmd
 
 
-def _spawn_vllm_metal(
-    cmd: list[str],
-    log_path: Path,
-    *,
-    hf_home: str | None = None,
-) -> subprocess.Popen[str]:
+def _spawn_vllm_metal(cmd: list[str], log_path: Path) -> subprocess.Popen[str]:
     """Spawn the Metal calibration probe process.
 
     No CUDA_VISIBLE_DEVICES / NCCL env — those do not exist on this
-    backend (see MetalVllmProcessHandle._build_process_env).
+    backend (see MetalVllmProcessHandle._build_process_env). No HF_HOME
+    override either: unlike the CUDA path, Metal calibration does not
+    integrate with the tmpfs RAM model cache (out of scope, see module
+    docstring), so it always loads from the plain HF cache.
     """
     env = os.environ.copy()
-    if hf_home:
-        env["HF_HOME"] = hf_home
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("a", encoding="utf-8")
@@ -176,7 +172,7 @@ def calibrate_model_metal(
         if not served:
             logger.warning("  %s: warmup request did not complete — measuring load-only footprint", model)
 
-        time.sleep(_READY_POLL_SETTLE_S)
+        time.sleep(_METAL_SETTLE_S)
         loaded = read_host_memory_mb()
         if loaded is None:
             result.error = "metal host-memory read failed after load"
