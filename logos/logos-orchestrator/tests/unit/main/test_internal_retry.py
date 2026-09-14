@@ -1249,6 +1249,121 @@ async def test_pre_token_deadline_is_not_retried_on_the_same_lane(retry_env):
     assert len(opened) == 1
 
 
+def _pre_token_backoff_env(retry_env, *, deadline_s: float, backoff_s: float, send):
+    """A near-expiry RetryBudget on a fake clock plus a fake asyncio.sleep
+    that advances it, so the pre-token backoff can be driven with real
+    backoff in zero wall time. ``send`` is the scripted stream command."""
+    from logos.pipeline.retry import RetryBudget
+
+    clock = {"t": 0.0}
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+        clock["t"] += seconds
+
+    retry_env.setattr("asyncio.sleep", fake_sleep)
+    retry_env.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=send),
+        raising=False,
+    )
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    retry_env.setattr(main, "_pipeline", _FakePipeline([_fail_result("unused")]), raising=False)
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRIES", 3)
+    retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", backoff_s)
+    budget = RetryBudget(max_attempts=3, deadline_s=deadline_s, now=lambda: clock["t"])
+    return slept, budget
+
+
+async def _pre_token_streaming_response(budget):
+    # log_id=0: the fake DB has no persistence methods, and the test
+    # consumes the body, which runs the streamer's logging finally.
+    return await main._streaming_response(
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        0,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-pretoken-backoff",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+        retry_budget=budget,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_token_backoff_is_clamped_to_the_remaining_deadline(retry_env):
+    """A pre-token failure just before the deadline must not sleep the full
+    fixed backoff across the wall: the sleep is clamped to the time left, so
+    the same-lane retry that follows starts with the budget still alive
+    instead of already spent."""
+    from logos.logosnode_registry import LogosNodeOfflineError
+
+    content = b'data: {"id": "c1", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+    done = b"data: [DONE]\n\n"
+    calls = []
+
+    async def fail_then_send(**kwargs):  # noqa: ARG001
+        calls.append(None)
+        if len(calls) == 1:
+            raise LogosNodeOfflineError("worker offline")
+        yield content
+        yield done
+
+    # Deadline 0.5s out, backoff 1.0s: an unclamped sleep would cross the
+    # wall. The clamp keeps it inside.
+    slept, budget = _pre_token_backoff_env(retry_env, deadline_s=0.5, backoff_s=1.0, send=fail_then_send)
+
+    response = await _pre_token_streaming_response(budget)
+
+    assert isinstance(response, StreamingResponse)
+    # The one sleep was clamped to the 0.5s left, not the full 1.0s backoff.
+    assert slept == [0.5]
+    # The retry itself ran: the client reads the second attempt's answer.
+    assert len(calls) == 2
+    assert b"".join([part async for part in response.body_iterator]) == content + done
+
+
+@pytest.mark.asyncio
+async def test_pre_token_backoff_stops_when_the_deadline_is_spent(retry_env):
+    """A non-deadline pre-token failure that leaves no time in the budget
+    must stop the same-lane retries rather than burn them: each one would
+    sleep across the wall and dispatch another worker command after the
+    budget was spent."""
+    from logos.logosnode_registry import LogosNodeOfflineError
+
+    opened = []
+
+    async def failing_send(**kwargs):  # noqa: ARG001
+        opened.append(None)
+        raise LogosNodeOfflineError("worker offline")
+        yield b""  # unreachable; makes this an async generator
+
+    slept, budget = _pre_token_backoff_env(retry_env, deadline_s=0.5, backoff_s=1.0, send=failing_send)
+
+    response = await _pre_token_streaming_response(budget)
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 502
+    # One clamped sleep, then the spent deadline stops the loop — the three
+    # configured same-lane retries are not burned across the wall.
+    assert slept == [0.5]
+    assert len(opened) == 2
+
+
 def _fake_deadline_env(retry_env, deadline_s=10.0, backoff_s=4.0):
     """A RetryBudget on a fake clock plus a fake asyncio.sleep that advances
     it, so a retry loop can be driven with real backoff in zero wall time."""

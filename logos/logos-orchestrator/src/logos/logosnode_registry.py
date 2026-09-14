@@ -1220,6 +1220,16 @@ class LogosNodeRuntimeRegistry:
         stale_after_seconds: int = 30,
         deadline_at: float | None = None,
     ) -> AsyncIterator[bytes]:
+        # The read loop below checks ``deadline_at`` only *after* the command
+        # is dispatched. The dispatch itself — session lookup, the send-lock
+        # wait (the WebSocket is shared by every command to the node), and
+        # the send — can cross the budget's wall on a near-expiry call,
+        # handing the worker a command it starts generating one read before
+        # we tear it down. So the wall is enforced before the session is even
+        # fetched, and again once the send lock is held, right before the
+        # bytes go out.
+        if deadline_at is not None and time.monotonic() >= deadline_at:
+            raise RetryDeadlineExceeded("stream execution passed its retry deadline")
         session = await self._get_active_session(provider_id, stale_after_seconds)
         cmd_id = str(uuid.uuid4())
         stream_queue: asyncio.Queue = asyncio.Queue()
@@ -1233,9 +1243,19 @@ class LogosNodeRuntimeRegistry:
         }
         try:
             async with session.send_lock:
+                # Re-check once the lock is held: a contended send_lock can
+                # hold us past the wall, and a command written past it would
+                # start a generation the caller has already stopped waiting
+                # for.
+                if deadline_at is not None and time.monotonic() >= deadline_at:
+                    raise RetryDeadlineExceeded("stream execution passed its retry deadline")
                 await session.websocket.send_json(message)
         except Exception as exc:  # noqa: BLE001
             session.pending_streams.pop(cmd_id, None)
+            if isinstance(exc, RetryDeadlineExceeded):
+                # A spent deadline is not a send failure — keep its identity
+                # so the caller does not same-lane-retry it as a flaky worker.
+                raise
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
 
         # Whether the worker told us the stream is over. False means we are

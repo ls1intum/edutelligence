@@ -2317,13 +2317,26 @@ async def _streaming_response(
                     # as pre-token: only metadata was held back, nothing was
                     # committed.
                     if attempt < attempts - 1 and not isinstance(e, (UpstreamStreamError, RetryDeadlineExceeded)):
+                        # The backoff is fixed, but the request's deadline is
+                        # absolute: a failure just before deadline_at must not
+                        # sleep the full backoff across the wall, or the next
+                        # open would hand the worker another command after the
+                        # budget was spent. Clamp the sleep to the time left
+                        # and stop when none is left — re-pulling the lane can
+                        # only spend time that no longer exists.
+                        backoff = _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S
+                        if retry_budget is not None:
+                            remaining = retry_budget.remaining_s()
+                            if remaining <= 0:
+                                return None, None, e
+                            backoff = min(backoff, remaining)
                         logger.warning(
                             "logosnode pre-token stream failure (attempt %d/%d), retrying: %s",
                             attempt + 1,
                             attempts,
                             e,
                         )
-                        await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
+                        await asyncio.sleep(backoff)
                         continue
                     return None, None, e
 

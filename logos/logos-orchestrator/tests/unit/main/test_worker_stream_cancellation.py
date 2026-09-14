@@ -206,6 +206,11 @@ async def test_cancellation_clears_the_pending_stream_entry():
 
 @pytest.mark.asyncio
 async def test_a_spent_deadline_fails_the_stream_before_its_first_chunk():
+    """The wall is enforced before the command is even dispatched: with the
+    budget already spent, the stream fails before its first chunk and not a
+    single byte of the command goes on the wire — dispatching first and
+    checking one read later would hand the worker a generation that starts
+    one read before we tear it down."""
     import time
 
     from logos.errors import RetryDeadlineExceeded
@@ -216,13 +221,15 @@ async def test_a_spent_deadline_fails_the_stream_before_its_first_chunk():
         "infer_stream",
         {"lane_id": "lane-a"},
         timeout_seconds=30,
-        deadline_at=time.monotonic() - 1.0,  # spent before the first read
+        deadline_at=time.monotonic() - 1.0,  # spent before dispatch
     )
-    consumer = asyncio.ensure_future(stream.__anext__())
-    await asyncio.wait_for(websocket.stream_command_sent.wait(), timeout=1)
     with pytest.raises(RetryDeadlineExceeded):
-        await asyncio.wait_for(consumer, timeout=1)
+        await asyncio.wait_for(stream.__anext__(), timeout=1)
     await _drain_pending_tasks()
+
+    assert not any(
+        m.get("action") == "infer_stream" for m in websocket.sent
+    ), "the command reached the worker after its deadline"
 
 
 @pytest.mark.asyncio
@@ -318,6 +325,43 @@ async def test_an_idle_read_with_the_deadline_ahead_still_reports_the_worker_off
     with pytest.raises(LogosNodeOfflineError):
         await asyncio.wait_for(consumer, timeout=5)
     await _drain_pending_tasks()
+
+
+@pytest.mark.asyncio
+async def test_a_send_lock_wait_past_the_deadline_is_not_sent():
+    """The WebSocket is shared by every command to the node, so a contended
+    send lock can hold the dispatch past the budget's wall. The re-check must
+    run once the lock is held, right before the bytes go out — a command
+    written past the deadline would start a generation the caller has already
+    stopped waiting for."""
+    import time
+
+    from logos.errors import RetryDeadlineExceeded
+
+    registry, websocket = _registry_with_session()
+    session = registry._sessions[PROVIDER_ID]
+    # A concurrent command holds the send lock while the wall passes: the
+    # dispatch parks on it, and the only question is what happens once it is
+    # held again.
+    async with session.send_lock:
+        stream = registry.send_stream_command(
+            PROVIDER_ID,
+            "infer_stream",
+            {"lane_id": "lane-a"},
+            timeout_seconds=30,
+            deadline_at=time.monotonic() + 0.3,
+        )
+        consumer = asyncio.ensure_future(stream.__anext__())
+        # Let the dispatch park on the lock and the wall pass while it waits.
+        await asyncio.sleep(0.35)
+
+    with pytest.raises(RetryDeadlineExceeded):
+        await asyncio.wait_for(consumer, timeout=2)
+    await _drain_pending_tasks()
+
+    assert not any(
+        m.get("action") == "infer_stream" for m in websocket.sent
+    ), "the command was dispatched after its deadline"
 
 
 # ---------------------------------------------------------------------------
