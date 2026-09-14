@@ -286,7 +286,9 @@ if command -v docker >/dev/null 2>&1 && [ -n "$(docker images -q "$IMAGE" 2>/dev
     log "Removing docker image $IMAGE"
     docker images --format '{{.Repository}}:{{.Tag}}' \
         | grep -E "^$(printf '%s' "$IMAGE" | sed 's/[].[^$\\*/]/\\&/g'):" \
-        | xargs -r -n1 docker rmi >/dev/null 2>&1 || true
+        | xargs -n1 docker rmi >/dev/null 2>&1 || true
+    # No -r: BSD xargs does not run the command on empty input anyway, and
+    # the flag is a GNU extension this script has no reason to depend on.
 fi
 
 # ── 3. Power settings ────────────────────────────────────────────────────────

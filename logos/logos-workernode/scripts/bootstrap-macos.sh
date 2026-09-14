@@ -386,8 +386,14 @@ if [ "$POWER_SETTINGS" -eq 1 ]; then
                 # uninstaller must only reset settings it can prove it owns. An
                 # operator or MDM policy that already disabled sleep is left alone
                 # precisely because no record of it is ever written.
-                printf 'disablesleep %s\n' \
-                    "$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2; found=1} END {if (!found) print 0}')"
+                # Print nothing when pmset gives no value. Substituting a 0
+                # would fabricate an ownership baseline: validation would pass,
+                # the settings would be changed, and the uninstaller would
+                # later "restore" a value that was never read from the machine.
+                # An absent line fails validation instead, which leaves the
+                # power settings untouched — the safe direction.
+                pmset -g 2>/dev/null \
+                    | awk '/SleepDisabled/ { print "disablesleep", $2 }'
                 pmset -g custom 2>/dev/null \
                     | sed -n '/AC Power/,$p' \
                     | awk '$1 ~ /^(sleep|displaysleep|disksleep|standby|autopoweroff|powernap)$/ { print $1, $2 }'
