@@ -4083,6 +4083,72 @@ class TestReviewReplyDelivery:
         assert recorded["re_requests"] == ["claudia"]
         assert recorded["attempts"] == [(31, False), (31, True)]
 
+    async def test_a_retry_without_a_summary_is_not_no_answer(self, monkeypatch, tmp_path):
+        # Every answer is a per-comment file; there is no reply.md. The
+        # first pass gets them all out and then dies on the re-request. The
+        # second must resume — a retry that finds nothing new to post is
+        # not an answerless session, and restarting one would re-answer a
+        # review that is already answered.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "replies" / "102.md").write_text("two")
+        calls = {"n": 0}
+
+        async def flaky_request(_number, logins):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("rate limited")
+            recorded["re_requests"].extend(logins)
+
+        monkeypatch.setattr(sessions.github, "request_pull_review", flaky_request)
+        taken_up: list = []
+
+        async def take_up_again(_self, session):
+            taken_up.append(session["id"])
+            return 99
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        assert recorded["threads"] == [(772, 101, "one"), (772, 102, "two")]
+        assert recorded["summaries"] == []
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, False), (31, True)]
+        assert taken_up == []
+
+    async def test_a_refused_resolution_leaves_the_thread_open_but_delivers(self, monkeypatch, tmp_path):
+        # GitHub can answer a resolution and still refuse it — the thread is
+        # gone, or the token may not act on it. The thread stays open for a
+        # person and is recorded as dealt with; the re-requested review does
+        # not wait on a thread that will never resolve.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+
+        async def refused(_thread_ids):
+            raise sessions.github.GitHubError("could not resolve: not found")
+
+        monkeypatch.setattr(sessions.github, "resolve_review_threads", refused)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [(772, 101, "one")]
+        assert recorded["resolved"] == []
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, True)]
+        state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
+        assert state["resolved_threads"] == ["PRRT_1"]
+
     async def test_a_review_row_without_a_reference_posts_the_summary_only(self, monkeypatch, tmp_path):
         from app import sessions
 

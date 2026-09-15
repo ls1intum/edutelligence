@@ -2397,7 +2397,11 @@ class SessionManager:
         summary = await self._read_answer(session_id)
         if summary is None:
             return
-        if not per_comment and not summary and not state["summary_posted"]:
+        # "Nothing was written" means nothing new *and* nothing delivered in
+        # an earlier pass: a retry that resumes after every per-comment
+        # answer is in its thread is not an answerless session, whatever
+        # happens to the summary file.
+        if not per_comment and not summary and not state["summary_posted"] and not state["replied"]:
             await self._no_answer(session_id, session)
             return
 
@@ -2444,7 +2448,11 @@ class SessionManager:
         A thread a person already resolved stays as they left it, and a
         comment that is a reply inside somebody else's thread has no thread
         of its own to resolve — it is not in the map, and its thread is
-        somebody else's to close.
+        somebody else's to close. A thread GitHub refuses outright (it is
+        gone, or the token may not act on it) is recorded and left open: it
+        will not resolve on a retry, and the re-requested review must not
+        wait on it. A transport-level failure still raises, and the sweep
+        is tried again.
         """
         handled = set(state["resolved_threads"])
         threads = await github.review_thread_map(number)
@@ -2457,7 +2465,14 @@ class SessionManager:
                 state["resolved_threads"].append(thread_id)
                 self._write_review_reply_state(state_path, state)
                 continue
-            await github.resolve_review_threads([thread_id])
+            try:
+                await github.resolve_review_threads([thread_id])
+            except github.GitHubError as exc:
+                if exc.status is not None:
+                    raise
+                logger.warning(
+                    "could not resolve the thread of comment %s (left open for a person): %s", comment_id, exc
+                )
             state["resolved_threads"].append(thread_id)
             self._write_review_reply_state(state_path, state)
             logger.info("session %s resolved the thread of comment %s", session_id, comment_id)

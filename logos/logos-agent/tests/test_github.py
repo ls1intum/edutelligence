@@ -1198,22 +1198,31 @@ class TestReviewRepliesAndReRequests:
         assert await github.review_thread_map(772) == {}
 
     async def test_resolving_threads_runs_one_mutation_per_thread(self, monkeypatch):
+        # The exact request, pinned to the schema: the mutation takes the id
+        # wrapped in `input` and answers with the thread it resolved. Any
+        # other shape is a validation error GitHub refuses before doing
+        # anything — which is what a first draft of this was.
         calls: list = []
         fake_graphql_client(
             monkeypatch,
             calls,
             [
-                (200, {"data": {"resolveReviewThread": {"threadId": "PRRT_1"}}}),
-                (200, {"data": {"resolveReviewThread": {"threadId": "PRRT_2"}}}),
+                (200, {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_1"}}}}),
+                (200, {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_2"}}}}),
             ],
         )
 
         await github.resolve_review_threads(["PRRT_1", "PRRT_2"])
 
         assert len(calls) == 2
-        assert all("resolveReviewThread" in c["json"]["query"] for c in calls)
-        assert calls[0]["json"]["variables"] == {"threadId": "PRRT_1"}
-        assert calls[1]["json"]["variables"] == {"threadId": "PRRT_2"}
+        for call, thread_id in zip(calls, ("PRRT_1", "PRRT_2")):
+            assert call["json"] == {
+                "query": (
+                    "mutation ResolveReviewThread($threadId: ID!) "
+                    "{ resolveReviewThread(input: {threadId: $threadId}) { thread { id } } }"
+                ),
+                "variables": {"threadId": thread_id},
+            }
 
     async def test_a_declined_resolution_does_not_stop_the_rest(self, monkeypatch):
         # GitHub answers a null when it will not resolve what it was given;

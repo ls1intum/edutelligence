@@ -710,8 +710,11 @@ async def resolve_review_threads(thread_ids: list[str]) -> None:
     for thread_id in thread_ids:
         if not thread_id:
             continue
+        # The mutation takes its id wrapped — `input: {threadId}` — and
+        # answers with the thread it resolved, not the id it was given.
         data = await _graphql(
-            "mutation ResolveReviewThread($threadId: ID!) { resolveReviewThread(threadId: $threadId) { threadId } }",
+            "mutation ResolveReviewThread($threadId: ID!) "
+            "{ resolveReviewThread(input: {threadId: $threadId}) { thread { id } } }",
             {"threadId": thread_id},
         )
         if data.get("resolveReviewThread") is None:
