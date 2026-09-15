@@ -31,6 +31,77 @@ environment vars/secrets except the SSH/registry plumbing) to the node and runs
 `/opt/logos`; worker nodes use `logos/logos-workernode/docker-compose.yml` under
 `/opt/logos-workernode`.
 
+## Security & rate limiting
+
+The orchestrator's API surface is tiered:
+
+- **User-facing** (`/v1`, `/openai`, `/jobs`) — any valid Logos API key.
+- **Cluster-internal** (`/logosdb/scheduler_state`, `/internal/*`) — the shared
+  `LOGOS_INTERNAL_SECRET`, never a user key. `/logosdb/scheduler_state` used
+  to accept any Logos API key and was publicly routed; it is now secret-gated
+  and only reachable from inside the stack (the agent runner polls it).
+- **Operator** (`/logosdb/providers/logosnode/*`) — the root key, TLS only.
+- **Monitoring** (`/metrics`) — `PROMETHEUS_API_KEY`; denies all when unset.
+
+The API docs (`/docs`, `/redoc`, `/openapi.json`) publish the full endpoint map
+and are **off by default**; set `LOGOS_DOCS_ENABLED=1` in `.env` only where
+needed (the dev compose enables it).
+
+### In-stack rate limits (Traefik)
+
+Both compose files attach generous Traefik `rateLimit` middleware to the
+orchestrator routers (429 when exceeded):
+
+| Middleware | Routers | Default (avg rps / burst) |
+|---|---|---|
+| `rl-model` | `/v1`, `/openai`, `/api` | 100 / 200 |
+| `rl-jobs` | `/jobs` | 50 / 100 |
+| `rl-admin` | `/health`, `/docs`, `/metrics`, `/logosdb/providers/logosnode` | 20 / 40 |
+
+Tune per deployment via `.env`: `LOGOS_RATE_LIMIT_MODEL_AVG`,
+`LOGOS_RATE_LIMIT_MODEL_BURST`, `LOGOS_RATE_LIMIT_JOBS_AVG`,
+`LOGOS_RATE_LIMIT_JOBS_BURST`, `LOGOS_RATE_LIMIT_ADMIN_AVG`,
+`LOGOS_RATE_LIMIT_ADMIN_BURST`. Note Traefik counts requests **per service,
+not per client IP** — this layer stops floods, it does not isolate one
+abusive client. The dev compose uses higher defaults (500/1000, 250/500,
+100/200) so local benchmarking is not throttled.
+
+Per-API-key request budgets on the model paths are enforced inside the
+orchestrator (per key's configured `cloud_rl`/`local_rl`); the in-stack limits
+are the backstop for unauthenticated or leaked-key abuse.
+
+### Per-IP limits in the nginx in front
+
+The stack sits behind the chair's nginx ingress, which is the right place for
+per-client limiting (Traefik cannot do it natively). Recommended snippet for
+the server/location that proxies to a Logos core node:
+
+```nginx
+# Per-client flood protection for the Logos API. Generous on purpose:
+# real clients (coding assistants, benchmark drivers) stay far below these
+# rates; this is a brake, not a budget.
+limit_req_zone $binary_remote_addr zone=logos_api:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=logos_burst:10m rate=5r/s;
+
+server {
+    # ...
+    location / {
+        proxy_pass http://logos-core:443;
+        # Model API: one assistant session bursts at most a few requests per
+        # second at startup; 30 r/s per IP with a small burst headroom.
+        limit_req zone=logos_api burst=60 nodelay;
+    }
+    # Control-plane paths (jobs, admin, docs, metrics) are hammered far less.
+    location ~ ^/(jobs|api|docs|metrics|health)(/|$) {
+        proxy_pass http://logos-core:443;
+        limit_req zone=logos_burst burst=20 nodelay;
+    }
+}
+```
+
+Adjust the zones/rates to the deployment's traffic; `limit_req_status 429;`
+keeps the status code aligned with the in-stack limits.
+
 ## Apple Silicon (MLX) worker nodes
 
 MLX nodes do not follow the compose-based deploy path above, because Metal

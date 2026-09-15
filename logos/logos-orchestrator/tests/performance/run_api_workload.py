@@ -31,6 +31,7 @@ import asyncio
 import csv
 import json
 import math
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -292,6 +293,7 @@ async def collect_runtime_samples(
     client: httpx.AsyncClient,
     base_url: str,
     logos_key: str,
+    internal_secret: str,
     stop_event: asyncio.Event,
     interval_s: float,
 ) -> list[dict]:
@@ -301,11 +303,13 @@ async def collect_runtime_samples(
     async def capture_once() -> None:
         sample: dict[str, object] = {"captured_at": isoformat_utc(datetime.now(timezone.utc))}
         try:
+            # scheduler_state is gated on the shared internal secret, not a
+            # user API key — the sample carries cluster internals.
             scheduler_payload = await _request_json(
                 client,
                 "GET",
                 f"{base_url.rstrip('/')}/logosdb/scheduler_state",
-                headers=headers,
+                headers={"Authorization": f"Bearer {internal_secret}"},
             )
             sample["scheduler_state"] = scheduler_payload
             provider_ids: list[int] = []
@@ -375,13 +379,10 @@ def fetch_runtime_artifacts(
     end_ts: datetime,
     runtime_samples: list[dict],
 ) -> RuntimeArtifacts:
-    vram_day = start_ts.astimezone(timezone.utc).date().isoformat()
-    provider_vram = _request_json_sync(
-        "POST",
-        f"{base_url.rstrip('/')}/logosdb/get_ollama_vram_stats",
-        logos_key=logos_key,
-        json_body={"day": vram_day},
-    )
+    # The orchestrator's /logosdb/get_ollama_vram_stats endpoint was removed
+    # (the webservice serves the dashboard with proper auth); VRAM history is
+    # covered by the per-sample provider_status payloads instead.
+    provider_vram = None
     request_log_stats = _request_json_sync(
         "POST",
         f"{base_url.rstrip('/')}/logosdb/request_log_stats",
@@ -1397,6 +1398,7 @@ async def run_workload(
     workload: Sequence[WorkloadEntry],
     logos_key: str,
     base_url: str,
+    internal_secret: str,
     request_timeout_s: float,
 ) -> tuple[List[RequestResult], list[dict]]:
     async def report_progress(
@@ -1427,6 +1429,7 @@ async def run_workload(
                 client,
                 base_url,
                 logos_key,
+                internal_secret,
                 stop_event,
                 interval_s=1.0,
             )
@@ -1480,6 +1483,11 @@ def wait_for_log_records(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay workload against Logos API.")
     parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
+    parser.add_argument(
+        "--internal-secret",
+        default=os.environ.get("LOGOS_INTERNAL_SECRET", ""),
+        help="Shared orchestrator internal secret (gates /logosdb/scheduler_state).",
+    )
     parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
     parser.add_argument(
         "--api-base",
@@ -1524,7 +1532,7 @@ def main() -> None:
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
         results, runtime_samples = asyncio.run(
-            run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s)
+            run_workload(workload, args.logos_key, args.api_base, args.internal_secret, args.request_timeout_s)
         )
         if local_mode:
             logs = wait_for_log_records(

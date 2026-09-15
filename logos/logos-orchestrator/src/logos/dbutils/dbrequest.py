@@ -1,26 +1,10 @@
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class LogosKeyModel(BaseModel):
     logos_key: str
-
-
-class UpdateProviderSdiConfigRequest(LogosKeyModel):
-    provider_id: int
-    ollama_admin_url: str | None = None
-    total_vram_mb: int | None = None
-    parallel_capacity: int | None = None
-    keep_alive_seconds: int | None = None
-    max_loaded_models: int | None = None
-
-
-class ConnectModelProviderRequest(LogosKeyModel):
-    model_id: int
-    provider_id: int
-    api_key: Optional[str] = None
-    endpoint: Optional[str] = None
 
 
 class LogosNodeAuthRequest(BaseModel):

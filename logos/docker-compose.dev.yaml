@@ -86,6 +86,7 @@ services:
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
+      LOGOS_DOCS_ENABLED: "true"
     expose:
       - "8080"
     ports:
@@ -93,57 +94,68 @@ services:
     labels:
       - "traefik.enable=true"
 
+      # ── Rate limits (defense in depth, mirroring the prod compose) ──
+      # Same scheme as production with more headroom so local benchmarking
+      # and bursty dev traffic are not throttled; tighten to the prod
+      # defaults to rehearse the 429 behaviour.
+      - "traefik.http.middlewares.rl-model.ratelimit.average=${LOGOS_RATE_LIMIT_MODEL_AVG:-500}"
+      - "traefik.http.middlewares.rl-model.ratelimit.burst=${LOGOS_RATE_LIMIT_MODEL_BURST:-1000}"
+      - "traefik.http.middlewares.rl-jobs.ratelimit.average=${LOGOS_RATE_LIMIT_JOBS_AVG:-250}"
+      - "traefik.http.middlewares.rl-jobs.ratelimit.burst=${LOGOS_RATE_LIMIT_JOBS_BURST:-500}"
+      - "traefik.http.middlewares.rl-admin.ratelimit.average=${LOGOS_RATE_LIMIT_ADMIN_AVG:-100}"
+      - "traefik.http.middlewares.rl-admin.ratelimit.burst=${LOGOS_RATE_LIMIT_ADMIN_BURST:-200}"
+
       # === Routing: /v1 ===
       - "traefik.http.routers.logos-orchestrator-v1.rule=PathPrefix(`/v1`)"
       - "traefik.http.routers.logos-orchestrator-v1.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-v1.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-v1.middlewares=rl-model"
       - "traefik.http.routers.logos-orchestrator-v1.priority=100"
 
       # === Routing: /openai ===
       - "traefik.http.routers.logos-orchestrator-openai.rule=PathPrefix(`/openai`)"
       - "traefik.http.routers.logos-orchestrator-openai.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-openai.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-openai.middlewares=rl-model"
       - "traefik.http.routers.logos-orchestrator-openai.priority=100"
 
       # === Routing: /jobs ===
       - "traefik.http.routers.logos-orchestrator-jobs.rule=PathPrefix(`/jobs`)"
       - "traefik.http.routers.logos-orchestrator-jobs.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-jobs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-jobs.middlewares=rl-jobs"
       - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
 
       # === Routing: /api (UI-internal endpoints; backend strips /api prefix) ===
       - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
       - "traefik.http.routers.logos-orchestrator-api.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-api.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api.middlewares=rl-model"
       - "traefik.http.routers.logos-orchestrator-api.priority=100"
 
       # === Routing: /docs ===
       - "traefik.http.routers.logos-orchestrator-docs.rule=PathPrefix(`/docs`) || PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.logos-orchestrator-docs.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-docs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-docs.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-docs.priority=100"
 
       # === Routing: /metrics (Prometheus) ===
       - "traefik.http.routers.logos-orchestrator-metrics.rule=PathPrefix(`/metrics`)"
       - "traefik.http.routers.logos-orchestrator-metrics.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-metrics.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-metrics.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-metrics.priority=100"
 
       # === Routing: /ws (WebSocket) ===
       - "traefik.http.routers.logos-orchestrator-ws.rule=PathPrefix(`/ws`)"
       - "traefik.http.routers.logos-orchestrator-ws.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-ws.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-ws.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-ws.priority=100"
 
       # Service-Port
       - "traefik.http.services.logos-orchestrator.loadbalancer.server.port=8080"
-
-      # === Routing: /api/logosdb/scheduler_state ===
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.entrypoints=web8080"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.middlewares=strip-api"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.priority=201"
 
       # === Routing: /api/logosdb/providers/logosnode (UI → worker admin actions) ===
       # Must outrank the webservice's /api/logosdb catch-all (priority 200):
