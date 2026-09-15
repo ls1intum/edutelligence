@@ -4752,6 +4752,35 @@ class TestReviewReplyDelivery:
         ]
         assert recorded["resolved"] == ["PRRT_2"]
 
+    async def test_one_thread_with_two_answers_is_resolved_once(self, monkeypatch, tmp_path):
+        # Two answered comments in one thread: the map names the thread
+        # for both, and the sweep resolves it once — a repeated mutation
+        # is the rate budget spent twice, and a second call reporting an
+        # unclassified error would stop the sweep before the re-request.
+        from app import sessions
+
+        recorded = self.install(
+            monkeypatch,
+            tmp_path,
+            self.REVIEW_ROW,
+            comments=[{"id": 101, "body": "one"}, {"id": 102, "body": "two"}],
+            threads={
+                101: {"thread": "PRRT_1", "resolved": False},
+                102: {"thread": "PRRT_1", "resolved": False},
+            },
+        )
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "replies" / "102.md").write_text("two")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["resolved"] == ["PRRT_1"]
+        assert recorded["re_requests"] == ["claudia"]
+        state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
+        assert state["resolved_threads"] == ["PRRT_1"]
+
     async def test_a_review_with_no_inline_comments_is_answered_as_one(self, monkeypatch, tmp_path):
         from app import sessions
 

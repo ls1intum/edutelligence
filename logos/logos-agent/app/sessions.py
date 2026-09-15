@@ -2677,6 +2677,10 @@ class SessionManager:
                 continue
             if info.get("resolved"):
                 state["resolved_threads"].append(thread_id)
+                # Every comment of the thread maps to its id: the one
+                # already handled here must not be handled again by the
+                # next comment of the same thread.
+                handled.add(thread_id)
                 self._write_review_reply_state(state_path, state)
                 continue
             try:
@@ -2691,6 +2695,10 @@ class SessionManager:
                     "could not resolve the thread of comment %s (left open for a person): %s", comment_id, exc
                 )
             state["resolved_threads"].append(thread_id)
+            # The mutation went out (or the refusal was recorded) for
+            # this thread: the next comment that maps to it is a
+            # duplicate, not a second resolution.
+            handled.add(thread_id)
             self._write_review_reply_state(state_path, state)
             logger.info("session %s resolved the thread of comment %s", session_id, comment_id)
 
