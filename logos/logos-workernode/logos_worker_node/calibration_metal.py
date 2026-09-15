@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 _METAL_SETTLE_S = 2.0  # let the allocator settle before the final read
 
+# Matches VllmConfig.mm_processor_cache_gb's own default (models.py) — vLLM's
+# built-in default, applied when the plan has no per-model override. Every
+# production lane (CUDA and Metal) passes --mm-processor-cache-gb
+# unconditionally, so calibration must too: the reserved GB comes out of the
+# same working-set budget the probe measures a residency against.
+_DEFAULT_MM_PROCESSOR_CACHE_GB = 4.0
+
 # Env vars a stale worker/CUDA environment could leak into the Metal
 # subprocess — meaningless on this backend and confusing in a crash dump
 # (mirrors MetalVllmProcessHandle._build_process_env).
@@ -61,9 +68,17 @@ def _build_metal_calibration_cmd(
         str(port),
         "--dtype",
         str(plan.get("dtype") or "auto"),
-        "--max-model-len",
-        "auto",
     ]
+    # Same precedence as the CUDA calibration path (calibration.py): an
+    # explicit plan override wins, else let vLLM size the window itself.
+    # A model whose full context does not fit (config.example.mlx.yml pins
+    # max_model_len well below the reported window for exactly this reason)
+    # would otherwise fail to start under "auto".
+    max_model_len = plan.get("max_model_len")
+    if max_model_len:
+        cmd.extend(["--max-model-len", str(int(max_model_len))])
+    else:
+        cmd.extend(["--max-model-len", "auto"])
     quantization = plan.get("quantization")
     if quantization:
         cmd.extend(["--quantization", str(quantization)])
@@ -84,6 +99,15 @@ def _build_metal_calibration_cmd(
     max_num_seqs = plan.get("max_num_seqs")
     if max_num_seqs:
         cmd.extend(["--max-num-seqs", str(int(max_num_seqs))])
+    # Unconditional, matching every production lane (metal_process.py,
+    # vllm_process.py): a model configured with mm_processor_cache_gb: 0
+    # (config.example.mlx.yml) frees the 4 GB the default reserves, so
+    # measuring under the default instead would record a residency the
+    # served lane never actually has room for.
+    mm_processor_cache_gb = plan.get("mm_processor_cache_gb")
+    if mm_processor_cache_gb is None:
+        mm_processor_cache_gb = _DEFAULT_MM_PROCESSOR_CACHE_GB
+    cmd.extend(["--mm-processor-cache-gb", str(mm_processor_cache_gb)])
     extra_args = plan.get("extra_args") or []
     cmd.extend(str(a) for a in extra_args)
     return cmd

@@ -98,6 +98,34 @@ def test_build_cmd_forwards_max_num_seqs():
     assert cmd[idx + 1] == "64"
 
 
+def test_build_cmd_forwards_explicit_max_model_len():
+    """A model whose full context does not fit the node (e.g.
+    config.example.mlx.yml's max_model_len: 32768 pin) must probe at that
+    length, not "auto" — production starts the lane at the pinned length
+    too, so a wider "auto" measurement would not match what actually runs."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model", "max_model_len": 32768}, ["vllm"], "127.0.0.1", 11499)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "32768"
+
+
+def test_build_cmd_mm_processor_cache_gb_defaults_to_four():
+    """Unconfigured plans must still measure vLLM's own 4 GB default —
+    production (metal_process.py/vllm_process.py) always passes the flag."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
+    idx = cmd.index("--mm-processor-cache-gb")
+    assert cmd[idx + 1] == "4.0"
+
+
+def test_build_cmd_forwards_explicit_mm_processor_cache_gb_zero():
+    """0 must be forwarded, not treated as falsy/absent — a model pinning
+    mm_processor_cache_gb: 0 (config.example.mlx.yml) frees the 4 GB
+    default reserves, and calibrating under the default would over-reserve
+    versus what the served lane actually needs."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model", "mm_processor_cache_gb": 0}, ["vllm"], "127.0.0.1", 11499)
+    idx = cmd.index("--mm-processor-cache-gb")
+    assert cmd[idx + 1] == "0"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # _build_metal_calibration_env
 # ═══════════════════════════════════════════════════════════════════════
