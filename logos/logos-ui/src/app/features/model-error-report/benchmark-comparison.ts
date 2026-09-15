@@ -5,6 +5,8 @@ import { benchmarkConfigurationItems, servingConfigurationItems } from './benchm
 import { canCompare, comparisonSettings, isolatedRuns, parameterValue } from './benchmark-isolation';
 
 export type ComparisonMetric = 'throughput' | 'ttft' | 'ttlt';
+type RunSortKey = 'id' | 'recorded_at' | 'tensor_parallel_size' | 'max_concurrency' | 'sample_size' | ComparisonMetric;
+
 
 export const COMPARISON_METRICS = [
   { key: 'throughput', label: 'Output throughput', unit: 'tok/s', hint: 'Higher is better' },
@@ -35,6 +37,22 @@ export class BenchmarkComparison {
   readonly runs = input.required<readonly ModelProviderBenchmark[]>();
   readonly metrics = COMPARISON_METRICS;
   readonly metric = signal<ComparisonMetric>('throughput');
+  readonly columns: readonly { key: RunSortKey; label: string; unit?: string }[] = [
+    { key: 'id', label: 'Run' }, { key: 'recorded_at', label: 'Date' },
+    { key: 'tensor_parallel_size', label: 'TP' }, { key: 'max_concurrency', label: 'Concurrency' },
+    { key: 'sample_size', label: 'Requests' },
+    { key: 'throughput', label: 'Output', unit: 'tok/s' },
+    { key: 'ttft', label: 'Mean TTFT', unit: 's' }, { key: 'ttlt', label: 'Mean TTLT', unit: 's' },
+  ];
+  readonly sortKey = signal<RunSortKey>('recorded_at');
+  readonly sortDirection = signal<'ascending' | 'descending'>('descending');
+  readonly sortedRuns = computed(() => [...this.selected()].sort((a, b) => {
+    const left = this.sortValue(a, this.sortKey());
+    const right = this.sortValue(b, this.sortKey());
+    // Missing measurements stay last in either direction.
+    if (left === null || right === null) return left === right ? b.id - a.id : left === null ? 1 : -1;
+    return (left - right) * (this.sortDirection() === 'ascending' ? 1 : -1) || b.id - a.id;
+  }));
   readonly baselineId = signal<number | null>(null);
   readonly orderedRuns = computed(() => [...this.runs()].sort((a, b) =>
     Date.parse(b.recorded_at) - Date.parse(a.recorded_at) || b.id - a.id));
@@ -54,7 +72,10 @@ export class BenchmarkComparison {
     ] as const).map(parameter => {
       const runs = isolatedRuns(this.orderedRuns(), baseline, parameter.key);
       const values = [...new Set(runs.map(run => parameterValue(run, parameter.key)!))];
-      return { ...parameter, groups: values.map(value => ({ parameter: value,
+      const maxRepeats = Math.max(1, ...values.map(value => runs.filter(run => parameterValue(run, parameter.key) === value).length));
+      const groupWidth = Math.max(160, maxRepeats * 64 + (maxRepeats - 1) * 8 + 40);
+      return { ...parameter, minPlotWidth: values.length * groupWidth + 64,
+        plotWidth: Math.max(520, values.length * Math.max(200, groupWidth) + 64), groups: values.map(value => ({ parameter: value,
         rows: runs.filter(run => parameterValue(run, parameter.key) === value)
           .map(run => ({ run, value: comparisonValue(run, this.metric()) })),
       })) };
@@ -70,6 +91,31 @@ export class BenchmarkComparison {
     return Math.ceil(max / step) * step;
   });
 
+  sortBy(key: RunSortKey): void {
+    this.sortDirection.set(this.sortKey() === key && this.sortDirection() === 'ascending' ? 'descending' : 'ascending');
+    this.sortKey.set(key);
+  }
+
+  sortValue(run: ModelProviderBenchmark, key: RunSortKey): number | null {
+    if (key === 'id' || key === 'sample_size') return run[key];
+    if (key === 'recorded_at') {
+      const timestamp = Date.parse(run.recorded_at);
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+    if (key === 'tensor_parallel_size' || key === 'max_concurrency') return parameterValue(run, key);
+    return comparisonValue(run, key);
+  }
+
+  sortLabel(key: RunSortKey): string {
+    const direction = this.sortKey() === key && this.sortDirection() === 'ascending' ? 'descending' : 'ascending';
+    return `Sort ${this.columns.find(column => column.key === key)!.label} ${direction}`;
+  }
+
+  chartValue(value: number | null): string {
+    return value === null || (value > 0 && value < 0.01) ? this.format(value)
+      : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
   format(value: number | null): string {
     if (value === null) return '—';
     if (value > 0 && value < 0.001) return '<0.001';
@@ -78,14 +124,6 @@ export class BenchmarkComparison {
 
   value(run: ModelProviderBenchmark, metric: ComparisonMetric): string {
     return this.format(comparisonValue(run, metric));
-  }
-
-  datasetDetails(run: ModelProviderBenchmark): string {
-    const items = benchmarkConfigurationItems(run);
-    return ['subset', 'split', 'max_output_tokens'].map(key => {
-      const item = items.find(item => item.key === key)!;
-      return key === 'max_output_tokens' ? `Max output tokens: ${item.value}` : item.value;
-    }).join(' · ');
   }
 
   configuration(run: ModelProviderBenchmark): string {

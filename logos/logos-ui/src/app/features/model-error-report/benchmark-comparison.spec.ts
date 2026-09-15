@@ -172,6 +172,49 @@ describe('Benchmark comparison', () => {
     expect(fixture.componentInstance.baseline()).toBeNull();
   });
 
+  it('sorts the table newest first independently of chart grouping', () => {
+    expect(fixture.componentInstance.sortedRuns().map(run => run.id)).toEqual([5, 3, 2, 1]);
+    expect(fixture.nativeElement.querySelector('th[aria-sort="descending"]').textContent).toContain('Date');
+  });
+
+  it('toggles numeric metric sorting and keeps missing measurements last in both directions', async () => {
+    const benchmarks = runs();
+    benchmarks[0].metrics.output_tokens_per_second!.successful.mean = 9;
+    benchmarks[1].metrics.output_tokens_per_second!.successful.mean = 100;
+    benchmarks[2].metrics.output_tokens_per_second = undefined;
+    benchmarks[4].metrics.output_tokens_per_second!.successful.mean = 20;
+    fixture.componentRef.setInput('runs', benchmarks);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    const button: HTMLButtonElement = fixture.nativeElement.querySelector('button[aria-label="Sort Output ascending"]');
+    button.click();
+    await fixture.whenStable();
+    expect(component.sortedRuns().map(run => run.id)).toEqual([1, 5, 2, 3]);
+    expect(button.closest('th')!.getAttribute('aria-sort')).toBe('ascending');
+    button.click();
+    await fixture.whenStable();
+    expect(component.sortedRuns().map(run => run.id)).toEqual([2, 5, 1, 3]);
+    expect(button.closest('th')!.getAttribute('aria-sort')).toBe('descending');
+    expect(benchmarks.map(run => run.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(component.baseline()?.id).toBe(1);
+  });
+
+  it('sorts parameter columns numerically and preserves the chosen order on metric changes', () => {
+    const component = fixture.componentInstance;
+    component.sortBy('max_concurrency');
+    expect(component.sortedRuns().map(run => run.id)).toEqual([5, 2, 1, 3]);
+    component.sortBy('max_concurrency');
+    component.metric.set('ttft');
+    expect(component.sortedRuns().map(run => run.id)).toEqual([3, 2, 1, 5]);
+    component.sortBy('id');
+    expect(component.sortedRuns().map(run => run.id)).toEqual([1, 2, 3, 5]);
+  });
+
+  it('keeps explanations collapsed and gives each table column a sorting button', () => {
+    expect(fixture.nativeElement.querySelector('.comparison-details').open).toBe(false);
+    expect(fixture.nativeElement.querySelectorAll('thead button')).toHaveLength(fixture.componentInstance.columns.length);
+  });
+
   it('uses a common zero-based finite scale and shows missing values explicitly', () => {
     const component = fixture.componentInstance;
     expect(component.chartMax()).toBeGreaterThanOrEqual(42);

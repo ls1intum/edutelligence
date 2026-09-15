@@ -1,10 +1,7 @@
 <section class="comparison" aria-label="Benchmark parameter comparison">
   <header>
-    <div>
-      <h3>Compare benchmark parameters</h3>
-      <p>Change one parameter at a time. Both charts share the same metric and scale.</p>
-    </div>
-    <label class="metric-picker">Y-axis metric
+    <h3>Compare benchmark runs</h3>
+    <label class="metric-picker">Metric
       <select [value]="metric()" (change)="metric.set($any($event.target).value)">
         @for (item of metrics; track item.key) {
           <option [value]="item.key">{{ item.label }} ({{ item.unit }})</option>
@@ -14,37 +11,47 @@
   </header>
 
   @if (baseline(); as reference) {
-    <label class="baseline-picker">Reference run — defines the fixed settings
+    <label class="baseline-picker">Reference run
       <select [value]="reference.id" (change)="baselineId.set(+$any($event.target).value)">
         @for (run of eligibleRuns(); track run.id) {
           <option [value]="run.id" [selected]="run.id === reference.id">#{{ run.id }} · {{ run.provider_name }} · {{ run.dataset }} · {{ run.sample_size }} requests · {{ configuration(run) }}</option>
         }
       </select>
     </label>
-    <p class="baseline-summary"><strong>{{ reference.provider_name }} · {{ reference.dataset }}</strong>
-      · {{ baselineSettings()['subset'] }}/{{ baselineSettings()['split'] }} · {{ reference.sample_size }} requests
-      · max {{ baselineSettings()['max_output_tokens'] }} output tokens · seed {{ baselineSettings()['seed'] }}</p>
-    <p class="definitions">Only runs with matching recorded inputs and other settings are included.
-      {{ excludedCount() }} other runs excluded. Cache state and other traffic may still differ.</p>
+    <div class="comparison-context">
+      <p><strong>{{ reference.provider_name }} · {{ reference.dataset }}</strong>
+        · {{ baselineSettings()['subset'] }}/{{ baselineSettings()['split'] }} · {{ reference.sample_size }} requests
+        · max {{ baselineSettings()['max_output_tokens'] }} tokens</p>
+      <details class="comparison-details">
+        <summary>Comparison details</summary>
+        <p>Each bar is one run. Only the X-axis parameter changes; other recorded settings match the reference.
+          {{ excludedCount() }} runs excluded. Seed {{ baselineSettings()['seed'] }}. Cache state and other traffic may still differ.</p>
+        <p>TTFT: time to first token. TTLT: total response time (GuideLLM request latency).
+          Both are arithmetic means across successful requests. Output: GuideLLM’s aggregate output token rate. — means not captured.</p>
+      </details>
+    </div>
 
     <div class="charts">
       @for (chart of charts(); track chart.key) {
         <figure [attr.aria-label]="chart.label + ': ' + activeMetric().label + ' by parameter value'">
           <figcaption><strong>{{ chart.label }}</strong><span>{{ chart.fixed }}</span></figcaption>
-          <div class="axis-title">{{ activeMetric().label }} ({{ activeMetric().unit }}) · {{ activeMetric().hint }}</div>
+          <div class="axis-title">{{ activeMetric().label }} ({{ activeMetric().unit }})</div>
           <div class="plot-scroll" tabindex="0" role="region" [attr.aria-label]="chart.label + ' chart, scroll horizontally for all runs'">
-            <div class="plot">
-              <div class="y-axis" aria-hidden="true"><span>{{ format(chartMax()) }}</span><span>{{ format(chartMax() / 2) }}</span><span>0</span></div>
-              <div class="plot-groups">
+            <div class="plot" [style.min-width.px]="chart.minPlotWidth" [style.max-width.px]="chart.plotWidth">
+              <div class="y-axis" aria-hidden="true">
+                <span>{{ chartValue(chartMax()) }}</span><span>{{ chartValue(chartMax() / 2) }}</span><span>0</span>
+              </div>
+              <div class="plot-groups" [style.grid-template-columns]="'repeat(' + chart.groups.length + ', minmax(0, 1fr))'">
                 @for (group of chart.groups; track group.parameter) {
                   <div class="parameter-group">
                     <div class="bars">
                       @for (row of group.rows; track row.run.id) {
-                        <div class="bar-column" [attr.aria-label]="chart.label + ' ' + group.parameter + ', run ' + row.run.id + ': ' + (row.value === null ? 'Not captured' : format(row.value) + ' ' + activeMetric().unit)">
+                        <div class="bar-column" [attr.aria-label]="chart.label + ' ' + group.parameter + ', run ' + row.run.id + ': ' + (row.value === null ? 'Not captured' : format(row.value) + ' ' + activeMetric().unit)"
+                          [title]="'Run #' + row.run.id + ' · ' + format(row.value) + ' ' + activeMetric().unit">
                           <div class="bar-track" aria-hidden="true">
-                            <div class="chart-bar" [style.height.%]="(row.value ?? 0) / chartMax() * 100"><strong>{{ format(row.value) }}</strong></div>
+                            <div class="chart-bar" [style.height.%]="(row.value ?? 0) / chartMax() * 100"><strong>{{ chartValue(row.value) }}</strong></div>
                           </div>
-                          <small>#{{ row.run.id }}</small>
+                          <span class="run-label">#{{ row.run.id }}</span>
                         </div>
                       }
                     </div>
@@ -56,39 +63,41 @@
           </div>
           <div class="x-axis-title">{{ chart.label }}</div>
           @if (chart.groups.length < 2) {
-            <p class="comparison-note">A second {{ chart.label.toLowerCase() }} value with matching settings is needed to compare this parameter.</p>
+            <p class="comparison-note">No matching run with a different {{ chart.label.toLowerCase() }} value yet.</p>
           }
         </figure>
       }
     </div>
-    <p class="definitions">Each bar is one run. Repeated runs appear side by side under the same parameter value.</p>
+
     <div class="table-scroll" tabindex="0" role="region" aria-label="Benchmark comparison table, scroll horizontally for all columns">
       <table>
-        <caption>Matching runs · times in seconds · throughput in output tokens per second</caption>
+        <caption>Runs <span>{{ sortedRuns().length }}</span></caption>
         <thead><tr>
-          <th scope="col">Run / provider</th><th scope="col">Dataset</th><th scope="col">Requests</th><th scope="col">Configuration</th>
-          @for (item of metrics; track item.key) {
-            <th scope="col" class="numeric" [class.active-metric]="metric() === item.key">{{ item.label }}<small>{{ item.unit }}</small></th>
+          @for (column of columns; track column.key) {
+            <th scope="col" [class.numeric]="column.key !== 'recorded_at' && column.key !== 'id'"
+              [class.active-metric]="metric() === column.key"
+              [attr.aria-sort]="sortKey() === column.key ? sortDirection() : 'none'">
+              <button type="button" [attr.aria-label]="sortLabel(column.key)" (click)="sortBy(column.key)">
+                <span>{{ column.label }}@if (column.unit) {<span class="unit"> ({{ column.unit }})</span>}</span>
+                <span class="sort-indicator" aria-hidden="true">{{ sortKey() === column.key ? (sortDirection() === 'ascending' ? '↑' : '↓') : '↕' }}</span>
+              </button>
+            </th>
           }
         </tr></thead>
         <tbody>
-          @for (run of selected(); track run.id) {
+          @for (run of sortedRuns(); track run.id) {
             <tr>
-              <th scope="row">#{{ run.id }} · {{ run.provider_name }}<small>{{ run.recorded_at | date:'medium' }}</small></th>
-              <td>{{ run.dataset }}<small>{{ datasetDetails(run) }}</small></td>
-              <td class="numeric">{{ run.sample_size }}</td>
-              <td class="configuration">{{ configuration(run) }}</td>
-              @for (item of metrics; track item.key) {
-                <td class="numeric" [class.active-metric]="metric() === item.key">{{ value(run, item.key) }}</td>
+              <th scope="row">#{{ run.id }}</th>
+              <td class="date" [title]="run.recorded_at | date:'medium'">{{ run.recorded_at | date:'dd MMM yyyy' }}<time [attr.datetime]="run.recorded_at">{{ run.recorded_at | date:'HH:mm:ss' }}</time></td>
+              @for (column of columns.slice(2); track column.key) {
+                <td class="numeric" [class.active-metric]="metric() === column.key">{{ format(sortValue(run, column.key)) }}</td>
               }
             </tr>
           }
         </tbody>
       </table>
     </div>
-    <p class="definitions">TTFT: time to first token. TTLT: total response time (GuideLLM request latency). Both show the arithmetic mean across successful requests.
-      Throughput: GuideLLM’s aggregate output token rate across requests. — means no measurement was captured.</p>
   } @else {
-    <p class="empty">No comparable runs yet. Complete benchmarks with recorded dataset, prompt settings, TP, PP and concurrency to compare parameters. Older runs remain available below.</p>
+    <p class="empty">No comparable runs yet. Older runs remain available below.</p>
   }
 </section>
