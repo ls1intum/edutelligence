@@ -71,6 +71,38 @@ from logos import CapacityPlanner, LaneSchedulerSignals  # noqa: E402
 from logos.sdi.models import CapacityPlanAction  # noqa: E402
 
 
+class TestReplicateOnFreeVramDefault:
+    """The ``LOGOS_REPLICATE_ON_FREE_VRAM`` env var is parsed in ``__init__``.
+
+    Pin the constructor default (speculative replication ON) and the opt-out
+    spellings through the real constructor. The ``_planner`` harness in the
+    other capacity tests builds with ``__new__`` and assigns
+    ``_replicate_on_free_vram`` by hand, so it never exercises this parsing.
+    """
+
+    def _parsed(self, monkeypatch, value):
+        if value is None:
+            monkeypatch.delenv("LOGOS_REPLICATE_ON_FREE_VRAM", raising=False)
+        else:
+            monkeypatch.setenv("LOGOS_REPLICATE_ON_FREE_VRAM", value)
+        return CapacityPlanner(None, None, None)._replicate_on_free_vram
+
+    def test_on_by_default_when_unset(self, monkeypatch):
+        assert self._parsed(monkeypatch, None) is True
+
+    def test_truthy_values_enable(self, monkeypatch):
+        for value in ("true", "True", "1", "yes", "YES"):
+            assert self._parsed(monkeypatch, value) is True
+
+    def test_falsy_values_disable(self, monkeypatch):
+        for value in ("false", "False", "0", "no", "NO"):
+            assert self._parsed(monkeypatch, value) is False
+
+    def test_surrounding_whitespace_is_stripped(self, monkeypatch):
+        assert self._parsed(monkeypatch, "  false  ") is False
+        assert self._parsed(monkeypatch, " TRUE ") is True
+
+
 def _lane(
     lane_id: str,
     model_name: str,
