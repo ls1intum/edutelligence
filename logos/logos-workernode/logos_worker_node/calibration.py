@@ -53,13 +53,13 @@ from logos_worker_node.vllm_compat import (
     _BAKED_QUANT_METHODS_FILENAME,
     _DEFAULT_VLLM,
     _FATAL_LOAD_ERROR_PATTERNS,
+    FatalLoadErrorPattern,
     _extract_vllm_kv_gib_needed_for_full,
     _extract_vllm_max_concurrency,
     _extract_vllm_max_model_len_suggestion,
     _extract_vllm_max_num_seqs_suggestion,
     _extract_vllm_max_seq_len,
     _extract_vllm_served_context,
-    FatalLoadErrorPattern,
 )
 
 try:
@@ -273,7 +273,6 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
 # more calibration window; an over-eager one permanently parks a model
 # that would have worked with smaller kv.
 # ---------------------------------------------------------------------------
-
 
 
 def _classify_fatal_load_error(log_tail: str) -> FatalLoadErrorPattern | None:

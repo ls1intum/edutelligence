@@ -27,7 +27,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-
 # -----------------------------------------------------------------------------
 # Model-name to vLLM CLI flag mapping tables
 # -----------------------------------------------------------------------------
@@ -519,7 +518,6 @@ _VLLM_METRIC_TPOT_BUCKET = "time_per_output_token_seconds_bucket"
 _VLLM_METRIC_TPOT_SUM = "time_per_output_token_seconds_sum"
 _VLLM_METRIC_TPOT_COUNT = "time_per_output_token_seconds_count"
 _VLLM_METRIC_E2E_LATENCY_BUCKET = "e2e_request_latency_seconds_bucket"
-
 
 
 # -----------------------------------------------------------------------------

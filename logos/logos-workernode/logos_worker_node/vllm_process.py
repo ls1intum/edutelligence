@@ -21,7 +21,6 @@ import asyncio
 import logging
 import math
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -52,20 +51,20 @@ from logos_worker_node.vllm_compat import (
     _VLLM_METRIC_E2E_LATENCY_BUCKET,
     _VLLM_METRIC_GENERATION_TOKENS_TOTAL,
     _VLLM_METRIC_GPU_CACHE_USAGE,
-    _VLLM_METRIC_PREFIX_CACHE_HITS,
     _VLLM_METRIC_PREFIX_CACHE_HIT_RATE_LEGACY,
+    _VLLM_METRIC_PREFIX_CACHE_HITS,
     _VLLM_METRIC_PREFIX_CACHE_QUERIES,
     _VLLM_METRIC_PROMPT_TOKENS_TOTAL,
     _VLLM_METRIC_QUEUE_WAITING,
     _VLLM_METRIC_REQUESTS_RUNNING,
     _VLLM_METRIC_SPEC_ACCEPTED_TOKENS,
     _VLLM_METRIC_SPEC_DRAFT_TOKENS,
-    _VLLM_METRIC_TTFT_BUCKET,
-    _VLLM_METRIC_TTFT_COUNT,
-    _VLLM_METRIC_TTFT_SUM,
     _VLLM_METRIC_TPOT_BUCKET,
     _VLLM_METRIC_TPOT_COUNT,
     _VLLM_METRIC_TPOT_SUM,
+    _VLLM_METRIC_TTFT_BUCKET,
+    _VLLM_METRIC_TTFT_COUNT,
+    _VLLM_METRIC_TTFT_SUM,
     _infer_default_chat_template_kwargs,
     _infer_reasoning_parser,
     _infer_tool_call_parser,

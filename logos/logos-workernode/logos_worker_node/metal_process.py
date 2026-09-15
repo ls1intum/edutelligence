@@ -54,10 +54,7 @@ from logos_worker_node.vllm_compat import (
     _infer_tool_call_parser,
     _resolve_chat_template,
 )
-from logos_worker_node.vllm_process import (
-    _DEFAULT_LANE_CONTEXT_LENGTH,
-    VllmProcessHandle,
-)
+from logos_worker_node.vllm_process import _DEFAULT_LANE_CONTEXT_LENGTH, VllmProcessHandle
 
 logger = logging.getLogger(__name__)
 
