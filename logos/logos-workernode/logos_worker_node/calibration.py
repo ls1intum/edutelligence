@@ -35,7 +35,6 @@ import json
 import logging
 import math
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -50,6 +49,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from logos_worker_node.vllm_compat import (
+    _BAKED_QUANT_METHODS_FILENAME,
+    _DEFAULT_VLLM,
+    _FATAL_LOAD_ERROR_PATTERNS,
+    _extract_vllm_kv_gib_needed_for_full,
+    _extract_vllm_max_concurrency,
+    _extract_vllm_max_model_len_suggestion,
+    _extract_vllm_max_num_seqs_suggestion,
+    _extract_vllm_max_seq_len,
+    _extract_vllm_served_context,
+    FatalLoadErrorPattern,
+)
+
 try:
     import yaml
 
@@ -63,7 +75,6 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_VLLM = "vllm"
 _READY_TIMEOUT_S = 600.0
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
@@ -253,7 +264,8 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
 # the per-command blacklist (and another stuck-GPU recovery to vLLM's restart
 # logic). We need a coarser "do not retry this MODEL at all" record.
 #
-# Adding a pattern: append to ``_FATAL_LOAD_ERROR_PATTERNS`` below. Keep
+# Adding a pattern: append to ``_FATAL_LOAD_ERROR_PATTERNS`` in
+# vllm_compat.py. Keep
 # patterns NARROW — only error signatures that prove the failure is (a)
 # deterministic, (b) about the model itself (not the GPU or vLLM version
 # or some transient I/O issue), and (c) unfixable by kv-cache tuning.
@@ -262,52 +274,6 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
 # that would have worked with smaller kv.
 # ---------------------------------------------------------------------------
 
-
-@dataclass(frozen=True)
-class FatalLoadErrorPattern:
-    """A vLLM log signature that proves the model can never load on this worker.
-
-    Matched as a substring against the vLLM log tail captured after a probe
-    failure. Case-sensitive — vLLM's own error strings are stable, so
-    fuzzy-matching is unnecessary and just invites false positives.
-    """
-
-    needle: str
-    reason_code: str  # short, kebab-case; surfaced in logs and the persisted file
-    description: str  # human-readable, shown to ops in the file and in error responses
-
-
-_FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
-    FatalLoadErrorPattern(
-        needle="Invalid repository ID or local directory specified",
-        reason_code="invalid-repo-id",
-        description=(
-            "vLLM cannot resolve the model name to either a Hugging Face "
-            "repository or a local directory containing config.json. The "
-            "identifier is misspelled, the repository is private/withdrawn, "
-            "or the local directory is missing config.json / params.json."
-        ),
-    ),
-    FatalLoadErrorPattern(
-        needle="Cannot access gated repo",
-        reason_code="gated-repo-no-token",
-        description=(
-            "Hugging Face flags this repository as gated. The worker has no "
-            "HF token (or the token lacks access). Fix by adding a "
-            "HUGGING_FACE_HUB_TOKEN with read access to the repo before "
-            "removing this entry."
-        ),
-    ),
-    FatalLoadErrorPattern(
-        needle="does not recognize this architecture",
-        reason_code="unsupported-architecture",
-        description=(
-            "The installed vLLM build does not implement this model's "
-            "architecture. Upgrade vLLM (and remove this entry) if support "
-            "has been added since this worker was deployed."
-        ),
-    ),
-)
 
 
 def _classify_fatal_load_error(log_tail: str) -> FatalLoadErrorPattern | None:
@@ -554,166 +520,6 @@ def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern |
     return None
 
 
-# vLLM raises a specific ValueError when the configured KV cache budget is too
-# small to serve a single request at the model's default max_seq_len, e.g.::
-#
-#     ValueError: To serve at least one request with the model's max seq len
-#     (131072), (8.0 GiB KV cache is needed, which is larger than the available
-#     KV cache memory (6.0 GiB). Based on the available memory, the estimated
-#     maximum model length is 98304.
-#
-# This is recoverable WITHOUT enlarging the KV budget: pass --max-model-len at
-# the suggested value (or below). The calibration probe loop uses this helper
-# to extract the number and auto-retry the same kv_mb with the suggestion
-# injected, instead of blacklisting the command and failing the model.
-_VLLM_MAX_MODEL_LEN_SUGGESTION_RE = re.compile(r"estimated maximum model length is (\d+)")
-_VLLM_MAX_SEQ_LEN_RE = re.compile(r"max seq len \((\d+)\)")
-_VLLM_MAX_MODEL_LEN_CONFIG_RE = re.compile(r"max_model_len\s*[=:]\s*(\d+)")
-# "... the model's max seq len (131072), 8.94 GiB KV cache is needed ..." — the
-# KV required to serve the model's FULL context. With the max seq len this gives
-# the KV→context rate, letting the sweep COMPUTE the curve instead of crawling.
-_VLLM_KV_GIB_NEEDED_RE = re.compile(r"([\d.]+)\s*GiB KV cache is needed")
-
-
-def _extract_vllm_kv_gib_needed_for_full(log_tail: str) -> float | None:
-    """GiB of KV cache vLLM says it needs to serve the model's full max seq len."""
-    m = _VLLM_KV_GIB_NEEDED_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        return float(m.group(1))
-    except ValueError:
-        return None
-
-
-def _extract_vllm_max_model_len_suggestion(log_tail: str) -> int | None:
-    """Return vLLM's suggested ``--max-model-len`` when the KV budget is too
-    small for the model's default max_seq_len, otherwise None.
-    """
-    if not log_tail:
-        return None
-    m = _VLLM_MAX_MODEL_LEN_SUGGESTION_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        value = int(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
-
-
-def _extract_vllm_max_seq_len(log_tail: str, *, allow_config_fallback: bool = True) -> int | None:
-    """Return the model's default max seq len mentioned by vLLM, if present.
-
-    This appears in KV-too-small startup failures and lets calibration record
-    the plateau ``max_model_len`` once the default fits again.
-
-    ``allow_config_fallback=False`` restricts the search to the authoritative
-    "max seq len (N)" phrasing of vLLM's KV-too-small ValueError and skips the
-    ``max_model_len=N`` config-dump fallback. Callers MUST pass False whenever
-    calibration itself injected ``--max-model-len`` for the probe being parsed:
-    the config dump then echoes OUR OWN injected value, so treating it as the
-    model default silently pins the whole sweep to the floor probe's shrunken
-    context (deipapa/deimama 2026-08-18: Qwen3.8-27B recorded a flat 27440
-    curve although probes at 10-20G served the model's full 262144).
-    """
-    if not log_tail:
-        return None
-    m = _VLLM_MAX_SEQ_LEN_RE.search(log_tail)
-    if not m and allow_config_fallback:
-        m = _VLLM_MAX_MODEL_LEN_CONFIG_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        value = int(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
-
-
-# Hybrid Mamba/SSM models (Qwen3-Coder-Next, …) allocate a fixed pool of
-# state-cache blocks sized from the leftover VRAM after weights + KV. Each
-# in-flight decode sequence needs one block, so when max_num_seqs (vLLM's
-# default 1024) exceeds the pool, CUDA-graph capture aborts at startup with:
-#
-#     RuntimeError: ... 'max_num_seqs (1024) exceeds available Mamba cache
-#     blocks (160). Each decode sequence requires one Mamba cache block, so
-#     CUDA graph capture cannot proceed. Please lower max_num_seqs to at most
-#     160 or increase gpu_memory_utilization.'
-#
-# Recoverable by passing --max-num-seqs at (or below) the suggested ceiling.
-# The probe loop extracts the number and auto-retries the same kv_mb with the
-# flag injected, instead of blacklisting the command and failing the model.
-_VLLM_MAX_NUM_SEQS_SUGGESTION_RE = re.compile(r"lower max_num_seqs to at most (\d+)")
-
-
-def _extract_vllm_max_num_seqs_suggestion(log_tail: str) -> int | None:
-    """Return vLLM's suggested ``--max-num-seqs`` ceiling when a hybrid
-    Mamba/SSM model's state-cache pool is smaller than max_num_seqs, else None.
-    """
-    if not log_tail:
-        return None
-    m = _VLLM_MAX_NUM_SEQS_SUGGESTION_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        value = int(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
-
-
-# vLLM prints the achievable concurrency at every engine init, e.g.
-#   "Maximum concurrency for 33,888 tokens per request: 2.00x"
-# This is total_kv_cache_tokens / max_model_len — i.e. how many simultaneous
-# full-context requests the KV pool can serve. We read it back (rather than
-# pinning --max-num-seqs) to record the "parallelity factor" of each KV point.
-_VLLM_MAX_CONCURRENCY_RE = re.compile(r"Maximum concurrency for ([\d,]+) tokens per request:\s*([\d.]+)x")
-
-
-def _extract_vllm_max_concurrency(log_tail: str) -> float | None:
-    """Return vLLM's reported achievable concurrency (the ``X.XXx`` factor), else None.
-
-    Uses the LAST occurrence in the log so a re-probe at a different KV size
-    reflects the final successful load rather than an earlier attempt.
-    """
-    if not log_tail:
-        return None
-    matches = _VLLM_MAX_CONCURRENCY_RE.findall(log_tail)
-    if not matches:
-        return None
-    try:
-        value = float(matches[-1][1])
-    except (TypeError, ValueError, IndexError):
-        return None
-    return value if value > 0 else None
-
-
-def _extract_vllm_served_context(log_tail: str) -> int | None:
-    """Return the context length vLLM actually loaded, from the same line.
-
-    "Maximum concurrency for 262,144 tokens per request: 2.21x" names the
-    engine's resolved ``max_model_len``, printed on every successful init. It
-    is the ONLY authoritative answer to "what did this probe really serve" —
-    a probe that starts without an injected ``--max-model-len`` carries no
-    suggestion and no fresh config echo, so without this the sweep has to fall
-    back to a cached model-default and can attribute the floor probe's
-    shrunken context to every larger KV size (see ``_extract_vllm_max_seq_len``).
-
-    Uses the LAST occurrence so retries within one probe report the final load.
-    """
-    if not log_tail:
-        return None
-    matches = _VLLM_MAX_CONCURRENCY_RE.findall(log_tail)
-    if not matches:
-        return None
-    try:
-        value = int(matches[-1][0].replace(",", ""))
-    except (TypeError, ValueError, IndexError):
-        return None
-    return value if value > 0 else None
-
-
 # ---------------------------------------------------------------------------
 # GPU VRAM helpers
 # ---------------------------------------------------------------------------
@@ -798,9 +604,6 @@ def extract_revision_arg(extra_args: list[str] | None) -> str | None:
 # ---------------------------------------------------------------------------
 # vLLM registry introspection
 # ---------------------------------------------------------------------------
-
-
-_BAKED_QUANT_METHODS_FILENAME = "vllm_quantization_methods.json"
 
 
 def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:

@@ -45,6 +45,32 @@ from logos_worker_node.models import (
     WorkerConfig,
     model_uses_sharded_checkpoint,
 )
+from logos_worker_node.vllm_compat import (
+    _SCRUBBED_ENV_VARS,
+    _VLLM_DEV_MODE_LOG_FRAGMENTS,
+    _VLLM_MAX_CONCURRENCY_RE,
+    _VLLM_METRIC_E2E_LATENCY_BUCKET,
+    _VLLM_METRIC_GENERATION_TOKENS_TOTAL,
+    _VLLM_METRIC_GPU_CACHE_USAGE,
+    _VLLM_METRIC_PREFIX_CACHE_HITS,
+    _VLLM_METRIC_PREFIX_CACHE_HIT_RATE_LEGACY,
+    _VLLM_METRIC_PREFIX_CACHE_QUERIES,
+    _VLLM_METRIC_PROMPT_TOKENS_TOTAL,
+    _VLLM_METRIC_QUEUE_WAITING,
+    _VLLM_METRIC_REQUESTS_RUNNING,
+    _VLLM_METRIC_SPEC_ACCEPTED_TOKENS,
+    _VLLM_METRIC_SPEC_DRAFT_TOKENS,
+    _VLLM_METRIC_TTFT_BUCKET,
+    _VLLM_METRIC_TTFT_COUNT,
+    _VLLM_METRIC_TTFT_SUM,
+    _VLLM_METRIC_TPOT_BUCKET,
+    _VLLM_METRIC_TPOT_COUNT,
+    _VLLM_METRIC_TPOT_SUM,
+    _infer_default_chat_template_kwargs,
+    _infer_reasoning_parser,
+    _infer_tool_call_parser,
+    _resolve_chat_template,
+)
 
 logger = logging.getLogger("logos_worker_node.vllm_process")
 
@@ -93,15 +119,6 @@ _READY_TIMEOUT = _env_ready_timeout()
 _STOP_TIMEOUT = 15
 _STARTUP_LOG_TAIL_LINES = 8
 _STARTUP_LOG_TAIL_MAX_CHARS = 1200
-_SCRUBBED_ENV_VARS = (
-    "LOCAL_RANK",
-    "RANK",
-    "WORLD_SIZE",
-    "LOCAL_WORLD_SIZE",
-    "NODE_RANK",
-    "MASTER_ADDR",
-    "MASTER_PORT",
-)
 
 # Cache for _discover_pip_cuda_lib_dirs() — computed once per process.
 _pip_cuda_lib_dirs: list[str] | None = None
@@ -160,214 +177,6 @@ def _discover_pip_cuda_lib_dirs() -> list[str]:
 
     _pip_cuda_lib_dirs = dirs
     return dirs
-
-
-# Model-name → vLLM --tool-call-parser mapping.  Checked in order;
-# first match wins.  Patterns are lowercased substrings of the HF model id.
-# Full list of parsers: https://docs.vllm.ai/en/latest/features/tool_calling.html
-_TOOL_PARSER_RULES: tuple[tuple[str, str], ...] = (
-    # --- Patterns that share substrings with other families -----------------
-    # Google FunctionGemma (before gemma — "functiongemma" contains "gemma")
-    ("functiongemma", "functiongemma"),  # google/functiongemma-270m-it
-    # Google Gemma 4
-    ("gemma-4", "gemma4"),
-    ("gemma4", "gemma4"),
-    # Salesforce xLAM (before llama/qwen — xLAM models may contain those)
-    ("xlam", "xlam"),
-    # NousResearch Hermes (before llama — Hermes-Llama models exist)
-    ("hermes", "hermes"),
-    # Meta Llama (4 before 3)
-    ("llama-4", "llama4_pythonic"),
-    ("llama4", "llama4_pythonic"),
-    ("llama-3", "llama3_json"),
-    ("llama3", "llama3_json"),
-    # Mistral / Mixtral
-    ("mistral", "mistral"),
-    ("mixtral", "mistral"),
-    # DeepSeek (specific versions before general; R1 also uses deepseek_v3)
-    ("deepseek-v3.2", "deepseek_v32"),
-    ("deepseek-v3.1", "deepseek_v31"),
-    ("deepseek", "deepseek_v3"),
-    # IBM Granite (specific before general)
-    ("granite-20b-functioncalling", "granite-20b-fc"),
-    ("granite-20b-fc", "granite-20b-fc"),
-    ("granite-4", "granite4"),
-    ("granite4", "granite4"),
-    ("granite", "granite"),
-    # Zhipu GLM (4.7 before 4 — "glm-4" is a prefix of "glm-4.7")
-    ("glm-4.7", "glm47"),
-    ("glm47", "glm47"),
-    ("glm-4", "glm45"),  # also covers GLM-4.5 and GLM-4.6
-    ("glm4", "glm45"),
-    # Shanghai AI Lab InternLM
-    ("internlm", "internlm"),
-    # AI21 Labs Jamba
-    ("jamba", "jamba"),
-    # Alibaba Qwen.  vLLM registers "qwen3_coder" and "qwen3_xml" as two names
-    # for the same Qwen3EngineToolParser; "qwen3_coder" is the one vLLM's own
-    # deployment recipes name, so it is the one used here.
-    ("qwen3-coder", "qwen3_coder"),
-    ("qwen3_coder", "qwen3_coder"),
-    # Qwen3 point releases (3.5, 3.6, 3.8, …) emit the same XML dialect as
-    # Qwen3-Coder, not the JSON-in-<tool_call> that hermes expects: their
-    # bundled chat templates render '<tool_call>\n<function=NAME>\n<parameter=…>'
-    # verbatim.  This rule has to sit above the "qwen3-"/"qwen3_" entries,
-    # which never matched a dotted name and so let every point release fall
-    # through to the generic ("qwen", "hermes") catch-all — hermes then failed
-    # to parse the XML and vLLM returned the raw markup as assistant text.
-    ("qwen3.", "qwen3_coder"),
-    # Qwen3 (dot-free, e.g. Qwen3-32B) still emits hermes-style JSON.
-    ("qwen3-", "hermes"),
-    ("qwen3_", "hermes"),
-    ("qwen", "hermes"),
-    # MiniMax (m2 before general)
-    ("minimax-m2", "minimax_m2"),
-    ("minimax_m2", "minimax_m2"),
-    ("minimax", "minimax"),
-    # Microsoft Phi
-    ("phi-4-mini", "phi4_mini_json"),
-    ("phi4mini", "phi4_mini_json"),
-    # Allen AI OLMo
-    ("olmo-3", "olmo3"),
-    ("olmo3", "olmo3"),
-    # Tencent Hunyuan
-    ("hunyuan-a13b", "hunyuan_a13b"),
-    ("hunyuan_a13b", "hunyuan_a13b"),
-    ("hunyuan", "hunyuan_a13b"),
-    # Baidu ERNIE
-    ("ernie-4.5", "ernie45"),
-    ("ernie45", "ernie45"),
-    ("ernie", "ernie45"),
-    # Moonshot Kimi
-    ("kimi-k2", "kimi_k2"),
-    ("kimi_k2", "kimi_k2"),
-    ("kimi", "kimi_k2"),
-    # ByteDance Seed
-    ("seed-oss", "seed_oss"),
-    ("seed_oss", "seed_oss"),
-    # StepFun (3.5 before 3 — "step-3" is a prefix of "step-3.5")
-    ("step-3.5", "step3p5"),
-    ("step3p5", "step3p5"),
-    ("step-3", "step3"),
-    ("step3", "step3"),
-    # Sber GigaChat
-    ("gigachat", "gigachat3"),
-    # Meituan LongCat
-    ("longcat", "longcat"),
-    # Xiaomi MIMO
-    ("mimo", "mimo"),
-    # OpenAI OSS (gpt-oss-20b, gpt-oss-120b)
-    ("gpt-oss", "openai"),
-)
-
-# Model-name → vLLM --reasoning-parser mapping.  Checked in order; first match
-# wins.  Patterns are lowercased substrings of the HF model id.
-# Registered parser names sourced directly from vllm/reasoning/__init__.py
-# (_REASONING_PARSERS_TO_REGISTER dict) — these are the only valid values.
-_REASONING_PARSER_RULES: tuple[tuple[str, str], ...] = (
-    ("gemma-4", "gemma4"),
-    ("gpt-oss", "openai_gptoss"),
-    # Qwen3 point releases think by default.  Without a reasoning parser the
-    # <think> block is returned inline in the assistant message instead of in
-    # reasoning_content, so clients render it as the answer.  Only the dotted
-    # releases are mapped: dot-free Qwen3 predates the parser.
-    ("qwen3.", "qwen3"),
-)
-
-# Model-name → default --default-chat-template-kwargs mapping.  Applied as a
-# base layer; explicit vllm_config.chat_template_kwargs keys win on a per-key
-# basis (merge, not replace).
-_DEFAULT_CHAT_TEMPLATE_KWARGS_RULES: tuple[tuple[str, dict[str, Any]], ...] = (
-    # Google Gemma 4 — thinking is opt-in via chat template
-    ("gemma-4", {"enable_thinking": True}),
-)
-
-
-# Persistent, operator-managed directory holding custom Jinja chat templates.
-# It matches the host-side compose directory (/opt/logos-workernode) so the
-# same path is valid on the host and inside the container, and it is bind-
-# mounted read-only by docker-compose.yml. Overridable for local dev and tests.
-_DEFAULT_CHAT_TEMPLATE_DIR = "/opt/logos-workernode/chat-templates"
-
-
-def _chat_template_dir() -> str:
-    """Directory custom chat templates are resolved against."""
-    return (os.environ.get("LOGOS_CHAT_TEMPLATE_DIR") or "").strip() or _DEFAULT_CHAT_TEMPLATE_DIR
-
-
-def _resolve_chat_template(value: str) -> str:
-    """Resolve a configured chat template to an absolute file path.
-
-    ``value`` is a file name (optionally with subdirectories) relative to the
-    persistent chat-template directory; an absolute path is accepted only when
-    it points inside that directory. Symlinks are followed and the resolved
-    target must still be contained, so a template can never be served from a
-    location that a container restart would wipe.
-
-    Raises ``RuntimeError`` when the value escapes the directory or the file
-    does not exist — a lane must fail loudly rather than silently fall back to
-    the model's bundled template, which would change generation behaviour
-    without any visible error.
-    """
-    base = os.path.realpath(_chat_template_dir())
-    candidate = os.path.join(base, value) if not os.path.isabs(value) else value
-    resolved = os.path.realpath(candidate)
-    if resolved != base and not resolved.startswith(base + os.sep):
-        raise RuntimeError(
-            f"chat_template {value!r} resolves to {resolved!r}, which is outside the "
-            f"persistent chat-template directory {base!r}. Place the template there "
-            "and reference it by file name."
-        )
-    if not os.path.isfile(resolved):
-        raise RuntimeError(
-            f"chat_template {value!r} not found at {resolved!r}. Templates are read from "
-            f"{base!r} (bind-mounted from the host); add the file there and restart the lane."
-        )
-    return resolved
-
-
-def _infer_reasoning_parser(model: str) -> str | None:
-    """Infer the vLLM --reasoning-parser value from the model name.
-
-    Returns the parser name when the model is a known reasoning model, or
-    ``None`` when no rule matches (no flag should be emitted).
-    """
-    model_lower = model.lower()
-    for pattern, parser in _REASONING_PARSER_RULES:
-        if pattern in model_lower:
-            return parser
-    return None
-
-
-def _infer_default_chat_template_kwargs(model: str) -> dict[str, Any]:
-    """Infer the default chat-template-kwargs dict from the model name.
-
-    Returns the first matching dict, or ``{}`` when nothing matches.
-    The caller should merge (overlay) any explicit user-supplied kwargs on top.
-    """
-    model_lower = model.lower()
-    for pattern, kwargs in _DEFAULT_CHAT_TEMPLATE_KWARGS_RULES:
-        if pattern in model_lower:
-            return dict(kwargs)  # shallow copy so callers can mutate safely
-    return {}
-
-
-def _infer_tool_call_parser(model: str) -> str:
-    """Infer the vLLM tool-call-parser from the model name.
-
-    vLLM requires an explicit ``--tool-call-parser`` value when
-    ``--enable-auto-tool-choice`` is set (no built-in auto-detect yet).
-    Falls back to ``hermes`` which is broadly compatible.
-
-    TODO: vLLM draft PR adds ``--tool-call-parser=auto`` which would make
-    this function obsolete. Check if merged and remove this workaround:
-    https://github.com/vllm-project/vllm/pull/34809
-    """
-    model_lower = model.lower()
-    for pattern, parser in _TOOL_PARSER_RULES:
-        if pattern in model_lower:
-            return parser
-    return "hermes"
 
 
 def _speculative_decoding_requested(vc: Any) -> bool:
@@ -1389,69 +1198,49 @@ class VllmProcessHandle:
                     value = float(value_raw.strip())
                 except ValueError:
                     continue
-                if metric_name.endswith("num_requests_waiting"):
+                if metric_name.endswith(_VLLM_METRIC_QUEUE_WAITING):
                     metrics["queue_waiting"] = value
-                elif metric_name.endswith("num_requests_running"):
+                elif metric_name.endswith(_VLLM_METRIC_REQUESTS_RUNNING):
                     metrics["requests_running"] = value
-                elif (
-                    metric_name.endswith("gpu_cache_usage_perc")
-                    or metric_name.endswith("gpu_cache_usage_percent")
-                    or metric_name.endswith("kv_cache_usage_perc")
-                    or metric_name.endswith("kv_cache_usage_percent")
-                ):
+                elif metric_name.endswith(_VLLM_METRIC_GPU_CACHE_USAGE):
                     metrics["gpu_cache_usage_percent"] = value * 100.0
-                elif metric_name.endswith("prefix_cache_hit_rate"):
-                    # Legacy gauge (vLLM < 0.20); kept for backward compatibility.
+                elif metric_name.endswith(_VLLM_METRIC_PREFIX_CACHE_HIT_RATE_LEGACY):
                     metrics["prefix_cache_hit_rate"] = value
-                elif (
-                    metric_name.endswith("gpu_prefix_cache_queries")
-                    or metric_name.endswith("gpu_prefix_cache_queries_total")
-                    or metric_name.endswith(":prefix_cache_queries_total")
-                    or metric_name.endswith(":prefix_cache_queries")
-                ):
+                elif metric_name.endswith(_VLLM_METRIC_PREFIX_CACHE_QUERIES):
                     _prefix_queries += value
-                elif (
-                    metric_name.endswith("gpu_prefix_cache_hits")
-                    or metric_name.endswith("gpu_prefix_cache_hits_total")
-                    or metric_name.endswith(":prefix_cache_hits_total")
-                    or metric_name.endswith(":prefix_cache_hits")
-                ):
+                elif metric_name.endswith(_VLLM_METRIC_PREFIX_CACHE_HITS):
                     _prefix_hits += value
-                elif metric_name.endswith("spec_decode_num_draft_tokens") or metric_name.endswith(
-                    "spec_decode_num_draft_tokens_total"
-                ):
+                elif metric_name.endswith(_VLLM_METRIC_SPEC_DRAFT_TOKENS):
                     # vLLM speculative decoding (e.g. MTP draft heads):
                     # cumulative tokens proposed by the draft model.
                     _spec_draft_tokens_total += value
-                elif metric_name.endswith("spec_decode_num_accepted_tokens") or metric_name.endswith(
-                    "spec_decode_num_accepted_tokens_total"
-                ):
+                elif metric_name.endswith(_VLLM_METRIC_SPEC_ACCEPTED_TOKENS):
                     # Cumulative draft tokens accepted by the target model.
                     # Only present when --speculative-config is active.
                     _spec_accepted_tokens_total += value
-                elif metric_name.endswith("prompt_tokens_total"):
+                elif metric_name.endswith(_VLLM_METRIC_PROMPT_TOKENS_TOTAL):
                     metrics["prompt_tokens_total"] = value
-                elif metric_name.endswith("generation_tokens_total"):
+                elif metric_name.endswith(_VLLM_METRIC_GENERATION_TOKENS_TOTAL):
                     metrics["generation_tokens_total"] = value
-                elif "time_to_first_token_seconds_bucket" in metric_name:
+                elif _VLLM_METRIC_TTFT_BUCKET in metric_name:
                     bucket = "unknown"
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["ttft_histogram"][bucket] = value
-                elif metric_name.endswith("time_to_first_token_seconds_sum"):
+                elif metric_name.endswith(_VLLM_METRIC_TTFT_SUM):
                     _ttft_sum = value
-                elif metric_name.endswith("time_to_first_token_seconds_count"):
+                elif metric_name.endswith(_VLLM_METRIC_TTFT_COUNT):
                     _ttft_count = value
-                elif "time_per_output_token_seconds_bucket" in metric_name:
+                elif _VLLM_METRIC_TPOT_BUCKET in metric_name:
                     bucket = "unknown"
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
                     metrics["tpot_histogram"][bucket] = value
-                elif metric_name.endswith("time_per_output_token_seconds_sum"):
+                elif metric_name.endswith(_VLLM_METRIC_TPOT_SUM):
                     _tpot_sum = value
-                elif metric_name.endswith("time_per_output_token_seconds_count"):
+                elif metric_name.endswith(_VLLM_METRIC_TPOT_COUNT):
                     _tpot_count = value
-                elif "e2e_request_latency_seconds_bucket" in metric_name:
+                elif _VLLM_METRIC_E2E_LATENCY_BUCKET in metric_name:
                     bucket = "unknown"
                     if 'le="' in name:
                         bucket = name.split('le="', 1)[1].split('"', 1)[0]
@@ -2631,14 +2420,15 @@ class VllmProcessHandle:
         )
         return False
 
-    # Matches vLLM startup line like:
-    #   "Maximum concurrency for 4,096 tokens per request: 10.66x"
-    _RE_MAX_CONCURRENCY = re.compile(r"Maximum concurrency for [\d,]+ tokens per request:\s+([\d.]+)x")
+    # Matches vLLM's "Maximum concurrency for N tokens per request: Xx" startup
+    # line. The regex is shared with calibration's _extract_vllm_max_concurrency /
+    # _extract_vllm_served_context, so it lives in vllm_compat.
+    _RE_MAX_CONCURRENCY = _VLLM_MAX_CONCURRENCY_RE
 
     # vLLM warnings that are expected side-effects of our configuration
     # (e.g. VLLM_SERVER_DEV_MODE required for sleep endpoints) and add
     # no operational value — suppress them from the log stream.
-    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = ("SECURITY WARNING: Development endpoints are enabled",)
+    _SUPPRESSED_LOG_FRAGMENTS: ClassVar[tuple[str, ...]] = _VLLM_DEV_MODE_LOG_FRAGMENTS
 
     @property
     def max_concurrency(self) -> int | None:
@@ -2659,7 +2449,8 @@ class VllmProcessHandle:
                     if self._max_concurrency is None:
                         m = self._RE_MAX_CONCURRENCY.search(line)
                         if m:
-                            self._max_concurrency = max(1, math.floor(float(m.group(1))))
+                            # group 2 is the "X.XXx" factor (group 1 is the token count).
+                            self._max_concurrency = max(1, math.floor(float(m.group(2))))
                             logger.info(
                                 "[%s] vLLM reported max concurrency: %d",
                                 self.lane_id,

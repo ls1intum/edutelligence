@@ -137,7 +137,7 @@ def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
 
 
 def test_infer_tool_call_parser() -> None:
-    from logos_worker_node.vllm_process import _infer_tool_call_parser
+    from logos_worker_node.vllm_compat import _infer_tool_call_parser
 
     # Google Gemma
     assert _infer_tool_call_parser("google/gemma-4-26B-A4B-it") == "gemma4"
@@ -314,7 +314,7 @@ def _handle_with_stub_binary(monkeypatch) -> VllmProcessHandle:
 
 
 def test_chat_template_dir_defaults_to_persistent_path(monkeypatch) -> None:
-    from logos_worker_node.vllm_process import _chat_template_dir
+    from logos_worker_node.vllm_compat import _chat_template_dir
 
     monkeypatch.delenv("LOGOS_CHAT_TEMPLATE_DIR", raising=False)
     assert _chat_template_dir() == "/opt/logos-workernode/chat-templates"
@@ -1771,7 +1771,7 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 
 
 def test_infer_reasoning_parser() -> None:
-    from logos_worker_node.vllm_process import _infer_reasoning_parser
+    from logos_worker_node.vllm_compat import _infer_reasoning_parser
 
     # The production rule table registers only parsers shipping in
     # vllm/reasoning/__init__.py: gemma4, openai_gptoss and qwen3. Other model
@@ -1803,7 +1803,7 @@ def test_infer_reasoning_parser() -> None:
 
 
 def test_infer_default_chat_template_kwargs() -> None:
-    from logos_worker_node.vllm_process import _infer_default_chat_template_kwargs
+    from logos_worker_node.vllm_compat import _infer_default_chat_template_kwargs
 
     # Google Gemma 4 → enable_thinking: True. Pattern is the substring
     # "gemma-4" (with dash) — names without the dash do not match.
