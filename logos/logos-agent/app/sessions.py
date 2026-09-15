@@ -107,6 +107,18 @@ def _reply_marker(session_id: int, comment_id: int) -> str:
     return f"<!-- logos reply {session_id} {comment_id} -->"
 
 
+def _answer_marker(session_id: int) -> str:
+    """The hidden mark of a session's single answer, the one that is posted
+    as a whole where an answer always went.
+
+    Comment POSTs are not idempotent: a confirmation that never arrived
+    leaves the answer posted without the delivery state ever learning of
+    it. On the next pass, the mark on the pull request is how it is
+    recognized as already delivered instead of being said twice.
+    """
+    return f"<!-- logos answer {session_id} -->"
+
+
 # How many sessions one request may have before the runner stops taking it
 # up again. A launch that cannot work, or a task nothing can be made of:
 # three attempts survives an accident and is few enough to notice.
@@ -2287,6 +2299,18 @@ class SessionManager:
             await self._no_answer(session_id, session)
             return
         body = self._truncate_reply(body)
+        if target.startswith("issue:"):
+            # The answer's POST is not idempotent: a confirmation lost on
+            # the way back leaves it posted without the state knowing, and
+            # the mark on the pull request is the answer to whether
+            # posting again would say it twice.
+            marker = _answer_marker(session_id)
+            if await github.issue_comment_contains(int(target.partition(":")[2]), marker):
+                await db.record_reply_attempt(session_id, delivered=True)
+                await db.add_event(session_id, EventKind.PULL_REQUEST, {"reply": True, "found": True})
+                logger.info("session %s found its answer already at %s", session_id, target)
+                return
+            body += "\n\n" + marker
         try:
             url = await self._send_reply(target, body)
         except Exception as exc:
@@ -2506,11 +2530,21 @@ class SessionManager:
             await self._resolve_answered_threads(session_id, number, state, state_path)
 
         if summary and not state["summary_posted"]:
-            url = await github.post_issue_comment(number, self._truncate_reply(summary))
-            state["summary_posted"] = True
-            self._write_review_reply_state(state_path, state)
-            await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
-            logger.info("session %s posted its summary on pull request %s", session_id, number)
+            marker = _answer_marker(session_id)
+            # The summary's POST is not idempotent: a confirmation lost on
+            # the way back leaves it posted without the state knowing, and
+            # the mark on the pull request is the answer to whether
+            # posting again would say it twice.
+            if await github.issue_comment_contains(number, marker):
+                state["summary_posted"] = True
+                self._write_review_reply_state(state_path, state)
+                logger.info("session %s found its summary already on pull request %s", session_id, number)
+            else:
+                url = await github.post_issue_comment(number, self._truncate_reply(summary) + "\n\n" + marker)
+                state["summary_posted"] = True
+                self._write_review_reply_state(state_path, state)
+                await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
+                logger.info("session %s posted its summary on pull request %s", session_id, number)
 
         if (
             not state["review_rerequested"]

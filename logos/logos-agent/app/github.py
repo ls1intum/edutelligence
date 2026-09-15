@@ -1171,6 +1171,18 @@ async def post_issue_comment(number: int, body: str) -> str:
     return str(response.json().get("html_url") or "")
 
 
+async def issue_comment_contains(number: int, marker: str) -> bool:
+    """Whether the pull request's comments already carry the marked answer.
+
+    A comment POST is not idempotent, and a confirmation that never
+    arrived leaves the posted comment behind without the delivery state
+    ever learning of it — this is how the next pass finds it instead of
+    posting the same answer twice.
+    """
+    comments = await _get_all(f"/repos/{settings.repo_slug}/issues/{number}/comments")
+    return any(marker in str(c.get("body") or "") for c in comments if isinstance(c, dict))
+
+
 async def reply_to_review_comment(number: int, comment_id: int, body: str) -> str:
     """Answer inside an inline review thread. Returns the comment url.
 

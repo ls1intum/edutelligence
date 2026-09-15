@@ -1307,6 +1307,22 @@ class TestReviewRepliesAndReRequests:
         with pytest.raises(github.GitHubError):
             await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->")
 
+    async def test_a_posted_answer_is_found_on_the_pull_request(self, monkeypatch):
+        # The single answer's mark is looked up across the pull request's
+        # comments; a hit anywhere in them is a hit.
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            return [{"body": "an earlier discussion"}, {"body": "the answer\n\n<!-- logos answer 31 -->"}]
+
+        monkeypatch.setattr(github, "_get", fake_get)
+
+        assert await github.issue_comment_contains(772, "<!-- logos answer 31 -->") is True
+        assert await github.issue_comment_contains(772, "<!-- logos answer 32 -->") is False
+        assert len(asked) == 2
+        assert asked[0].endswith("/issues/772/comments")
+
     async def test_resolving_threads_runs_one_mutation_per_thread(self, monkeypatch):
         # The exact request, pinned to the schema: the mutation takes the id
         # wrapped in `input` and answers with the thread it resolved. Any
