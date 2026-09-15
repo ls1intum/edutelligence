@@ -14,6 +14,13 @@ import pytest
 from app import github
 
 
+@pytest.fixture(autouse=True)
+def _clean_verified_login(monkeypatch):
+    # verify_identities remembers the API's spelling of the account in the
+    # module; every test starts from a service that has not verified yet.
+    monkeypatch.setattr(github, "_verified_login", None)
+
+
 class FakeResponse:
     def __init__(self, status_code, payload=None, text=""):
         self.status_code = status_code
@@ -420,6 +427,10 @@ class TestAgentIdentity:
         self._identity_client(monkeypatch, {"runner-token": "LogosOSSAgent"})
 
         assert await github.verify_identities()
+        # The marker lookups compare against the API's spelling, not the
+        # configured one, so the differently cased configuration still
+        # recognizes its own posted markers.
+        assert github._verified_login == "LogosOSSAgent"
 
     async def test_an_unreachable_api_is_reported_but_does_not_stop_startup(self, monkeypatch):
         # A network blip must not take the service down: the finalizer
@@ -1380,11 +1391,11 @@ class TestReviewRepliesAndReRequests:
 
         assert await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->") is False
 
-    async def test_the_thread_marker_author_check_ignores_casing(self, monkeypatch):
-        # Startup accepts the configured identity in any casing, so a
-        # marker posted by that very account must be recognized here too —
-        # otherwise a lost confirmation is never reconciled and the retry
-        # duplicates the answer. The fake's configured login is "logos".
+    async def test_the_thread_marker_matches_the_verified_spelling(self, monkeypatch):
+        # The configured identity may carry any casing, but the marker is
+        # recognized by the exact spelling the API verified the account
+        # under — the same spelling it hands back on the comment's author.
+        # The fake's configured login is the differently cased "logos".
         calls: list = []
         map_answer = {"data": _threads_payload([_thread_payload("PRRT_1", 101)])}
         fake_graphql_client(
@@ -1398,14 +1409,49 @@ class TestReviewRepliesAndReRequests:
                 ),
             ],
         )
+        monkeypatch.setattr(github, "_verified_login", "Logos")
 
         assert await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->") is True
 
-    async def test_the_issue_marker_author_check_ignores_casing(self, monkeypatch):
-        # The same rule on the REST look-up: the default configured login
-        # is "LogosOSSAgent", and the API hands the account back in any
-        # casing.
+    async def test_the_issue_marker_matches_the_verified_spelling(self, monkeypatch):
+        # The same rule on the REST look-up: the configured login is
+        # spelled in any casing, and the marker is recognized by the exact
+        # spelling the API verified the account under.
         asked: list = []
+        monkeypatch.setattr(github, "settings", replace(github.settings, github_login="logosossagent"))
+        monkeypatch.setattr(github, "_verified_login", "LogosOSSAgent")
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            return [{"body": "<!-- logos answer 31 -->", "user": {"login": "LogosOSSAgent"}}]
+
+        monkeypatch.setattr(github, "_get", fake_get)
+
+        assert await github.issue_comment_contains(772, "<!-- logos answer 31 -->") is True
+
+    async def test_a_differently_cased_thread_login_is_not_the_verified_account(self, monkeypatch):
+        # The comparison is exact, not case-insensitive: a login that
+        # merely spells alike apart from case is not the account the
+        # token was verified as, and its marker must not make the retry
+        # skip an answer the session still owes.
+        calls: list = []
+        map_answer = {"data": _threads_payload([_thread_payload("PRRT_1", 101)])}
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [
+                (200, map_answer),
+                (200, {"data": _thread_comments_payload(["<!-- logos reply 31 101 -->"], author="LOGOS")}),
+            ],
+        )
+        monkeypatch.setattr(github, "_verified_login", "logos")
+
+        assert await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->") is False
+
+    async def test_a_differently_cased_issue_login_is_not_the_verified_account(self, monkeypatch):
+        # The same exactness on the REST look-up.
+        asked: list = []
+        monkeypatch.setattr(github, "_verified_login", "LogosOSSAgent")
 
         async def fake_get(path, params=None, **kwargs):
             asked.append(path)
@@ -1413,7 +1459,7 @@ class TestReviewRepliesAndReRequests:
 
         monkeypatch.setattr(github, "_get", fake_get)
 
-        assert await github.issue_comment_contains(772, "<!-- logos answer 31 -->") is True
+        assert await github.issue_comment_contains(772, "<!-- logos answer 31 -->") is False
 
     async def test_the_map_reads_out_a_thread_beyond_its_first_page(self, monkeypatch):
         # A thread that holds more comments than its first page: the rest

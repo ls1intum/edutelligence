@@ -85,6 +85,14 @@ async def token_login(token: str, *, timeout_s: float = 15.0) -> str:
     return login
 
 
+# The account's login exactly as the GitHub API spells it, remembered when
+# :func:`verify_identities` confirms a token belongs to the configured
+# account. Marker lookups compare against this spelling — not against the
+# operator's configuration — because the API hands the same spelling back
+# on the author of every comment the account posts.
+_verified_login: str | None = None
+
+
 async def verify_identities() -> list[str]:
     """Check every configured token belongs to the agent account.
 
@@ -99,7 +107,13 @@ async def verify_identities() -> list[str]:
     finalizer verifies the same thing inside the container before it pushes,
     so a network blip at startup cannot smuggle work out under a wrong
     identity.
+
+    When a token resolves to the expected account, the login the API spelled
+    it with is remembered (see :data:`_verified_login`): the configured
+    identity may carry any casing, and that spelling is what later marker
+    lookups recognize their own comments by.
     """
+    global _verified_login
     expected = settings.github_login.strip().lower()
     notes: list[str] = []
     for label, token in (
@@ -121,6 +135,7 @@ async def verify_identities() -> list[str]:
                 f"account only — issue the token from it, or set "
                 f"LOGOS_AGENT_GITHUB_LOGIN to the account it belongs to."
             )
+        _verified_login = login
         notes.append(f"{label} authenticates as {login}")
     return notes
 
@@ -673,10 +688,14 @@ def _is_our_marker(comment: Any, marker: str) -> bool:
     and suppress the answer that is still owed. A marker counts only when
     the account it was posted by is the account the runner posts with.
 
-    The comparison is case-insensitive exactly like :func:`verify_identities`
-    accepts the configured identity: an operator may set the login in any
-    casing, and a marker posted by that very account must still be
-    recognized, or the lost-confirmation retry would duplicate the answer.
+    The comparison is exact, against the login :func:`verify_identities`
+    remembered from the API (falling back to the configured one when the
+    identity could not be verified): the API spells the account's name the
+    same way on every comment it posts, so the supported any-casing of the
+    configuration still recognizes its own markers — while a differently
+    cased login that merely matches the configured name apart from case is
+    not the account, and must not make the retry skip an answer the
+    session still owes.
     """
     if not isinstance(comment, dict):
         return False
@@ -686,7 +705,7 @@ def _is_our_marker(comment: Any, marker: str) -> bool:
     login = author.get("login") if isinstance(author, dict) else None
     if not isinstance(login, str):
         return False
-    return login.strip().lower() == settings.github_login.strip().lower()
+    return login == (_verified_login or settings.github_login)
 
 
 # A pull request's review threads, paged. Each inline comment starts its own
