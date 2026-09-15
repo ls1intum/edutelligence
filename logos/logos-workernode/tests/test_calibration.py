@@ -52,10 +52,14 @@ from logos_worker_node.calibration import (
     parse_gpu_indices,
     pin_plan_gpu_devices,
     plans_from_config,
+    probe_generative,
+    probe_pooling,
+    probe_transcription,
     result_to_profile_dict,
     sample_vram_mb,
     save_profiles,
     select_calibration_gpus,
+    warmup_inference,
 )
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 from logos_worker_node.models import AppConfig
@@ -3357,6 +3361,132 @@ def test_result_to_profile_dict_maps_sleep_mode_disabled() -> None:
     assert result_to_profile_dict(_success_result("m"))["sleep_mode_disabled"] is None
     assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=True))["sleep_mode_disabled"] is True
     assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=False))["sleep_mode_disabled"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Group 11 — functional probe routing by model class (issue #963)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_probe_generative_hits_completions_endpoint():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_generative(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/v1/completions"
+
+
+def test_probe_pooling_hits_embeddings_endpoint():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_pooling(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/v1/embeddings"
+
+
+def test_probe_transcription_hits_audio_endpoint_with_wav_fixture():
+    with patch("logos_worker_node.calibration._post_multipart", return_value=(200, {})) as mock_post:
+        assert probe_transcription(_CALIB_BASE_URL, "openai/whisper-large-v3", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/v1/audio/transcriptions"
+    assert mock_post.call_args.kwargs["file_field"] == "file"
+    assert len(mock_post.call_args.kwargs["file_bytes"]) > 0
+
+
+def test_probe_transcription_false_when_fixture_missing(monkeypatch):
+    monkeypatch.setattr("logos_worker_node.calibration._PROBE_AUDIO_PATH", Path("/nonexistent/probe.wav"))
+    assert probe_transcription(_CALIB_BASE_URL, "openai/whisper-large-v3", 10.0) is False
+
+
+def test_warmup_inference_dispatches_by_model_kind():
+    with (
+        patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post,
+        patch("logos_worker_node.calibration._post_multipart", return_value=(200, {})) as mock_multipart,
+    ):
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="generative")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="pooling")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="transcription")
+        # An unrecognized kind must never silently drop the warmup — falls
+        # back to the pre-#963 generative probe.
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="something-new")
+
+    post_urls = [c.args[0] for c in mock_post.call_args_list]
+    # generative, pooling, and the unknown-kind fallback (generative again)
+    # all go through _post; only transcription uses _post_multipart.
+    assert post_urls == [
+        f"{_CALIB_BASE_URL}/v1/completions",
+        f"{_CALIB_BASE_URL}/v1/embeddings",
+        f"{_CALIB_BASE_URL}/v1/completions",
+    ]
+    assert mock_multipart.call_count == 1
+
+
+def test_calibrate_pooling_model_fails_fast_when_embeddings_probe_fails():
+    """issue #963: a pooling model that can't answer one /v1/embeddings
+    request must fail calibration outright, never reach [CALIBRATED]."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="pooling"), sleep_level=0)
+
+    assert result.success is False
+    assert "pooling" in result.error
+    assert any(u.endswith("/v1/embeddings") for u in urls)
+    # Never reached Phase 3 — no /v1/completions was ever sent for it.
+    assert not any(u.endswith("/v1/completions") for u in urls)
+
+
+def test_calibrate_pooling_model_succeeds_via_the_right_endpoint():
+    """Proves routing, not just gating: /v1/completions is broken for this
+    model (real embedding-lane behavior) but /v1/embeddings works fine."""
+    post, urls = _capturing_post(**{"/v1/completions": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="pooling"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/v1/embeddings") for u in urls)
+
+
+def test_calibrate_transcription_model_fails_fast_when_audio_probe_fails():
+    """issue #963: the openai/whisper-large-v3 production incident — a
+    lane-killing flag combination must surface here, not first in prod."""
+    patches = _patch_calibration_infra()
+    patches["multipart"] = patch("logos_worker_node.calibration._post_multipart", return_value=(500, {}))
+
+    result, _ = _run_calibrate(
+        patches, plan=_make_plan(model="openai/whisper-large-v3", model_kind="transcription"), sleep_level=0
+    )
+
+    assert result.success is False
+    assert "transcription" in result.error
+
+
+def test_calibrate_generative_model_probe_failure_stays_non_fatal():
+    """Explicit model_kind="generative": unchanged from pre-#963 — a failed
+    warmup only warns, the run still completes (out-of-scope boundary)."""
+    post, _ = _capturing_post(**{"/v1/completions": (405, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="generative"), sleep_level=0)
+
+    assert result.success, result.error
+
+
+def test_calibrate_operator_model_kind_override_wins_over_detected_kind():
+    """An operator's engines.vllm.model_overrides.<model>.model_kind (plan
+    key "model_kind") must win over the HF-precheck auto-classification
+    (plan key "_detected_model_kind")."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(
+        patches,
+        plan=_make_plan(model_kind="pooling", _detected_model_kind="generative"),
+        sleep_level=0,
+    )
+
+    assert result.success is False
+    assert any(u.endswith("/v1/embeddings") for u in urls)
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -42,6 +42,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -659,6 +660,45 @@ def _post(url: str, body: dict | None = None, timeout_s: float = 30.0) -> tuple[
     return _http("POST", url, body=body, timeout_s=timeout_s)
 
 
+def _post_multipart(
+    url: str,
+    *,
+    fields: dict[str, str],
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    file_content_type: str = "audio/wav",
+    timeout_s: float = 30.0,
+) -> tuple[int, Any]:
+    """POST a ``multipart/form-data`` body — stdlib-only, no extra HTTP
+    client dependency for the (single) transcription probe use (#963).
+    """
+    boundary = uuid.uuid4().hex
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; '
+        f'filename="{filename}"\r\nContent-Type: {file_content_type}\r\n\r\n'.encode() + file_bytes + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+    payload = b"".join(parts)
+    headers = {
+        "User-Agent": "logos-calibrate/1.0",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            raw = resp.read()
+            parsed: Any = json.loads(raw) if raw else {}
+            return resp.status, parsed
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+    except Exception:
+        return 0, {}
+
+
 # ---------------------------------------------------------------------------
 # vLLM process lifecycle
 # ---------------------------------------------------------------------------
@@ -996,18 +1036,8 @@ def wait_ready(
     raise TimeoutError(f"vLLM not ready after {timeout_s:.0f}s")
 
 
-def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> bool:
-    """Trigger a single 1-token completion to force lazy GPU allocations.
-
-    Without this, ``/health=200`` only guarantees weights are loaded — CUDA
-    graphs are captured lazily on the first real request, FlashInfer kernels
-    JIT on first use, and Triton autotunes per-shape. The peak VRAM the
-    planner needs to budget for is post-first-request, not post-load.
-
-    Sends one ``/v1/completions`` with ``max_tokens=1``. Returns True on
-    success, False on any HTTP error (caller logs and continues — failure
-    here doesn't fail calibration, the awake measurement is still useful).
-    """
+def probe_generative(base_url: str, model: str, timeout_s: float) -> bool:
+    """1-token ``/v1/completions`` probe — the generative serving path."""
     body = {
         "model": model,
         "prompt": "hi",
@@ -1017,6 +1047,73 @@ def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> boo
     }
     status, _ = _post(f"{base_url}/v1/completions", body=body, timeout_s=timeout_s)
     return status == 200
+
+
+def probe_pooling(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/v1/embeddings`` request — pooling models' real serving path."""
+    body = {"model": model, "input": "hi"}
+    status, _ = _post(f"{base_url}/v1/embeddings", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+# Sub-second mono 16kHz WAV — no network dependency for the transcription
+# probe (issue #963).
+_PROBE_AUDIO_PATH = Path(__file__).with_name("fixtures") / "calibration_probe.wav"
+
+
+def probe_transcription(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/v1/audio/transcriptions`` request against a bundled WAV
+    fixture — the real endpoint voice-only models (Whisper & co.) serve.
+    """
+    try:
+        audio_bytes = _PROBE_AUDIO_PATH.read_bytes()
+    except OSError:
+        logger.warning("  calibration probe fixture missing: %s", _PROBE_AUDIO_PATH)
+        return False
+    status, _ = _post_multipart(
+        f"{base_url}/v1/audio/transcriptions",
+        fields={"model": model},
+        file_field="file",
+        filename="calibration_probe.wav",
+        file_bytes=audio_bytes,
+        timeout_s=timeout_s,
+    )
+    return status == 200
+
+
+_PROBE_BY_MODEL_KIND: dict[str, Callable[[str, str, float], bool]] = {
+    "generative": probe_generative,
+    "pooling": probe_pooling,
+    "transcription": probe_transcription,
+}
+
+# Model kinds calibration can now positively verify end-to-end (issue #963)
+# — a failed probe for these fails calibration outright (see
+# _calibrate_model_probe Phase 2.5 / 5.5). "generative" stays non-fatal:
+# unchanged from before #963, deliberately, to avoid new false positives on
+# transient first-token flakiness — #963 only asked for the missing classes.
+_FATAL_PROBE_MODEL_KINDS = frozenset({"pooling", "transcription"})
+
+
+def warmup_inference(
+    base_url: str,
+    model: str,
+    timeout_s: float = 120.0,
+    *,
+    model_kind: str = "generative",
+) -> bool:
+    """Send one real request through *model*'s own serving endpoint.
+
+    Also forces lazy GPU allocations (CUDA graph capture, FlashInfer JIT,
+    Triton autotune, real KV page allocation) so the awake VRAM sample
+    reflects post-first-request peak, not post-load. ``model_kind`` (from
+    ``classify_model_kind``) picks the matching endpoint — completions,
+    embeddings, or transcription — instead of always assuming
+    ``/v1/completions`` (issue #963: that silently no-ops for pooling/ASR
+    models and never catches a serving-breaking config for them).
+    """
+    probe = _PROBE_BY_MODEL_KIND.get(model_kind, probe_generative)
+    return probe(base_url, model, timeout_s)
 
 
 def wait_sleep_state(base_url: str, target: bool, timeout_s: float) -> None:
@@ -1557,6 +1654,10 @@ def _calibrate_model_probe(
     plan = {**plan, "enforce_eager": eager_mode, "enable_sleep_mode": sleep_level > 0}
 
     model = plan["model"]
+    # "model_kind" is an operator override (engines.vllm.model_overrides);
+    # "_detected_model_kind" is the HF-precheck's auto-classification
+    # (logos_bridge.py). Both route the functional probe (issue #963).
+    model_kind = str(plan.get("model_kind") or plan.get("_detected_model_kind") or "generative")
     gpu_devices = str(plan.get("gpu_devices") or "")
     tp = int(plan.get("tensor_parallel_size", 1))
     gpu_indices = parse_gpu_indices(gpu_devices)
@@ -2576,7 +2677,7 @@ def _calibrate_model_probe(
                 "  [2.5/6] Warming up engine (1-token completion, capturing CUDA graphs — may take a couple minutes)..."
             )
         warmup_t0 = time.perf_counter()
-        warmup_ok = warmup_inference(base_url, model, timeout_s=600.0)
+        warmup_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
         warmup_dt = time.perf_counter() - warmup_t0
         if warmup_ok:
             logger.info(
@@ -2597,6 +2698,17 @@ def _calibrate_model_probe(
                     "        cold load (spawn → first served request, page-cache-warm) = %.1fs",
                     cold_load_time_s,
                 )
+        elif model_kind in _FATAL_PROBE_MODEL_KINDS:
+            # A classified pooling/transcription model has a real, working
+            # probe now (issue #963) — a failure here is the model itself
+            # not serving one request on its own endpoint, not a missed
+            # /v1/completions mismatch. Must not reach [CALIBRATED].
+            partial.error = (
+                f"functional probe failed ({model_kind}): {model} did not answer "
+                "one request on its own serving endpoint"
+            )
+            logger.warning("  ERROR: %s", partial.error)
+            return partial
         else:
             logger.warning(
                 "        warmup failed (%.1fs) — awake VRAM may underestimate peak",
@@ -2796,24 +2908,25 @@ def _calibrate_model_probe(
                     # Test request 2: a lane that wakes but cannot serve is as
                     # unusable as one that never wakes. Same call as the Phase
                     # 2.5 warmup — one 1-token completion.
-                    post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0)
+                    post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
                     if not post_wake_ok and warmup_ok:
                         # Served before sleep but not after: the sleep/wake
                         # cycle broke serving.
                         sleep_phase_failed = True
                         sleep_failure_reason = "post-wake test request failed — model does not serve after sleep/wake"
                     elif not post_wake_ok:
-                        # Did not serve one before sleep either, so this
-                        # failure carries no evidence of a wake regression —
-                        # whatever the cause (embedding-only lanes expose no
-                        # /v1/completions, a transient 5xx, ...), it predates
-                        # the sleep. The wake itself is verified by
-                        # /is_sleeping above, so accept it.
+                        # Did not serve one before sleep either. For a
+                        # classified pooling/transcription model that is
+                        # unreachable here — Phase 2.5 already failed the
+                        # run outright on the same probe (issue #963). This
+                        # remains a genuine "no evidence" case only for an
+                        # unclassified/generative model (a transient 5xx,
+                        # etc.); the wake itself is verified by /is_sleeping
+                        # above, so accept it.
                         logger.warning(
                             "        post-wake test request failed, but the pre-sleep warmup "
-                            "did not serve either — no evidence of a wake regression (the "
-                            "request type may simply be unsupported by this model, e.g. an "
-                            "embedding lane); accepting wake on /is_sleeping evidence"
+                            "did not serve either — no evidence of a wake regression; "
+                            "accepting wake on /is_sleeping evidence"
                         )
                     else:
                         # First request served after the wake completed — the

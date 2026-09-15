@@ -43,6 +43,61 @@ REASON_INSUFFICIENT_VRAM_FOR_MIN_KV = "insufficient-vram-for-min-kv-cache"
 REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED = "model-not-found-or-unauthorized"
 REASON_MODEL_GATED = "model-gated"
 
+# Model class calibration's functional probe must route by (issue #963):
+# a model whose serving endpoint isn't /v1/completions (pooling, ASR) never
+# looked broken there, so a fatal serving flag combination went uncaught.
+# "generative" is also the default classify_model_kind returns when neither
+# signal below is conclusive — the pre-#963 behavior, never widened blindly.
+# pipeline_tag (HF's own curated tag) is authoritative whenever it names a
+# kind we recognize — checked whole, never combined with the architecture
+# fallback below, so a generative tag can't be second-guessed by an
+# incidental architecture-name substring (e.g. a CausalLM wrapper class
+# that happens to contain "Embedding" in its name).
+_PIPELINE_TAG_KIND: dict[str, str] = {
+    "text-generation": "generative",
+    "text2text-generation": "generative",
+    "image-text-to-text": "generative",
+    "feature-extraction": "pooling",
+    "sentence-similarity": "pooling",
+    "text-classification": "pooling",
+    "text-ranking": "pooling",
+    "automatic-speech-recognition": "transcription",
+}
+
+# Architecture-class-name substrings, checked only when pipeline_tag (HF's
+# own curated tag) didn't already decide it — a repo with a missing/generic
+# tag still classifies correctly off its config.json architectures list.
+_TRANSCRIPTION_ARCH_MARKERS = ("Whisper",)
+_POOLING_ARCH_MARKERS = (
+    "Embedding",
+    "ForSequenceClassification",
+    "Reranker",
+    "ForTextEncoding",
+    "RewardModel",
+)
+
+
+def classify_model_kind(pipeline_tag: str | None, architectures: list[str] | None) -> str:
+    """Route calibration's functional probe: "generative" / "pooling" /
+    "transcription" (issue #963).
+
+    Deliberately conservative: defaults to "generative" — today's only
+    probe — whenever neither signal is conclusive, so an unrecognized model
+    keeps exactly its pre-#963 behavior instead of risking a new false-
+    positive calibration failure.
+    """
+    kind = _PIPELINE_TAG_KIND.get(pipeline_tag or "")
+    if kind is not None:
+        return kind
+    for arch in architectures or ():
+        if any(marker in arch for marker in _TRANSCRIPTION_ARCH_MARKERS):
+            return "transcription"
+    for arch in architectures or ():
+        if any(marker in arch for marker in _POOLING_ARCH_MARKERS):
+            return "pooling"
+    return "generative"
+
+
 _DTYPE_BYTES = {
     "float32": 4,
     "fp32": 4,
@@ -81,6 +136,13 @@ class HfModelMetadata:
     # against the installed vLLM's supported methods separately (see
     # calibration.query_vllm_quantization_methods).
     quantization_method: str | None = None
+    # Hub-curated task tag (e.g. "text-generation", "feature-extraction",
+    # "automatic-speech-recognition") and config.json's own "architectures"
+    # list — both already fetched below for other purposes, kept here so
+    # classify_model_kind can route calibration's functional probe by model
+    # class instead of always assuming /v1/completions (issue #963).
+    pipeline_tag: str | None = None
+    architectures: list[str] | None = None
     fetched_at: float = 0.0
     source: str = "error:unknown"  # "hf" on success, "error:<reason>" otherwise
     error: str | None = None
@@ -101,6 +163,8 @@ _HF_METADATA_VALUE_TYPES: dict[str, tuple[type, ...]] = {
     "torch_dtype": (str,),
     "max_context_length": (int,),
     "quantization_method": (str,),
+    "pipeline_tag": (str,),
+    "architectures": (list,),
     "fetched_at": (int, float),
     "source": (str,),
     "error": (str,),
@@ -242,8 +306,10 @@ def _fetch_uncached(
     # not-found verdict, or a gated model would wrongly look nonexistent.
     gated = False
     weight_bytes: int | None = None
+    pipeline_tag: str | None = None
     try:
         info = HfApi().model_info(model_name, revision=revision, token=token, files_metadata=True, timeout=timeout_s)
+        pipeline_tag = str(info.pipeline_tag) if info.pipeline_tag else None
         siblings = info.siblings or []
         index_names = [s.rfilename for s in siblings if s.rfilename.endswith(".safetensors.index.json")]
         index_json: dict[str, Any] | None = None
@@ -277,6 +343,7 @@ def _fetch_uncached(
     torch_dtype: str | None = None
     max_context_length: int | None = None
     quantization_method: str | None = None
+    architectures: list[str] | None = None
     try:
         # etag_timeout only bounds the existence check, not the (tiny)
         # config.json transfer itself — hf_hub_download has no knob for that.
@@ -296,6 +363,11 @@ def _fetch_uncached(
         if isinstance(quant_cfg, dict):
             quant_method = quant_cfg.get("quant_method")
             quantization_method = str(quant_method) if quant_method else None
+        # Always top-level (unlike torch_dtype/quantization_config), never
+        # nested under text_config — no _get_config_field fallback needed.
+        raw_architectures = config.get("architectures")
+        if isinstance(raw_architectures, list) and raw_architectures:
+            architectures = [str(a) for a in raw_architectures]
     except GatedRepoError as exc:
         gated = True
         logger.debug("[HF precheck] config.json gated for %s: %s", model_name, exc)
@@ -324,6 +396,8 @@ def _fetch_uncached(
         torch_dtype=torch_dtype,
         max_context_length=max_context_length,
         quantization_method=quantization_method,
+        pipeline_tag=pipeline_tag,
+        architectures=architectures,
         fetched_at=time.time(),
         source="hf",
     )
@@ -374,7 +448,7 @@ class HfModelInfoCache:
                 return False
             if isinstance(value, bool) or not isinstance(value, expected_types):
                 return False
-            if expected_types != (str,) and value < 0:
+            if isinstance(value, (int, float)) and value < 0:
                 return False
         return True
 

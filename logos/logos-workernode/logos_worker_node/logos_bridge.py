@@ -963,6 +963,7 @@ class LogosBridgeClient:
                 "fit_tp_idle": None,
                 "fit_tp_current": None,
                 "unsupported_reason": None,
+                "model_kind": "generative",
             }
         from logos_worker_node.calibration import (  # noqa: PLC0415
             _max_tp_for_plan,
@@ -976,6 +977,7 @@ class LogosBridgeClient:
             REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
             REASON_MODEL_GATED,
             REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
+            classify_model_kind,
             fetch_hf_model_metadata,
             kv_bytes_for_dtype,
             min_feasible_tp,
@@ -1027,6 +1029,11 @@ class LogosBridgeClient:
             "fit_tp_idle": None,
             "fit_tp_current": None,
             "unsupported_reason": None,
+            "model_kind": (
+                classify_model_kind(hf_meta.pipeline_tag, hf_meta.architectures)
+                if hf_meta is not None
+                else "generative"
+            ),
         }
 
         # A repo that doesn't exist and a private one this token can't see
@@ -1755,6 +1762,12 @@ class LogosBridgeClient:
                         None,
                     )
                     continue
+                # Auto-classification (issue #963) — routes the functional
+                # probe to the model's real serving endpoint. An operator
+                # override (plan["model_kind"], via
+                # engines.vllm.model_overrides) takes precedence; see
+                # _calibrate_model_probe.
+                plan = {**plan, "_detected_model_kind": precheck["model_kind"]}
                 if precheck["fit_tp_idle"] is not None:
                     plan = {
                         **plan,

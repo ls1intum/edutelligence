@@ -1339,6 +1339,9 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
     assert len(seen_plans) == 1
     assert seen_plans[0]["_hf_weight_bytes"] == 4 * 1024 * 1024 * 1024
     assert seen_plans[0]["_hf_max_tp_ceiling"] == 1
+    # No pipeline_tag/architectures on this HfModelMetadata — issue #963's
+    # classifier defaults to "generative", the pre-#963 behavior.
+    assert seen_plans[0]["_detected_model_kind"] == "generative"
 
     # A successful calibration overwrites the HF estimate with the real
     # measurement, but the HF-only fields (never measured by calibration)
@@ -1349,6 +1352,58 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
     assert profile.base_residency_mb == 4200.0
     assert profile.kv_per_token_bytes == 1024
     assert profile.max_context_length == 8192
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_classifies_transcription_model_into_plan(tmp_path, monkeypatch):
+    """issue #963: a Whisper-like model's HF pipeline_tag must reach the
+    calibration plan as _detected_model_kind, routing the functional probe
+    to /v1/audio/transcriptions instead of /v1/completions. Isolated from
+    the VRAM-fit math: weight_bytes is left unset."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/whisper-large-v3"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            pipeline_tag="automatic-speech-recognition",
+            architectures=["WhisperForConditionalGeneration"],
+            source="hf",
+        ),
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=1000.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert seen_plans[0]["_detected_model_kind"] == "transcription"
 
 
 @pytest.mark.asyncio
@@ -1984,6 +2039,51 @@ async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_d
     assert response["unsupported_reason"] is None
     assert response["per_gpu_total_mb"] == 24000.0
     assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_reports_model_kind(tmp_path, monkeypatch):
+    """issue #963: the precheck classifies every model it fetches HF
+    metadata for, generative default included, so the calibration loop can
+    route its functional probe without a second HF lookup."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(pipeline_tag="feature-extraction", source="hf"),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/embedding-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "pooling"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_model_kind_defaults_generative_on_fetch_failure(tmp_path, monkeypatch):
+    """No HF metadata at all (network down, unknown model, ...) must still
+    default to "generative" — the pre-#963 behavior, never a new fatal
+    probe for a model we have no classification signal for."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network down")),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/unreachable-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "generative"
 
 
 @pytest.mark.asyncio
