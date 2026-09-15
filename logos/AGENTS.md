@@ -290,16 +290,24 @@ When implementing a feature for a GitHub issue:
    - Monitor until all checks pass
 8. Never merge directly to `main` without a PR
 9. **ALWAYS include a screenshot in every PR that touches the UI** — this is a
-   hard requirement (see below), not a nicety.
+   hard requirement (see below), not a nicety: desktop **and** mobile.
 
 ### UI PRs Require a Screenshot (MANDATORY)
-Every pull request that changes the Logos UI (`logos/logos-ui/`) MUST include a
-screenshot (or short screen recording) of the changed UI in the PR description
-under a `## Screenshots` section. Reviewers must be able to see the result
-without running the stack — a UI PR without screenshots is not reviewable and
-will be sent back. Take the screenshot against a local dev stack (`docker
+Every pull request that changes the Logos UI (`logos/logos-ui/`) MUST include
+screenshots of the changed UI in the PR description under a `## Screenshots`
+section:
+
+- at least one **desktop** screenshot of the changed view, and
+- at least one **mobile** screenshot (e.g. 375px viewport) of the same view,
+  to prove the UI stays usable on small screens — the shared data tables drop
+  their header below 768px and fall back to per-cell `data-label`s, so a
+  mobile shot is the only way to see how a table actually renders there.
+
+Reviewers must be able to see the result without running the stack — a UI PR
+without screenshots (desktop **or** mobile) is not reviewable and will be sent
+back. Take the screenshots against a local dev stack (`docker
 compose -f docker-compose.dev.yaml up` + `ng serve`), log in with one of the
-seeded users (see below), and attach the image to the PR description.
+seeded users (see below), and attach the images to the PR description.
 
 ### PR Description Template
 ```markdown
