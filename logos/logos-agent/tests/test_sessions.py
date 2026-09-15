@@ -3866,6 +3866,36 @@ class TestReplyDelivery:
 
         assert posted == []
 
+    async def test_a_failed_marker_lookup_is_recorded_as_pending(self, monkeypatch, tmp_path):
+        # The look-up for a lost confirmation fails like the POST it
+        # protects: the attempt is recorded undelivered and the next pass
+        # tries again, and nothing escapes to the settlement.
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        attempts: list = []
+
+        async def broken(_number, _marker):
+            raise RuntimeError("rate limited")
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        async def send(_target, _body):
+            raise AssertionError("a failed look-up must not reach the POST")
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", broken)
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        assert attempts == [(7, False)]
+
     async def test_an_oversized_answer_is_shortened_rather_than_refused(self, monkeypatch, tmp_path):
         from app import sessions
 
@@ -3932,6 +3962,13 @@ class TestReviewReplyDelivery:
         from app import sessions
 
         return (772, body + "\n\n" + sessions._answer_marker(31))
+
+    @staticmethod
+    def _summarized(body):
+        """The review summary as it reaches GitHub, its marker included."""
+        from app import sessions
+
+        return (772, body + "\n\n" + sessions._summary_marker(31))
 
     def install(self, monkeypatch, tmp_path, row, *, comments=None, threads=None):
         """The review delivery, with every GitHub call recorded."""
@@ -4054,7 +4091,7 @@ class TestReviewReplyDelivery:
         await sessions.SessionManager()._post_reply(31)
 
         assert recorded["threads"] == [self._posted(101, "fixed"), self._posted(102, "fixed too")]
-        assert recorded["summaries"] == [self._single("and the body point: the default is documented now")]
+        assert recorded["summaries"] == [self._summarized("and the body point: the default is documented now")]
         assert recorded["re_requests"] == ["claudia"]
 
     async def test_a_comment_the_review_does_not_carry_is_not_answered(self, monkeypatch, tmp_path):
@@ -4133,7 +4170,7 @@ class TestReviewReplyDelivery:
         await manager._post_reply(31)
 
         assert recorded["threads"] == [self._posted(101, "one"), self._posted(102, "two")]
-        assert recorded["summaries"] == [self._single("the body point")]
+        assert recorded["summaries"] == [self._summarized("the body point")]
         assert recorded["resolved"] == ["PRRT_1", "PRRT_2"]
         assert recorded["re_requests"] == ["claudia"]
         assert recorded["attempts"] == [(31, False), (31, True)]
@@ -4376,6 +4413,65 @@ class TestReviewReplyDelivery:
         assert recorded["summaries"] == []
         assert recorded["attempts"] == [(31, False), (31, True)]
 
+    async def test_a_deleted_review_after_a_posted_summary_still_posts_the_answers(self, monkeypatch, tmp_path):
+        # The summary reached the pull request, the re-request failed, and
+        # the review — with its threads — was deleted before the retry. The
+        # summary's mark must not stand for the combined answer: the thread
+        # answers were lost with the threads, and they still have to be said.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "reply.md").write_text("the body point")
+        reviews_seen = {"n": 0}
+        requests_seen = {"n": 0}
+        posted = {"summary": False}
+
+        async def gone_later(_number, _review_id):
+            reviews_seen["n"] += 1
+            if reviews_seen["n"] >= 2:
+                raise sessions.github.GitHubError("the review is gone (404)", status=404)
+            return {"id": 5085681761, "user": {"login": "claudia"}}
+
+        async def flaky_request(_number, logins):
+            requests_seen["n"] += 1
+            if requests_seen["n"] == 1:
+                raise RuntimeError("rate limited")
+            recorded["re_requests"].extend(logins)
+
+        async def post_summary(number, body):
+            posted["summary"] = True
+            recorded["summaries"].append((number, body))
+            return f"https://github.com/x/y#issuecomment-{number}"
+
+        async def contains(_number, marker):
+            # Only the summary's mark can be on the pull request: the
+            # thread answers went into the threads that are now gone.
+            return posted["summary"] and marker == sessions._summary_marker(31)
+
+        monkeypatch.setattr(sessions.github, "review", gone_later)
+        monkeypatch.setattr(sessions.github, "request_pull_review", flaky_request)
+        monkeypatch.setattr(sessions.github, "post_issue_comment", post_summary)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", contains)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        # Pass one answered the thread, posted the summary, and died on
+        # the re-request. Pass two found the review gone and posted the
+        # combined answer under its own mark — the summary's did not stand
+        # for it.
+        assert recorded["threads"] == [self._posted(101, "one")]
+        assert recorded["summaries"] == [
+            self._summarized("the body point"),
+            self._single("the body point\n\n**Answer to review comment 101:**\n\none"),
+        ]
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, False), (31, True)]
+
     async def test_a_review_row_without_a_reference_posts_the_summary_only(self, monkeypatch, tmp_path):
         from app import sessions
 
@@ -4516,7 +4612,7 @@ class TestReviewReplyDelivery:
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["summaries"] == [self._single("the body was the whole review")]
+        assert recorded["summaries"] == [self._summarized("the body was the whole review")]
         assert recorded["threads"] == []
         assert recorded["resolved"] == []
         assert recorded["re_requests"] == ["claudia"]

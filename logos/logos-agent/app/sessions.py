@@ -119,6 +119,18 @@ def _answer_marker(session_id: int) -> str:
     return f"<!-- logos answer {session_id} -->"
 
 
+def _summary_marker(session_id: int) -> str:
+    """The hidden mark of a review's summary.
+
+    Deliberately not the single answer's mark: a session can owe both —
+    the summary posted while the review still stood, and the combined
+    answer later, when the review is gone. If both carried one mark, the
+    first would stand for the second, and the thread answers lost with the
+    threads would never be said.
+    """
+    return f"<!-- logos summary {session_id} -->"
+
+
 # How many sessions one request may have before the runner stops taking it
 # up again. A launch that cannot work, or a task nothing can be made of:
 # three attempts survives an accident and is few enough to notice.
@@ -2298,20 +2310,22 @@ class SessionManager:
         if not body:
             await self._no_answer(session_id, session)
             return
-        body = self._truncate_reply(body)
-        if target.startswith("issue:"):
-            # The answer's POST is not idempotent: a confirmation lost on
-            # the way back leaves it posted without the state knowing, and
-            # the mark on the pull request is the answer to whether
-            # posting again would say it twice.
-            marker = _answer_marker(session_id)
-            if await github.issue_comment_contains(int(target.partition(":")[2]), marker):
-                await db.record_reply_attempt(session_id, delivered=True)
-                await db.add_event(session_id, EventKind.PULL_REQUEST, {"reply": True, "found": True})
-                logger.info("session %s found its answer already at %s", session_id, target)
-                return
-            body += "\n\n" + marker
         try:
+            body = self._truncate_reply(body)
+            if target.startswith("issue:"):
+                # The answer's POST is not idempotent: a confirmation lost
+                # on the way back leaves it posted without the state
+                # knowing, and the mark on the pull request is the answer
+                # to whether posting again would say it twice. The look-up
+                # fails like the POST: the attempt is recorded undelivered,
+                # and the next pass tries again.
+                marker = _answer_marker(session_id)
+                if await github.issue_comment_contains(int(target.partition(":")[2]), marker):
+                    await db.record_reply_attempt(session_id, delivered=True)
+                    await db.add_event(session_id, EventKind.PULL_REQUEST, {"reply": True, "found": True})
+                    logger.info("session %s found its answer already at %s", session_id, target)
+                    return
+                body += "\n\n" + marker
             url = await self._send_reply(target, body)
         except Exception as exc:
             # Counted, not given up on: the next scheduler pass tries again
@@ -2530,7 +2544,7 @@ class SessionManager:
             await self._resolve_answered_threads(session_id, number, state, state_path)
 
         if summary and not state["summary_posted"]:
-            marker = _answer_marker(session_id)
+            marker = _summary_marker(session_id)
             # The summary's POST is not idempotent: a confirmation lost on
             # the way back leaves it posted without the state knowing, and
             # the mark on the pull request is the answer to whether

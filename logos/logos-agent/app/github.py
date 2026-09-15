@@ -652,8 +652,22 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     return [comment for comment in payload if isinstance(comment, dict)]
 
 
+def _next_page(after: str | None, page: dict[str, Any], what: str) -> str:
+    """The cursor for the next page — or the error that pagination stopped.
+
+    A page that claims there is more and hands back the cursor it was asked
+    with (or none at all) is not a page: following it would read the same
+    page again until the ceiling, spending the rate budget on nothing.
+    """
+    next_after = str(page.get("endCursor") or "")
+    if not next_after or next_after == after:
+        raise GitHubError(f"GitHub stopped paginating {what}: the cursor did not advance")
+    return next_after
+
+
 # A pull request's review threads, paged. Each inline comment starts its own
-# thread, and it is the thread — not the comment — that resolution acts on.
+# thread — or sits inside the thread of the comment it replies to — and it
+# is the thread, not the comment, that resolution acts on.
 _THREADS_QUERY = """
 query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -662,7 +676,7 @@ query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: Stri
         nodes {
           id
           isResolved
-          comments(first: 1) {
+          comments(first: 100) {
             nodes { databaseId }
           }
         }
@@ -675,14 +689,14 @@ query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: Stri
 
 
 async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
-    """The pull request's review threads, keyed by their first comment's id.
+    """The pull request's review threads, keyed by the ids of their comments.
 
-    ``{comment id: {"thread": node id, "resolved": bool}}``. The first
-    comment of a thread is the one that started it — for a review, the
-    review's own inline comment — so this is how the id the answers are
-    named after finds the thread they belong to. A comment that is a reply
-    inside somebody else's thread starts no thread of its own and is not in
-    the map; answering it still works, its thread simply stays open.
+    ``{comment id: {"thread": node id, "resolved": bool}}`` — the comment
+    that started a thread and the replies inside it alike, so the id an
+    answer is named after always finds the thread it belongs to, whether or
+    not the comment starts a thread of its own. A comment a thread holds
+    beyond its first hundred is not in the map; resolution then simply
+    leaves the thread open, which is the safe direction.
     """
     owner, name = settings.repo_slug.split("/", 1)
     mapped: dict[int, dict[str, Any]] = {}
@@ -691,14 +705,14 @@ async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
         data = await _graphql(_THREADS_QUERY, {"owner": owner, "name": name, "number": number, "after": after})
         connection = (data.get("repository") or {}).get("pullRequest", {}).get("reviewThreads") or {}
         for node in connection.get("nodes") or []:
-            first = ((node.get("comments") or {}).get("nodes") or [None])[0]
-            comment_id = (first or {}).get("databaseId")
-            if isinstance(comment_id, int) and comment_id not in mapped:
-                mapped[comment_id] = {"thread": node.get("id"), "resolved": bool(node.get("isResolved"))}
+            for comment in (node.get("comments") or {}).get("nodes") or []:
+                comment_id = comment.get("databaseId") if isinstance(comment, dict) else None
+                if isinstance(comment_id, int) and comment_id not in mapped:
+                    mapped[comment_id] = {"thread": node.get("id"), "resolved": bool(node.get("isResolved"))}
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
             return mapped
-        after = str(page.get("endCursor") or "")
+        after = _next_page(after, page, f"the review threads of #{number}")
     # An incomplete map would leave a resolved-and-answered thread
     # unresolved while the delivery claims success: raising hands the
     # sweep back to the retry instead.
@@ -733,15 +747,15 @@ async def review_reply_is_in_thread(number: int, comment_id: int, marker: str) -
     reply can sit anywhere in them. A look-up that cannot be completed
     raises rather than risking the duplicate.
     """
-    # The reply went into the thread its comment starts. A comment that
-    # starts no thread of its own is a reply inside somebody else's
-    # thread, and the map does not name that thread — its answer cannot
-    # be looked for, and the POST goes ahead as before.
+    # The reply went into the thread the map names for the comment — the
+    # one it starts, or the one of the comment it replies to. A comment
+    # the map does not name at all cannot be looked for, and the POST goes
+    # ahead as before.
     threads = await review_thread_map(number)
     thread_id = str((threads.get(comment_id) or {}).get("thread") or "")
     if not thread_id:
         logger.warning(
-            "comment %s on #%s starts no thread of its own; its posted answer cannot be looked for",
+            "comment %s on #%s is in no review thread; its posted answer cannot be looked for",
             comment_id,
             number,
         )
@@ -755,7 +769,7 @@ async def review_reply_is_in_thread(number: int, comment_id: int, marker: str) -
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
             return False
-        after = str(page.get("endCursor") or "")
+        after = _next_page(after, page, f"the thread of comment {comment_id} on #{number}")
     raise GitHubError(
         f"could not finish looking through the thread of comment {comment_id} on #{number}: "
         f"more than {_MAX_PAGES} pages of comments"
@@ -1177,9 +1191,12 @@ async def issue_comment_contains(number: int, marker: str) -> bool:
     A comment POST is not idempotent, and a confirmation that never
     arrived leaves the posted comment behind without the delivery state
     ever learning of it — this is how the next pass finds it instead of
-    posting the same answer twice.
+    posting the same answer twice. A listing that could not be read in
+    full cannot rule the marker out, so it raises rather than answer no.
     """
-    comments = await _get_all(f"/repos/{settings.repo_slug}/issues/{number}/comments")
+    comments, incomplete = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments")
+    if incomplete:
+        raise GitHubError(f"could not finish reading the comments of #{number}: the listing is incomplete")
     return any(marker in str(c.get("body") or "") for c in comments if isinstance(c, dict))
 
 

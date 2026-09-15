@@ -1288,8 +1288,21 @@ class TestReviewRepliesAndReRequests:
         # complete while a thread is left unresolved, and the retry is the
         # only safe outcome.
         calls: list = []
-        page = {"data": _threads_payload([_thread_payload("PRRT_1", 101)], has_next=True)}
-        fake_graphql_client(monkeypatch, calls, [(200, page)])
+
+        async def endless(_query, variables):
+            calls.append(variables)
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [_thread_payload("PRRT_1", 101)],
+                            "pageInfo": {"hasNextPage": True, "endCursor": f"cursor-{len(calls)}"},
+                        }
+                    }
+                }
+            }
+
+        monkeypatch.setattr(github, "_graphql", endless)
 
         with pytest.raises(github.GitHubError):
             await github.review_thread_map(772)
@@ -1322,6 +1335,92 @@ class TestReviewRepliesAndReRequests:
         assert await github.issue_comment_contains(772, "<!-- logos answer 32 -->") is False
         assert len(asked) == 2
         assert asked[0].endswith("/issues/772/comments")
+
+    async def test_the_map_covers_the_replies_inside_a_thread(self, monkeypatch):
+        # A comment that is a reply inside somebody else's thread still
+        # maps to that thread: the answer to it is named after the
+        # comment, and reconciliation and resolution both look it up.
+        calls: list = []
+        payload = {
+            "data": _threads_payload(
+                [
+                    {
+                        "id": "PRRT_1",
+                        "isResolved": False,
+                        "comments": {"nodes": [{"databaseId": 101}, {"databaseId": 500}]},
+                    }
+                ]
+            )
+        }
+        fake_graphql_client(monkeypatch, calls, [(200, payload)])
+
+        mapped = await github.review_thread_map(772)
+
+        assert set(mapped) == {101, 500}
+        assert mapped[500] == {"thread": "PRRT_1", "resolved": False}
+
+    async def test_a_reply_inside_another_thread_is_found_there(self, monkeypatch):
+        # The marker look-up follows the same map: a comment that replies
+        # inside somebody else's thread is reconciled against that thread,
+        # not ruled out because it starts none of its own.
+        calls: list = []
+        marker = "<!-- logos reply 31 500 -->"
+        map_answer = {
+            "data": _threads_payload(
+                [
+                    {
+                        "id": "PRRT_1",
+                        "isResolved": False,
+                        "comments": {"nodes": [{"databaseId": 101}, {"databaseId": 500}]},
+                    }
+                ]
+            )
+        }
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [(200, map_answer), (200, {"data": _thread_comments_payload([f"the answer\n\n{marker}"])})],
+        )
+
+        assert await github.review_reply_is_in_thread(772, 500, marker) is True
+        assert calls[1]["json"]["variables"]["threadId"] == "PRRT_1"
+
+    async def test_a_stuck_thread_map_cursor_is_an_error(self, monkeypatch):
+        # A page that claims there is more and hands back the cursor it was
+        # asked with is not a page: following it would read the same page
+        # until the ceiling, spending the rate budget on nothing.
+        calls: list = []
+        page = {"data": _threads_payload([_thread_payload("PRRT_1", 101)], has_next=True, end_cursor="same")}
+        fake_graphql_client(monkeypatch, calls, [(200, page)])
+
+        with pytest.raises(github.GitHubError):
+            await github.review_thread_map(772)
+        assert len(calls) == 2
+
+    async def test_a_stuck_thread_comments_cursor_is_an_error(self, monkeypatch):
+        calls: list = []
+        map_answer = {"data": _threads_payload([_thread_payload("PRRT_1", 101)])}
+        stuck = {"data": _thread_comments_payload(["no marker"], has_next=True, end_cursor="same")}
+        fake_graphql_client(monkeypatch, calls, [(200, map_answer), (200, stuck)])
+
+        with pytest.raises(github.GitHubError):
+            await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->")
+        assert len(calls) == 3
+
+    async def test_an_incomplete_comment_listing_is_an_error(self, monkeypatch):
+        # A listing that hits the page ceiling cannot rule the marker out,
+        # and ruling it out is what the POST depends on.
+        asked: list = []
+
+        async def full_page(_path, params=None, **kwargs):
+            asked.append(params)
+            return [{"body": f"comment {i}"} for i in range(github._PAGE_SIZE)]
+
+        monkeypatch.setattr(github, "_get", full_page)
+
+        with pytest.raises(github.GitHubError):
+            await github.issue_comment_contains(772, "<!-- logos answer 31 -->")
+        assert len(asked) == github._MAX_PAGES
 
     async def test_resolving_threads_runs_one_mutation_per_thread(self, monkeypatch):
         # The exact request, pinned to the schema: the mutation takes the id
