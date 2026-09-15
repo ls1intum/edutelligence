@@ -1062,7 +1062,7 @@ def fake_graphql_client(monkeypatch, calls, answers):
             return FakeGraphQLResponse(status, payload)
 
     monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
-    monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok"))
+    monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok", github_login="logos"))
 
 
 def _thread_payload(thread_id: str, comment_id: int, resolved: bool = False) -> dict:
@@ -1086,11 +1086,19 @@ def _threads_payload(nodes, has_next: bool = False, end_cursor: str = "cursor-1"
     }
 
 
-def _thread_comments_payload(bodies, has_next: bool = False, end_cursor: str = "cursor-1") -> dict:
+def _thread_comments_payload(
+    bodies, has_next: bool = False, end_cursor: str = "cursor-1", author: str | None = "logos"
+) -> dict:
+    nodes = []
+    for body in bodies:
+        node = {"body": body}
+        if author is not None:
+            node["author"] = {"login": author}
+        nodes.append(node)
     return {
         "node": {
             "comments": {
-                "nodes": [{"body": body} for body in bodies],
+                "nodes": nodes,
                 "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
             }
         }
@@ -1327,7 +1335,10 @@ class TestReviewRepliesAndReRequests:
 
         async def fake_get(path, params=None, **kwargs):
             asked.append(path)
-            return [{"body": "an earlier discussion"}, {"body": "the answer\n\n<!-- logos answer 31 -->"}]
+            return [
+                {"body": "an earlier discussion"},
+                {"body": "the answer\n\n<!-- logos answer 31 -->", "user": {"login": "LogosOSSAgent"}},
+            ]
 
         monkeypatch.setattr(github, "_get", fake_get)
 
@@ -1335,6 +1346,114 @@ class TestReviewRepliesAndReRequests:
         assert await github.issue_comment_contains(772, "<!-- logos answer 32 -->") is False
         assert len(asked) == 2
         assert asked[0].endswith("/issues/772/comments")
+
+    async def test_a_participant_authored_marker_is_not_delivery(self, monkeypatch):
+        # A posted marker carries the session id, which a participant of
+        # the pull request can read. Writing the expected marker
+        # themselves would suppress the answer that is still owed, so a
+        # marker counts only when the account it was posted by is the
+        # account the runner posts with.
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            return [{"body": "<!-- logos answer 31 -->", "user": {"login": "a-participant"}}]
+
+        monkeypatch.setattr(github, "_get", fake_get)
+
+        assert await github.issue_comment_contains(772, "<!-- logos answer 31 -->") is False
+
+    async def test_a_participant_authored_thread_marker_is_not_delivery(self, monkeypatch):
+        # The same binding inside a review thread: a marker posted by
+        # somebody else does not stand for the runner's reply, and the
+        # look-up still reads the thread to the end before ruling it out.
+        calls: list = []
+        map_answer = {"data": _threads_payload([_thread_payload("PRRT_1", 101)])}
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [
+                (200, map_answer),
+                (200, {"data": _thread_comments_payload(["<!-- logos reply 31 101 -->"], author="a-participant")}),
+            ],
+        )
+
+        assert await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->") is False
+
+    async def test_the_map_reads_out_a_thread_beyond_its_first_page(self, monkeypatch):
+        # A thread that holds more comments than its first page: the rest
+        # is read out of the thread, so a target after comment 100 still
+        # maps to its thread.
+        calls: list = []
+        first_page = {
+            "id": "PRRT_1",
+            "isResolved": False,
+            "comments": {
+                "nodes": [{"databaseId": i} for i in range(1, 101)],
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+            },
+        }
+        rest = {
+            "data": {
+                "node": {
+                    "comments": {
+                        "nodes": [{"databaseId": 101}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
+        }
+        fake_graphql_client(monkeypatch, calls, [(200, {"data": _threads_payload([first_page])}), (200, rest)])
+
+        mapped = await github.review_thread_map(772)
+
+        assert mapped[101] == {"thread": "PRRT_1", "resolved": False}
+        assert calls[1]["json"]["variables"]["threadId"] == "PRRT_1"
+        assert calls[1]["json"]["variables"]["after"] == "c1"
+
+    async def test_the_map_refuses_a_thread_it_cannot_finish(self, monkeypatch):
+        # A thread with more comment pages than the ceiling: the map
+        # cannot be completed, and a partial map would silently drop a
+        # target — so it raises.
+        calls: list = []
+
+        async def fetch(_query, variables):
+            calls.append(variables)
+            if "threadId" in variables:
+                n = sum(1 for v in calls if "threadId" in v)
+                return {
+                    "node": {
+                        "comments": {
+                            "nodes": [{"databaseId": 100 + n}],
+                            "pageInfo": {"hasNextPage": True, "endCursor": f"c{n}"},
+                        }
+                    }
+                }
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "PRRT_1",
+                                    "isResolved": False,
+                                    "comments": {
+                                        "nodes": [{"databaseId": i} for i in range(1, 101)],
+                                        "pageInfo": {"hasNextPage": True, "endCursor": "c0"},
+                                    },
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            }
+
+        monkeypatch.setattr(github, "_graphql", fetch)
+
+        with pytest.raises(github.GitHubError):
+            await github.review_thread_map(772)
+        assert len(calls) == 1 + github._MAX_PAGES
 
     async def test_the_map_covers_the_replies_inside_a_thread(self, monkeypatch):
         # A comment that is a reply inside somebody else's thread still

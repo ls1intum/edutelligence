@@ -665,6 +665,22 @@ def _next_page(after: str | None, page: dict[str, Any], what: str) -> str:
     return next_after
 
 
+def _is_our_marker(comment: Any, marker: str) -> bool:
+    """Whether the comment carries the marker — and is the runner's own.
+
+    The session id of a posted marker is visible in the thread, so a
+    participant can write the expected marker into an unanswered thread
+    and suppress the answer that is still owed. A marker counts only when
+    the account it was posted by is the account the runner posts with.
+    """
+    if not isinstance(comment, dict):
+        return False
+    if marker not in str(comment.get("body") or ""):
+        return False
+    author = comment.get("author") or comment.get("user") or {}
+    return isinstance(author, dict) and author.get("login") == settings.github_login
+
+
 # A pull request's review threads, paged. Each inline comment starts its own
 # thread — or sits inside the thread of the comment it replies to — and it
 # is the thread, not the comment, that resolution acts on.
@@ -678,8 +694,25 @@ query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: Stri
           isResolved
           comments(first: 100) {
             nodes { databaseId }
+            pageInfo { hasNextPage endCursor }
           }
         }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+# The rest of one thread's comments, paged: the first page travels with the
+# thread listing, and a thread that holds more comments than that is read
+# out of the thread itself while the map is built.
+_THREAD_COMMENT_IDS_QUERY = """
+query ReviewThreadCommentIds($threadId: ID!, $after: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) {
+        nodes { databaseId }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -692,11 +725,11 @@ async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
     """The pull request's review threads, keyed by the ids of their comments.
 
     ``{comment id: {"thread": node id, "resolved": bool}}`` — the comment
-    that started a thread and the replies inside it alike, so the id an
-    answer is named after always finds the thread it belongs to, whether or
-    not the comment starts a thread of its own. A comment a thread holds
-    beyond its first hundred is not in the map; resolution then simply
-    leaves the thread open, which is the safe direction.
+    that started a thread and the replies inside it alike, read to the end
+    of every thread, so the id an answer is named after always finds the
+    thread it belongs to, however deep in the thread it sits. A map that
+    cannot be completed raises: a partial one would silently drop a target,
+    and a dropped target is a duplicated answer.
     """
     owner, name = settings.repo_slug.split("/", 1)
     mapped: dict[int, dict[str, Any]] = {}
@@ -705,10 +738,24 @@ async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
         data = await _graphql(_THREADS_QUERY, {"owner": owner, "name": name, "number": number, "after": after})
         connection = (data.get("repository") or {}).get("pullRequest", {}).get("reviewThreads") or {}
         for node in connection.get("nodes") or []:
-            for comment in (node.get("comments") or {}).get("nodes") or []:
-                comment_id = comment.get("databaseId") if isinstance(comment, dict) else None
-                if isinstance(comment_id, int) and comment_id not in mapped:
-                    mapped[comment_id] = {"thread": node.get("id"), "resolved": bool(node.get("isResolved"))}
+            thread_id = node.get("id")
+            comments = node.get("comments") or {}
+            nested_after: str | None = None
+            for _ in range(_MAX_PAGES):
+                for comment in comments.get("nodes") or []:
+                    comment_id = comment.get("databaseId") if isinstance(comment, dict) else None
+                    if isinstance(comment_id, int) and comment_id not in mapped:
+                        mapped[comment_id] = {"thread": thread_id, "resolved": bool(node.get("isResolved"))}
+                page = comments.get("pageInfo") or {}
+                if not page.get("hasNextPage"):
+                    break
+                nested_after = _next_page(nested_after, page, f"the comments of thread {thread_id} on #{number}")
+                more = await _graphql(_THREAD_COMMENT_IDS_QUERY, {"threadId": thread_id, "after": nested_after})
+                comments = (more.get("node") or {}).get("comments") or {}
+            else:
+                raise GitHubError(
+                    f"could not map all comments of thread {thread_id} on #{number}: more than {_MAX_PAGES} pages"
+                )
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
             return mapped
@@ -721,13 +768,14 @@ async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
 
 # The comments of one review thread, paged. A reply that a lost POST
 # confirmation left behind is one of the thread's comments, and only the
-# bodies can say whether it is there.
+# bodies can say whether it is there — and only the runner's own: a marker
+# in somebody else's comment is a comment about the marker, not delivery.
 _THREAD_COMMENTS_QUERY = """
 query ReviewThreadComments($threadId: ID!, $after: String) {
   node(id: $threadId) {
     ... on PullRequestReviewThread {
       comments(first: 100, after: $after) {
-        nodes { body }
+        nodes { body author { login } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -764,7 +812,7 @@ async def review_reply_is_in_thread(number: int, comment_id: int, marker: str) -
     for _ in range(_MAX_PAGES):
         data = await _graphql(_THREAD_COMMENTS_QUERY, {"threadId": thread_id, "after": after})
         connection = (data.get("node") or {}).get("comments") or {}
-        if any(isinstance(c, dict) and marker in str(c.get("body") or "") for c in connection.get("nodes") or []):
+        if any(_is_our_marker(c, marker) for c in connection.get("nodes") or []):
             return True
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
@@ -1192,12 +1240,14 @@ async def issue_comment_contains(number: int, marker: str) -> bool:
     arrived leaves the posted comment behind without the delivery state
     ever learning of it — this is how the next pass finds it instead of
     posting the same answer twice. A listing that could not be read in
-    full cannot rule the marker out, so it raises rather than answer no.
+    full cannot rule the marker out, so it raises rather than answer no;
+    and a marker in somebody else's comment is not delivery, whatever it
+    says.
     """
     comments, incomplete = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments")
     if incomplete:
         raise GitHubError(f"could not finish reading the comments of #{number}: the listing is incomplete")
-    return any(marker in str(c.get("body") or "") for c in comments if isinstance(c, dict))
+    return any(_is_our_marker(c, marker) for c in comments)
 
 
 async def reply_to_review_comment(number: int, comment_id: int, body: str) -> str:
