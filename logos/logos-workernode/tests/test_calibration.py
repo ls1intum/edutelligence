@@ -55,6 +55,7 @@ from logos_worker_node.calibration import (
     result_to_profile_dict,
     sample_vram_mb,
     save_profiles,
+    select_calibration_gpus,
 )
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 from logos_worker_node.models import AppConfig
@@ -781,6 +782,32 @@ def test_calibration_gpu_slice_no_gpus_is_empty():
     assert calibration_gpu_slice(0) == []
     assert calibration_gpu_slice(None) == []
     assert calibration_gpu_slice(-2) == []
+
+
+def test_select_calibration_gpus_prefers_fully_idle_slice():
+    """3 GPUs, model loaded only on GPU 0: pick idle [1, 2], not [0, 1]."""
+    assert select_calibration_gpus(3, busy_gpus=[0]) == [1, 2]
+    assert select_calibration_gpus(3, busy_gpus=[1]) == [0, 2]
+    assert select_calibration_gpus(3, busy_gpus=[]) == [0, 1]
+
+
+def test_select_calibration_gpus_falls_back_when_not_enough_idle():
+    """Only one GPU idle but the slice needs two: fall back to 0..slice-1,
+    matching calibration_gpu_slice's naive behavior (some lane still killed)."""
+    assert select_calibration_gpus(3, busy_gpus=[0, 1]) == [0, 1]
+    assert select_calibration_gpus(3, busy_gpus=[0, 1, 2]) == [0, 1]
+
+
+def test_select_calibration_gpus_power_of_two_node_ignores_busy():
+    """On a power-of-two node the slice IS the whole node — idle preference
+    can't help, so the naive slice is always returned."""
+    assert select_calibration_gpus(4, busy_gpus=[0]) == [0, 1, 2, 3]
+    assert select_calibration_gpus(8, busy_gpus=[0, 1, 2]) == [0, 1, 2, 3, 4, 5, 6, 7]
+
+
+def test_select_calibration_gpus_no_gpus_is_empty():
+    assert select_calibration_gpus(0, busy_gpus=[0]) == []
+    assert select_calibration_gpus(None, busy_gpus=[]) == []
 
 
 def test_pin_plan_uses_slice_only_when_gpu_devices_blank_or_all():

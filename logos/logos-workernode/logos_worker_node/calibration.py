@@ -46,7 +46,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from logos_worker_node.vllm_compat import (
     _BAKED_QUANT_METHODS_FILENAME,
@@ -3222,6 +3222,27 @@ def calibration_gpu_slice(available_gpus: int) -> list[int]:
     if n < 1:
         return []
     slice_size = 1 << (n.bit_length() - 1)
+    return list(range(slice_size))
+
+
+def select_calibration_gpus(available_gpus: int, busy_gpus: Iterable[int] = ()) -> list[int]:
+    """GPU indices a calibration run should use, preferring idle ones.
+
+    Same slice size as :func:`calibration_gpu_slice` (the largest power-of-two
+    ≤ ``available_gpus``), but the indices favor GPUs outside *busy_gpus* —
+    so on a 3-GPU node with a model loaded only on GPU 0, calibration picks
+    ``[1, 2]`` instead of unconditionally killing lanes on ``[0, 1]``. Falls
+    back to :func:`calibration_gpu_slice`'s naive ``0..slice_size-1`` slice
+    when too few GPUs are idle to cover the needed size.
+    """
+    n = int(available_gpus) if available_gpus else 0
+    if n < 1:
+        return []
+    slice_size = 1 << (n.bit_length() - 1)
+    busy = {int(i) for i in busy_gpus}
+    idle = [i for i in range(n) if i not in busy]
+    if len(idle) >= slice_size:
+        return idle[:slice_size]
     return list(range(slice_size))
 
 

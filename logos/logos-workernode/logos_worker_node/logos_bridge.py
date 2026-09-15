@@ -1569,6 +1569,7 @@ class LogosBridgeClient:
                 _READY_TIMEOUT_S,
                 CalibrationResult,
                 ProfileStoreUnreadableError,
+                _plan_needs_gpu_pin,
                 calibrate_with_tp_escalation,
                 extract_revision_arg,
                 is_model_unsupported,
@@ -1621,6 +1622,7 @@ class LogosBridgeClient:
             # already-loaded model on the measured GPUs and OOM at sizes that
             # would otherwise fit. The Logos server re-spawns the stopped slice
             # lanes via the normal apply_lanes path once the session ends.
+            calibration_gpus: frozenset[int] = frozenset()
             if lane_manager is not None:
                 try:
                     calibration_gpus = lane_manager.begin_calibration_session()
@@ -1641,6 +1643,19 @@ class LogosBridgeClient:
 
                 session.current_model = model_name
                 plan = plan_by_model.get(model_name) or {"model": model_name}
+
+                # Pin to the slice begin_calibration_session actually freed
+                # (which may prefer idle GPUs over 0..slice_size-1 — see
+                # select_calibration_gpus) rather than leaving gpu_devices
+                # blank/"all": calibrate_with_tp_escalation's own
+                # pin_plan_gpu_devices would otherwise recompute the naive
+                # slice independently and probe GPUs that were never freed.
+                # An explicit operator pin in config.yml is left untouched.
+                if calibration_gpus and _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
+                    plan = {
+                        **plan,
+                        "gpu_devices": ",".join(str(i) for i in sorted(calibration_gpus)),
+                    }
 
                 # Pre-flight: persistent unsupported flag.
                 _unsupported = None
