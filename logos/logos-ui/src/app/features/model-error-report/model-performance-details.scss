@@ -167,6 +167,7 @@
 }
 
 .benchmark-runner {
+  padding: 24px;
   margin-bottom: 24px;
   overflow: hidden;
   border: 1px solid rgb(var(--color-outline-200));
@@ -179,7 +180,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 14px 16px;
+  padding: 0 0 16px;
   border-bottom: 1px solid rgb(var(--color-outline-200));
 
   h3,
@@ -401,6 +402,7 @@
   .configuration-comparison-row { grid-template-columns: 1fr; gap: 0; }
   .configuration-row { grid-template-columns: 1fr; gap: 4px; }
   .configuration-row dd { text-align: left; }
+  .benchmark-runner { padding: 16px; }
   .benchmark-runner__header { align-items: flex-start; flex-direction: column; }
   .benchmark-pair { grid-template-columns: 1fr; gap: 10px; }
   .benchmark-run-button { width: 100%; }

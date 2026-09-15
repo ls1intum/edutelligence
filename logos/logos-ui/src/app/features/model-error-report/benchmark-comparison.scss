@@ -23,11 +23,8 @@ figcaption span { color: rgb(var(--color-typography-500)); }
 .axis-title { margin-top: 16px; color: rgb(var(--color-typography-500)); }
 .plot-scroll { overflow-x: auto; padding-top: 20px; }
 .plot { display: flex; width: 100%; margin: 0 auto; }
-.y-axis { position: relative; width: 48px; flex-shrink: 0; height: var(--plot-height); color: rgb(var(--color-typography-500)); font-size: 15px; font-variant-numeric: tabular-nums; }
+.y-axis { position: relative; width: 72px; flex-shrink: 0; height: var(--plot-height); color: rgb(var(--color-typography-500)); font-size: 15px; font-variant-numeric: tabular-nums; }
 .y-axis span { position: absolute; right: 12px; transform: translateY(-50%); }
-.y-axis span:first-child { top: 0; }
-.y-axis span:nth-child(2) { top: 50%; }
-.y-axis span:last-child { top: 100%; }
 .plot-groups { position: relative; display: grid; flex: 1; }
 .plot-groups::before { content: ''; pointer-events: none; position: absolute; left: 0; right: 0; top: 0; height: var(--plot-height); border-left: 1px solid rgb(var(--color-outline-300)); border-bottom: 1px solid rgb(var(--color-outline-300)); }
 .parameter-group { min-width: 0; text-align: center; }

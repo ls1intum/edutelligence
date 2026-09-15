@@ -16,8 +16,11 @@ async def run_benchmark_batch(
         for repetition in range(1, batch.repetitions + 1):
             index += 1
             progress = {
-                "run_index": index, "total_runs": total, "completed_runs": index - 1,
-                "configuration_index": configuration_index, "repetition": repetition,
+                "run_index": index,
+                "total_runs": total,
+                "completed_runs": index - 1,
+                "configuration_index": configuration_index,
+                "repetition": repetition,
             }
             benchmark_id = await execute_run(settings, progress, index == total)
             if benchmark_id is None:

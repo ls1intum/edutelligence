@@ -27,7 +27,7 @@
         <p>Each box summarizes repeated runs of the same configuration. The line is the median, the box spans Q1–Q3, whiskers extend to the last values within 1.5 × IQR, and dots mark outliers. A single run appears as a line. Only the X-axis parameter changes; other recorded settings match the reference.
           {{ excludedCount() }} runs excluded. Seed {{ baselineSettings()['seed'] }}. Cache state and other traffic may still differ.</p>
         <p>TTFT: time to first token. TTLT: total response time (GuideLLM request latency).
-          Both are arithmetic means across successful requests. Output: GuideLLM’s aggregate output token rate. — means not captured.</p>
+          Each Y-axis fits its own measurements with 10% padding above and below. Both latency metrics are arithmetic means across successful requests. Output: GuideLLM’s aggregate output token rate. — means not captured.</p>
       </details>
     </div>
 
@@ -39,20 +39,22 @@
           <div class="plot-scroll" tabindex="0" role="region" [attr.aria-label]="chart.label + ' chart, scroll horizontally for all parameter values'">
             <div class="plot" [style.min-width.px]="chart.minPlotWidth">
               <div class="y-axis" aria-hidden="true">
-                <span>{{ chartValue(chartMax()) }}</span><span>{{ chartValue(chartMax() / 2) }}</span><span>0</span>
+                @for (tick of chart.scale.ticks; track $index) {
+                  <span [style.top.%]="$index * 25">{{ axisValue(tick, chart.scale) }}</span>
+                }
               </div>
               <div class="plot-groups" [style.grid-template-columns]="'repeat(' + chart.groups.length + ', minmax(0, 1fr))'">
                 @for (group of chart.groups; track group.parameter) {
                   <div class="parameter-group">
                     @if (group.box; as box) {
                       <div class="box-track" tabindex="0" role="img" [attr.aria-label]="chart.label + ' ' + group.parameter + ': ' + boxLabel(box)" [title]="boxLabel(box)">
-                        <span class="whisker" [style.bottom.%]="box.low / chartMax() * 100" [style.height.%]="(box.high - box.low) / chartMax() * 100"></span>
-                        <span class="whisker-cap" [style.bottom.%]="box.low / chartMax() * 100"></span>
-                        <span class="whisker-cap" [style.bottom.%]="box.high / chartMax() * 100"></span>
-                        <span class="quartile-box" [style.bottom.%]="box.q1 / chartMax() * 100" [style.height.%]="(box.q3 - box.q1) / chartMax() * 100"></span>
-                        <span class="median" [style.bottom.%]="box.median / chartMax() * 100"></span>
+                        <span class="whisker" [style.bottom.%]="position(box.low, chart.scale)" [style.height.%]="(box.high - box.low) / chart.scale.span * 100"></span>
+                        <span class="whisker-cap" [style.bottom.%]="position(box.low, chart.scale)"></span>
+                        <span class="whisker-cap" [style.bottom.%]="position(box.high, chart.scale)"></span>
+                        <span class="quartile-box" [style.bottom.%]="position(box.q1, chart.scale)" [style.height.%]="(box.q3 - box.q1) / chart.scale.span * 100"></span>
+                        <span class="median" [style.bottom.%]="position(box.median, chart.scale)"></span>
                         @for (outlier of box.outliers; track outlier) {
-                          <span class="outlier" [style.bottom.%]="outlier / chartMax() * 100"></span>
+                          <span class="outlier" [style.bottom.%]="position(outlier, chart.scale)"></span>
                         }
                       </div>
                       <small class="run-count">n = {{ box.count }}@if (box.count < group.rows.length) { / {{ group.rows.length }}}</small>
@@ -73,7 +75,7 @@
       }
     </div>
 
-    <p class="box-legend">Box: middle 50% · line: median · dots: outliers · n: measured runs</p>
+    <p class="box-legend">Auto-scaled per chart · box: middle 50% · line: median · dots: outliers · n: runs</p>
     <details class="run-details" (toggle)="showRuns.set($any($event.target).open)">
       <summary>Individual runs ({{ selected().length }})</summary>
     @if (showRuns()) {

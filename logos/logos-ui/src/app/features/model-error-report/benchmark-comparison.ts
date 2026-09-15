@@ -42,6 +42,21 @@ export function boxplot(values: readonly (number | null)[]) {
     outliers: [...new Set(sorted.filter(value => value < low || value > high))] };
 }
 
+export interface ChartScale { min: number; max: number; span: number; ticks: number[]; }
+
+/** Fit every observation, including outliers, with 10% of the data range on each side. */
+export function fitChartScale(values: readonly (number | null)[]): ChartScale {
+  const measured = values.filter((value): value is number => value !== null && Number.isFinite(value) && value >= 0);
+  const low = measured.length ? Math.min(...measured) : 0;
+  const high = measured.length ? Math.max(...measured) : 1;
+  // Identical measurements still need a nonzero axis; center the line in the plot.
+  const padding = ((high - low) || Math.abs(high) || 1) * .1;
+  const min = low - padding;
+  const max = high + padding;
+  const span = max - min;
+  return { min, max, span, ticks: Array.from({ length: 5 }, (_, i) => max - span * i / 4) };
+}
+
 @Component({
   selector: 'app-benchmark-comparison',
   standalone: true,
@@ -91,7 +106,8 @@ export class BenchmarkComparison {
     ] as const).map(parameter => {
       const runs = isolatedRuns(this.orderedRuns(), baseline, parameter.key);
       const values = [...new Set(runs.map(run => parameterValue(run, parameter.key)!))];
-      return { ...parameter, minPlotWidth: values.length * 68 + 48,
+      return { ...parameter, minPlotWidth: values.length * 68 + 72,
+        scale: fitChartScale(runs.map(run => comparisonValue(run, this.metric()))),
         groups: values.map(value => {
           const rows = runs.filter(run => parameterValue(run, parameter.key) === value)
             .map(run => ({ run, value: comparisonValue(run, this.metric()) }));
@@ -102,12 +118,14 @@ export class BenchmarkComparison {
   readonly selected = computed(() => [...new Map(this.charts().flatMap(chart => chart.groups)
     .flatMap(group => group.rows).map(row => [row.run.id, row.run])).values()]);
   readonly excludedCount = computed(() => this.runs().length - this.selected().length);
-  readonly chartMax = computed(() => {
-    const max = Math.max(0, ...this.selected().map(run => comparisonValue(run, this.metric()) ?? 0));
-    if (max === 0) return 1;
-    const step = 10 ** Math.floor(Math.log10(max));
-    return Math.ceil(max / step) * step;
-  });
+  position(value: number, scale: ChartScale): number {
+    return (value - scale.min) / scale.span * 100;
+  }
+
+  axisValue(value: number, scale: ChartScale): string {
+    const digits = Math.min(20, Math.max(0, Math.ceil(-Math.log10(scale.span / 4)) + 1));
+    return value.toLocaleString(undefined, { maximumFractionDigits: digits });
+  }
 
   boxLabel(box: NonNullable<ReturnType<typeof boxplot>>): string {
     return `${box.count} runs · median ${this.format(box.median)} · Q1 ${this.format(box.q1)} · Q3 ${this.format(box.q3)} · whiskers ${this.format(box.low)}–${this.format(box.high)} ${this.activeMetric().unit} · ${box.outliers.length} distinct outlier values`;

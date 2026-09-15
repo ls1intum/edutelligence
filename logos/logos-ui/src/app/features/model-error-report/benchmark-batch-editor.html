@@ -1,11 +1,16 @@
 <section class="batch-editor" aria-label="Benchmark batch configuration">
-  <label class="batch-toggle"><input type="checkbox" [ngModel]="enabled()" (ngModelChange)="enabled.set($event)"> Run a batch</label>
+  <header class="batch-header">
+    <label class="batch-toggle"><input type="checkbox" [ngModel]="enabled()" (ngModelChange)="enabled.set($event)"> Run a batch</label>
+    @if (plan().batch; as batch) {
+      <strong class="run-total" aria-live="polite">{{ batch.configurations.length * batch.repetitions }} runs</strong>
+    }
+  </header>
   @if (enabled()) {
-    <p>Choose the parameters to vary. All other values stay fixed at the settings above. Each configuration runs sequentially on the selected provider.</p>
+    <p class="batch-intro">Vary selected parameters. Everything else stays fixed.</p>
     <div class="batch-controls">
-      <label>Repetitions per configuration<input type="number" min="1" max="10000" step="1" [ngModel]="repetitions()" (ngModelChange)="repetitions.set($event)"></label>
-      <label>Add a parameter to vary
-        <select #parameter (change)="add(parameter.value); parameter.value = ''">
+      <label>Repetitions<input aria-label="Repetitions per configuration" type="number" min="1" max="10000" step="1" [ngModel]="repetitions()" (ngModelChange)="repetitions.set($event)"></label>
+      <label>Parameter to vary
+        <select aria-label="Add a parameter to vary" #parameter (change)="add(parameter.value); parameter.value = ''">
           <option value="">Choose a parameter…</option>
           @for (field of available(); track field.key) { <option [value]="field.key">{{ field.label }}</option> }
         </select>
@@ -18,8 +23,8 @@
           <label>Input<select [ngModel]="sweep.mode" (ngModelChange)="update(index, {mode: $event})"><option value="values">Values</option><option value="range">Range</option></select></label>
         }
         @if (sweep.mode === 'values') {
-          <label class="values">{{ field(sweep.key).type === 'boolean' ? 'Values: true, false' : 'Values separated by commas' }}
-            <input type="text" [ngModel]="sweep.values" (ngModelChange)="update(index, {values: $event})" [placeholder]="field(sweep.key).type === 'number' ? 'e.g. 1, 2, 4' : ''">
+          <label class="values">{{ field(sweep.key).type === 'boolean' ? 'Values: true, false' : 'Values' }}
+            <input type="text" aria-label="Values separated by commas" [ngModel]="sweep.values" (ngModelChange)="update(index, {values: $event})" [placeholder]="field(sweep.key).type === 'number' ? 'e.g. 1, 2, 4' : ''">
           </label>
         } @else {
           <label>From<input type="number" [ngModel]="sweep.start" (ngModelChange)="update(index, {start: $event})"></label>
@@ -29,13 +34,14 @@
         <button type="button" (click)="remove(index)" [attr.aria-label]="'Keep ' + field(sweep.key).label + ' fixed'">Keep fixed</button>
       </div>
     }
-    <p class="combination-note">{{ sweeps().length > 1 ? 'All combinations of the selected values will be tested.' : sweeps().length === 1 ? 'Only this parameter varies.' : 'Repeat the current configuration without changing any parameters.' }}
-    </p>
     @if (plan().error; as error) { <p class="error" role="alert">{{ error }}</p> }
     @if (plan().batch; as batch) {
-      <div class="plan-summary" aria-live="polite"><strong>{{ batch.configurations.length * batch.repetitions }} runs</strong> = {{ batch.configurations.length }} configurations × {{ batch.repetitions }} repetitions</div>
-      <details>
-        <summary>Preview configurations and fixed values</summary>
+      <div class="plan-summary">
+        <span>{{ batch.configurations.length }} {{ batch.configurations.length === 1 ? 'configuration' : 'configurations' }} × {{ batch.repetitions }} repeats</span>
+        @if (sweeps().length > 1) { <span class="combination-note">All combinations</span> }
+      </div>
+      <details class="batch-details">
+        <summary>Review plan</summary>
         <div class="preview-scroll"><table>
           <thead><tr><th>Configuration</th>@for (sweep of sweeps(); track sweep.key) { <th>{{ field(sweep.key).label }}</th> }<th>Repetitions</th></tr></thead>
           <tbody>@for (configuration of batch.configurations.slice(0, previewLimit()); track $index) {
@@ -47,8 +53,12 @@
         <p>{{ settings().dataset }} · {{ settings().subset }}/{{ settings().split }} · text column {{ settings().text_column }}</p>
         <p>Load profile: {{ batch.configurations[0].profile }} · one unmeasured warm-up request per run</p>
         <dl>@for (field of fixed(); track field.label) { <div><dt>{{ field.label }}</dt><dd>{{ field.value }}</dd></div> }</dl>
+        <ul class="batch-help">
+          <li>Continues when you leave this page.</li>
+          <li>Stops on error; completed results are kept.</li>
+          <li>Up to 1,000 configurations and 10,000 runs.</li>
+        </ul>
       </details>
     }
-    <p class="batch-help">The batch continues on the server when you leave this page. A failed run stops the batch; completed results remain available. Up to 1,000 configurations and 10,000 total runs.</p>
   }
 </section>

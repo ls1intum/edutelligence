@@ -53,6 +53,7 @@ async def test_failed_run_stops_batch_and_cancellation_propagates():
 @pytest.mark.parametrize("finalize", [False, True])
 async def test_runner_keeps_provider_lease_between_runs(monkeypatch, finalize):
     import importlib
+
     runner = importlib.import_module("logos.benchmarks.guidellm_runner")
     db = MagicMock()
     db.__enter__.return_value = db
@@ -63,18 +64,32 @@ async def test_runner_keeps_provider_lease_between_runs(monkeypatch, finalize):
 
     async def subprocess(*args, **kwargs):
         # The report is adjacent to the scenario, as for the real subprocess.
-        runner.Path(args[-1]).with_name("benchmarks.json").write_text(json.dumps({
-            "benchmarks": [{"config": {}, "metrics": {
-                "request_totals": {"successful": 5, "total": 5, "errored": 0, "incomplete": 0}
-            }}]
-        }))
+        runner.Path(args[-1]).with_name("benchmarks.json").write_text(
+            json.dumps(
+                {
+                    "benchmarks": [
+                        {
+                            "config": {},
+                            "metrics": {"request_totals": {"successful": 5, "total": 5, "errored": 0, "incomplete": 0}},
+                        }
+                    ]
+                }
+            )
+        )
         return MagicMock(returncode=0, communicate=AsyncMock(return_value=(b"", b"")))
 
     monkeypatch.setattr(runner.asyncio, "create_subprocess_exec", subprocess)
     result = await runner.run_benchmark_job(
-        job_id=7, model_provider_id=31, target="http://127.0.0.1/v1", model="m", api_key=None,
-        samples=5, max_output_tokens=32, serving_configuration={},
-        batch_progress={"run_index": 2, "total_runs": 3, "completed_runs": 1}, finalize=finalize,
+        job_id=7,
+        model_provider_id=31,
+        target="http://127.0.0.1/v1",
+        model="m",
+        api_key=None,
+        samples=5,
+        max_output_tokens=32,
+        serving_configuration={},
+        batch_progress={"run_index": 2, "total_runs": 3, "completed_runs": 1},
+        finalize=finalize,
     )
     assert result == 123
     calls = db.update_job_status.call_args_list
@@ -85,6 +100,7 @@ async def test_runner_keeps_provider_lease_between_runs(monkeypatch, finalize):
 
 async def test_batch_endpoint_submits_once_and_uses_each_configuration(monkeypatch):
     import importlib
+
     internal = importlib.import_module("logos.routers.internal")
     main = importlib.import_module("logos.main")
     db = MagicMock()
@@ -92,8 +108,12 @@ async def test_batch_endpoint_submits_once_and_uses_each_configuration(monkeypat
     db.find_active_model_benchmark_job.return_value = None
     db.create_job_record.return_value = 77
     db.get_model_provider_benchmark_target.return_value = {
-        "provider_id": 7, "provider_type": "cloud", "provider_name": "Cloud",
-        "model_id": 1, "model_name": "m", "target": "https://provider.example/v1",
+        "provider_id": 7,
+        "provider_type": "cloud",
+        "provider_name": "Cloud",
+        "model_id": 1,
+        "model_name": "m",
+        "target": "https://provider.example/v1",
     }
     registry = MagicMock()
     registry.peek_runtime_snapshot.return_value = None
@@ -104,11 +124,16 @@ async def test_batch_endpoint_submits_once_and_uses_each_configuration(monkeypat
     monkeypatch.setattr(internal, "dataset_metadata", metadata)
     runner = AsyncMock(return_value=123)
     monkeypatch.setattr(internal, "run_benchmark_job", runner)
-    response = await internal.internal_run_model_benchmark(internal.InternalBenchmarkRequest(
-        model_provider_id=31, batch={"configurations": [
-            {"concurrency": 4, "samples": 5}, {"concurrency": 8, "samples": 10}
-        ], "repetitions": 2},
-    ), MagicMock())
+    response = await internal.internal_run_model_benchmark(
+        internal.InternalBenchmarkRequest(
+            model_provider_id=31,
+            batch={
+                "configurations": [{"concurrency": 4, "samples": 5}, {"concurrency": 8, "samples": 10}],
+                "repetitions": 2,
+            },
+        ),
+        MagicMock(),
+    )
     await main._benchmark_tasks_by_job[77]
     assert response.status_code == 202
     db.create_job_record.assert_called_once()

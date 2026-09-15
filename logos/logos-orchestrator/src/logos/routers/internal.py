@@ -565,12 +565,12 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
         if is_internal_worker_benchmark
         else None
     )
+
     async def execute_run(
         settings: BenchmarkRunSettings | InternalBenchmarkRequest,
         progress: dict[str, int] | None = None,
         finalize: bool = True,
     ) -> int | None:
-        worker_preparer = None
         if request_headers is not None and _main._capacity_planner is not None:
 
             async def worker_preparer() -> bool:
@@ -583,15 +583,22 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
                             job_id,
                             JobStatus.RUNNING.value,
                             result_payload={
-                                **(progress or {}), "stage": stage,
-                                "started_samples": 0, "total_samples": settings.samples,
+                                **(progress or {}),
+                                "stage": stage,
+                                "started_samples": 0,
+                                "total_samples": settings.samples,
                             },
                         )
 
                 return await _main._capacity_planner.prepare_configured_benchmark_lane(
-                    provider_id, model_name, settings.serving_overrides,
+                    provider_id,
+                    model_name,
+                    settings.serving_overrides,
                     progress_callback=report_preparation_stage,
                 )
+
+        else:
+            worker_preparer = None
 
         return await run_benchmark_job(
             job_id=job_id,
@@ -609,15 +616,17 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             request_headers=request_headers,
             worker_preparer=worker_preparer,
             worker_session_is_current=(
-                lambda: (_main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
-                == job_payload["provider_session_id"]
-            ) if is_internal_worker_benchmark else None,
+                (
+                    lambda: (_main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
+                    == job_payload["provider_session_id"]
+                )
+                if is_internal_worker_benchmark
+                else None
+            ),
             **({"batch_progress": progress, "finalize": finalize} if progress else {}),
         )
 
-    task = asyncio.create_task(
-        run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data)
-    )
+    task = asyncio.create_task(run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
     _background_tasks.add(task)
     _benchmark_tasks.add(task)
     _benchmark_tasks_by_job[job_id] = task

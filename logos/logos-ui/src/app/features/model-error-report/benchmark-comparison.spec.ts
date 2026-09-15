@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ModelProviderBenchmark } from '../../shared/models/provider.model';
-import { BenchmarkComparison, boxplot, comparisonValue } from './benchmark-comparison';
+import { BenchmarkComparison, boxplot, comparisonValue, fitChartScale } from './benchmark-comparison';
 import { canCompare, isolatedRuns } from './benchmark-isolation';
 
 function run(id: number, tp = 1, concurrency = 4, overrides: Partial<ModelProviderBenchmark> = {}): ModelProviderBenchmark {
@@ -143,6 +143,33 @@ describe('Benchmark comparison', () => {
     expect(fixture.nativeElement.querySelector('tbody').textContent).toContain('7.6');
   });
 
+  it('fits each chart independently and recomputes the scale on metric changes', () => {
+    const benchmarks = [run(1), run(2, 2, 4), run(3, 1, 16)];
+    benchmarks.forEach((benchmark, i) => benchmark.metrics.output_tokens_per_second!.successful.mean = [100, 200, 101][i]);
+    fixture.componentRef.setInput('runs', benchmarks);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    expect(component.charts()[0].scale.min).toBe(90);
+    expect(component.charts()[0].scale.max).toBe(210);
+    expect(component.charts()[1].scale.min).toBeCloseTo(99.9);
+    expect(component.charts()[1].scale.max).toBeCloseTo(101.1);
+    component.metric.set('ttft');
+    expect(component.charts()[0].scale.max).toBeLessThan(1);
+  });
+
+  it('makes a narrow distribution readable and places the median relative to the fitted minimum', () => {
+    const benchmarks = Array.from({ length: 5 }, (_, i) => run(i + 1));
+    benchmarks.forEach((benchmark, i) => benchmark.metrics.output_tokens_per_second!.successful.mean = 1000 + i);
+    fixture.componentRef.setInput('runs', benchmarks);
+    fixture.detectChanges();
+    const box = fixture.nativeElement.querySelector('.quartile-box') as HTMLElement;
+    const median = fixture.nativeElement.querySelector('.median') as HTMLElement;
+    expect(parseFloat(box.style.height)).toBeCloseTo(41.6667, 3);
+    expect(parseFloat(median.style.bottom)).toBeCloseTo(50);
+    const labels = [...fixture.nativeElement.querySelectorAll('.y-axis span')].map((el: any) => el.textContent);
+    expect(new Set(labels).size).toBe(5);
+  });
+
   it('changes fixed controls when a different reference run is selected', async () => {
     const select: HTMLSelectElement = fixture.nativeElement.querySelector('.baseline-picker select');
     select.value = '4'; select.dispatchEvent(new Event('change'));
@@ -216,12 +243,13 @@ describe('Benchmark comparison', () => {
     expect(fixture.nativeElement.querySelectorAll('thead button')).toHaveLength(fixture.componentInstance.columns.length);
   });
 
-  it('uses a common zero-based finite scale and shows missing values explicitly', () => {
+  it('uses a finite fitted scale and shows missing values explicitly', () => {
     const component = fixture.componentInstance;
-    expect(component.chartMax()).toBeGreaterThanOrEqual(42);
+    expect(component.charts()[0].scale.min).toBeLessThan(42);
+    expect(component.charts()[0].scale.max).toBeGreaterThan(42);
     fixture.componentRef.setInput('runs', [run(1, 1, 4, { metrics: { ...run(1).metrics, output_tokens_per_second: undefined } })]);
     fixture.detectChanges();
-    expect(component.chartMax()).toBe(1);
+    expect(component.charts()[0].scale.span).toBeGreaterThan(0);
     expect(fixture.nativeElement.querySelector('.missing').textContent).toContain('—');
   });
 });
@@ -247,5 +275,24 @@ describe('Run boxplots', () => {
     expect(fixture.componentInstance.charts()[0].groups[0].box?.count).toBe(200);
     expect(fixture.componentInstance.charts()[0].minPlotWidth).toBeLessThan(200);
     fixture.destroy();
+  });
+});
+
+
+describe('Fitted chart scale', () => {
+  it('adds exactly 10% of the observed range above and below, including outliers', () => {
+    const scale = fitChartScale([40, 45, 50, 55, 60, null]);
+    expect(scale.min).toBe(38);
+    expect(scale.max).toBe(62);
+    expect(scale.ticks).toEqual([62, 56, 50, 44, 38]);
+    const outlierScale = fitChartScale([1, 2, 3, 4, 100]);
+    expect(outlierScale.min).toBeCloseTo(-8.9);
+    expect(outlierScale.max).toBeCloseTo(109.9);
+  });
+  it.each([[0], [42, 42], [null, NaN, Infinity], [.000001, .000002]].map(values => ({ values })))('keeps the scale finite for $values', ({ values }) => {
+    const scale = fitChartScale(values);
+    expect(Number.isFinite(scale.span)).toBe(true);
+    expect(scale.span).toBeGreaterThan(0);
+    expect(new Set(scale.ticks).size).toBe(5);
   });
 });

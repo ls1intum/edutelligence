@@ -533,7 +533,9 @@ async def run_benchmark_job(
             message = message.replace(api_key, "[redacted]")
         with DBManager() as db:
             db.update_job_status(
-                job_id, JobStatus.FAILED.value, error_message=message[:1000],
+                job_id,
+                JobStatus.FAILED.value,
+                error_message=message[:1000],
                 **({"result_payload": {**progress, "stage": "failed"}} if progress else {}),
             )
     finally:
