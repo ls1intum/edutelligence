@@ -451,6 +451,30 @@ class TestAgentIdentity:
 
         assert any("could not be verified" in note for note in notes)
 
+    async def test_a_degraded_startup_still_reconciles_the_configured_name(self, monkeypatch):
+        # A startup without a reachable API leaves no verified spelling,
+        # and the service continues. The supported differently cased
+        # configuration must then still recognize its own account's
+        # canonical markers, or the retry duplicates the answer.
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login="logosossagent",
+                github_token="runner-token",
+                session_github_token="",
+            ),
+        )
+        self._identity_client(monkeypatch, {"runner-token": RuntimeError("no route to host")})
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+        assert github._verified_login is None
+        comment = {"body": "<!-- logos reply 31 101 -->", "user": {"login": "LogosOSSAgent"}}
+        assert github._is_our_marker(comment, "<!-- logos reply 31 101 -->") is True
+
     async def test_an_unconfigured_token_is_not_a_mismatch(self, monkeypatch):
         monkeypatch.setattr(
             github,

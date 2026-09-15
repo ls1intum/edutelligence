@@ -89,7 +89,9 @@ async def token_login(token: str, *, timeout_s: float = 15.0) -> str:
 # :func:`verify_identities` confirms a token belongs to the configured
 # account. Marker lookups compare against this spelling — not against the
 # operator's configuration — because the API hands the same spelling back
-# on the author of every comment the account posts.
+# on the author of every comment the account posts. When the identity could
+# not be verified, the lookups fall back to the configured name,
+# case-normalized (the same acceptance startup uses for it).
 _verified_login: str | None = None
 
 
@@ -689,13 +691,18 @@ def _is_our_marker(comment: Any, marker: str) -> bool:
     the account it was posted by is the account the runner posts with.
 
     The comparison is exact, against the login :func:`verify_identities`
-    remembered from the API (falling back to the configured one when the
-    identity could not be verified): the API spells the account's name the
-    same way on every comment it posts, so the supported any-casing of the
-    configuration still recognizes its own markers — while a differently
-    cased login that merely matches the configured name apart from case is
-    not the account, and must not make the retry skip an answer the
-    session still owes.
+    remembered from the API: the API spells the account's name the same way
+    on every comment it posts, so a differently cased login that merely
+    matches the configured name apart from case is not the account, and
+    must not make the retry skip an answer the session still owes.
+
+    Only when the identity could not be verified (the supported degraded
+    startup, where the API was unreachable at startup and the service
+    continues) is the configured name the only reference — and startup
+    accepts it in any casing, so the fallback normalizes both sides.
+    Without that, a supported differently cased configuration would miss
+    its own remotely accepted markers and the retry would duplicate the
+    answer.
     """
     if not isinstance(comment, dict):
         return False
@@ -705,7 +712,9 @@ def _is_our_marker(comment: Any, marker: str) -> bool:
     login = author.get("login") if isinstance(author, dict) else None
     if not isinstance(login, str):
         return False
-    return login == (_verified_login or settings.github_login)
+    if _verified_login is not None:
+        return login == _verified_login
+    return login.strip().lower() == settings.github_login.strip().lower()
 
 
 # A pull request's review threads, paged. Each inline comment starts its own
