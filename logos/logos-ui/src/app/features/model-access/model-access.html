@@ -73,11 +73,11 @@
       >
         @for (p of a.providers; track p.provider_id) {
           <div class="table-row">
-            <div class="cell-strong" role="cell">{{ p.name }}</div>
-            <div role="cell">{{ p.provider_type }}</div>
-            <div role="cell">{{ p.privacy_level }}</div>
-            <div role="cell">{{ p.request_count.toLocaleString() }}</div>
-            <div role="cell">{{ formatLastUsed(p.last_request_at) }}</div>
+            <div class="cell-strong" role="cell" data-label="Provider">{{ p.name }}</div>
+            <div role="cell" data-label="Type">{{ p.provider_type }}</div>
+            <div role="cell" data-label="Privacy">{{ p.privacy_level }}</div>
+            <div role="cell" data-label="Requests">{{ p.request_count.toLocaleString() }}</div>
+            <div role="cell" data-label="Last request">{{ formatLastUsed(p.last_request_at) }}</div>
           </div>
         }
       </app-data-table>
@@ -106,10 +106,10 @@
             [class.table-row--orphaned]="isOrphaned(t)"
             [class.table-row--provider-only]="isProviderOnly(t)"
           >
-            <div role="cell">
+            <div role="cell" data-label="Team">
               <a class="cell-link" [routerLink]="['/teams', t.team_id]">{{ t.team_name }}</a>
             </div>
-            <div role="cell">
+            <div role="cell" data-label="Model">
               <i
                 class="pi {{ t.model_grant ? 'pi-check' : 'pi-times' }}"
                 [class.check--yes]="t.model_grant"
@@ -117,8 +117,8 @@
                 [attr.aria-label]="'Model grant: ' + (t.model_grant ? 'yes' : 'no')"
               ></i>
             </div>
-            @for (g of t.provider_grants; track g.provider_id) {
-              <div role="cell">
+            @for (g of t.provider_grants; track g.provider_id; let gi = $index) {
+              <div role="cell" [attr.data-label]="a.providers[gi]?.name ?? 'Provider'">
                 <i
                   class="pi {{ g.granted ? 'pi-check' : 'pi-times' }}"
                   [class.check--yes]="g.granted"
@@ -127,7 +127,7 @@
                 ></i>
               </div>
             }
-            <div class="col-status" role="cell">
+            <div class="col-status" role="cell" data-label="Status">
               @if (t.effective_access) {
                 <span class="status-badge status-badge--ok">effective</span>
               } @else if (isOrphaned(t)) {
@@ -164,20 +164,20 @@
             [class.table-row--orphaned]="isOrphaned(k)"
             [class.table-row--provider-only]="isProviderOnly(k)"
           >
-            <div class="cell-key" role="cell">
+            <div class="cell-key" role="cell" data-label="Key">
               <span class="cell-strong">{{ k.key_name }}</span>
               @if (!k.is_active) {
                 <span class="key-inactive">inactive</span>
               }
             </div>
-            <div role="cell">
+            <div role="cell" data-label="Team">
               @if (k.team_id != null) {
                 <a class="cell-link" [routerLink]="['/teams', k.team_id]">{{ k.team_name }}</a>
               } @else {
                 <span class="cell-muted">–</span>
               }
             </div>
-            <div role="cell">
+            <div role="cell" data-label="Active">
               <i
                 class="pi {{ k.is_active ? 'pi-check' : 'pi-times' }}"
                 [class.check--yes]="k.is_active"
@@ -185,7 +185,7 @@
                 [attr.aria-label]="'Active: ' + (k.is_active ? 'yes' : 'no')"
               ></i>
             </div>
-            <div role="cell">
+            <div role="cell" data-label="Model">
               <i
                 class="pi {{ k.model_grant ? 'pi-check' : 'pi-times' }}"
                 [class.check--yes]="k.model_grant"
@@ -193,8 +193,8 @@
                 [attr.aria-label]="'Model grant: ' + (k.model_grant ? 'yes' : 'no')"
               ></i>
             </div>
-            @for (g of k.provider_grants; track g.provider_id) {
-              <div role="cell">
+            @for (g of k.provider_grants; track g.provider_id; let gi = $index) {
+              <div role="cell" [attr.data-label]="a.providers[gi]?.name ?? 'Provider'">
                 <i
                   class="pi {{ g.granted ? 'pi-check' : 'pi-times' }}"
                   [class.check--yes]="g.granted"
@@ -203,7 +203,7 @@
                 ></i>
               </div>
             }
-            <div class="col-status" role="cell">
+            <div class="col-status" role="cell" data-label="Status">
               @if (k.effective_access) {
                 <span class="status-badge status-badge--ok">effective</span>
               } @else if (isOrphaned(k)) {
