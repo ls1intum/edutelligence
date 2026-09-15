@@ -2328,23 +2328,41 @@ class SessionManager:
         if not body:
             await self._no_answer(session_id, session)
             return
+        number = None
+        comment_id = None
+        if target.startswith("issue:"):
+            number = int(target.partition(":")[2])
+        elif target.startswith("review_comment:"):
+            rest = target.partition(":")[2]
+            number, _, comment_text = rest.partition(":")
+            number, comment_id = int(number), int(comment_text)
         try:
+            # One map for the whole delivery, when the chunks go into a
+            # review thread: every chunk's look-up asks it, and rebuilding
+            # its pages for each of them would be the delivery paying for
+            # its own length twice.
+            threads = await github.review_thread_map(number) if comment_id is not None else None
             url = ""
             for index, chunk in enumerate(self._reply_chunks(body)):
-                if target.startswith("issue:"):
-                    # The answer's POST is not idempotent: a confirmation
-                    # lost on the way back leaves the chunk posted without
-                    # the state knowing, and the mark on the pull request
-                    # is the answer to whether posting again would say it
-                    # twice. A chunk already found is the delivery's
-                    # durable record of itself, and the pass resumes after
-                    # it. The look-up fails like the POST: the attempt is
-                    # recorded undelivered, and the next pass tries again.
-                    marker = _answer_marker(session_id) if index == 0 else _answer_chunk_marker(session_id, index)
-                    if await github.issue_comment_contains(int(target.partition(":")[2]), marker):
+                # The chunk's POST is not idempotent, on either target: a
+                # confirmation lost on the way back leaves it posted
+                # without the state knowing, and its mark — on the pull
+                # request, or in the thread it went into — is the answer
+                # to whether posting again would say it twice. A chunk
+                # already found is the delivery's durable record of
+                # itself, and the pass resumes after it. The look-up
+                # fails like the POST: the attempt is recorded
+                # undelivered, and the next pass tries again.
+                marker = _answer_marker(session_id) if index == 0 else _answer_chunk_marker(session_id, index)
+                if comment_id is not None:
+                    if await github.review_reply_is_in_thread(number, comment_id, marker, threads):
                         logger.info("session %s found its answer chunk %s already at %s", session_id, index, target)
                         continue
-                    chunk += "\n\n" + marker
+                elif number is not None:
+                    if await github.issue_comment_contains(number, marker):
+                        logger.info("session %s found its answer chunk %s already at %s", session_id, index, target)
+                        continue
+                chunk += "\n\n" + marker
                 url = await self._send_reply(target, chunk)
         except Exception as exc:
             # Counted, not given up on: the next scheduler pass resumes
@@ -2455,16 +2473,20 @@ class SessionManager:
         GitHub refuses a comment above its length limit outright, so an
         answer that long is not shortened but said across the comments it
         needs, each within the limit and nothing of it dropped. A chunk
-        breaks at a line end where it can, so the split does not tear a
-        line in half; a run longer than the limit is cut anyway.
+        breaks at a line end where it can, the line end staying with the
+        chunk that ends there, and no character is consumed at the
+        boundary: the chunks concatenated are the answer, exactly. A run
+        longer than the limit is cut where it is anyway.
         """
         chunks: list[str] = []
         while len(body) > _MAX_REPLY_CHARS:
             cut = body.rfind("\n", 0, _MAX_REPLY_CHARS)
             if cut <= 0:
-                cut = _MAX_REPLY_CHARS
-            chunks.append(body[:cut].rstrip())
-            body = body[cut:].lstrip("\n")
+                chunks.append(body[:_MAX_REPLY_CHARS])
+                body = body[_MAX_REPLY_CHARS:]
+            else:
+                chunks.append(body[: cut + 1])
+                body = body[cut + 1 :]
         if body:
             chunks.append(body)
         return chunks

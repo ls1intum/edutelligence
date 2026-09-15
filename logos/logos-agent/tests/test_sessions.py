@@ -3926,6 +3926,64 @@ class TestReplyDelivery:
         assert posted[0] == "x" * 60_000 + "\n\n" + sessions._answer_marker(7)
         assert posted[1] == "x" * 20_000 + "\n\n" + sessions._answer_chunk_marker(7, 1)
 
+    def test_the_chunks_reproduce_the_body_exactly(self):
+        # The split must be lossless: the fallback promises the complete
+        # answer, and a boundary the splitter ate — a trailing space, a
+        # blank line — is formatting changed, not just moved.
+        from app import sessions
+
+        body = "first line\n\n" + "z" * 60_000 + "\n\nmid   \n\nlast line\n\n"
+        chunks = sessions.SessionManager._reply_chunks(body)
+
+        assert len(chunks) == 3
+        assert all(len(chunk) <= sessions._MAX_REPLY_CHARS for chunk in chunks)
+        assert "".join(chunks) == body
+
+    async def test_an_inline_answer_resumes_after_its_posted_chunks(self, monkeypatch, tmp_path):
+        # The review_comment target is answered in chunks too, and every
+        # chunk is reconciled in its thread: a retry after a failed chunk
+        # resumes after the chunks already in the thread instead of
+        # duplicating them.
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("x" * 80_000)
+        posted: list = []
+        attempts: list = []
+
+        async def send(target, body):
+            posted.append((target, body))
+            if len(posted) == 1:
+                raise RuntimeError("the confirmation never arrived")
+            return "url"
+
+        async def find(_number, _comment_id, marker, _threads):
+            return bool(posted) and marker == sessions._answer_marker(7)
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "review_comment:772:101"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "review_thread_map", self._async_value({}))
+        monkeypatch.setattr(sessions.github, "review_reply_is_in_thread", find)
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(7)
+        await manager._post_reply(7)
+
+        # Pass one posted the first chunk and died on the second. Pass
+        # two found the first chunk's mark in the thread and posted only
+        # what was still owed — the posted chunk is not said twice.
+        assert posted == [
+            ("review_comment:772:101", "x" * 60_000 + "\n\n" + sessions._answer_marker(7)),
+            ("review_comment:772:101", "x" * 20_000 + "\n\n" + sessions._answer_chunk_marker(7, 1)),
+        ]
+        assert attempts == [(7, False), (7, True)]
+
 
 class TestReviewReplyDelivery:
     """A review is answered thread by thread, and the reviewer is asked back.
@@ -4606,7 +4664,7 @@ class TestReviewReplyDelivery:
         first, second = recorded["summaries"]
         assert first[1].startswith("a" * 100)
         assert first[1].endswith("\n\n" + sessions._answer_marker(31))
-        assert second[1].startswith("b" * 100)
+        assert second[1].count("b") == 40_000
         assert second[1].endswith("\n\n" + sessions._answer_chunk_marker(31, 1))
         for body in (first[1], second[1]):
             assert len(body) < 65_536
