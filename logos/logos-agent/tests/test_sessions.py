@@ -4253,6 +4253,40 @@ class TestReviewReplyDelivery:
         assert recorded["threads"] == []
         assert recorded["re_requests"] == []
 
+    async def test_a_deleted_review_with_no_summary_posts_the_thread_answers(self, monkeypatch, tmp_path):
+        # A review with inline comments is answered with per-comment files;
+        # its task says the summary file is not written. When the review —
+        # and with it its threads — is gone before delivery, the answers
+        # must not be lost with it: combined, they go where an answer
+        # always went, instead of spending replacement sessions on a review
+        # that can never be answered again.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row)
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("the close is now after the drain")
+        (directory / "replies" / "102.md").write_text("already addressed on line 40")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [
+            (
+                772,
+                "**Answer to review comment 101:**\n\nthe close is now after the drain\n\n"
+                "**Answer to review comment 102:**\n\nalready addressed on line 40",
+            )
+        ]
+        assert recorded["threads"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, True)]
+
     async def test_a_thread_someone_resolved_stays_theirs(self, monkeypatch, tmp_path):
         # A thread a person resolved on purpose is not reopened by the
         # runner, and a comment that is a reply inside somebody else's

@@ -2259,6 +2259,15 @@ class SessionManager:
         if body is None:
             return
         if not body:
+            # A review answered thread by thread has no summary file. Its
+            # per-comment answers may still exist even where their threads
+            # do not (the review was deleted) — combined, they are still an
+            # answer, and an unanswered review is what they were written
+            # against.
+            body = await self._combined_review_answers(session_id)
+            if body is None:
+                return
+        if not body:
             await self._no_answer(session_id, session)
             return
         body = self._truncate_reply(body)
@@ -2292,6 +2301,37 @@ class SessionManager:
             await db.record_reply_attempt(session_id, delivered=False)
             logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
             return None
+
+    async def _combined_review_answers(self, session_id: int) -> str | None:
+        """The per-comment review answers, combined into one text.
+
+        Where the threads that were to receive them are gone, one comment
+        says what all of them said. An unreadable file is an attempt, not
+        an absence: the next pass may read it, and combining what is
+        readable would deliver an incomplete set as the whole.
+        """
+        replies_dir = artifact_dir(session_id) / REPLY_DIR
+        if not replies_dir.is_dir():
+            return ""
+        answers: list[tuple[int, str]] = []
+        for path in sorted(replies_dir.iterdir()):
+            if not path.is_file() or path.suffix != ".md" or not path.stem.isdigit():
+                continue
+            try:
+                text = path.read_text().strip()
+            except OSError as exc:
+                await db.record_reply_attempt(session_id, delivered=False)
+                logger.warning(
+                    "could not read the answer to comment %s of session %s (will retry): %s",
+                    path.stem,
+                    session_id,
+                    exc,
+                )
+                return None
+            if text:
+                answers.append((int(path.stem), text))
+        combined = [f"**Answer to review comment {comment_id}:**\n\n{text}" for comment_id, text in sorted(answers)]
+        return "\n\n".join(combined)
 
     async def _no_answer(self, session_id: int, session: dict[str, Any]) -> None:
         """What a session that wrote nothing still owes the request.
@@ -2361,9 +2401,10 @@ class SessionManager:
         except github.GitHubError as exc:
             if exc.status == 404:
                 # The review is gone — deleted by its author or a
-                # moderator. Its threads are gone with it, and only the
-                # summary can still be said where it always went.
-                logger.info("the review session %s answered no longer exists; posting its summary only", session_id)
+                # moderator. Its threads are gone with it, so whatever
+                # answer exists — a summary, or the per-comment answers
+                # combined — goes where an answer always went.
+                logger.info("the review session %s answered no longer exists; posting its answer as one", session_id)
                 await self._post_single_reply(session_id, session, target)
                 return
             raise
