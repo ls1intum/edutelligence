@@ -8,6 +8,7 @@ from iris.common.pyris_message import PyrisMessage
 from iris.domain.data.image_message_content_dto import ImageMessageContentDTO
 from iris.llm import CompletionArguments, RequestHandler
 from iris.llm.external.model import LanguageModel
+from iris.llm.external.passthrough_reranker import PassthroughReranker
 from iris.llm.llm_manager import LlmManager
 
 logger = get_logger(__name__)
@@ -67,7 +68,8 @@ class RerankRequestHandler(RequestHandler):
         if not valid_documents:
             return []
 
-        # Skip Cohere entirely after first failure to avoid repeated timeout delays
+        # Skip an unavailable external reranker after its first failure to avoid
+        # repeated timeout delays. Passthrough behavior is identical here.
         if not self._rerank_available:
             return valid_documents[:top_n]
 
@@ -75,13 +77,19 @@ class RerankRequestHandler(RequestHandler):
             map(lambda x: getattr(x, content_field_name), valid_documents)
         )
 
-        cohere_client = self.llm_manager.get_llm_by_id(self.model_id)
+        reranker = self.llm_manager.get_llm_by_id(self.model_id)
 
         try:
-            _, reranked_results, _ = cohere_client.rerank(
-                query=query,
-                documents=document_contents,
-                top_n=top_n,
+            if isinstance(reranker, PassthroughReranker):
+                ranked_indices = reranker.rerank(
+                    query=query,
+                    documents=document_contents,
+                    top_n=top_n,
+                )
+                return [valid_documents[index] for index in ranked_indices]
+
+            _, reranked_results, _ = reranker.rerank(
+                query=query, documents=document_contents, top_n=top_n
             )
             ranked_documents = []
             for result in reranked_results[1]:
