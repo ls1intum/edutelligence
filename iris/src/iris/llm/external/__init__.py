@@ -15,6 +15,7 @@ from ...llm.external.openai_embeddings import (
 )
 from ...llm.external.whisper import AzureWhisperModel, OpenAIWhisperModel
 from .cohere_client import CohereAzureClient
+from .vllm_rerank import VllmRerankModel
 
 AnyLlm = Union[
     DirectOpenAICompletionModel,
@@ -27,4 +28,5 @@ AnyLlm = Union[
     OpenAIWhisperModel,
     OllamaModel,
     CohereAzureClient,
+    VllmRerankModel,
 ]
