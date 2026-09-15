@@ -26,6 +26,13 @@ describe('formatRateUsd', () => {
     expect(formatRateUsd(0.075)).toBe('$0.075');
   });
 
+  it('keeps supported tiny per-second rates legible instead of "$0.0000"', () => {
+    // PriceUpdaterService accepts and tests $0.000006 per second.
+    expect(formatRateUsd(0.000006)).toBe('$0.000006');
+    expect(formatRateUsd(0.000016)).toBe('$0.000016');
+    expect(formatRateUsd(0.00000006)).toBe('$0.00000006');
+  });
+
   it('keeps at least two decimals for round rates', () => {
     expect(formatRateUsd(0.01)).toBe('$0.01');
     expect(formatRateUsd(0.1)).toBe('$0.10');

@@ -48,7 +48,14 @@ function trimTrailingZeros(text: string): string {
  */
 export function formatRateUsd(dollars: number): string {
   if (dollars === 0) return '$0.00';
-  if (dollars < 0.01) return `$${dollars.toFixed(4)}`;
+  if (dollars < 0.01) {
+    // Up to three significant digits, so the tiny per-second rates the
+    // PriceUpdaterService accepts (down to $0.000006/s) stay legible
+    // instead of rounding to "$0.0000". Below 1e-6 toPrecision switches
+    // to exponent notation, so fall back to a fixed 8 decimals there.
+    const text = dollars < 1e-6 ? dollars.toFixed(8) : dollars.toPrecision(3);
+    return `$${trimTrailingZeros(text)}`;
+  }
   if (dollars < 1) {
     const trimmed = trimTrailingZeros(dollars.toFixed(3));
     const [whole, frac = ''] = trimmed.split('.');
