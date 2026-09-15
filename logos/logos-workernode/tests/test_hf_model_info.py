@@ -227,8 +227,8 @@ def test_classify_model_kind_by_architecture_fallback():
 
 
 def test_classify_model_kind_defaults_to_generative_when_unknown():
-    """Issue #963: never widen fatal probing to a model we can't positively
-    identify — unknown must keep today's (pre-#963) generative behavior."""
+    """Never widen fatal probing to a model we can't positively identify —
+    unknown must keep the safe, lenient generative behavior."""
     assert classify_model_kind(None, None) == "generative"
     assert classify_model_kind("some-unrelated-tag", []) == "generative"
     assert classify_model_kind(None, ["SomeNovelArchitectureForFoo"]) == "generative"
@@ -283,8 +283,8 @@ def test_fetch_hf_model_metadata_success(tmp_path):
 
 
 def test_fetch_hf_model_metadata_captures_pipeline_tag_and_architectures(tmp_path):
-    """issue #963: both signals classify_model_kind needs must survive the
-    fetch (and, via the cache, a JSON round-trip — see put()/get())."""
+    """Both signals classify_model_kind needs must survive the fetch (and,
+    via the cache, a JSON round-trip — see put()/get())."""
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"num_hidden_layers": 1, "architectures": ["WhisperForConditionalGeneration"]}))
 
@@ -500,15 +500,15 @@ def test_cache_put_sweeps_a_malformed_entry_belonging_to_another_model(tmp_path)
     assert cache.get("org/fine") is not None
 
 
-def test_cache_treats_pre_963_entry_missing_pipeline_tag_as_stale(tmp_path):
-    """Confirmed live on the hochbruegge dev worker: a cache entry written
-    before issue #963 has no pipeline_tag/architectures keys at all, and
-    without a schema-version stamp HfModelMetadata(**entry) would silently
-    default them to None — indistinguishable from "this model genuinely
-    has no pipeline_tag" and misclassifying it generative forever (up to
-    the 24h TTL) instead of refetching once for the new fields."""
+def test_cache_treats_entry_missing_pipeline_tag_as_stale(tmp_path):
+    """A cache entry written by an older schema version has no
+    pipeline_tag/architectures keys at all, and without a schema-version
+    stamp HfModelMetadata(**entry) would silently default them to None —
+    indistinguishable from "this model genuinely has no pipeline_tag" and
+    misclassifying it generative forever (up to the 24h TTL) instead of
+    refetching once for the new fields."""
     cache = HfModelInfoCache(tmp_path)
-    # A real pre-#963 entry shape: no _cache_schema_version, no
+    # An older-schema entry shape: no _cache_schema_version, no
     # pipeline_tag, no architectures.
     cache._entries["Alibaba-NLP/gte-Qwen2-1.5B-instruct"] = {  # noqa: SLF001
         "weight_bytes": 7104788480,

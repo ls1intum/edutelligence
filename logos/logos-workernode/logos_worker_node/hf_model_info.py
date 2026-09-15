@@ -34,10 +34,10 @@ _ERROR_CACHE_TTL_S = 3600  # retry failures (network blips, rate limits) sooner
 
 # Bumped whenever a new HfModelMetadata field's absence would be silently
 # misread as a legitimate value rather than "never fetched" — e.g.
-# pipeline_tag/architectures (issue #963): an entry written before they
-# existed has no such key at all, and HfModelMetadata(**entry) would
-# otherwise default it to None indistinguishably from a model that
-# genuinely has no pipeline_tag on the Hub, misclassifying it generative.
+# pipeline_tag/architectures: an entry written before a field existed has
+# no such key at all, and HfModelMetadata(**entry) would otherwise
+# default it to None indistinguishably from a model that genuinely has
+# no pipeline_tag on the Hub, misclassifying it generative.
 _CACHE_SCHEMA_VERSION = 2
 _CACHE_VERSION_KEY = "_cache_schema_version"  # not a real field — see put()/_is_valid_entry
 
@@ -52,15 +52,18 @@ REASON_INSUFFICIENT_VRAM_FOR_MIN_KV = "insufficient-vram-for-min-kv-cache"
 REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED = "model-not-found-or-unauthorized"
 REASON_MODEL_GATED = "model-gated"
 
-# Model class calibration's functional probe must route by (issue #963):
-# a model whose serving endpoint isn't /v1/completions (pooling, ASR) never
-# looked broken there, so a fatal serving flag combination went uncaught.
-# "generative" is also the default classify_model_kind returns when neither
-# signal below is conclusive — the pre-#963 behavior, never widened blindly.
-# pipeline_tag (HF's own curated tag) is authoritative whenever it names a
-# kind we recognize — checked whole, never combined with the architecture
-# fallback below, so a generative tag can't be second-guessed by an
-# incidental architecture-name substring (e.g. a CausalLM wrapper class
+# Model class calibration's functional probe must route by: a model
+# whose serving endpoint isn't /v1/completions (pooling, ASR) never
+# looks broken there, so a fatal serving flag combination would go
+# uncaught. "generative" is also the default classify_model_kind returns
+# when neither signal below is conclusive — deliberately, never widened
+# without a positive signal.
+#
+# pipeline_tag (HF's own curated tag) is authoritative whenever it names
+# a kind we recognize — checked whole, never combined with the
+# architecture fallback below, so a generative tag can't be
+# second-guessed by an incidental architecture-name substring (e.g. a
+# CausalLM wrapper class
 # that happens to contain "Embedding" in its name).
 _PIPELINE_TAG_KIND: dict[str, str] = {
     "text-generation": "generative",
@@ -88,12 +91,12 @@ _POOLING_ARCH_MARKERS = (
 
 def classify_model_kind(pipeline_tag: str | None, architectures: list[str] | None) -> str:
     """Route calibration's functional probe: "generative" / "pooling" /
-    "transcription" (issue #963).
+    "transcription".
 
-    Deliberately conservative: defaults to "generative" — today's only
-    probe — whenever neither signal is conclusive, so an unrecognized model
-    keeps exactly its pre-#963 behavior instead of risking a new false-
-    positive calibration failure.
+    Deliberately conservative: defaults to "generative" whenever neither
+    signal is conclusive, so an unrecognized model gets the safe,
+    already-proven probe instead of risking a false-positive calibration
+    failure.
     """
     kind = _PIPELINE_TAG_KIND.get(pipeline_tag or "")
     if kind is not None:
@@ -148,8 +151,8 @@ class HfModelMetadata:
     # Hub-curated task tag (e.g. "text-generation", "feature-extraction",
     # "automatic-speech-recognition") and config.json's own "architectures"
     # list — both already fetched below for other purposes, kept here so
-    # classify_model_kind can route calibration's functional probe by model
-    # class instead of always assuming /v1/completions (issue #963).
+    # classify_model_kind can route calibration's functional probe by
+    # model class instead of always assuming /v1/completions.
     pipeline_tag: str | None = None
     architectures: list[str] | None = None
     fetched_at: float = 0.0
@@ -448,13 +451,13 @@ class HfModelInfoCache:
         #
         # The schema-version stamp catches a different failure mode: a
         # dataclass field ADDED after this entry was written (e.g.
-        # pipeline_tag/architectures for issue #963) is simply absent from
-        # the JSON, which HfModelMetadata(**entry) then silently defaults
-        # to None — a real "field never fetched" is then indistinguishable
-        # from "this model genuinely has no pipeline_tag on the Hub", and
+        # pipeline_tag/architectures) is simply absent from the JSON,
+        # which HfModelMetadata(**entry) then silently defaults to None —
+        # a real "field never fetched" is then indistinguishable from
+        # "this model genuinely has no pipeline_tag on the Hub", and
         # classify_model_kind reads that None as "generative" either way.
         # Rejecting anything not stamped with the CURRENT version forces a
-        # refetch instead of serving a pre-#963 entry as if it were complete.
+        # refetch instead of serving an older-schema entry as complete.
         if not isinstance(entry, dict) or entry.get(_CACHE_VERSION_KEY) != _CACHE_SCHEMA_VERSION:
             return False
         fields_only = {k: v for k, v in entry.items() if k != _CACHE_VERSION_KEY}
@@ -500,8 +503,8 @@ class HfModelInfoCache:
             # otherwise a dropped-from-config model keeps a stale/broken entry
             # forever, and one malformed entry keeps raising out of every
             # future put() sweep too. Also opportunistically clears out
-            # pre-#963 entries missing the version stamp on the very next
-            # write, rather than waiting out their full 24h TTL.
+            # older-schema entries missing the version stamp on the very
+            # next write, rather than waiting out their full 24h TTL.
             for name in [n for n, e in self._entries.items() if not self._is_valid_entry(e) or self._is_expired(e)]:
                 del self._entries[name]
             # asdict(), not a hand-picked field list — a manually maintained

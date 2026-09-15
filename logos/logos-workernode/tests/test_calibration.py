@@ -3411,7 +3411,7 @@ def test_result_to_profile_dict_maps_sleep_mode_disabled() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Group 11 — functional probe routing by model class (issue #963)
+# Group 11 — functional probe routing by model class
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -3449,7 +3449,7 @@ def test_warmup_inference_dispatches_by_model_kind():
         warmup_inference(_CALIB_BASE_URL, "m", model_kind="pooling")
         warmup_inference(_CALIB_BASE_URL, "m", model_kind="transcription")
         # An unrecognized kind must never silently drop the warmup — falls
-        # back to the pre-#963 generative probe.
+        # back to the generative probe.
         warmup_inference(_CALIB_BASE_URL, "m", model_kind="something-new")
 
     post_urls = [c.args[0] for c in mock_post.call_args_list]
@@ -3464,8 +3464,8 @@ def test_warmup_inference_dispatches_by_model_kind():
 
 
 def test_calibrate_pooling_model_fails_fast_when_embeddings_probe_fails():
-    """issue #963: a pooling model that can't answer one /v1/embeddings
-    request must fail calibration outright, never reach [CALIBRATED]."""
+    """A pooling model that can't answer one /v1/embeddings request must
+    fail calibration outright, never reach [CALIBRATED]."""
     post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
     patches = _patch_calibration_infra()
     patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
@@ -3493,8 +3493,8 @@ def test_calibrate_pooling_model_succeeds_via_the_right_endpoint():
 
 
 def test_calibrate_transcription_model_fails_fast_when_audio_probe_fails():
-    """issue #963: the openai/whisper-large-v3 production incident — a
-    lane-killing flag combination must surface here, not first in prod."""
+    """The openai/whisper-large-v3 production incident — a lane-killing
+    flag combination must surface here, not first in prod."""
     patches = _patch_calibration_infra()
     patches["multipart"] = patch("logos_worker_node.calibration._post_multipart", return_value=(500, {}))
 
@@ -3507,8 +3507,9 @@ def test_calibrate_transcription_model_fails_fast_when_audio_probe_fails():
 
 
 def test_calibrate_generative_model_probe_failure_stays_non_fatal():
-    """Explicit model_kind="generative": unchanged from pre-#963 — a failed
-    warmup only warns, the run still completes (out-of-scope boundary)."""
+    """Explicit model_kind="generative": a failed warmup only warns, the
+    run still completes — this class deliberately keeps the lenient
+    behavior (out-of-scope boundary for the fatal-probe gating)."""
     post, _ = _capturing_post(**{"/v1/completions": (405, {})})
     patches = _patch_calibration_infra()
     patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)

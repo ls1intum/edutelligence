@@ -269,9 +269,9 @@ def test_cancelled_before_spawn_short_circuits():
 
 def test_warmup_failure_does_not_fail_calibration():
     """An unclassified/generative model's warmup that never serves still
-    yields a load-only measurement — unchanged since before issue #963;
-    see test_pooling_warmup_failure_fails_calibration for the classes
-    that now have a real, gating probe instead."""
+    yields a load-only measurement; see
+    test_pooling_warmup_failure_fails_calibration for the classes that
+    have a real, gating probe instead."""
     patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9500.0], warmup_ok=False)
     result, _mocks = _run({"model": "org/model"}, patches)
 
@@ -280,10 +280,10 @@ def test_warmup_failure_does_not_fail_calibration():
 
 
 def test_pooling_warmup_failure_fails_calibration():
-    """issue #963: a classified pooling/transcription model has a real
-    probe now — a failure means the model itself doesn't serve one
-    request on its own endpoint, and must not persist a footprint
-    measured before the real request's lazy allocations."""
+    """A classified pooling/transcription model has a real probe — a
+    failure means the model itself doesn't serve one request on its own
+    endpoint, and must not persist a footprint measured before the real
+    request's lazy allocations."""
     patches, mocks_ref = _patch_metal_infra(wired_memory_sequence=[4000.0], warmup_ok=False)
     result, mocks = _run({"model": "org/embedding-model", "model_kind": "pooling"}, patches)
 

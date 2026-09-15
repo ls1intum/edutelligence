@@ -868,10 +868,10 @@ async def test_start_calibration_session_routes_metal_backend_to_metal_probe(tmp
     )
     client = LogosBridgeClient(app, cfg)
 
-    # issue #963: the precheck now classifies Metal models too (only the
-    # CUDA-only VRAM-fit half is skipped), so it needs HF metadata to not
-    # look like a permanently-unsupported repo (which would skip the
-    # model before it ever reaches calibrate_model_metal).
+    # The precheck classifies Metal models too (only the CUDA-only
+    # VRAM-fit half is skipped), so it needs HF metadata to not look like
+    # a permanently-unsupported repo (which would skip the model before
+    # it ever reaches calibrate_model_metal).
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
         lambda *a, **k: HfModelMetadata(source="hf"),
@@ -1349,8 +1349,8 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
     assert len(seen_plans) == 1
     assert seen_plans[0]["_hf_weight_bytes"] == 4 * 1024 * 1024 * 1024
     assert seen_plans[0]["_hf_max_tp_ceiling"] == 1
-    # No pipeline_tag/architectures on this HfModelMetadata — issue #963's
-    # classifier defaults to "generative", the pre-#963 behavior.
+    # No pipeline_tag/architectures on this HfModelMetadata —
+    # classify_model_kind defaults to "generative".
     assert seen_plans[0]["_detected_model_kind"] == "generative"
 
     # A successful calibration overwrites the HF estimate with the real
@@ -1366,9 +1366,9 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 async def test_hf_precheck_classifies_transcription_model_into_plan(tmp_path, monkeypatch):
-    """issue #963: a Whisper-like model's HF pipeline_tag must reach the
-    calibration plan as _detected_model_kind, routing the functional probe
-    to /v1/audio/transcriptions instead of /v1/completions. Isolated from
+    """A Whisper-like model's HF pipeline_tag must reach the calibration
+    plan as _detected_model_kind, routing the functional probe to
+    /v1/audio/transcriptions instead of /v1/completions. Isolated from
     the VRAM-fit math: weight_bytes is left unset."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
@@ -1532,9 +1532,9 @@ async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, mon
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_skips_vram_fit_on_metal_backend(tmp_path, monkeypatch):
     """No nvidia-smi on Metal, so only the VRAM-fit half is skipped — HF
-    metadata is still fetched and classified (issue #963's model_kind is a
-    pure Hub/config.json lookup, backend-independent), so a Metal pooling
-    or transcription model isn't silently misclassified as generative."""
+    metadata is still fetched and classified (model_kind is a pure
+    Hub/config.json lookup, backend-independent), so a Metal pooling or
+    transcription model isn't silently misclassified as generative."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.hf_model_info import HfModelMetadata
 
@@ -2065,9 +2065,9 @@ async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_d
 
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_reports_model_kind(tmp_path, monkeypatch):
-    """issue #963: the precheck classifies every model it fetches HF
-    metadata for, generative default included, so the calibration loop can
-    route its functional probe without a second HF lookup."""
+    """The precheck classifies every model it fetches HF metadata for,
+    generative default included, so the calibration loop can route its
+    functional probe without a second HF lookup."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.hf_model_info import HfModelMetadata
 
@@ -2089,8 +2089,8 @@ async def test_run_compatibility_precheck_reports_model_kind(tmp_path, monkeypat
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_model_kind_defaults_generative_on_fetch_failure(tmp_path, monkeypatch):
     """No HF metadata at all (network down, unknown model, ...) must still
-    default to "generative" — the pre-#963 behavior, never a new fatal
-    probe for a model we have no classification signal for."""
+    default to "generative" — never a fatal probe for a model we have no
+    classification signal for."""
     from logos_worker_node import config as _wcfg
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)

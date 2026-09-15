@@ -671,7 +671,7 @@ def _post_multipart(
     timeout_s: float = 30.0,
 ) -> tuple[int, Any]:
     """POST a ``multipart/form-data`` body — stdlib-only, no extra HTTP
-    client dependency for the (single) transcription probe use (#963).
+    client dependency for the (single) transcription probe use.
     """
     boundary = uuid.uuid4().hex
     parts: list[bytes] = []
@@ -1057,7 +1057,7 @@ def probe_pooling(base_url: str, model: str, timeout_s: float) -> bool:
 
 
 # Sub-second mono 16kHz WAV — no network dependency for the transcription
-# probe (issue #963).
+# probe.
 _PROBE_AUDIO_PATH = Path(__file__).with_name("fixtures") / "calibration_probe.wav"
 
 
@@ -1087,11 +1087,11 @@ _PROBE_BY_MODEL_KIND: dict[str, Callable[[str, str, float], bool]] = {
     "transcription": probe_transcription,
 }
 
-# Model kinds calibration can now positively verify end-to-end (issue #963)
-# — a failed probe for these fails calibration outright (see
-# _calibrate_model_probe Phase 2.5 / 5.5). "generative" stays non-fatal:
-# unchanged from before #963, deliberately, to avoid new false positives on
-# transient first-token flakiness — #963 only asked for the missing classes.
+# Model kinds calibration can positively verify end-to-end — a failed
+# probe for these fails calibration outright (see _calibrate_model_probe
+# Phase 2.5 / 5.5). "generative" stays non-fatal, deliberately, to avoid
+# false positives on transient first-token flakiness — only the classes
+# with a real, working functional probe are fatal.
 _FATAL_PROBE_MODEL_KINDS = frozenset({"pooling", "transcription"})
 
 
@@ -1109,8 +1109,8 @@ def warmup_inference(
     reflects post-first-request peak, not post-load. ``model_kind`` (from
     ``classify_model_kind``) picks the matching endpoint — completions,
     embeddings, or transcription — instead of always assuming
-    ``/v1/completions`` (issue #963: that silently no-ops for pooling/ASR
-    models and never catches a serving-breaking config for them).
+    ``/v1/completions``, which silently no-ops for pooling/ASR models and
+    never catches a serving-breaking config for them.
     """
     probe = _PROBE_BY_MODEL_KIND.get(model_kind, probe_generative)
     return probe(base_url, model, timeout_s)
@@ -1666,7 +1666,7 @@ def _calibrate_model_probe(
     model = plan["model"]
     # "model_kind" is an operator override (engines.vllm.model_overrides);
     # "_detected_model_kind" is the HF-precheck's auto-classification
-    # (logos_bridge.py). Both route the functional probe (issue #963).
+    # (logos_bridge.py). Both route the functional probe below.
     model_kind = str(plan.get("model_kind") or plan.get("_detected_model_kind") or "generative")
     gpu_devices = str(plan.get("gpu_devices") or "")
     tp = int(plan.get("tensor_parallel_size", 1))
@@ -2718,9 +2718,9 @@ def _calibrate_model_probe(
                 )
         elif model_kind in _FATAL_PROBE_MODEL_KINDS:
             # A classified pooling/transcription model has a real, working
-            # probe now (issue #963) — a failure here is the model itself
-            # not serving one request on its own endpoint, not a missed
-            # /v1/completions mismatch. Must not reach [CALIBRATED].
+            # probe — a failure here is the model itself not serving one
+            # request on its own endpoint, not a missed /v1/completions
+            # mismatch. Must not reach [CALIBRATED].
             partial.error = (
                 f"functional probe failed ({model_kind}): {model} did not answer "
                 "one request on its own serving endpoint"
@@ -2936,8 +2936,8 @@ def _calibrate_model_probe(
                         # Did not serve one before sleep either. For a
                         # classified pooling/transcription model that is
                         # unreachable here — Phase 2.5 already failed the
-                        # run outright on the same probe (issue #963). This
-                        # remains a genuine "no evidence" case only for an
+                        # run outright on the same probe. This remains a
+                        # genuine "no evidence" case only for an
                         # unclassified/generative model (a transient 5xx,
                         # etc.); the wake itself is verified by /is_sleeping
                         # above, so accept it.

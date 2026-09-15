@@ -204,7 +204,7 @@ def calibrate_model_metal(
     log_path = log_dir / f"{model.replace('/', '__')}.log"
     # "model_kind" is an operator override (engines.vllm.model_overrides);
     # "_detected_model_kind" is the HF-precheck's auto-classification
-    # (logos_bridge.py) — both backend-independent (issue #963).
+    # (logos_bridge.py) — both backend-independent.
     model_kind = str(plan.get("model_kind") or plan.get("_detected_model_kind") or "generative")
 
     if int(plan.get("tensor_parallel_size", 1)) > 1:
@@ -263,11 +263,11 @@ def calibrate_model_metal(
         served = warmup_inference(base_url, model, model_kind=model_kind)
         if not served:
             if model_kind in _FATAL_PROBE_MODEL_KINDS:
-                # issue #963: a classified pooling/transcription model has
-                # a real, working probe now — a failure means the model
-                # itself doesn't answer one request on its own endpoint,
-                # not a missed /v1/completions mismatch. Must not persist
-                # a footprint measured before the real request's lazy
+                # A classified pooling/transcription model has a real,
+                # working probe — a failure means the model itself
+                # doesn't answer one request on its own endpoint, not a
+                # missed /v1/completions mismatch. Must not persist a
+                # footprint measured before the real request's lazy
                 # allocations (e.g. an embedding model's pooling layer).
                 result.error = (
                     f"functional probe failed ({model_kind}): {model} did not answer "

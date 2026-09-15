@@ -1057,9 +1057,9 @@ class LogosBridgeClient:
         if is_metal_backend():
             # No nvidia-smi here, so the VRAM-fit half below could never
             # run anyway — skip it, but only it. HF metadata and
-            # model_kind (issue #963) are already resolved above and
-            # backend-independent (a pure Hub/config.json lookup), so a
-            # Metal pooling/transcription model must still get its real
+            # model_kind are already resolved above and backend-
+            # independent (a pure Hub/config.json lookup), so a Metal
+            # pooling/transcription model must still get its real
             # classification instead of silently defaulting to generative.
             # Metal profiles themselves come from model_profile_overrides,
             # not this precheck.
@@ -1753,11 +1753,10 @@ class LogosBridgeClient:
                         None,
                     )
                     continue
-                # Auto-classification (issue #963) — routes the functional
-                # probe to the model's real serving endpoint. An operator
-                # override (plan["model_kind"], via
-                # engines.vllm.model_overrides) takes precedence; see
-                # _calibrate_model_probe.
+                # Auto-classification — routes the functional probe to
+                # the model's real serving endpoint. An operator override
+                # (plan["model_kind"], via engines.vllm.model_overrides)
+                # takes precedence; see _calibrate_model_probe.
                 plan = {**plan, "_detected_model_kind": precheck["model_kind"]}
                 if precheck["fit_tp_idle"] is not None:
                     plan = {
