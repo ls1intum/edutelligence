@@ -2254,19 +2254,23 @@ class SessionManager:
         await self._post_single_reply(session_id, session or {}, target)
 
     async def _post_single_reply(self, session_id: int, session: dict[str, Any], target: str) -> None:
-        """One answer, posted where its question was asked."""
+        """One answer, posted where its question was asked.
+
+        A review whose threads are gone (the review was deleted) owes its
+        whole answer at once: the summary and every per-comment answer, in
+        whatever mix was written — none of it may be left unsaid in a
+        fallback where the threads cannot receive it.
+        """
         body = await self._read_answer(session_id)
         if body is None:
             return
-        if not body:
-            # A review answered thread by thread has no summary file. Its
-            # per-comment answers may still exist even where their threads
-            # do not (the review was deleted) — combined, they are still an
-            # answer, and an unanswered review is what they were written
-            # against.
-            body = await self._combined_review_answers(session_id)
-            if body is None:
-                return
+        answers = await self._combined_review_answers(session_id)
+        if answers is None:
+            return
+        if body and answers:
+            body = f"{body}\n\n{answers}"
+        elif not body:
+            body = answers
         if not body:
             await self._no_answer(session_id, session)
             return
@@ -2402,8 +2406,8 @@ class SessionManager:
             if exc.status == 404:
                 # The review is gone — deleted by its author or a
                 # moderator. Its threads are gone with it, so whatever
-                # answer exists — a summary, or the per-comment answers
-                # combined — goes where an answer always went.
+                # answer exists — the summary, the per-comment answers, or
+                # both — goes where an answer always went.
                 logger.info("the review session %s answered no longer exists; posting its answer as one", session_id)
                 await self._post_single_reply(session_id, session, target)
                 return

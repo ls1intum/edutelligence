@@ -4287,6 +4287,38 @@ class TestReviewReplyDelivery:
         assert recorded["re_requests"] == []
         assert recorded["attempts"] == [(31, True)]
 
+    async def test_a_deleted_review_posts_the_summary_and_the_thread_answers(self, monkeypatch, tmp_path):
+        # A review with a body-level point and inline comments is answered
+        # with a summary and per-comment files. Where its threads are gone,
+        # the single comment carries all of it — the summary on top, every
+        # answer under it — and none of it is left unsaid.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row)
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("the close is now after the drain")
+        (directory / "reply.md").write_text("and the body point: the default is documented now")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [
+            (
+                772,
+                "and the body point: the default is documented now\n\n"
+                "**Answer to review comment 101:**\n\nthe close is now after the drain",
+            )
+        ]
+        assert recorded["threads"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, True)]
+
     async def test_a_thread_someone_resolved_stays_theirs(self, monkeypatch, tmp_path):
         # A thread a person resolved on purpose is not reopened by the
         # runner, and a comment that is a reply inside somebody else's
