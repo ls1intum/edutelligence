@@ -2519,13 +2519,19 @@ class SessionManager:
             await self._no_answer(session_id, session)
             return
 
+        # One map for the whole delivery: every answer's look-up and the
+        # resolution sweep below ask it, and rebuilding its pages for each
+        # of them would turn a review with many answers into quadratic
+        # GitHub work.
+        threads = await github.review_thread_map(number) if per_comment or state["replied"] else None
+
         for comment_id in sorted(per_comment):
             marker = _reply_marker(session_id, comment_id)
             # The reply may already be in its thread: a previous pass posted
             # it and lost the confirmation on the way back, and the state
             # never learned of it. The marker in the thread is the answer
             # to whether posting again would be a duplicate.
-            if await github.review_reply_is_in_thread(number, comment_id, marker):
+            if await github.review_reply_is_in_thread(number, comment_id, marker, threads):
                 state["replied"].append(comment_id)
                 self._write_review_reply_state(state_path, state)
                 await db.add_event(
@@ -2541,7 +2547,7 @@ class SessionManager:
             logger.info("session %s answered comment %s on pull request %s", session_id, comment_id, number)
 
         if state["replied"]:
-            await self._resolve_answered_threads(session_id, number, state, state_path)
+            await self._resolve_answered_threads(session_id, number, state, state_path, threads)
 
         if summary and not state["summary_posted"]:
             marker = _summary_marker(session_id)
@@ -2577,9 +2583,19 @@ class SessionManager:
         logger.info("session %s answered its review on pull request %s", session_id, number)
 
     async def _resolve_answered_threads(
-        self, session_id: int, number: int, state: dict[str, Any], state_path: Path
+        self,
+        session_id: int,
+        number: int,
+        state: dict[str, Any],
+        state_path: Path,
+        threads: dict[int, dict[str, Any]],
     ) -> None:
         """Resolve the threads whose answers just went out.
+
+        ``threads`` is the map the delivery built once for every answer's
+        look-up; its ``resolved`` flags are a snapshot of that moment, and
+        a thread that changed state meanwhile is handled as the snapshot
+        says — the sweep must not re-read GitHub to second-guess it.
 
         A thread a person already resolved stays as they left it, and a
         comment that is a reply inside somebody else's thread has no thread
@@ -2591,7 +2607,6 @@ class SessionManager:
         handed back, and the sweep is tried again with the whole delivery.
         """
         handled = set(state["resolved_threads"])
-        threads = await github.review_thread_map(number)
         for comment_id in state["replied"]:
             info = threads.get(comment_id) or {}
             thread_id = str(info.get("thread") or "")

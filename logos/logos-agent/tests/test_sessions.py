@@ -3987,6 +3987,7 @@ class TestReviewReplyDelivery:
             "attempts": [],
             "checks": [],
             "issue_checks": [],
+            "maps": [],
         }
 
         async def get_session(_session_id):
@@ -4017,6 +4018,7 @@ class TestReviewReplyDelivery:
             return f"https://github.com/x/y#issuecomment-{number}"
 
         async def fake_threads_map(_number):
+            recorded["maps"].append(_number)
             return (
                 threads
                 if threads is not None
@@ -4029,7 +4031,7 @@ class TestReviewReplyDelivery:
         async def fake_resolve(thread_ids):
             recorded["resolved"].extend(thread_ids)
 
-        async def fake_find(number, comment_id, marker):
+        async def fake_find(number, comment_id, marker, threads=None):
             recorded["checks"].append((number, comment_id, marker))
             return False
 
@@ -4077,6 +4079,9 @@ class TestReviewReplyDelivery:
         assert recorded["resolved"] == ["PRRT_1", "PRRT_2"]
         assert recorded["re_requests"] == ["claudia"]
         assert recorded["attempts"] == [(31, True)]
+        # The delivery asks two comments and resolves two threads, but the
+        # map with all of its pages is built once for the whole of it.
+        assert recorded["maps"] == [772]
 
     async def test_the_summary_is_posted_alongside_the_thread_answers(self, monkeypatch, tmp_path):
         from app import sessions
@@ -4319,7 +4324,7 @@ class TestReviewReplyDelivery:
             recorded["threads"].append((number, comment_id, body))
             return f"https://github.com/x/y#issuecomment-{comment_id}"
 
-        async def find(_number, comment_id, _marker):
+        async def find(_number, comment_id, _marker, _threads=None):
             recorded["checks"].append((comment_id,))
             return posted_remotely["n"] >= 1
 

@@ -820,7 +820,9 @@ query ReviewThreadComments($threadId: ID!, $after: String) {
 """
 
 
-async def review_reply_is_in_thread(number: int, comment_id: int, marker: str) -> bool:
+async def review_reply_is_in_thread(
+    number: int, comment_id: int, marker: str, threads: dict[int, dict[str, Any]] | None = None
+) -> bool:
     """Whether the marked answer is already in the thread of its comment.
 
     A POST that GitHub accepted but whose confirmation never arrived left
@@ -830,12 +832,18 @@ async def review_reply_is_in_thread(number: int, comment_id: int, marker: str) -
     wrote it — through every page of the thread's comments, because the
     reply can sit anywhere in them. A look-up that cannot be completed
     raises rather than risking the duplicate.
+
+    ``threads`` is the map of the delivery (see :func:`review_thread_map`):
+    a delivery asks about many comments, and the map — with all of its
+    pages — is built once for all of them. Without it, the map is built
+    here on the spot.
     """
     # The reply went into the thread the map names for the comment — the
     # one it starts, or the one of the comment it replies to. A comment
     # the map does not name at all cannot be looked for, and the POST goes
     # ahead as before.
-    threads = await review_thread_map(number)
+    if threads is None:
+        threads = await review_thread_map(number)
     thread_id = str((threads.get(comment_id) or {}).get("thread") or "")
     if not thread_id:
         logger.warning(

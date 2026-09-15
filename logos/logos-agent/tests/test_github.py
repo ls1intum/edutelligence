@@ -1609,6 +1609,22 @@ class TestReviewRepliesAndReRequests:
         assert await github.review_reply_is_in_thread(772, 500, marker) is True
         assert calls[1]["json"]["variables"]["threadId"] == "PRRT_1"
 
+    async def test_a_passed_map_is_not_fetched_again(self, monkeypatch):
+        # The delivery builds the map once and hands it in: the look-up
+        # asks the thread for the marker and goes back for nothing else.
+        calls: list = []
+        marker = "<!-- logos reply 31 101 -->"
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [(200, {"data": _thread_comments_payload([f"the answer\n\n{marker}"])})],
+        )
+        threads = {101: {"thread": "PRRT_1", "resolved": False}}
+
+        assert await github.review_reply_is_in_thread(772, 101, marker, threads) is True
+        assert len(calls) == 1
+        assert calls[0]["json"]["variables"]["threadId"] == "PRRT_1"
+
     async def test_a_stuck_thread_map_cursor_is_an_error(self, monkeypatch):
         # A page that claims there is more and hands back the cursor it was
         # asked with is not a page: following it would read the same page
