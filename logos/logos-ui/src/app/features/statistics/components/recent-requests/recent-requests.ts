@@ -14,6 +14,7 @@ import { formatUsd } from '../../../../shared/utils/currency';
 import {
   LatestRequestsPage,
   RequestCursor,
+  RequestPayloads,
   StatisticsService,
 } from '../../services/statistics.service';
 import { RequestItem } from '../../statistics.models';
@@ -74,6 +75,63 @@ export function tokenLabel(
 })
 export class RecentRequests implements OnChanges, OnDestroy {
   private statisticsService = inject(StatisticsService);
+
+  readonly expandedRequestId = signal<string | null>(null);
+  readonly payloadTab = signal<'request' | 'response'>('request');
+  readonly payloads = signal<RequestPayloads | null>(null);
+  readonly payloadLoading = signal(false);
+  readonly payloadError = signal<string | null>(null);
+  private payloadRequestId: string | null = null;
+  private payloadGeneration = 0;
+  private payloadAwaitingCompletion = false;
+
+  readonly payloadText = computed(() => {
+    const data = this.payloads();
+    const value = this.payloadTab() === 'request' ? data?.input_payload : data?.response_payload;
+    if (value == null) return null;
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  });
+
+  togglePayloads(item: RequestItem): void {
+    if (this.expandedRequestId() === item.request_id) {
+      this.expandedRequestId.set(null);
+      return;
+    }
+    this.expandedRequestId.set(item.request_id);
+    this.payloadTab.set('request');
+    if (this.payloadRequestId !== item.request_id || this.payloadAwaitingCompletion || (!this.payloads() && !this.payloadLoading())) {
+      this.payloadAwaitingCompletion = deriveStage(item) !== 'complete';
+      void this.loadPayloads(item.request_id);
+    }
+  }
+
+  async loadPayloads(requestId: string): Promise<void> {
+    const generation = ++this.payloadGeneration;
+    this.payloadRequestId = requestId;
+    this.payloads.set(null);
+    this.payloadLoading.set(true);
+    this.payloadError.set(null);
+    try {
+      const payloads = await this.statisticsService.getRequestPayloads(requestId);
+      if (generation === this.payloadGeneration) this.payloads.set(payloads);
+    } catch {
+      if (generation === this.payloadGeneration) {
+        this.payloadError.set('Could not load request content. Close and reopen to try again.');
+      }
+    } finally {
+      if (generation === this.payloadGeneration) this.payloadLoading.set(false);
+    }
+  }
+
+  private clearPayloads(): void {
+    ++this.payloadGeneration;
+    this.expandedRequestId.set(null);
+    this.payloadRequestId = null;
+    this.payloadAwaitingCompletion = false;
+    this.payloads.set(null);
+    this.payloadError.set(null);
+    this.payloadLoading.set(false);
+  }
 
   /**
    * Live rows pushed by the stats WS — the newest page, already narrowed to the
@@ -258,15 +316,25 @@ export class RecentRequests implements OnChanges, OnDestroy {
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
     // A new push is where the chase gets new ground to cover.
-    if (changes['liveRequests']) this.startChase();
+    if (changes['liveRequests']) {
+      this.startChase();
+      const expanded = this.liveRequests?.find(item => item.request_id === this.expandedRequestId());
+      if (expanded && this.payloadAwaitingCompletion && deriveStage(expanded) === 'complete') {
+        this.payloadAwaitingCompletion = false;
+        // Supersede even an in-flight fetch: it may contain the unfinished response.
+        void this.loadPayloads(expanded.request_id);
+      }
+    }
   }
 
   ngOnDestroy(): void {
+    this.clearPayloads();
     this.clearTicker();
     this.clearChase();
   }
 
   private resetToFirstPage(): void {
+    this.clearPayloads();
     this.pageIndex.set(0);
     this.cursorForPage = [null];
     this._pageRows.set([]);

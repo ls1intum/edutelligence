@@ -1,0 +1,38 @@
+:host { display: block; margin: 16px 0; }
+.batch-editor { border: 1px solid rgb(var(--color-outline-200)); border-radius: 10px; padding: 24px; }
+.batch-toggle { display: flex; gap: 10px; align-items: center; font-weight: 600; font-size: 17px; cursor: pointer; }
+p { color: rgb(var(--color-typography-500)); margin: 12px 0; }
+.batch-controls, .sweep-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0; }
+.sweep-row { padding: 12px; background: rgb(var(--color-surface-50)); border-radius: 8px; }
+.sweep-row strong { align-self: center; min-width: 150px; }
+label { display: grid; gap: 6px; }
+input, select, button { color: inherit; font: inherit; border: 1px solid rgb(var(--color-outline-200)); border-radius: 6px; padding: 8px 10px; background: rgb(var(--color-surface-0)); }
+input[type='number'] { width: 110px; }
+input[type='checkbox'] { width: 18px; height: 18px; }
+button, summary { cursor: pointer; }
+.values { flex: 1; min-width: 180px; }
+.values input { width: 100%; box-sizing: border-box; }
+.batch-header, .plan-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.run-total { padding: 6px 12px; border-radius: 20px; background: rgb(var(--color-primary-500) / .1); color: rgb(var(--color-primary-500)); font-size: 17px; }
+.plan-summary { margin: 20px 0 12px; font-weight: 500; }
+.combination-note { color: rgb(var(--color-typography-500)); font-size: 13px; font-weight: 400; }
+.batch-details { border-top: 1px solid rgb(var(--color-outline-200)); padding-top: 12px; }
+.batch-details summary { color: rgb(var(--color-primary-500)); }
+.batch-intro { margin: 8px 0 20px; }
+.error { color: rgb(var(--color-error-500)); }
+.batch-help { font-size: 13px; color: rgb(var(--color-typography-500)); padding-left: 20px; margin-top: 16px; }
+.batch-help li { margin: 6px 0; }
+.preview-scroll { overflow: auto; max-height: 300px; }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid rgb(var(--color-outline-200)); white-space: nowrap; }
+dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+dt { color: rgb(var(--color-typography-500)); } dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+:focus-visible { outline: 2px solid rgb(var(--color-primary-500)); outline-offset: 3px; }
+
+@media (max-width: 600px) {
+  .batch-editor { padding: 16px; }
+  .batch-controls { align-items: stretch; }
+  .batch-controls > label { flex: 1 1 100%; }
+  .batch-controls input { width: 100%; }
+  .sweep-row > strong { flex-basis: 100%; }
+}

@@ -1,0 +1,118 @@
+<section class="comparison" aria-label="Benchmark parameter comparison">
+  <header>
+    <h3>Compare benchmark runs</h3>
+    <label class="metric-picker">Metric
+      <select [value]="metric()" (change)="metric.set($any($event.target).value)">
+        @for (item of metrics; track item.key) {
+          <option [value]="item.key">{{ item.label }} ({{ item.unit }})</option>
+        }
+      </select>
+    </label>
+  </header>
+
+  @if (baseline(); as reference) {
+    <label class="baseline-picker">Reference run
+      <select [value]="reference.id" (change)="baselineId.set(+$any($event.target).value)">
+        @for (run of eligibleRuns(); track run.id) {
+          <option [value]="run.id" [selected]="run.id === reference.id">#{{ run.id }} · {{ run.provider_name }} · {{ run.dataset }} · {{ run.sample_size }} requests · {{ configuration(run) }}</option>
+        }
+      </select>
+    </label>
+    <div class="comparison-context">
+      <p><strong>{{ reference.provider_name }} · {{ reference.dataset }}</strong>
+        · {{ baselineSettings()['subset'] }}/{{ baselineSettings()['split'] }} · {{ reference.sample_size }} requests
+        · max {{ baselineSettings()['max_output_tokens'] }} tokens</p>
+      <details class="comparison-details">
+        <summary>Comparison details</summary>
+        <p>Each box summarizes repeated runs of the same configuration. The line is the median, the box spans Q1–Q3, whiskers extend to the last values within 1.5 × IQR, and dots mark outliers. A single run appears as a line. Only the X-axis parameter changes; other recorded settings match the reference.
+          {{ excludedCount() }} runs excluded. Seed {{ baselineSettings()['seed'] }}. Cache state and other traffic may still differ.</p>
+        <p>TTFT: time to first token. TTLT: total response time (GuideLLM request latency).
+          Each Y-axis fits its own measurements with 10% padding above and below. Both latency metrics are arithmetic means across successful requests. Output: GuideLLM’s aggregate output token rate. — means not captured.</p>
+      </details>
+    </div>
+
+    <div class="charts">
+      @for (chart of charts(); track chart.key) {
+        <figure [attr.aria-label]="chart.label + ': ' + activeMetric().label + ' by parameter value'">
+          <figcaption><strong>{{ chart.label }}</strong><span>{{ chart.fixed }}</span></figcaption>
+          <div class="axis-title">{{ activeMetric().label }} ({{ activeMetric().unit }})</div>
+          <div class="plot-scroll" tabindex="0" role="region" [attr.aria-label]="chart.label + ' chart, scroll horizontally for all parameter values'">
+            <div class="plot" [style.min-width.px]="chart.minPlotWidth">
+              <div class="y-axis" aria-hidden="true">
+                @for (tick of chart.scale.ticks; track $index) {
+                  <span [style.top.%]="$index * 25">{{ axisValue(tick, chart.scale) }}</span>
+                }
+              </div>
+              <div class="plot-groups" [style.grid-template-columns]="'repeat(' + chart.groups.length + ', minmax(0, 1fr))'">
+                @for (group of chart.groups; track group.parameter) {
+                  <div class="parameter-group">
+                    @if (group.box; as box) {
+                      <div class="box-track" tabindex="0" role="img" [attr.aria-label]="chart.label + ' ' + group.parameter + ': ' + boxLabel(box)" [title]="boxLabel(box)">
+                        <span class="whisker" [style.bottom.%]="position(box.low, chart.scale)" [style.height.%]="(box.high - box.low) / chart.scale.span * 100"></span>
+                        <span class="whisker-cap" [style.bottom.%]="position(box.low, chart.scale)"></span>
+                        <span class="whisker-cap" [style.bottom.%]="position(box.high, chart.scale)"></span>
+                        <span class="quartile-box" [style.bottom.%]="position(box.q1, chart.scale)" [style.height.%]="(box.q3 - box.q1) / chart.scale.span * 100"></span>
+                        <span class="median" [style.bottom.%]="position(box.median, chart.scale)"></span>
+                        @for (outlier of box.outliers; track outlier) {
+                          <span class="outlier" [style.bottom.%]="position(outlier, chart.scale)"></span>
+                        }
+                      </div>
+                      <small class="run-count">n = {{ box.count }}@if (box.count < group.rows.length) { / {{ group.rows.length }}}</small>
+                    } @else {
+                      <div class="box-track missing">—</div><small class="run-count">Not captured</small>
+                    }
+                    <strong class="parameter-label">{{ group.parameter }}</strong>
+                  </div>
+                }
+              </div>
+            </div>
+          </div>
+          <div class="x-axis-title">{{ chart.label }}</div>
+          @if (chart.groups.length < 2) {
+            <p class="comparison-note">No matching run with a different {{ chart.label.toLowerCase() }} value yet.</p>
+          }
+        </figure>
+      }
+    </div>
+
+    <p class="box-legend">Auto-scaled per chart · box: middle 50% · line: median · dots: outliers · n: runs</p>
+    <details class="run-details" (toggle)="showRuns.set($any($event.target).open)">
+      <summary>Individual runs ({{ selected().length }})</summary>
+    @if (showRuns()) {
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Benchmark comparison table, scroll horizontally for all columns">
+      <table>
+        <caption>Runs <span>{{ sortedRuns().length }}</span></caption>
+        <thead><tr>
+          @for (column of columns; track column.key) {
+            <th scope="col" [class.numeric]="column.key !== 'recorded_at' && column.key !== 'id'"
+              [class.active-metric]="metric() === column.key"
+              [attr.aria-sort]="sortKey() === column.key ? sortDirection() : 'none'">
+              <button type="button" [attr.aria-label]="sortLabel(column.key)" (click)="sortBy(column.key)">
+                <span>{{ column.label }}@if (column.unit) {<span class="unit"> ({{ column.unit }})</span>}</span>
+                <span class="sort-indicator" aria-hidden="true">{{ sortKey() === column.key ? (sortDirection() === 'ascending' ? '↑' : '↓') : '↕' }}</span>
+              </button>
+            </th>
+          }
+        </tr></thead>
+        <tbody>
+          @for (run of sortedRuns().slice(0, visibleRunCount()); track run.id) {
+            <tr>
+              <th scope="row">#{{ run.id }}</th>
+              <td class="date" [title]="run.recorded_at | date:'medium'">{{ run.recorded_at | date:'dd MMM yyyy' }}<time [attr.datetime]="run.recorded_at">{{ run.recorded_at | date:'HH:mm:ss' }}</time></td>
+              @for (column of columns.slice(2); track column.key) {
+                <td class="numeric" [class.active-metric]="metric() === column.key">{{ format(sortValue(run, column.key)) }}</td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    @if (visibleRunCount() < sortedRuns().length) {
+      <button type="button" (click)="visibleRunCount.set(visibleRunCount() + 50)">Show 50 more runs</button>
+    }
+    }
+    </details>
+  } @else {
+    <p class="empty">No comparable runs yet. Older runs remain available below.</p>
+  }
+</section>

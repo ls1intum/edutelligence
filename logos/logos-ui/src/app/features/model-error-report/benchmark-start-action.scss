@@ -1,0 +1,5 @@
+.benchmark-start-action { position: relative; justify-self: end; }
+.benchmark-start-notice { position: absolute; z-index: 5; bottom: calc(100% + 12px); right: 0; width: min(350px, 75vw); padding: 16px; border: 1px solid rgb(var(--color-primary-500)); border-radius: 10px; background: rgb(var(--color-surface-0)); box-shadow: 0 8px 24px #0003; font-size: 14px; }
+.benchmark-start-notice p { margin: 10px 0; line-height: 1.5; }
+.benchmark-start-notice::after { content: ''; position: absolute; bottom: -7px; right: 24px; width: 12px; height: 12px; transform: rotate(45deg); background: rgb(var(--color-surface-0)); border-right: 1px solid rgb(var(--color-primary-500)); border-bottom: 1px solid rgb(var(--color-primary-500)); }
+.benchmark-pair__state progress { width: 100%; accent-color: rgb(var(--color-primary-500)); }

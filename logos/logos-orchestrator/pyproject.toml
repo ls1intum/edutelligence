@@ -68,6 +68,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
+shared = { path = "shared", editable = true }
 
 # ---------------------------------------------------------------------------
 # Pytest

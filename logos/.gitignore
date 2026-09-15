@@ -5,3 +5,5 @@ benchmarks/workloads/
 benchmarks/data/
 benchmarks/venv/
 letsencrypt/
+# Local link to the repository's shared Python package (also created by CI).
+/logos-orchestrator/shared

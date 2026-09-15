@@ -1,0 +1,298 @@
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ModelProviderBenchmark } from '../../shared/models/provider.model';
+import { BenchmarkComparison, boxplot, comparisonValue, fitChartScale } from './benchmark-comparison';
+import { canCompare, isolatedRuns } from './benchmark-isolation';
+
+function run(id: number, tp = 1, concurrency = 4, overrides: Partial<ModelProviderBenchmark> = {}): ModelProviderBenchmark {
+  const distribution = (mean: number) => ({ successful: { mean, percentiles: { p50: 1, p95: 2, p99: 3 } } });
+  return {
+    id, model_provider_id: 1, model_id: 1, model_name: 'Qwen', provider_id: 1, provider_name: 'Worker A',
+    dataset: 'openai/gsm8k', sample_size: 50, recorded_at: new Date(Date.UTC(2026, 8, 14, 12, id)).toISOString(),
+    configuration: {
+      metadata: { guidellm_version: '0.7.2' },
+      scenario: { spec: {
+        data: [{ source: 'openai/gsm8k', load_kwargs: { name: 'main', split: 'test' } }],
+        data_column_mapper: { column_mappings: { text_column: 'question' } }, seed: { value: 42 },
+        data_loader: { samples: 50, shuffle: false },
+        backend: { stream: true, extras: { body: { max_tokens: 512 } } },
+      } },
+      benchmark: { profile: { kind: concurrency === 1 ? 'synchronous' : 'concurrent' },
+        strategy: { max_concurrency: concurrency, worker_count: concurrency } },
+      serving: { tensor_parallel_size: tp, pipeline_parallel_size: 1, kv_cache_memory: '4G', enable_prefix_caching: true },
+    },
+    metrics: {
+      request_totals: { successful: 50, errored: 0, incomplete: 0, total: 50 },
+      time_to_first_token_ms: distribution(680), request_latency: distribution(7.6),
+      output_tokens_per_second: distribution(42),
+    }, ...overrides,
+  };
+}
+
+// The baseline is #1 (TP 1, concurrency 4); #4 changes both parameters.
+const runs = () => [run(1), run(2, 2, 4), run(3, 1, 16), run(4, 2, 16), run(5, 1, 1)];
+
+describe('Benchmark parameter isolation', () => {
+  it('varies only TP in the TP chart and only concurrency in the concurrency chart', () => {
+    expect(isolatedRuns(runs(), run(1), 'tensor_parallel_size').map(run => run.id)).toEqual([1, 2]);
+    expect(isolatedRuns(runs(), run(1), 'max_concurrency').map(run => run.id)).toEqual([5, 1, 3]);
+  });
+
+  it.each(['dataset', 'sample_size', 'model_provider_id', 'model_id'])('excludes a different %s', key => {
+    const changed = run(2, 2, 4, { [key]: key === 'dataset' ? 'org/other' : 20 });
+    expect(isolatedRuns([changed], run(1), 'tensor_parallel_size')).toEqual([]);
+  });
+
+  it.each([
+    ['scenario', 'spec', 'seed', 'value'],
+    ['scenario', 'spec', 'backend', 'extras', 'body', 'max_tokens'],
+    ['scenario', 'spec', 'data_loader', 'shuffle'],
+    ['scenario', 'spec', 'data', 0, 'load_kwargs', 'split'],
+    ['scenario', 'spec', 'data', 0, 'load_kwargs', 'revision'],
+    ['scenario', 'spec', 'data_column_mapper', 'column_mappings', 'text_column'],
+    ['serving', 'pipeline_parallel_size'],
+    ['serving', 'kv_cache_memory'],
+    ['serving', 'enable_prefix_caching'],
+    ['metadata', 'guidellm_version'],
+  ])('excludes changed control %j', (...path) => {
+    const changed = run(2, 2, 4);
+    let target: any = changed.configuration;
+    for (const key of path.slice(0, -1)) target = target[key];
+    target[path.at(-1)!] = 'different';
+    expect(isolatedRuns([changed], run(1), 'tensor_parallel_size')).toEqual([]);
+  });
+
+  it('compares request body options, ignoring object key order and job-specific transport details', () => {
+    const baseline = run(1);
+    const other = run(2, 2, 4);
+    const spec = (other.configuration['scenario'] as any).spec;
+    spec.backend.target = '/new-job';
+    spec.backend.extras.headers = { job: 'different' };
+    spec.outputs = [{ path: 'new-report.json' }];
+    spec.data[0].load_kwargs = { split: 'test', name: 'main' };
+    expect(isolatedRuns([other], baseline, 'tensor_parallel_size')).toHaveLength(1);
+    spec.backend.extras.body.temperature = 1;
+    expect(isolatedRuns([other], baseline, 'tensor_parallel_size')).toEqual([]);
+  });
+
+  it('does not infer missing TP, PP, dataset or concurrency settings for old reports', () => {
+    expect(canCompare(run(1, 1, 4, { configuration: {} }))).toBe(false);
+    const missing = run(2);
+    delete (missing.configuration['serving'] as any).pipeline_parallel_size;
+    expect(canCompare(missing)).toBe(false);
+    expect(isolatedRuns(runs(), missing, 'max_concurrency')).toEqual([]);
+  });
+
+  it('excludes failed or incomplete runs and preserves repeated runs separately', () => {
+    const failed = run(8);
+    failed.metrics.request_totals = { successful: 49, total: 50, errored: 1, incomplete: 0 };
+    expect(canCompare(failed)).toBe(false);
+    expect(isolatedRuns([...runs(), run(6), run(7), failed], run(1), 'tensor_parallel_size')
+      .map(run => run.id)).toEqual([1, 6, 7, 2]);
+  });
+});
+
+describe('Benchmark comparison', () => {
+  let fixture: ComponentFixture<BenchmarkComparison>;
+  beforeEach(() => {
+    TestBed.configureTestingModule({ imports: [BenchmarkComparison] });
+    fixture = TestBed.createComponent(BenchmarkComparison);
+    fixture.componentRef.setInput('runs', runs());
+    fixture.componentInstance.showRuns.set(true);
+    fixture.detectChanges();
+  });
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('uses means, converts TTFT from milliseconds, and preserves the aggregate token rate', () => {
+    expect(comparisonValue(run(1), 'ttft')).toBe(0.68);
+    expect(comparisonValue(run(1), 'ttlt')).toBe(7.6);
+    expect(comparisonValue(run(1), 'throughput')).toBe(42);
+  });
+  it('does not replace missing means with percentiles or zero', () => {
+    const benchmark = run(1);
+    delete benchmark.metrics.time_to_first_token_ms!.successful.mean;
+    expect(comparisonValue(benchmark, 'ttft')).toBeNull();
+    expect(fixture.componentInstance.format(null)).toBe('—');
+  });
+  it.each([NaN, Infinity, -1])('rejects invalid measurements (%s)', value => {
+    const benchmark = run(1);
+    benchmark.metrics.output_tokens_per_second!.successful.mean = value;
+    expect(comparisonValue(benchmark, 'throughput')).toBeNull();
+  });
+  it('keeps measured zero but rejects runs with no successful requests', () => {
+    const benchmark = run(1);
+    benchmark.metrics.request_latency!.successful.mean = 0;
+    expect(comparisonValue(benchmark, 'ttlt')).toBe(0);
+    benchmark.metrics.request_totals.successful = 0;
+    expect(comparisonValue(benchmark, 'ttlt')).toBeNull();
+  });
+
+  it('defaults to TP 1/concurrency 4 and changes both vertical charts through one metric selector', async () => {
+    expect(fixture.componentInstance.baseline()?.id).toBe(1);
+    expect(fixture.nativeElement.querySelector('.baseline-picker select').value).toBe('1');
+    expect(fixture.nativeElement.querySelectorAll('figure')).toHaveLength(2);
+    const select: HTMLSelectElement = fixture.nativeElement.querySelector('.metric-picker select');
+    select.value = 'ttft'; select.dispatchEvent(new Event('change'));
+    await fixture.whenStable();
+    const charts = fixture.componentInstance.charts();
+    expect(charts[0].groups.map(group => group.parameter)).toEqual([1, 2]);
+    expect(charts[1].groups.map(group => group.parameter)).toEqual([1, 4, 16]);
+    expect(charts.flatMap(chart => chart.groups).flatMap(group => group.rows).every(row => row.value === 0.68)).toBe(true);
+    expect(fixture.nativeElement.querySelector('.quartile-box').style.height).not.toBe('');
+    expect(fixture.nativeElement.querySelectorAll('tbody tr')).toHaveLength(4);
+    expect(fixture.nativeElement.querySelectorAll('tbody .active-metric')).toHaveLength(4);
+    expect(fixture.nativeElement.querySelector('tbody').textContent).toContain('7.6');
+  });
+
+  it('fits each chart independently and recomputes the scale on metric changes', () => {
+    const benchmarks = [run(1), run(2, 2, 4), run(3, 1, 16)];
+    benchmarks.forEach((benchmark, i) => benchmark.metrics.output_tokens_per_second!.successful.mean = [100, 200, 101][i]);
+    fixture.componentRef.setInput('runs', benchmarks);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    expect(component.charts()[0].scale.min).toBe(90);
+    expect(component.charts()[0].scale.max).toBe(210);
+    expect(component.charts()[1].scale.min).toBeCloseTo(99.9);
+    expect(component.charts()[1].scale.max).toBeCloseTo(101.1);
+    component.metric.set('ttft');
+    expect(component.charts()[0].scale.max).toBeLessThan(1);
+  });
+
+  it('makes a narrow distribution readable and places the median relative to the fitted minimum', () => {
+    const benchmarks = Array.from({ length: 5 }, (_, i) => run(i + 1));
+    benchmarks.forEach((benchmark, i) => benchmark.metrics.output_tokens_per_second!.successful.mean = 1000 + i);
+    fixture.componentRef.setInput('runs', benchmarks);
+    fixture.detectChanges();
+    const box = fixture.nativeElement.querySelector('.quartile-box') as HTMLElement;
+    const median = fixture.nativeElement.querySelector('.median') as HTMLElement;
+    expect(parseFloat(box.style.height)).toBeCloseTo(41.6667, 3);
+    expect(parseFloat(median.style.bottom)).toBeCloseTo(50);
+    const labels = [...fixture.nativeElement.querySelectorAll('.y-axis span')].map((el: any) => el.textContent);
+    expect(new Set(labels).size).toBe(5);
+  });
+
+  it('changes fixed controls when a different reference run is selected', async () => {
+    const select: HTMLSelectElement = fixture.nativeElement.querySelector('.baseline-picker select');
+    select.value = '4'; select.dispatchEvent(new Event('change'));
+    await fixture.whenStable();
+    expect(fixture.componentInstance.charts().map(chart => chart.fixed)).toEqual(['Concurrency fixed at 16', 'TP fixed at 2']);
+    expect(fixture.componentInstance.selected().map(run => run.id).sort()).toEqual([2, 3, 4]);
+  });
+
+  it('retains the reference during refresh and falls back if it is deleted', () => {
+    const component = fixture.componentInstance;
+    component.baselineId.set(4);
+    fixture.componentRef.setInput('runs', [...runs(), run(6)]);
+    fixture.detectChanges();
+    expect(component.baseline()?.id).toBe(4);
+    fixture.componentRef.setInput('runs', [run(1)]);
+    fixture.detectChanges();
+    expect(component.baseline()?.id).toBe(1);
+    expect(fixture.nativeElement.querySelectorAll('.comparison-note')).toHaveLength(2);
+  });
+
+  it('handles empty and legacy data without invented comparisons', () => {
+    fixture.componentRef.setInput('runs', [run(1, 1, 4, { configuration: {} })]);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('figure')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.empty').textContent).toContain('No comparable runs');
+    fixture.componentRef.setInput('runs', []);
+    fixture.detectChanges();
+    expect(fixture.componentInstance.baseline()).toBeNull();
+  });
+
+  it('sorts the table newest first independently of chart grouping', () => {
+    expect(fixture.componentInstance.sortedRuns().map(run => run.id)).toEqual([5, 3, 2, 1]);
+    expect(fixture.nativeElement.querySelector('th[aria-sort="descending"]').textContent).toContain('Date');
+  });
+
+  it('toggles numeric metric sorting and keeps missing measurements last in both directions', async () => {
+    const benchmarks = runs();
+    benchmarks[0].metrics.output_tokens_per_second!.successful.mean = 9;
+    benchmarks[1].metrics.output_tokens_per_second!.successful.mean = 100;
+    benchmarks[2].metrics.output_tokens_per_second = undefined;
+    benchmarks[4].metrics.output_tokens_per_second!.successful.mean = 20;
+    fixture.componentRef.setInput('runs', benchmarks);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    const button: HTMLButtonElement = fixture.nativeElement.querySelector('button[aria-label="Sort Output ascending"]');
+    button.click();
+    await fixture.whenStable();
+    expect(component.sortedRuns().map(run => run.id)).toEqual([1, 5, 2, 3]);
+    expect(button.closest('th')!.getAttribute('aria-sort')).toBe('ascending');
+    button.click();
+    await fixture.whenStable();
+    expect(component.sortedRuns().map(run => run.id)).toEqual([2, 5, 1, 3]);
+    expect(button.closest('th')!.getAttribute('aria-sort')).toBe('descending');
+    expect(benchmarks.map(run => run.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(component.baseline()?.id).toBe(1);
+  });
+
+  it('sorts parameter columns numerically and preserves the chosen order on metric changes', () => {
+    const component = fixture.componentInstance;
+    component.sortBy('max_concurrency');
+    expect(component.sortedRuns().map(run => run.id)).toEqual([5, 2, 1, 3]);
+    component.sortBy('max_concurrency');
+    component.metric.set('ttft');
+    expect(component.sortedRuns().map(run => run.id)).toEqual([3, 2, 1, 5]);
+    component.sortBy('id');
+    expect(component.sortedRuns().map(run => run.id)).toEqual([1, 2, 3, 5]);
+  });
+
+  it('keeps explanations collapsed and gives each table column a sorting button', () => {
+    expect(fixture.nativeElement.querySelector('.comparison-details').open).toBe(false);
+    expect(fixture.nativeElement.querySelectorAll('thead button')).toHaveLength(fixture.componentInstance.columns.length);
+  });
+
+  it('uses a finite fitted scale and shows missing values explicitly', () => {
+    const component = fixture.componentInstance;
+    expect(component.charts()[0].scale.min).toBeLessThan(42);
+    expect(component.charts()[0].scale.max).toBeGreaterThan(42);
+    fixture.componentRef.setInput('runs', [run(1, 1, 4, { metrics: { ...run(1).metrics, output_tokens_per_second: undefined } })]);
+    fixture.detectChanges();
+    expect(component.charts()[0].scale.span).toBeGreaterThan(0);
+    expect(fixture.nativeElement.querySelector('.missing').textContent).toContain('—');
+  });
+});
+
+
+describe('Run boxplots', () => {
+  it('uses interpolated quartiles and Tukey whiskers with outliers', () => {
+    expect(boxplot([1, 2, 3, 4, 5, 6, 100])).toEqual({ count: 7, q1: 2.5, median: 4, q3: 5.5, low: 1, high: 6, outliers: [100] });
+    expect(boxplot([1, 2, 3, 4])?.median).toBe(2.5);
+  });
+  it('handles single runs, identical values, zero and missing measurements', () => {
+    expect(boxplot([null, NaN, Infinity, -1])).toBeNull();
+    expect(boxplot([0, null])).toEqual({ count: 1, q1: 0, median: 0, q3: 0, low: 0, high: 0, outliers: [] });
+    expect(boxplot([2, 2, 2])?.outliers).toEqual([]);
+  });
+  it('aggregates hundreds of repeats into one box per parameter without rendering the individual table', () => {
+    TestBed.configureTestingModule({ imports: [BenchmarkComparison] });
+    const fixture = TestBed.createComponent(BenchmarkComparison);
+    fixture.componentRef.setInput('runs', Array.from({ length: 200 }, (_, i) => run(i + 1)));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.box-track')).toHaveLength(2);
+    expect(fixture.nativeElement.querySelector('table')).toBeNull();
+    expect(fixture.componentInstance.charts()[0].groups[0].box?.count).toBe(200);
+    expect(fixture.componentInstance.charts()[0].minPlotWidth).toBeLessThan(200);
+    fixture.destroy();
+  });
+});
+
+
+describe('Fitted chart scale', () => {
+  it('adds exactly 10% of the observed range above and below, including outliers', () => {
+    const scale = fitChartScale([40, 45, 50, 55, 60, null]);
+    expect(scale.min).toBe(38);
+    expect(scale.max).toBe(62);
+    expect(scale.ticks).toEqual([62, 56, 50, 44, 38]);
+    const outlierScale = fitChartScale([1, 2, 3, 4, 100]);
+    expect(outlierScale.min).toBeCloseTo(-8.9);
+    expect(outlierScale.max).toBeCloseTo(109.9);
+  });
+  it.each([[0], [42, 42], [null, NaN, Infinity], [.000001, .000002]].map(values => ({ values })))('keeps the scale finite for $values', ({ values }) => {
+    const scale = fitChartScale(values);
+    expect(Number.isFinite(scale.span)).toBe(true);
+    expect(scale.span).toBeGreaterThan(0);
+    expect(new Set(scale.ticks).size).toBe(5);
+  });
+});

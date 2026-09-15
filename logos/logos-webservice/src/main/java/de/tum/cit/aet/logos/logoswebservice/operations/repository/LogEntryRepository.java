@@ -28,6 +28,17 @@ import de.tum.cit.aet.logos.logoswebservice.operations.entity.LogEntry;
  */
 public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.input_payload::text AS inputPayload,
+               le.response_payload::text AS responsePayload
+        FROM log_entry le
+        WHERE le.request_id = :requestId
+        ORDER BY le.id DESC
+        LIMIT 1
+        """, nativeQuery = true)
+    java.util.Optional<RequestPayloadProjection> findRequestPayloads(@Param("requestId") String requestId);
+
     /**
      * One team's requests by stage, right now.
      *

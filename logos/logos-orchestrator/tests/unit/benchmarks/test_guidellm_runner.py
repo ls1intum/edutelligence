@@ -322,3 +322,38 @@ def test_successful_summary_requires_every_requested_sample() -> None:
             expected_samples=6,
             serving_configuration={},
         )
+
+
+@pytest.mark.asyncio
+async def test_worker_preparation_failure_keeps_specific_error_and_skips_warmup(monkeypatch):
+    updates = []
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def update_job_status(self, job_id, status, **kwargs):
+            updates.append((job_id, status, kwargs))
+
+    error = "Benchmark model 'org/model' on worker 7: Not enough host RAM to load the model."
+    runner = importlib.import_module("logos.benchmarks.guidellm_runner")
+    monkeypatch.setattr(runner.shutil, "which", lambda _: "/usr/bin/guidellm")
+    monkeypatch.setattr(importlib.import_module("logos.dbutils.dbmanager"), "DBManager", DummyDB)
+    warmup = AsyncMock()
+    monkeypatch.setattr(runner, "send_warmup_request", warmup)
+    await run_benchmark_job(
+        job_id=7,
+        model_provider_id=31,
+        target="http://127.0.0.1:8080/v1",
+        model="org/model",
+        api_key=None,
+        samples=5,
+        max_output_tokens=32,
+        serving_configuration={},
+        worker_preparer=AsyncMock(side_effect=RuntimeError(error)),
+    )
+    assert updates[-1] == (7, "failed", {"error_message": error})
+    warmup.assert_not_awaited()
