@@ -42,9 +42,9 @@ _METAL_MEMORY_MARKERS: tuple[str, ...] = (
     "mtlbuffer",
 )
 
-# A signal-terminated exit (SIGKILL and below) is the typical shape of an
-# OS memory-pressure kill on macOS — treated as capacity evidence alongside
-# any log text match, since no single log signature covers every case.
+# Exactly SIGKILL — the signal macOS's memory-pressure killer sends — not
+# "any signal at or past it": signal numbers are not a severity scale, and
+# e.g. SIGSEGV(-11)/SIGTERM(-15) are unrelated crashes, not OOM evidence.
 _METAL_OOM_SIGNAL_EXIT_CODE = -9
 
 
@@ -52,10 +52,11 @@ def _is_metal_capacity_failure(returncode: int | None, log_tail: str) -> bool:
     """True when a failed Metal probe looks like a memory-capacity failure.
 
     Combines two independent signals (neither alone is reliable): the
-    process was killed by a signal consistent with an OS OOM kill, or the
-    log mentions a known memory-allocation failure marker.
+    process was killed by exactly SIGKILL, consistent with an OS OOM kill, or
+    the log mentions a known memory-allocation failure marker. Any other
+    signal/exit code falls through to the log-marker check alone.
     """
-    if returncode is not None and returncode <= _METAL_OOM_SIGNAL_EXIT_CODE:
+    if returncode == _METAL_OOM_SIGNAL_EXIT_CODE:
         return True
     lowered = (log_tail or "").lower()
     return any(marker in lowered for marker in _METAL_MEMORY_MARKERS)
@@ -140,6 +141,11 @@ def _build_metal_calibration_cmd(
     cmd.extend(["--mm-processor-cache-gb", str(mm_processor_cache_gb)])
     extra_args = plan.get("extra_args") or []
     cmd.extend(str(a) for a in extra_args)
+    # Repeat the bind settings AFTER the extras, mirroring
+    # MetalVllmProcessHandle._build_cmd: argparse keeps the last occurrence,
+    # so a --host/--port smuggled in through extra_args would otherwise
+    # override the loopback bind and expose the unauthenticated API.
+    cmd.extend(["--host", host, "--port", str(port)])
     return cmd
 
 

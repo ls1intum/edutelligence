@@ -77,6 +77,21 @@ def test_build_cmd_forwards_extra_args():
     assert "--trust-remote-code" in cmd
 
 
+def test_build_cmd_extra_args_cannot_override_the_loopback_bind():
+    """A --host smuggled in via extra_args must not win: argparse keeps the
+    last occurrence, so the loopback bind must be repeated after extras."""
+    cmd = _build_metal_calibration_cmd(
+        {"model": "org/model", "extra_args": ["--host", "0.0.0.0", "--port", "9999"]},
+        ["vllm"],
+        "127.0.0.1",
+        11499,
+    )
+    host_indexes = [i for i, tok in enumerate(cmd) if tok == "--host"]
+    port_indexes = [i for i, tok in enumerate(cmd) if tok == "--port"]
+    assert cmd[host_indexes[-1] + 1] == "127.0.0.1"
+    assert cmd[port_indexes[-1] + 1] == "11499"
+
+
 def test_build_cmd_enables_prefix_caching_by_default():
     """Matches the CUDA calibration path's own default (calibration.py):
     this changes vLLM's KV-cache accounting, so probing without it
@@ -434,6 +449,25 @@ def test_non_capacity_failure_leaves_floor_unset():
         "logos_worker_node.calibration_metal._read_log_since",
         return_value="ValueError: unsupported dtype",
     )
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is False
+    assert result.metal_capacity_floor_mb is None
+
+
+@pytest.mark.parametrize("signal_returncode", [-11, -15])
+def test_unrelated_signal_crash_is_not_mistaken_for_capacity(signal_returncode):
+    """SIGSEGV(-11)/SIGTERM(-15) are unrelated crashes, not OOM evidence —
+    signal numbers are not a severity scale, only exact SIGKILL(-9) counts."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError(f"vLLM exited before becoming ready (code={signal_returncode})"),
+    )
+    mock_proc.poll.return_value = signal_returncode
+    info = {"max_recommended_working_set_size": 18_000 * 1024 * 1024}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch("logos_worker_node.calibration_metal._read_log_since", return_value="")
     result, _mocks = _run({"model": "org/model"}, patches)
 
     assert not result.success
