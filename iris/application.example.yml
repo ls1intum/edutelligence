@@ -208,16 +208,9 @@ llm_configuration:
 
   citation_pipeline:
     default:
-      chat:
-        local: oai-gpt-5-mini
-        cloud: oai-gpt-5-mini-minimal
       keyword_summary:
         local: oai-gpt-5-nano
         cloud: oai-gpt-5-nano-minimal
-    advanced:
-      chat:
-        local: oai-gpt-5-mini
-        cloud: oai-gpt-5-mini-minimal
 
   interaction_suggestion_pipeline:
     course:
