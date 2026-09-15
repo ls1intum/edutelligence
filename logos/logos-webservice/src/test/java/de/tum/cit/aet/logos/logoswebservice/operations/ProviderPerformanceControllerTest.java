@@ -338,6 +338,23 @@ class ProviderPerformanceControllerTest {
     }
 
     @Test
+    void runModelBenchmark_forwardsBatchPlanAndRequiresAdmin() throws Exception {
+        Map<String, Object> batch = Map.of("repetitions", 20,
+            "configurations", java.util.List.of(Map.of("concurrency", 4, "samples", 50)));
+        when(orchestratorWorkerAdminClient.startModelBenchmark(7001, 5, 512, Map.of("batch", batch)))
+            .thenReturn(ResponseEntity.accepted().body(Map.of("job_id", 44, "status", "pending")));
+        String body = """
+            {"model_provider_id":7001,"batch":{"repetitions":20,"configurations":[{"concurrency":4,"samples":50}]}}
+            """;
+        mvc.perform(post("/logosdb/model_benchmarks/run").with(TestJwt.logosAdmin())
+                .contentType("application/json").content(body))
+            .andExpect(status().isAccepted()).andExpect(jsonPath("$.job_id").value(44));
+        mvc.perform(post("/logosdb/model_benchmarks/run").with(TestJwt.testUser())
+                .contentType("application/json").content(body))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
     void datasetSearch_requiresAdminAndForwardsQuery() throws Exception {
         when(orchestratorWorkerAdminClient.benchmarkDatasets("search", Map.of("query", "gsm8k")))
             .thenReturn(ResponseEntity.ok(Map.of("datasets", java.util.List.of(Map.of("id", "openai/gsm8k")))));

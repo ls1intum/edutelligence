@@ -10,8 +10,10 @@ import {
 } from '@angular/core';
 import { NgClass } from '@angular/common';
 import { BenchmarkComparison } from './benchmark-comparison';
+import { BenchmarkBatchEditor } from './benchmark-batch-editor';
+import { BenchmarkBatch } from './benchmark-batch';
 import { BenchmarkSettingsEditor } from './benchmark-settings-editor';
-import { BenchmarkSettings, COMPARISON_SAMPLE_SIZE, comparisonBaseline, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
+import { BenchmarkSettings, BenchmarkWorkerLimits, COMPARISON_SAMPLE_SIZE, comparisonBaseline, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
 import {
   CdkVirtualScrollViewport,
   ScrollingModule,
@@ -259,6 +261,7 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
     RouterLink,
     NgClass,
     BenchmarkSettingsEditor,
+    BenchmarkBatchEditor,
     BenchmarkComparison,
     ScrollingModule,
     ErrorMessageComponent,
@@ -269,6 +272,7 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
   styleUrls: [
     './model-error-report.scss',
     './model-performance-details.scss',
+    './benchmark-start-action.scss',
   ],
 
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -351,6 +355,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkSampleSize = signal(COMPARISON_SAMPLE_SIZE);
   readonly benchmarkSettings = signal<BenchmarkSettings>({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: {} });
   readonly benchmarkSettingsValid = signal(true);
+  readonly benchmarkBatch = signal<BenchmarkBatch | null>(null);
+  readonly benchmarkBatchValid = signal(true);
+  readonly benchmarkWorkerLimits = signal<BenchmarkWorkerLimits | null>(null);
+  readonly benchmarkConfirmPairId = signal<number | null>(null);
+  readonly benchmarkTotalRuns = computed(() => {
+    const batch = this.benchmarkBatch();
+    return batch ? batch.configurations.length * batch.repetitions : 1;
+  });
   readonly selectedBenchmarkPairId = signal<number | null>(null);
   readonly selectedBenchmarkPair = computed<ModelBenchmarkPair | null>(() => this.benchmarkPairs().find(
     pair => pair.model_provider_id === this.selectedBenchmarkPairId(),
@@ -370,7 +382,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   hasServingOverrides(): boolean {
-    return Object.keys(this.benchmarkSettings().serving_overrides).length > 0;
+    return Object.keys(this.benchmarkSettings().serving_overrides).length > 0
+      || (this.benchmarkBatch()?.configurations.some(settings => Object.keys(settings.serving_overrides).length > 0) ?? false);
   }
 
   readonly benchmarkSampleLabel = computed(
@@ -748,20 +761,18 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
-    if ((this.selectedBenchmarkPair() && this.selectedBenchmarkPair()!.model_provider_id !== pair.model_provider_id) || !this.benchmarkSettingsValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+    if ((this.selectedBenchmarkPair() && this.selectedBenchmarkPair()!.model_provider_id !== pair.model_provider_id) || !this.benchmarkSettingsValid() || !this.benchmarkBatchValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
       return;
     }
     const settings = structuredClone(this.benchmarkSettings());
     const sampleSize = this.benchmarkSampleSize();
-    const confirmed = window.confirm(
-      `Start the benchmark on ${pair.provider_name} · ${pair.model_name}?\n\nThe benchmark runs alongside other requests. Concurrent traffic can affect the measured performance.${this.hasServingOverrides() ? "\n\nThe selected vLLM settings will be applied to this worker and may reload the model. They remain active after the run." : ""}`,
-    );
-    if (!confirmed) return;
+    const batch = this.benchmarkBatch() ? structuredClone(this.benchmarkBatch()!) : undefined;
+    this.benchmarkConfirmPairId.set(null);
 
     this.benchmarkStartingPairId.set(pair.model_provider_id);
     this.benchmarkStartError.set(null);
     try {
-      await this.modelService.startBenchmark(pair.model_provider_id, sampleSize, settings);
+      await this.modelService.startBenchmark(pair.model_provider_id, sampleSize, settings, batch);
       await this.loadPerformance(this.modelId(), true);
     } catch (error) {
       const response = error instanceof HttpErrorResponse ? error.error : null;
@@ -807,6 +818,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   isBenchmarkActive(run: ModelBenchmarkRun): boolean {
     return run.status === 'pending' || run.status === 'running';
+  }
+
+  benchmarkBatchProgress(run: ModelBenchmarkRun): string | null {
+    const total = run.result.total_runs ?? (run.request.batch ? run.request.batch.configurations.length * run.request.batch.repetitions : 0);
+    if (!total) return null;
+    return `${run.result.completed_runs ?? 0}/${total} runs completed${this.isBenchmarkActive(run) && run.result.run_index ? ' · current run ' + run.result.run_index : ''}`;
   }
 
   benchmarkStatusLabel(run: ModelBenchmarkRun): string {

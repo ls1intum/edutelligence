@@ -1,3 +1,4 @@
+import { BenchmarkBatch } from '../../features/model-error-report/benchmark-batch';
 import { Injectable, inject } from '@angular/core';
 import { BenchmarkSettings, BenchmarkWorkerLimits, DatasetMetadata, DEFAULT_BENCHMARK_SETTINGS } from '../../features/model-error-report/benchmark-settings';
 import { HttpClient } from '@angular/common/http';
@@ -22,7 +23,7 @@ export class ModelManagementService {
     );
   }
 
-  startBenchmark(modelProviderId: number, sampleSize: number, settings: BenchmarkSettings = DEFAULT_BENCHMARK_SETTINGS): Promise<StartModelBenchmarkResponse> {
+  startBenchmark(modelProviderId: number, sampleSize: number, settings: BenchmarkSettings = DEFAULT_BENCHMARK_SETTINGS, batch?: BenchmarkBatch): Promise<StartModelBenchmarkResponse> {
     return firstValueFrom(
       this.http.post<StartModelBenchmarkResponse>(
         '/api/logosdb/model_benchmarks/run',
@@ -30,6 +31,7 @@ export class ModelManagementService {
           model_provider_id: modelProviderId,
           sample_size: sampleSize,
           ...settings,
+          ...(batch ? { batch } : {}),
         },
       ),
     );

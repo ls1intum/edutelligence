@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ModelProviderBenchmark } from '../../shared/models/provider.model';
-import { BenchmarkComparison, comparisonValue } from './benchmark-comparison';
+import { BenchmarkComparison, boxplot, comparisonValue } from './benchmark-comparison';
 import { canCompare, isolatedRuns } from './benchmark-isolation';
 
 function run(id: number, tp = 1, concurrency = 4, overrides: Partial<ModelProviderBenchmark> = {}): ModelProviderBenchmark {
@@ -97,6 +97,7 @@ describe('Benchmark comparison', () => {
     TestBed.configureTestingModule({ imports: [BenchmarkComparison] });
     fixture = TestBed.createComponent(BenchmarkComparison);
     fixture.componentRef.setInput('runs', runs());
+    fixture.componentInstance.showRuns.set(true);
     fixture.detectChanges();
   });
   afterEach(() => TestBed.resetTestingModule());
@@ -136,7 +137,7 @@ describe('Benchmark comparison', () => {
     expect(charts[0].groups.map(group => group.parameter)).toEqual([1, 2]);
     expect(charts[1].groups.map(group => group.parameter)).toEqual([1, 4, 16]);
     expect(charts.flatMap(chart => chart.groups).flatMap(group => group.rows).every(row => row.value === 0.68)).toBe(true);
-    expect(fixture.nativeElement.querySelector('.chart-bar').style.height).not.toBe('');
+    expect(fixture.nativeElement.querySelector('.quartile-box').style.height).not.toBe('');
     expect(fixture.nativeElement.querySelectorAll('tbody tr')).toHaveLength(4);
     expect(fixture.nativeElement.querySelectorAll('tbody .active-metric')).toHaveLength(4);
     expect(fixture.nativeElement.querySelector('tbody').textContent).toContain('7.6');
@@ -221,7 +222,30 @@ describe('Benchmark comparison', () => {
     fixture.componentRef.setInput('runs', [run(1, 1, 4, { metrics: { ...run(1).metrics, output_tokens_per_second: undefined } })]);
     fixture.detectChanges();
     expect(component.chartMax()).toBe(1);
-    expect(fixture.nativeElement.querySelector('.chart-bar').style.height).toBe('0%');
-    expect(fixture.nativeElement.querySelector('.chart-bar').textContent).toContain('—');
+    expect(fixture.nativeElement.querySelector('.missing').textContent).toContain('—');
+  });
+});
+
+
+describe('Run boxplots', () => {
+  it('uses interpolated quartiles and Tukey whiskers with outliers', () => {
+    expect(boxplot([1, 2, 3, 4, 5, 6, 100])).toEqual({ count: 7, q1: 2.5, median: 4, q3: 5.5, low: 1, high: 6, outliers: [100] });
+    expect(boxplot([1, 2, 3, 4])?.median).toBe(2.5);
+  });
+  it('handles single runs, identical values, zero and missing measurements', () => {
+    expect(boxplot([null, NaN, Infinity, -1])).toBeNull();
+    expect(boxplot([0, null])).toEqual({ count: 1, q1: 0, median: 0, q3: 0, low: 0, high: 0, outliers: [] });
+    expect(boxplot([2, 2, 2])?.outliers).toEqual([]);
+  });
+  it('aggregates hundreds of repeats into one box per parameter without rendering the individual table', () => {
+    TestBed.configureTestingModule({ imports: [BenchmarkComparison] });
+    const fixture = TestBed.createComponent(BenchmarkComparison);
+    fixture.componentRef.setInput('runs', Array.from({ length: 200 }, (_, i) => run(i + 1)));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.box-track')).toHaveLength(2);
+    expect(fixture.nativeElement.querySelector('table')).toBeNull();
+    expect(fixture.componentInstance.charts()[0].groups[0].box?.count).toBe(200);
+    expect(fixture.componentInstance.charts()[0].minPlotWidth).toBeLessThan(200);
+    fixture.destroy();
   });
 });

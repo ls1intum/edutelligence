@@ -25,6 +25,23 @@ export function comparisonValue(run: ModelProviderBenchmark, metric: ComparisonM
   return metric === 'ttft' ? value / 1000 : value;
 }
 
+/** Tukey boxplot across run-level measurements, using interpolated quartiles. */
+export function boxplot(values: readonly (number | null)[]) {
+  const sorted = values.filter((value): value is number => value !== null && Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const quantile = (p: number) => {
+    const position = (sorted.length - 1) * p;
+    const lower = Math.floor(position);
+    return sorted[lower] + (sorted[Math.ceil(position)] - sorted[lower]) * (position - lower);
+  };
+  const q1 = quantile(.25), median = quantile(.5), q3 = quantile(.75);
+  const iqr = q3 - q1;
+  const low = sorted.find(value => value >= q1 - 1.5 * iqr)!;
+  const high = [...sorted].reverse().find(value => value <= q3 + 1.5 * iqr)!;
+  return { count: sorted.length, q1, median, q3, low, high,
+    outliers: [...new Set(sorted.filter(value => value < low || value > high))] };
+}
+
 @Component({
   selector: 'app-benchmark-comparison',
   standalone: true,
@@ -53,6 +70,8 @@ export class BenchmarkComparison {
     if (left === null || right === null) return left === right ? b.id - a.id : left === null ? 1 : -1;
     return (left - right) * (this.sortDirection() === 'ascending' ? 1 : -1) || b.id - a.id;
   }));
+  readonly showRuns = signal(false);
+  readonly visibleRunCount = signal(50);
   readonly baselineId = signal<number | null>(null);
   readonly orderedRuns = computed(() => [...this.runs()].sort((a, b) =>
     Date.parse(b.recorded_at) - Date.parse(a.recorded_at) || b.id - a.id));
@@ -72,13 +91,12 @@ export class BenchmarkComparison {
     ] as const).map(parameter => {
       const runs = isolatedRuns(this.orderedRuns(), baseline, parameter.key);
       const values = [...new Set(runs.map(run => parameterValue(run, parameter.key)!))];
-      const maxRepeats = Math.max(1, ...values.map(value => runs.filter(run => parameterValue(run, parameter.key) === value).length));
-      const groupWidth = Math.max(160, maxRepeats * 64 + (maxRepeats - 1) * 8 + 40);
-      return { ...parameter, minPlotWidth: values.length * groupWidth + 64,
-        plotWidth: Math.max(520, values.length * Math.max(200, groupWidth) + 64), groups: values.map(value => ({ parameter: value,
-        rows: runs.filter(run => parameterValue(run, parameter.key) === value)
-          .map(run => ({ run, value: comparisonValue(run, this.metric()) })),
-      })) };
+      return { ...parameter, minPlotWidth: values.length * 68 + 48,
+        groups: values.map(value => {
+          const rows = runs.filter(run => parameterValue(run, parameter.key) === value)
+            .map(run => ({ run, value: comparisonValue(run, this.metric()) }));
+          return { parameter: value, rows, box: boxplot(rows.map(row => row.value)) };
+        }) };
     });
   });
   readonly selected = computed(() => [...new Map(this.charts().flatMap(chart => chart.groups)
@@ -90,6 +108,10 @@ export class BenchmarkComparison {
     const step = 10 ** Math.floor(Math.log10(max));
     return Math.ceil(max / step) * step;
   });
+
+  boxLabel(box: NonNullable<ReturnType<typeof boxplot>>): string {
+    return `${box.count} runs · median ${this.format(box.median)} · Q1 ${this.format(box.q1)} · Q3 ${this.format(box.q3)} · whiskers ${this.format(box.low)}–${this.format(box.high)} ${this.activeMetric().unit} · ${box.outliers.length} distinct outlier values`;
+  }
 
   sortBy(key: RunSortKey): void {
     this.sortDirection.set(this.sortKey() === key && this.sortDirection() === 'ascending' ? 'descending' : 'ascending');

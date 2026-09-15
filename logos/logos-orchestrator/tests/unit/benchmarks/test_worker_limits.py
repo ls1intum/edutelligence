@@ -73,7 +73,8 @@ def test_unknown_gpu_inventory_does_not_invent_a_limit():
         validate_worker_overrides(ServingOverrides(tensor_parallel_size=1), limits)
 
 
-async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch):
+@pytest.mark.parametrize("batch", [False, True])
+async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch, batch):
     import importlib
 
     main = importlib.import_module("logos.main")
@@ -97,7 +98,12 @@ async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch)
     monkeypatch.setattr(internal, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
     with pytest.raises(HTTPException, match="only 2 available") as error:
         await internal.internal_run_model_benchmark(
-            internal.InternalBenchmarkRequest(model_provider_id=31, serving_overrides={"tensor_parallel_size": 38}),
+            internal.InternalBenchmarkRequest(model_provider_id=31, **(
+                {"batch": {"configurations": [
+                    {"serving_overrides": {"tensor_parallel_size": 1}},
+                    {"serving_overrides": {"tensor_parallel_size": 38}},
+                ]}} if batch else {"serving_overrides": {"tensor_parallel_size": 38}}
+            )),
             MagicMock(),
         )
     assert error.value.status_code == 400

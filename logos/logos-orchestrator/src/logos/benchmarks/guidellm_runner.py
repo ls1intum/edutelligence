@@ -378,16 +378,19 @@ async def run_benchmark_job(
     worker_preparer: Callable[[], Awaitable[bool]] | None = None,
     worker_session_is_current: Callable[[], bool] | None = None,
     settings: BenchmarkSettings | None = None,
-) -> None:
+    batch_progress: dict[str, int] | None = None,
+    finalize: bool = True,
+) -> int | None:
     """Execute GuideLLM outside the event loop and update the shared job row."""
     from logos.dbutils.dbmanager import DBManager
     from logos.dbutils.dbmodules import JobStatus
 
+    progress = batch_progress or {}
     with DBManager() as db:
         db.update_job_status(
             job_id,
             JobStatus.RUNNING.value,
-            result_payload={"stage": "preparing_worker", "started_samples": 0, "total_samples": samples},
+            result_payload={**progress, "stage": "preparing_worker", "started_samples": 0, "total_samples": samples},
         )
 
     settings = settings or BenchmarkSettings()
@@ -422,7 +425,7 @@ async def run_benchmark_job(
             db.update_job_status(
                 job_id,
                 JobStatus.RUNNING.value,
-                result_payload={"stage": "warming_up", "started_samples": 0, "total_samples": samples},
+                result_payload={**progress, "stage": "warming_up", "started_samples": 0, "total_samples": samples},
             )
         await send_warmup_request(
             target=target,
@@ -435,7 +438,7 @@ async def run_benchmark_job(
             db.update_job_status(
                 job_id,
                 JobStatus.RUNNING.value,
-                result_payload={"stage": "benchmarking", "started_samples": 0, "total_samples": samples},
+                result_payload={**progress, "stage": "benchmarking", "started_samples": 0, "total_samples": samples},
             )
 
         with tempfile.TemporaryDirectory(prefix="logos-guidellm-") as directory:
@@ -505,15 +508,22 @@ async def run_benchmark_job(
             benchmark_id = db.insert_model_provider_benchmark(**summary)
             db.update_job_status(
                 job_id,
-                JobStatus.SUCCESS.value,
-                result_payload={"stage": "completed", "benchmark_id": benchmark_id},
+                JobStatus.SUCCESS.value if finalize else JobStatus.RUNNING.value,
+                result_payload={
+                    **progress,
+                    **({"completed_runs": progress["run_index"]} if progress else {}),
+                    "stage": "completed" if finalize else "between_runs",
+                    "benchmark_id": benchmark_id,
+                },
                 error_message=None,
             )
+        return benchmark_id
     except asyncio.CancelledError as exc:
         with DBManager() as db:
             db.update_job_status(
                 job_id,
                 JobStatus.FAILED.value,
+                **({"result_payload": {**progress, "stage": "cancelled"}} if progress else {}),
                 error_message=str(exc) or "Benchmark cancelled before completion",
             )
         raise
@@ -522,7 +532,10 @@ async def run_benchmark_job(
         if api_key:
             message = message.replace(api_key, "[redacted]")
         with DBManager() as db:
-            db.update_job_status(job_id, JobStatus.FAILED.value, error_message=message[:1000])
+            db.update_job_status(
+                job_id, JobStatus.FAILED.value, error_message=message[:1000],
+                **({"result_payload": {**progress, "stage": "failed"}} if progress else {}),
+            )
     finally:
         lease_task.cancel()
         await asyncio.gather(lease_task, return_exceptions=True)

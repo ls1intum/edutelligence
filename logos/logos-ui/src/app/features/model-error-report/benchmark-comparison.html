@@ -24,7 +24,7 @@
         · max {{ baselineSettings()['max_output_tokens'] }} tokens</p>
       <details class="comparison-details">
         <summary>Comparison details</summary>
-        <p>Each bar is one run. Only the X-axis parameter changes; other recorded settings match the reference.
+        <p>Each box summarizes repeated runs of the same configuration. The line is the median, the box spans Q1–Q3, whiskers extend to the last values within 1.5 × IQR, and dots mark outliers. A single run appears as a line. Only the X-axis parameter changes; other recorded settings match the reference.
           {{ excludedCount() }} runs excluded. Seed {{ baselineSettings()['seed'] }}. Cache state and other traffic may still differ.</p>
         <p>TTFT: time to first token. TTLT: total response time (GuideLLM request latency).
           Both are arithmetic means across successful requests. Output: GuideLLM’s aggregate output token rate. — means not captured.</p>
@@ -36,25 +36,29 @@
         <figure [attr.aria-label]="chart.label + ': ' + activeMetric().label + ' by parameter value'">
           <figcaption><strong>{{ chart.label }}</strong><span>{{ chart.fixed }}</span></figcaption>
           <div class="axis-title">{{ activeMetric().label }} ({{ activeMetric().unit }})</div>
-          <div class="plot-scroll" tabindex="0" role="region" [attr.aria-label]="chart.label + ' chart, scroll horizontally for all runs'">
-            <div class="plot" [style.min-width.px]="chart.minPlotWidth" [style.max-width.px]="chart.plotWidth">
+          <div class="plot-scroll" tabindex="0" role="region" [attr.aria-label]="chart.label + ' chart, scroll horizontally for all parameter values'">
+            <div class="plot" [style.min-width.px]="chart.minPlotWidth">
               <div class="y-axis" aria-hidden="true">
                 <span>{{ chartValue(chartMax()) }}</span><span>{{ chartValue(chartMax() / 2) }}</span><span>0</span>
               </div>
               <div class="plot-groups" [style.grid-template-columns]="'repeat(' + chart.groups.length + ', minmax(0, 1fr))'">
                 @for (group of chart.groups; track group.parameter) {
                   <div class="parameter-group">
-                    <div class="bars">
-                      @for (row of group.rows; track row.run.id) {
-                        <div class="bar-column" [attr.aria-label]="chart.label + ' ' + group.parameter + ', run ' + row.run.id + ': ' + (row.value === null ? 'Not captured' : format(row.value) + ' ' + activeMetric().unit)"
-                          [title]="'Run #' + row.run.id + ' · ' + format(row.value) + ' ' + activeMetric().unit">
-                          <div class="bar-track" aria-hidden="true">
-                            <div class="chart-bar" [style.height.%]="(row.value ?? 0) / chartMax() * 100"><strong>{{ chartValue(row.value) }}</strong></div>
-                          </div>
-                          <span class="run-label">#{{ row.run.id }}</span>
-                        </div>
-                      }
-                    </div>
+                    @if (group.box; as box) {
+                      <div class="box-track" tabindex="0" role="img" [attr.aria-label]="chart.label + ' ' + group.parameter + ': ' + boxLabel(box)" [title]="boxLabel(box)">
+                        <span class="whisker" [style.bottom.%]="box.low / chartMax() * 100" [style.height.%]="(box.high - box.low) / chartMax() * 100"></span>
+                        <span class="whisker-cap" [style.bottom.%]="box.low / chartMax() * 100"></span>
+                        <span class="whisker-cap" [style.bottom.%]="box.high / chartMax() * 100"></span>
+                        <span class="quartile-box" [style.bottom.%]="box.q1 / chartMax() * 100" [style.height.%]="(box.q3 - box.q1) / chartMax() * 100"></span>
+                        <span class="median" [style.bottom.%]="box.median / chartMax() * 100"></span>
+                        @for (outlier of box.outliers; track outlier) {
+                          <span class="outlier" [style.bottom.%]="outlier / chartMax() * 100"></span>
+                        }
+                      </div>
+                      <small class="run-count">n = {{ box.count }}@if (box.count < group.rows.length) { / {{ group.rows.length }}}</small>
+                    } @else {
+                      <div class="box-track missing">—</div><small class="run-count">Not captured</small>
+                    }
                     <strong class="parameter-label">{{ group.parameter }}</strong>
                   </div>
                 }
@@ -69,6 +73,10 @@
       }
     </div>
 
+    <p class="box-legend">Box: middle 50% · line: median · dots: outliers · n: measured runs</p>
+    <details class="run-details" (toggle)="showRuns.set($any($event.target).open)">
+      <summary>Individual runs ({{ selected().length }})</summary>
+    @if (showRuns()) {
     <div class="table-scroll" tabindex="0" role="region" aria-label="Benchmark comparison table, scroll horizontally for all columns">
       <table>
         <caption>Runs <span>{{ sortedRuns().length }}</span></caption>
@@ -85,7 +93,7 @@
           }
         </tr></thead>
         <tbody>
-          @for (run of sortedRuns(); track run.id) {
+          @for (run of sortedRuns().slice(0, visibleRunCount()); track run.id) {
             <tr>
               <th scope="row">#{{ run.id }}</th>
               <td class="date" [title]="run.recorded_at | date:'medium'">{{ run.recorded_at | date:'dd MMM yyyy' }}<time [attr.datetime]="run.recorded_at">{{ run.recorded_at | date:'HH:mm:ss' }}</time></td>
@@ -97,6 +105,11 @@
         </tbody>
       </table>
     </div>
+    @if (visibleRunCount() < sortedRuns().length) {
+      <button type="button" (click)="visibleRunCount.set(visibleRunCount() + 50)">Show 50 more runs</button>
+    }
+    }
+    </details>
   } @else {
     <p class="empty">No comparable runs yet. Older runs remain available below.</p>
   }

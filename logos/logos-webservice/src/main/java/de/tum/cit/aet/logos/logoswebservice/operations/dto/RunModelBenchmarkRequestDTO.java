@@ -11,5 +11,6 @@ public record RunModelBenchmarkRequestDTO(
     String profile,
     Integer concurrency,
     Integer seed,
-    java.util.Map<String, Object> servingOverrides
+    java.util.Map<String, Object> servingOverrides,
+    java.util.Map<String, Object> batch
 ) {}

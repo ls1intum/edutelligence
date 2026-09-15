@@ -42,12 +42,13 @@ describe('Benchmark runner', () => {
   });
 
   it('blocks further starts until the first start finishes', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const confirm = vi.spyOn(window, 'confirm');
     const pending = deferred<unknown>();
     service.startBenchmark.mockReturnValue(pending.promise);
     const first = component.startBenchmark(pair);
     await component.startBenchmark(pair);
     expect(service.startBenchmark).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
     pending.resolve({});
     await first;
     expect(component.benchmarkStartingPairId()).toBeNull();
@@ -74,4 +75,19 @@ describe('Benchmark runner', () => {
     await first;
     expect(component.benchmarkCancellingJobId()).toBeNull();
   });
+  it('submits a full batch once and closes the anchored notice', async () => {
+    const batch = { repetitions: 20, configurations: [{ ...component.benchmarkSettings(), samples: 50 }] };
+    component.benchmarkBatch.set(batch);
+    component.benchmarkConfirmPairId.set(1);
+    await component.startBenchmark(pair);
+    expect(service.startBenchmark).toHaveBeenCalledWith(1, 50, component.benchmarkSettings(), batch);
+    expect(component.benchmarkConfirmPairId()).toBeNull();
+    expect(component.benchmarkTotalRuns()).toBe(20);
+  });
+  it('does not submit an invalid batch', async () => {
+    component.benchmarkBatchValid.set(false);
+    await component.startBenchmark(pair);
+    expect(service.startBenchmark).not.toHaveBeenCalled();
+  });
+
 });

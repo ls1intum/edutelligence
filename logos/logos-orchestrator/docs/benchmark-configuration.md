@@ -35,3 +35,14 @@ All Spring endpoints below require `logos_admin` and forward to the internal orc
 - `POST /logosdb/model_benchmarks/run`: existing target and sample fields plus `dataset`, `subset`, `split`, `text_column`, `profile`, `concurrency`, `seed` and optional `serving_overrides`.
 
 The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. No database migration is required.
+
+
+## Benchmark batches and comparison
+
+Enable **Run a batch**, choose repetitions per configuration, and add parameters to vary. Numeric parameters accept a comma-separated list or a From/To/Step range; boolean parameters accept `true, false`. Multiple varied parameters produce all combinations. The preview lists each configuration and the fixed settings before starting. Concurrency sweeps use the concurrent profile, including the one-stream case. Limits are 1,000 configurations and 10,000 total runs, independent of the sample count per run.
+
+The start confirmation appears above the button. Confirming once submits the complete plan to the server; closing the browser does not stop execution. Each configuration is repeated before advancing to the next one. One provider lease covers the whole batch, with progress and one cancel action. The first failed run stops the remaining batch; completed measurements stay stored. Worker disconnects and orchestrator restarts stop the batch under the existing lease rules; batches do not resume automatically after a server restart. Serving overrides remain applied, as for a single run.
+
+The existing run endpoint accepts optional `batch: { configurations: [...], repetitions: 3 }`. Every configuration contains the same settings as a single run, using `samples` (1–100) inside the batch. Configurations are complete settings, not patches to the outer request. All configurations and their hardware limits are validated before a job is created. Every changed serving key must be present in every configuration to avoid inheriting a prior run's value. The job result exposes `total_runs`, `run_index` (one-based), `completed_runs`, `configuration_index`, and `repetition`.
+
+The two comparison charts sit side by side on desktop and stack on narrow screens. Each box summarizes run-level measurements for one parameter value, with all other recorded controls matching the reference. Quartiles use linear interpolation; whiskers reach the last observations within 1.5 times the interquartile range. Dots show outliers, `n` counts captured measurements, and a single measurement appears as a line. These are distributions across runs, not pooled request latencies. The individual-run table is collapsed and loads 50 rows at a time.

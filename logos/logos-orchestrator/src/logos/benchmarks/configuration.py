@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ServingOverrides(BaseModel):
@@ -38,3 +38,32 @@ class BenchmarkSettings(BaseModel):
     concurrency: int = Field(default=1, ge=1, le=32)
     seed: int = Field(default=42, ge=0, le=2147483647)
     serving_overrides: ServingOverrides = Field(default_factory=ServingOverrides)
+
+
+class BenchmarkRunSettings(BenchmarkSettings):
+    """One complete configuration in a benchmark batch."""
+
+    model_config = ConfigDict(extra="forbid")
+    samples: int = Field(default=5, gt=0, le=100)
+    max_output_tokens: int = Field(default=512, gt=0, le=4096)
+
+
+class BenchmarkBatch(BaseModel):
+    """A bounded plan; repetitions do not duplicate configuration payloads."""
+
+    model_config = ConfigDict(extra="forbid")
+    configurations: list[BenchmarkRunSettings] = Field(min_length=1, max_length=1000)
+    repetitions: int = Field(default=1, ge=1, le=10000)
+
+    @model_validator(mode="after")
+    def validate_plan(self) -> "BenchmarkBatch":
+        """Reject oversized plans and serving settings that leak between runs."""
+        if len(self.configurations) * self.repetitions > 10000:
+            raise ValueError("A batch supports at most 10,000 runs.")
+        # Every changed serving key must be explicit in every configuration:
+        # omissions would otherwise inherit a preceding run's changed value.
+        keys = set().union(*(s.serving_overrides.model_dump(exclude_none=True) for s in self.configurations))
+        for settings in self.configurations:
+            if keys != set(settings.serving_overrides.model_dump(exclude_none=True)):
+                raise ValueError("Specify the same serving override keys in every batch configuration.")
+        return self

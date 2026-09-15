@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from logos.benchmarks.configuration import BenchmarkSettings
+from logos.benchmarks.configuration import BenchmarkBatch, BenchmarkSettings
 
 
 class LogosKeyModel(BaseModel):
@@ -111,6 +111,7 @@ class InternalWakeLaneRequest(BaseModel):
 
 
 class InternalBenchmarkRequest(BenchmarkSettings):
+    batch: BenchmarkBatch | None = None
     model_provider_id: int = Field(gt=0)
     samples: int = Field(default=5, gt=0, le=100)
     max_output_tokens: int = Field(default=512, gt=0, le=4096)

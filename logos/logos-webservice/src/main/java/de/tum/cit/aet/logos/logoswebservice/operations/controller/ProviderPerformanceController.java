@@ -114,6 +114,7 @@ public class ProviderPerformanceController {
         if (request.concurrency() != null) settings.put("concurrency", request.concurrency());
         if (request.seed() != null) settings.put("seed", request.seed());
         if (request.servingOverrides() != null) settings.put("serving_overrides", request.servingOverrides());
+        if (request.batch() != null) settings.put("batch", request.batch());
         return settings;
     }
 

@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import logos.main as _main
 from logos.auth import AuthContext
 from logos.batch_credential import issue_batch_credential
+from logos.benchmarks.batch_runner import run_benchmark_batch
+from logos.benchmarks.configuration import BenchmarkRunSettings
 from logos.benchmarks.guidellm_runner import (
     BENCHMARK_JOB_HEADER,
     benchmark_affinity_headers,
@@ -470,9 +472,14 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
     """Queue a configured GuideLLM run for one exact provider-model pair."""
     _require_internal_secret(request)
 
-    metadata = await dataset_metadata(data.dataset, data.subset, data.split)
-    if data.text_column not in metadata["text_columns"]:
-        raise HTTPException(status_code=400, detail="Select a valid text column for the dataset.")
+    configurations = data.batch.configurations if data.batch else [data]
+    checked_datasets = {}
+    for settings in configurations:
+        key = (settings.dataset, settings.subset, settings.split)
+        if key not in checked_datasets:
+            checked_datasets[key] = await dataset_metadata(*key)
+        if settings.text_column not in checked_datasets[key]["text_columns"]:
+            raise HTTPException(status_code=400, detail="Select a valid text column for the dataset.")
 
     # One orchestrator process owns benchmark execution. Serialize the short
     # check-and-create section in memory so simultaneous starts cannot both
@@ -483,7 +490,7 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
-        if data.serving_overrides.model_dump(exclude_none=True) and (
+        if any(s.serving_overrides.model_dump(exclude_none=True) for s in configurations) and (
             provider_type != "logosnode" or _main._capacity_planner is None
         ):
             raise HTTPException(
@@ -520,7 +527,8 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
 
         model_name = str(target["model_name"])
         try:
-            validate_worker_overrides(data.serving_overrides, worker_limits(runtime_snapshot, model_name))
+            for settings in configurations:
+                validate_worker_overrides(settings.serving_overrides, worker_limits(runtime_snapshot, model_name))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
@@ -557,40 +565,43 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
         if is_internal_worker_benchmark
         else None
     )
-    worker_preparer = (
-        (lambda: _main._capacity_planner.prepare_benchmark_lane(provider_id, model_name))
-        if request_headers is not None and _main._capacity_planner is not None
-        else None
-    )
+    async def execute_run(
+        settings: BenchmarkRunSettings | InternalBenchmarkRequest,
+        progress: dict[str, int] | None = None,
+        finalize: bool = True,
+    ) -> int | None:
+        worker_preparer = None
+        if request_headers is not None and _main._capacity_planner is not None:
 
-    if worker_preparer is not None and data.serving_overrides.model_dump(exclude_none=True):
+            async def worker_preparer() -> bool:
+                if not settings.serving_overrides.model_dump(exclude_none=True):
+                    return await _main._capacity_planner.prepare_benchmark_lane(provider_id, model_name)
 
-        def report_preparation_stage(stage):
-            with DBManager() as db:
-                db.update_job_status(
-                    job_id,
-                    JobStatus.RUNNING.value,
-                    result_payload={"stage": stage, "started_samples": 0, "total_samples": data.samples},
+                def report_preparation_stage(stage: str) -> None:
+                    with DBManager() as db:
+                        db.update_job_status(
+                            job_id,
+                            JobStatus.RUNNING.value,
+                            result_payload={
+                                **(progress or {}), "stage": stage,
+                                "started_samples": 0, "total_samples": settings.samples,
+                            },
+                        )
+
+                return await _main._capacity_planner.prepare_configured_benchmark_lane(
+                    provider_id, model_name, settings.serving_overrides,
+                    progress_callback=report_preparation_stage,
                 )
 
-        def worker_preparer():
-            return _main._capacity_planner.prepare_configured_benchmark_lane(
-                provider_id,
-                model_name,
-                data.serving_overrides,
-                progress_callback=report_preparation_stage,
-            )
-
-    task = asyncio.create_task(
-        run_benchmark_job(
+        return await run_benchmark_job(
             job_id=job_id,
             model_provider_id=data.model_provider_id,
             target=benchmark_target,
             model=model_name,
             api_key=None if is_internal_worker_benchmark else api_key or None,
-            samples=data.samples,
-            settings=data,
-            max_output_tokens=data.max_output_tokens,
+            samples=settings.samples,
+            settings=settings,
+            max_output_tokens=settings.max_output_tokens,
             serving_configuration=serving_configuration,
             serving_configuration_getter=lambda: extract_serving_configuration(
                 _main._logosnode_registry.peek_runtime_snapshot(provider_id), model_name
@@ -598,14 +609,14 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             request_headers=request_headers,
             worker_preparer=worker_preparer,
             worker_session_is_current=(
-                (
-                    lambda: (_main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
-                    == job_payload["provider_session_id"]
-                )
-                if is_internal_worker_benchmark
-                else None
-            ),
+                lambda: (_main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}).get("session_id")
+                == job_payload["provider_session_id"]
+            ) if is_internal_worker_benchmark else None,
+            **({"batch_progress": progress, "finalize": finalize} if progress else {}),
         )
+
+    task = asyncio.create_task(
+        run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data)
     )
     _background_tasks.add(task)
     _benchmark_tasks.add(task)

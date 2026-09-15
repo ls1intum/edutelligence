@@ -138,8 +138,12 @@ export interface ModelBenchmarkRun {
     split: string;
     samples: number;
     max_output_tokens: number;
+    batch?: { configurations: unknown[]; repetitions: number };
   };
   result: {
+    total_runs?: number;
+    completed_runs?: number;
+    run_index?: number;
     stage?: string;
     benchmark_id?: number;
     started_samples?: number;

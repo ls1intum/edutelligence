@@ -20,6 +20,7 @@ export class BenchmarkSettingsEditor {
   private limitsVersion = 0;
   private limitsPairId: number | null = null;
   readonly validChange = output<boolean>();
+  readonly limitsChange = output<BenchmarkWorkerLimits | null>();
   readonly fields: readonly { key: string; label: string; type: string; min?: number; max?: number; step?: number }[] = SERVING_FIELDS;
   readonly query = signal('gsm8k');
   readonly pickerOpen = signal(false);
@@ -59,6 +60,7 @@ export class BenchmarkSettingsEditor {
   readonly hfOverrides = computed(() => this.settings().serving_overrides['hf_overrides'] ? JSON.stringify(this.settings().serving_overrides['hf_overrides'], null, 2) : '');
 
   constructor() {
+    effect(() => this.limitsChange.emit(this.limits()));
     inject(DestroyRef).onDestroy(() => {
       clearTimeout(this.searchTimer);
       ++this.searchVersion;
