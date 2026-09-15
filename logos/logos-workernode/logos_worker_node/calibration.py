@@ -1239,6 +1239,16 @@ class CalibrationResult:
     # kind was written — the failure isn't the calibration's fault and
     # leaving artefacts behind just pollutes things (see deioma 2026-06-04).
     node_unhealthy_reason: str | None = None
+    # True when the KV search exhausted its range because a probe actually
+    # hit a CUDA/torch allocator OOM (``_is_cuda_oom_log`` / the
+    # ``_capacity_oom_box`` latch), not merely because no kv value ever
+    # loaded. The generic "no working kv" terminal error is also set for
+    # non-capacity causes (e.g. a tp the model's attention-head count
+    # can't divide, which never even reaches a real OOM) — callers that
+    # decide whether a lower-tp fallback can help must use this explicit
+    # flag, not string-match ``error``, or they wrongly skip a fallback
+    # that would have recovered from a config/arch quirk.
+    capacity_oom: bool = False
     # ``max_model_len`` actually used during the successful probe(s). When
     # vLLM refuses to start because the configured KV budget can't hold one
     # request at the model's default max_seq_len, calibration parses vLLM's
@@ -2378,6 +2388,14 @@ def _calibrate_model_probe(
                 break  # real OOM — a larger kv will only need more, not less
             kv += _KV_CACHE_MIN_STEP_MB
         if kv_lo is None:
+            # This text fires for two distinct causes: a real capacity
+            # shortfall (_capacity_oom_box latched a genuine CUDA OOM) or
+            # every probe in the range failing for an unrelated reason
+            # (e.g. this tp's attention-head count isn't divisible) — the
+            # message reads the same either way, so record which one it
+            # actually was in capacity_oom instead of letting a caller
+            # infer it from this string.
+            partial.capacity_oom = bool(_capacity_oom_box)
             partial.error = (
                 f"No working KV cache size found between {_format_kv_mb(search_lo)} and "
                 f"{_format_kv_mb(original_ceiling)} on tp={tp}. Model weights likely exceed available GPU VRAM."
@@ -3544,8 +3562,15 @@ def calibrate_with_tp_escalation(
         """True when weights/kv don't fit anywhere in the kv search range
         at this tp — a real VRAM shortfall, not a config/arch quirk. A
         lower tp needs *more* VRAM per GPU, not less, so it can't recover
-        from this (see ``min_feasible_tp``'s same math in the HF precheck)."""
-        return "exceed available GPU VRAM" in (result.error or "")
+        from this (see ``min_feasible_tp``'s same math in the HF precheck).
+
+        Reads the explicit ``capacity_oom`` flag, not ``result.error`` —
+        the generic "no working kv" message is also set when every probe
+        fails for a non-capacity reason (e.g. a tp this model's attention
+        heads can't divide), which never latches a real OOM and would
+        otherwise wrongly suppress the lower-tp fallback below.
+        """
+        return result.capacity_oom
 
     tp = max_tp
     current_plan = {**plan, "tensor_parallel_size": tp}

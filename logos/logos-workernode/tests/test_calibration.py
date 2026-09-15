@@ -1074,6 +1074,7 @@ def test_calibrate_with_tp_escalation_skips_original_tp_fallback_on_capacity_exh
             success=False,
             error="No working KV cache size found between 1024 MB and 40960 "
             "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+            capacity_oom=True,
         )
 
     seen_tps: list[int] = []
@@ -1090,6 +1091,46 @@ def test_calibrate_with_tp_escalation_skips_original_tp_fallback_on_capacity_exh
 
     assert seen_tps == [2]  # tp=1 fallback skipped — not operator-pinned
     assert not result.success
+
+
+def test_calibrate_with_tp_escalation_does_not_skip_fallback_on_non_capacity_no_working_kv(tmp_path):
+    """Regression: the generic "no working kv" message also fires when
+    every probe fails for a reason unrelated to capacity (e.g. this tp's
+    attention-head count isn't divisible) — _capacity_oom_box never
+    latches, so capacity_oom stays False. The lower-tp fallback (which
+    could recover from exactly that config/arch quirk) must still run."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp == 1:
+            return _success_result("big-model", tensor_parallel_size=1)
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="No working KV cache size found between 1024 MB and 40960 "
+            "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+            capacity_oom=False,
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model"},  # no tensor_parallel_size — original_tp defaults to 1
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=2,
+        )
+
+    assert seen_tps == [2, 1]  # fallback NOT skipped — this wasn't a real OOM
+    assert result.success
+    assert result.tensor_parallel_size == 1
 
 
 def test_calibrate_with_tp_escalation_honors_explicit_tp_despite_capacity_exhaustion(tmp_path):
@@ -1110,6 +1151,7 @@ def test_calibrate_with_tp_escalation_honors_explicit_tp_despite_capacity_exhaus
             success=False,
             error="No working KV cache size found between 1024 MB and 40960 "
             "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+            capacity_oom=True,
         )
 
     seen_tps: list[int] = []
@@ -2553,6 +2595,11 @@ def test_kv_search_stops_climbing_on_genuine_cuda_oom(tmp_path: Path):
 
     assert not result.success
     assert "exceed available GPU VRAM" in result.error
+    # The explicit signal _is_capacity_exhausted reads — not just the
+    # shared error text (see test_calibrate_with_tp_escalation_does_not_
+    # skip_fallback_on_non_capacity_no_working_kv for the case where this
+    # text fires WITHOUT a real OOM).
+    assert result.capacity_oom is True
     # Exactly one spawn — the floor probe latched the OOM box; the scan
     # stopped instead of climbing toward the 18432 MB ceiling.
     assert managers["spawn"].call_count == 1

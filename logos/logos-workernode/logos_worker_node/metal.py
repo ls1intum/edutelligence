@@ -220,6 +220,40 @@ def default_metal_venv() -> str:
     return os.path.expanduser(override or "~/.venv-vllm-metal")
 
 
+def resolve_metal_vllm_binary(configured_binary: str, worker_vllm_binary: str = "") -> str | None:
+    """Resolve the vllm CLI for the Metal backend, preferring the
+    vllm-metal venv over the worker's own environment.
+
+    Shared by :class:`MetalVllmProcessHandle` (production lanes) and the
+    Metal calibration probe — both must agree on where vllm actually
+    lives, or calibration measures a process vLLM never runs, or worse,
+    can't even start it. The worker's own venv deliberately does not
+    contain vllm/mlx (they live in the vllm-metal venv install.sh
+    creates), so unlike the CUDA path the running interpreter is never
+    the right place to look, and launchd's inherited PATH does not
+    include the metal venv's bin directory either — passing a bare
+    "vllm" straight to ``Popen`` fails with ``FileNotFoundError``.
+
+    Resolution order: an explicit *configured_binary* (only when it
+    names an actual path, not the schema default "vllm") → a
+    node-level ``engines.metal.vllm_binary`` override
+    (*worker_vllm_binary*) → the vllm-metal venv's own ``bin/vllm``
+    (``LOGOS_METAL_VENV``, or its documented default). Returns ``None``
+    when none of these exist so the caller can fall back to its own
+    generic resolution instead of a silent wrong guess.
+    """
+    configured = (configured_binary or "").strip()
+    explicit = configured if (configured and configured != "vllm") else ""
+    candidates = [explicit, (worker_vllm_binary or "").strip(), os.path.join(default_metal_venv(), "bin", "vllm")]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        resolved = os.path.abspath(os.path.expanduser(candidate))
+        if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
+            return resolved
+    return None
+
+
 def metal_python_candidates(configured: str = "") -> list[str]:
     """Candidate interpreters that can import mlx, most specific first."""
     candidates: list[str] = []

@@ -15,9 +15,11 @@ import pytest
 
 from logos_worker_node.calibration_metal import (
     _build_metal_calibration_cmd,
+    _build_metal_calibration_env,
     _log_working_set_budget,
     calibrate_model_metal,
 )
+from logos_worker_node.models import MetalConfig
 
 # ═══════════════════════════════════════════════════════════════════════
 # _build_metal_calibration_cmd
@@ -75,6 +77,55 @@ def test_build_cmd_forwards_extra_args():
     assert "--trust-remote-code" in cmd
 
 
+def test_build_cmd_enables_prefix_caching_by_default():
+    """Matches the CUDA calibration path's own default (calibration.py):
+    this changes vLLM's KV-cache accounting, so probing without it
+    measures a different process than the production lane runs."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, "vllm", "127.0.0.1", 11499)
+    assert "--enable-prefix-caching" in cmd
+
+
+def test_build_cmd_respects_explicit_prefix_caching_disable():
+    cmd = _build_metal_calibration_cmd(
+        {"model": "org/model", "enable_prefix_caching": False}, "vllm", "127.0.0.1", 11499
+    )
+    assert "--enable-prefix-caching" not in cmd
+
+
+def test_build_cmd_forwards_max_num_seqs():
+    cmd = _build_metal_calibration_cmd({"model": "org/model", "max_num_seqs": 64}, "vllm", "127.0.0.1", 11499)
+    idx = cmd.index("--max-num-seqs")
+    assert cmd[idx + 1] == "64"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# _build_metal_calibration_env
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_build_env_strips_stale_cuda_vars(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("NCCL_P2P_DISABLE", "1")
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], None)
+    assert "CUDA_VISIBLE_DEVICES" not in env
+    assert "NCCL_P2P_DISABLE" not in env
+
+
+def test_build_env_forwards_worker_metal_tuning_knobs():
+    """A node-wide VLLM_METAL_MEMORY_FRACTION shapes every production
+    lane's footprint — the probe measures a different process without it."""
+    mc = MetalConfig(memory_fraction=0.7, use_paged_attention=False, multimodal_mode="text-only-compat")
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], mc)
+    assert env["VLLM_METAL_MEMORY_FRACTION"] == "0.7"
+    assert env["VLLM_METAL_USE_PAGED_ATTENTION"] == "0"
+    assert env["VLLM_METAL_MULTIMODAL_MODE"] == "text-only-compat"
+
+
+def test_build_env_prepends_resolved_binary_dir_to_path():
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], None)
+    assert env["PATH"].split(":")[0] == "/fake/vllm-metal/bin"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # _log_working_set_budget
 # ═══════════════════════════════════════════════════════════════════════
@@ -105,6 +156,10 @@ def _patch_metal_infra(*, wired_memory_sequence, wait_ready_side_effect=None, wa
     mock_proc.pid = 4242
     mock_proc.poll.return_value = None
     patches = {
+        "resolve_binary": patch(
+            "logos_worker_node.calibration_metal.resolve_metal_vllm_binary",
+            return_value="/fake/vllm-metal/bin/vllm",
+        ),
         "spawn": patch(
             "logos_worker_node.calibration_metal._spawn_vllm_metal",
             return_value=mock_proc,
@@ -213,10 +268,56 @@ def test_cancelled_before_spawn_short_circuits():
 
 
 def test_warmup_failure_does_not_fail_calibration():
-    """A warmup that never serves still yields a load-only measurement —
-    matches the CUDA path's own tolerance for a failed warmup."""
+    """An unclassified/generative model's warmup that never serves still
+    yields a load-only measurement — unchanged since before issue #963;
+    see test_pooling_warmup_failure_fails_calibration for the classes
+    that now have a real, gating probe instead."""
     patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9500.0], warmup_ok=False)
     result, _mocks = _run({"model": "org/model"}, patches)
 
     assert result.success
     assert result.base_residency_mb == pytest.approx(5500.0)
+
+
+def test_pooling_warmup_failure_fails_calibration():
+    """issue #963: a classified pooling/transcription model has a real
+    probe now — a failure means the model itself doesn't serve one
+    request on its own endpoint, and must not persist a footprint
+    measured before the real request's lazy allocations."""
+    patches, mocks_ref = _patch_metal_infra(wired_memory_sequence=[4000.0], warmup_ok=False)
+    result, mocks = _run({"model": "org/embedding-model", "model_kind": "pooling"}, patches)
+
+    assert not result.success
+    assert "pooling" in result.error
+    mocks["warmup"].assert_called_once()
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "pooling"
+
+
+def test_model_kind_defaults_to_generative_and_is_forwarded_to_warmup():
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
+    _result, mocks = _run({"model": "org/model"}, patches)
+
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "generative"
+
+
+def test_detected_model_kind_is_forwarded_to_warmup():
+    """The HF-precheck's auto-classification (plan[_detected_model_kind])
+    is used when no operator override (plan[model_kind]) is present."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
+    _result, mocks = _run({"model": "org/model", "_detected_model_kind": "transcription"}, patches)
+
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "transcription"
+
+
+def test_fails_cleanly_when_vllm_binary_cannot_be_resolved():
+    """No vllm-metal venv, no worker override, no explicit path: must fail
+    with a clear reason instead of a bare FileNotFoundError from Popen."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0])
+    patches["resolve_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_metal_vllm_binary", return_value=None
+    )
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "vllm binary not found" in result.error
+    mocks["spawn"].assert_not_called()

@@ -856,6 +856,7 @@ async def test_start_calibration_session_routes_metal_backend_to_metal_probe(tmp
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
@@ -866,6 +867,15 @@ async def test_start_calibration_session_routes_metal_backend_to_metal_probe(tmp
         configured_models=["some/model"],
     )
     client = LogosBridgeClient(app, cfg)
+
+    # issue #963: the precheck now classifies Metal models too (only the
+    # CUDA-only VRAM-fit half is skipped), so it needs HF metadata to not
+    # look like a permanently-unsupported repo (which would skip the
+    # model before it ever reaches calibrate_model_metal).
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="hf"),
+    )
 
     seen_kwargs: dict = {}
 
@@ -1520,11 +1530,13 @@ async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monkeypatch):
-    """No nvidia-smi on Metal, so the VRAM-fit half could never run — skip
-    the whole precheck up front instead of fetching HF metadata for
-    nothing. Metal profiles come from model_profile_overrides, not this."""
+async def test_run_compatibility_precheck_skips_vram_fit_on_metal_backend(tmp_path, monkeypatch):
+    """No nvidia-smi on Metal, so only the VRAM-fit half is skipped — HF
+    metadata is still fetched and classified (issue #963's model_kind is a
+    pure Hub/config.json lookup, backend-independent), so a Metal pooling
+    or transcription model isn't silently misclassified as generative."""
     from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
@@ -1532,16 +1544,26 @@ async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monke
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
     client = LogosBridgeClient(app, cfg)
 
-    fetch_spy = MagicMock(side_effect=AssertionError("should not fetch HF metadata on Metal"))
-    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", fetch_spy)
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,
+            pipeline_tag="feature-extraction",
+            source="hf",
+        ),
+    )
+    vram_spy = MagicMock(side_effect=AssertionError("nvidia-smi must never run on Metal"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", vram_spy)
 
     response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
 
     assert response["ok"] is True
-    assert response["hf_source"] == "skipped:metal-backend"
+    assert response["hf_source"] == "hf"
+    assert response["model_kind"] == "pooling"
     assert response["fit_tp_idle"] is None
+    assert response["per_gpu_total_mb"] is None
     assert response["unsupported_reason"] is None
-    fetch_spy.assert_not_called()
+    vram_spy.assert_not_called()
 
 
 @pytest.mark.asyncio

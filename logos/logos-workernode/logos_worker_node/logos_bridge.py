@@ -945,26 +945,6 @@ class LogosBridgeClient:
 
         ``persist=False`` skips the model_profiles write. Never raises.
         """
-        if is_metal_backend():
-            # No nvidia-smi here, so the VRAM-fit half could never run
-            # anyway — skip up front rather than fall through that
-            # exception. Metal profiles come from model_profile_overrides,
-            # not this precheck.
-            return {
-                "model": model_name,
-                "hf_source": "skipped:metal-backend",
-                "weight_bytes": None,
-                "kv_per_token_bytes": None,
-                "max_context_length": None,
-                "quantization_method": None,
-                "per_gpu_total_mb": None,
-                "per_gpu_free_mb": None,
-                "hardware_max_tp": None,
-                "fit_tp_idle": None,
-                "fit_tp_current": None,
-                "unsupported_reason": None,
-                "model_kind": "generative",
-            }
         from logos_worker_node.calibration import (  # noqa: PLC0415
             _max_tp_for_plan,
             calibration_gpu_slice,
@@ -1072,6 +1052,17 @@ class LogosBridgeClient:
                     )
 
         if hf_meta is None or not hf_meta.weight_bytes:
+            return result
+
+        if is_metal_backend():
+            # No nvidia-smi here, so the VRAM-fit half below could never
+            # run anyway — skip it, but only it. HF metadata and
+            # model_kind (issue #963) are already resolved above and
+            # backend-independent (a pure Hub/config.json lookup), so a
+            # Metal pooling/transcription model must still get its real
+            # classification instead of silently defaulting to generative.
+            # Metal profiles themselves come from model_profile_overrides,
+            # not this precheck.
             return result
 
         try:
@@ -1856,6 +1847,7 @@ class LogosBridgeClient:
                                 log_dir=log_dir,
                                 ready_timeout_s=_READY_TIMEOUT_S,
                                 cancel_event=session.cancel_event,
+                                worker_metal_config=cfg.engines.metal,
                             ),
                         )
                     else:
