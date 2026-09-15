@@ -81,6 +81,10 @@ class ModelAccessControllerTest {
         grantTeamModel(2001, "[5001]");
         grantTeamProvider(2001, "[6001]");
 
+        // Select the seeded teams by id: other test classes may have left
+        // extra teams in the shared database (e.g. TeamControllerTest creates
+        // one through the API), so index- and count-based assertions are
+        // order-dependent.
         mvc.perform(get("/admin/models/5001/access").with(TestJwt.logosAdmin()))
            .andExpect(status().isOk())
            // Model facts
@@ -93,18 +97,15 @@ class ModelAccessControllerTest {
            .andExpect(jsonPath("$.providers[0].request_count").value(0))
            .andExpect(jsonPath("$.providers[0].last_request_at").doesNotExist())
            // Team 2001: model + provider grant -> effective; team 2002: nothing
-           .andExpect(jsonPath("$.teams.length()").value(2))
-           .andExpect(jsonPath("$.teams[0].team_id").value(2001))
-           .andExpect(jsonPath("$.teams[0].team_name").value("test-team"))
-           .andExpect(jsonPath("$.teams[0].model_grant").value(true))
-           .andExpect(jsonPath("$.teams[0].provider_grants.length()").value(1))
-           .andExpect(jsonPath("$.teams[0].provider_grants[0].provider_id").value(6001))
-           .andExpect(jsonPath("$.teams[0].provider_grants[0].granted").value(true))
-           .andExpect(jsonPath("$.teams[0].effective_access").value(true))
-           .andExpect(jsonPath("$.teams[1].team_id").value(2002))
-           .andExpect(jsonPath("$.teams[1].model_grant").value(false))
-           .andExpect(jsonPath("$.teams[1].provider_grants[0].granted").value(false))
-           .andExpect(jsonPath("$.teams[1].effective_access").value(false))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].team_name").value("test-team"))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].model_grant").value(true))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].provider_grants.length()").value(1))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].provider_grants[0].provider_id").value(6001))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].provider_grants[0].granted").value(true))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].effective_access").value(true))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2002)].model_grant").value(false))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2002)].provider_grants[0].granted").value(false))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2002)].effective_access").value(false))
            // No custom-permission keys in the seed
            .andExpect(jsonPath("$.api_keys.length()").value(0));
     }
@@ -116,9 +117,9 @@ class ModelAccessControllerTest {
 
         mvc.perform(get("/admin/models/5001/access").with(TestJwt.logosAdmin()))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.teams[0].model_grant").value(true))
-           .andExpect(jsonPath("$.teams[0].provider_grants[0].granted").value(false))
-           .andExpect(jsonPath("$.teams[0].effective_access").value(false));
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].model_grant").value(true))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].provider_grants[0].granted").value(false))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].effective_access").value(false));
     }
 
     @Test
@@ -129,10 +130,9 @@ class ModelAccessControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.providers.length()").value(0))
            // The grant still shows up (and is orphaned), with empty columns.
-           .andExpect(jsonPath("$.teams[0].team_id").value(2001))
-           .andExpect(jsonPath("$.teams[0].model_grant").value(true))
-           .andExpect(jsonPath("$.teams[0].provider_grants.length()").value(0))
-           .andExpect(jsonPath("$.teams[0].effective_access").value(false));
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].model_grant").value(true))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].provider_grants.length()").value(0))
+           .andExpect(jsonPath("$.teams[?(@.team_id==2001)].effective_access").value(false));
     }
 
     @Test

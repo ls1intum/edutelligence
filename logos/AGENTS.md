@@ -289,6 +289,17 @@ When implementing a feature for a GitHub issue:
    - If tests fail, fix them before requesting review
    - Monitor until all checks pass
 8. Never merge directly to `main` without a PR
+9. **ALWAYS include a screenshot in every PR that touches the UI** — this is a
+   hard requirement (see below), not a nicety.
+
+### UI PRs Require a Screenshot (MANDATORY)
+Every pull request that changes the Logos UI (`logos/logos-ui/`) MUST include a
+screenshot (or short screen recording) of the changed UI in the PR description
+under a `## Screenshots` section. Reviewers must be able to see the result
+without running the stack — a UI PR without screenshots is not reviewable and
+will be sent back. Take the screenshot against a local dev stack (`docker
+compose -f docker-compose.dev.yaml up` + `ng serve`), log in with one of the
+seeded users (see below), and attach the image to the PR description.
 
 ### PR Description Template
 ```markdown
@@ -296,6 +307,9 @@ When implementing a feature for a GitHub issue:
 
 ## Summary
 Brief description of what this PR implements.
+
+## Screenshots
+<!-- MANDATORY for UI-related PRs: embed screenshot(s) of the changed UI -->
 
 ## Changes
 - `file1.py`: Description of change
@@ -346,6 +360,15 @@ docker compose up --build
 
 # Database is at logos-db:5432/logosdb (user: postgres, pass: root)
 ```
+
+### Local Dev Login (Keycloak)
+The local Keycloak realm is seeded from `logos/keycloak/tum-realm.json`, which
+already contains **passwords for all dev users: `password`** (e.g. log in as
+`tobias.wasner` — has the `itg-admin` role, i.e. logos admin — or
+`alexandra.szuminska` for a regular developer). Don't try to set passwords via
+the Keycloak admin API: the admin clients have direct access grants disabled.
+Keycloak admin console (if ever needed): `admin` / `admin`
+(bootstrap admin, dev compose only).
 
 ## Operations Runbook
 
