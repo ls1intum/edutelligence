@@ -1249,6 +1249,10 @@ class CalibrationResult:
     # flag, not string-match ``error``, or they wrongly skip a fallback
     # that would have recovered from a config/arch quirk.
     capacity_oom: bool = False
+    # Set only by a failed Metal probe that looks like a memory-capacity
+    # issue. Value = this node's own working-set budget (MB) — evidence the
+    # model needs more than that here. None on CUDA results and on success.
+    metal_capacity_floor_mb: float | None = None
     # ``max_model_len`` actually used during the successful probe(s). When
     # vLLM refuses to start because the configured KV budget can't hold one
     # request at the model's default max_seq_len, calibration parses vLLM's

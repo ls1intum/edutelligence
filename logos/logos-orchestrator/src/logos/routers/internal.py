@@ -681,12 +681,17 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
     sleep_level = (
         _main._calibration_orchestrator._config.sleep_level if _main._calibration_orchestrator is not None else 1
     )
+    skip_models = (
+        sorted(_main._calibration_orchestrator._capacity_skip_models(data.provider_id))
+        if _main._calibration_orchestrator is not None
+        else []
+    )
     pname = _resolve_provider_name(data.provider_id)
     try:
         await _main._logosnode_registry.send_command(
             data.provider_id,
             "start_calibration_session",
-            params={"sleep_level": sleep_level},
+            params={"sleep_level": sleep_level, "skip_models": skip_models},
             timeout_seconds=30,
         )
     except LogosNodeOfflineError as exc:

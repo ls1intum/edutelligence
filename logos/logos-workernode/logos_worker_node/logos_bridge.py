@@ -66,11 +66,15 @@ class _CalibrationSession:
     RPCs and consumes calibration_* events back from the worker.
     """
 
-    def __init__(self, sleep_level: int) -> None:
+    def __init__(self, sleep_level: int, skip_models: frozenset[str] = frozenset()) -> None:
         self.sleep_level: int = sleep_level
         self.cancel_event: threading.Event = threading.Event()
         self.task: asyncio.Task | None = None
         self.started_at: float = time.time()
+        # Models the orchestrator already knows can't fit on this node
+        # (cross-node capacity evidence) — excluded from this session's
+        # model list without a wasted probe attempt.
+        self.skip_models: frozenset[str] = skip_models
         # Updated by the session driver as it walks the model list — surfaced
         # so a future status RPC could inspect what's running without polling.
         self.current_model: str | None = None
@@ -1284,7 +1288,8 @@ class LogosBridgeClient:
         except Exception:  # noqa: BLE001
             logger.debug("[Calibration] node_health evaluation failed", exc_info=True)
 
-        session = _CalibrationSession(sleep_level=sleep_level)
+        skip_models = frozenset(str(m) for m in (params.get("skip_models") or []))
+        session = _CalibrationSession(sleep_level=sleep_level, skip_models=skip_models)
         session.task = asyncio.create_task(
             self._run_calibration_session(session),
             name="calibration-session",
@@ -1489,8 +1494,21 @@ class LogosBridgeClient:
             self._active_calibration_session.sleep_level if self._active_calibration_session is not None else 1
         )
 
+        session_skip_models = (
+            self._active_calibration_session.skip_models
+            if self._active_calibration_session is not None
+            else frozenset()
+        )
+
         ordered: list[str] = []
         for model_name in candidates:
+            if model_name in session_skip_models:
+                logger.info(
+                    "[Calibration] skipping %s — orchestrator flagged it as "
+                    "too large for this node's known capacity",
+                    model_name,
+                )
+                continue
             profile = model_profiles.get_profile(model_name)
             if profile is not None and profile.calibration_unsupported:
                 continue
@@ -1967,6 +1985,13 @@ class LogosBridgeClient:
                             "[Calibration] %s marked calibration_unsupported (reason=%s)",
                             model_name,
                             result.unsupported_reason,
+                        )
+                    if getattr(result, "metal_capacity_floor_mb", None):
+                        model_profiles.mark_capacity_floor(model_name, result.metal_capacity_floor_mb)
+                        logger.warning(
+                            "[Calibration] %s recorded capacity floor = %.0f MB on this node",
+                            model_name,
+                            result.metal_capacity_floor_mb,
                         )
                     self._record_calibration_event(
                         "calibration_model_failed",

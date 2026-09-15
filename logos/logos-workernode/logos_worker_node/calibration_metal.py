@@ -18,6 +18,7 @@ from typing import Any
 from logos_worker_node.calibration import (
     _FATAL_PROBE_MODEL_KINDS,
     CalibrationResult,
+    _read_log_since,
     _reset_calibration_log,
     stop_vllm,
     wait_ready,
@@ -30,6 +31,35 @@ from logos_worker_node.vllm_process import resolve_generic_vllm_binary
 logger = logging.getLogger(__name__)
 
 _METAL_SETTLE_S = 2.0  # let the allocator settle before the final read
+
+# Best-effort text markers for a Metal/mlx memory failure. There is no single
+# stable "out of memory" string for vllm-metal (unlike CUDA) — these are a
+# starting set, matched case-insensitively, and expected to grow as real
+# failures are observed in the field.
+_METAL_MEMORY_MARKERS: tuple[str, ...] = (
+    "out of memory",
+    "insufficient memory",
+    "mtlbuffer",
+)
+
+# A signal-terminated exit (SIGKILL and below) is the typical shape of an
+# OS memory-pressure kill on macOS — treated as capacity evidence alongside
+# any log text match, since no single log signature covers every case.
+_METAL_OOM_SIGNAL_EXIT_CODE = -9
+
+
+def _is_metal_capacity_failure(returncode: int | None, log_tail: str) -> bool:
+    """True when a failed Metal probe looks like a memory-capacity failure.
+
+    Combines two independent signals (neither alone is reliable): the
+    process was killed by a signal consistent with an OS OOM kill, or the
+    log mentions a known memory-allocation failure marker.
+    """
+    if returncode is not None and returncode <= _METAL_OOM_SIGNAL_EXIT_CODE:
+        return True
+    lowered = (log_tail or "").lower()
+    return any(marker in lowered for marker in _METAL_MEMORY_MARKERS)
+
 
 # Matches VllmConfig.mm_processor_cache_gb's own default (models.py) — vLLM's
 # built-in default, applied when the plan has no per-model override. Every
@@ -194,25 +224,26 @@ def _spawn_vllm_metal(
     return proc
 
 
-def _log_working_set_budget(model: str) -> None:
+def _log_working_set_budget(model: str) -> float | None:
     """Log the GPU working-set ceiling for context, if the mlx probe answers.
 
-    Informational only — never blocks or fails calibration if unreachable,
-    it just tells an operator reading the log how close a measurement
-    came to the working-set limit vllm-metal will actually enforce.
+    Returns the budget in MB (None if unreachable) so a capacity failure
+    later in the same run can reuse this reading instead of re-probing.
     """
     info = probe_device_info()
     if not info:
-        return
+        return None
     working_set = info.get("max_recommended_working_set_size")
     if not working_set:
-        return
+        return None
+    working_set_mb = float(working_set) / (1024.0 * 1024.0)
     logger.info(
         "  %s: GPU working-set budget = %.0f MB (%s)",
         model,
-        float(working_set) / (1024.0 * 1024.0),
+        working_set_mb,
         info.get("device_name") or "Apple Silicon GPU",
     )
+    return working_set_mb
 
 
 def calibrate_model_metal(
@@ -269,7 +300,7 @@ def calibrate_model_metal(
         result.error = "cancelled"
         return result
 
-    _log_working_set_budget(model)
+    working_set_mb = _log_working_set_budget(model)
 
     baseline_used_mb = read_wired_memory_mb()
     if baseline_used_mb is None:
@@ -345,6 +376,18 @@ def calibrate_model_metal(
     except (RuntimeError, TimeoutError, OSError) as exc:
         result.error = str(exc)
         logger.warning("  ERROR: %s", result.error)
+        returncode = proc.poll() if proc is not None else None
+        log_tail = _read_log_since(log_path, 0) if log_path.exists() else ""
+        if working_set_mb and _is_metal_capacity_failure(returncode, log_tail):
+            result.capacity_oom = True
+            result.metal_capacity_floor_mb = working_set_mb
+            logger.warning(
+                "  %s: failure looks like a memory-capacity issue — this "
+                "node's working-set budget (%.0f MB) is being recorded as "
+                "a floor this model did not fit under",
+                model,
+                working_set_mb,
+            )
         return result
     finally:
         if proc is not None:

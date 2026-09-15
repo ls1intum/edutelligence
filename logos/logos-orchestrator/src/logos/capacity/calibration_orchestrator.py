@@ -371,6 +371,38 @@ class CalibrationOrchestrator:
             return True
         return False
 
+    def _capacity_skip_models(self, provider_id: int) -> frozenset[str]:
+        """Models known, from any node's calibration history, to need more
+        capacity than *provider_id* has (Metal-only; always empty for CUDA).
+        Per model: max ``metal_capacity_floor_mb`` across every provider,
+        compared against this provider's own ``devices.total_memory_mb``.
+        """
+        try:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+        except Exception:
+            return frozenset()
+        if not isinstance(snap, dict):
+            return frozenset()
+        devices = (snap.get("runtime") or {}).get("devices") or {}
+        provider_capacity_mb = float(devices.get("total_memory_mb") or 0.0)
+        if provider_capacity_mb <= 0:
+            return frozenset()
+
+        floors: dict[str, float] = {}
+        for pid in self._facade.provider_ids():
+            try:
+                profiles = self._facade.get_model_profiles(pid)
+            except Exception:
+                continue
+            for model_name, profile in profiles.items():
+                floor = profile.metal_capacity_floor_mb
+                if floor is None:
+                    continue
+                if floor > floors.get(model_name, 0.0):
+                    floors[model_name] = floor
+
+        return frozenset(name for name, floor in floors.items() if provider_capacity_mb <= floor)
+
     def _provider_has_uncalibrated_models(self, provider_id: int) -> bool:
         """Return True when the worker still has at least one model that needs
         calibration. Mirrors the worker's own selection logic so we don't fire
@@ -383,8 +415,11 @@ class CalibrationOrchestrator:
             profiles = self._facade.get_model_profiles(provider_id)
         except Exception:
             profiles = {}
+        capacity_skip = self._capacity_skip_models(provider_id)
 
         for model_name in candidates:
+            if model_name in capacity_skip:
+                continue
             profile = profiles.get(model_name)
             if profile is not None and profile.calibration_unsupported:
                 continue
@@ -424,11 +459,12 @@ class CalibrationOrchestrator:
         # (e.g. from a duplicate connect) can clear it cleanly without us
         # also firing the same start a second time on the next tick.
         self._active_provider_id = provider_id
+        skip_models = sorted(self._capacity_skip_models(provider_id))
         try:
             await self._registry.send_command(
                 provider_id,
                 "start_calibration_session",
-                params={"sleep_level": self._config.sleep_level},
+                params={"sleep_level": self._config.sleep_level, "skip_models": skip_models},
                 timeout_seconds=30,
             )
             logger.info(

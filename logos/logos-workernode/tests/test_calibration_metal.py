@@ -381,6 +381,66 @@ def test_fails_cleanly_when_vllm_binary_cannot_be_resolved():
     mocks["spawn"].assert_not_called()
 
 
+def test_capacity_failure_via_signal_exit_code_sets_floor():
+    """A SIGKILL-style exit code is the typical shape of an OS memory-
+    pressure kill on macOS — recorded as this node's capacity floor."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=-9)"),
+    )
+    mock_proc.poll.return_value = -9
+    info = {"max_recommended_working_set_size": 20_000 * 1024 * 1024, "device_name": "M3 Pro"}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch("logos_worker_node.calibration_metal._read_log_since", return_value="")
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is True
+    assert result.metal_capacity_floor_mb == pytest.approx(20_000.0)
+
+
+def test_capacity_failure_via_log_marker_sets_floor():
+    """No signal exit, but the log names a known memory-allocation failure
+    marker — still counts as capacity evidence (see _METAL_MEMORY_MARKERS)."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=1)"),
+    )
+    mock_proc.poll.return_value = 1
+    info = {"max_recommended_working_set_size": 18_000 * 1024 * 1024}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch(
+        "logos_worker_node.calibration_metal._read_log_since",
+        return_value="RuntimeError: MTLBuffer allocation failed",
+    )
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is True
+    assert result.metal_capacity_floor_mb == pytest.approx(18_000.0)
+
+
+def test_non_capacity_failure_leaves_floor_unset():
+    """A generic non-signal failure with no memory marker in the log must
+    not be mistaken for a capacity issue."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=1)"),
+    )
+    mock_proc.poll.return_value = 1
+    info = {"max_recommended_working_set_size": 18_000 * 1024 * 1024}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch(
+        "logos_worker_node.calibration_metal._read_log_since",
+        return_value="ValueError: unsupported dtype",
+    )
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is False
+    assert result.metal_capacity_floor_mb is None
+
+
 def test_falls_back_to_generic_resolution_when_metal_specific_lookup_fails():
     """A bare "vllm" the metal-specific lookup won't treat as explicit and
     that isn't in the vllm-metal venv can still resolve via PATH/sibling/
