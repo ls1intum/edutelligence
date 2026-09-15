@@ -18,6 +18,7 @@ export const routes: Routes = [
     children: [
       { path: 'statistics',      title: 'Statistics · Logos',      data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/statistics/statistics').then(m => m.Statistics) },
       { path: 'models',         title: 'Models · Logos',           data: { roles: ALL_ROLES },                canActivate: [roleGuard], loadComponent: () => import('./features/models/models').then(m => m.Models) },
+      { path: 'models/:id/access', title: 'Model Access · Logos', data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/model-access/model-access').then(m => m.ModelAccess) },
       { path: 'models/:id/details', title: 'Model Details · Logos', data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/model-error-report/model-error-report').then(m => m.ModelErrorReport) },
       { path: 'models/:id/errors', redirectTo: 'models/:id/details', pathMatch: 'full' },
       { path: 'providers',      title: 'Providers · Logos',        data: { roles: ['logos_admin'] },                canActivate: [roleGuard], loadComponent: () => import('./features/providers/providers').then(m => m.Providers) },
