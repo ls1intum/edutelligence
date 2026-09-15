@@ -1486,6 +1486,17 @@ class TestReviewTaskReplyProtocol:
         assert "app/x.py:3" in task
         assert "[comment " not in task
 
+    async def test_every_actionable_comment_reaches_the_task(self):
+        # The answer is owed for each comment that carries a body, so every
+        # one of them has to reach the agent: a comment it never saw is a
+        # reply it cannot write, and the delivery would hold forever.
+        comments = [comment(4000 + i, 772, f"point {i}", path="app/x.py") for i in range(35)]
+
+        task = await triggers.review_task(772, "A change", review(9), comments)
+
+        for i in range(35):
+            assert f"[comment {4000 + i}]" in task
+
 
 class TestOtherReviewComments:
     """An inline answer can see the review comments it is asked to act on.

@@ -285,7 +285,11 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
         rendered.append(f"- {prefix}{path}:{line}\n  {body}")
     if not rendered:
         return ""
-    return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
+    # Every comment is shown, whatever the review carries: the answer is
+    # owed for each of them, and a comment the task never showed cannot be
+    # answered. A long review is a long task; an incomplete one is a
+    # session that can never deliver.
+    return "Inline comments:\n\n" + "\n\n".join(rendered) + "\n\n"
 
 
 async def review_request_task(number: int, title: str, body: str, requester: str, *, branch: str | None = None) -> str:
