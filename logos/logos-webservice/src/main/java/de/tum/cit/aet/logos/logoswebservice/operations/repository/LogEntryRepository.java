@@ -695,8 +695,15 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         SELECT COUNT(*) AS requests,
                COUNT(*) FILTER (WHERE p.privacy_level != 'LOCAL' AND p.privacy_level IS NOT NULL) AS cloudRequests,
                COUNT(*) FILTER (WHERE p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AS localRequests,
-               COUNT(*) FILTER (WHERE was_cold_start IS TRUE) AS coldStarts,
-               COUNT(*) FILTER (WHERE was_cold_start IS NOT TRUE) AS warmStarts,
+               -- A cold or warm start is a property of a local lane, so these
+               -- counts stay on the local side of the cloud/local split: the
+               -- KPI card labels the denominator "local starts" and pairing
+               -- that number with a denominator that also counts cloud requests
+               -- (issue #928) understates the cold-start share. The predicate
+               -- mirrors localRequests above, so cold + warm always adds up to
+               -- exactly the local request count.
+               COUNT(*) FILTER (WHERE (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND was_cold_start IS TRUE) AS coldStarts,
+               COUNT(*) FILTER (WHERE (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND was_cold_start IS NOT TRUE) AS warmStarts,
                AVG(CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END) AS avgQueueSeconds,
                AVG(CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
@@ -768,13 +775,17 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    THEN EXTRACT(EPOCH FROM (re.timestamp_forwarding - re.timestamp_request)) END) AS avgQueueSeconds,
                AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
                    THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avgRunSeconds,
-               SUM(CASE WHEN re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS coldStarts,
-               SUM(CASE WHEN re.was_cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warmStarts,
+               -- Same local-only rule as the totals above (issue #928): a cloud
+               -- request on a model has no local start, so it must not pad the
+               -- warm count for that model.
+               SUM(CASE WHEN (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS coldStarts,
+               SUM(CASE WHEN (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND re.was_cold_start IS NOT TRUE THEN 1 ELSE 0 END) AS warmStarts,
                SUM(CASE WHEN re.result_status IS DISTINCT FROM 'success'
                               OR (re.error_message IS NOT NULL AND re.error_message != '')
                         THEN 1 ELSE 0 END) AS errorCount
         FROM log_entry re
         LEFT JOIN models m ON m.id = re.model_id
+        LEFT JOIN providers p ON p.id = re.provider_id
         WHERE COALESCE(re.timestamp_forwarding, re.timestamp_request, re.timestamp_response) BETWEEN :start AND :end
           AND (CAST(:userId AS INTEGER) IS NULL OR re.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR re.team_id = CAST(:teamId AS INTEGER))

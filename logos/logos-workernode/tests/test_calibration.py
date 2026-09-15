@@ -1000,7 +1000,11 @@ def test_calibrate_with_tp_escalation_stops_on_fatal_error_surfaced_after_wideni
             gpu_devices="",
             kv_cache_sent_mb=0.0,
             success=False,
-            error="ValueError: vLLM does not recognize this architecture: FooNet",
+            error=(
+                "unsupported model (unsupported-architecture): The installed vLLM build "
+                "does not implement this model's architecture."
+            ),
+            unsupported_reason="unsupported-architecture",
         )
 
     seen_tps: list[int] = []
@@ -1092,6 +1096,49 @@ def test_calibrate_with_tp_escalation_honors_explicit_tp_despite_capacity_exhaus
     assert seen_tps == [2, 1]  # fallback attempted despite the shortfall
     assert result.success
     assert result.tensor_parallel_size == 1
+
+
+def test_calibrate_with_tp_escalation_stops_on_normalized_fatal_error(tmp_path):
+    """Regression: calibrate_model normalizes a fatal model-level error into
+    "unsupported model (<code>): <description>" and sets
+    result.unsupported_reason — the raw vLLM needle is gone from result.error.
+    The fatal check must key off unsupported_reason, not the needle, or a
+    permanently unloadable model gets re-probed at every lower tp."""
+    seen_tps: list[int] = []
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        return CalibrationResult(
+            model="gated-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error=(
+                "unsupported model (gated-repo-no-token): Hugging Face flags this "
+                "repository as gated. The worker has no HF token (or the token "
+                "lacks access)."
+            ),
+            unsupported_reason="gated-repo-no-token",
+        )
+
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "gated-model", "tensor_parallel_size": 1},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=4,
+        )
+
+    # Fatal on the very first (max-tp) probe: no fallback to the configured
+    # tp — exactly one spawn.
+    assert seen_tps == [4]
+    assert not result.success
+    assert result.unsupported_reason == "gated-repo-no-token"
 
 
 # ═══════════════════════════════════════════════════════════════════════
