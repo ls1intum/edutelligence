@@ -15,6 +15,7 @@ from logos_worker_node.hf_model_info import (
     _derive_kv_per_token_bytes,
     _effective_max_context_length,
     _resolve_checkpoint_weight_bytes,
+    classify_model_kind,
     fetch_hf_model_metadata,
     kv_bytes_for_dtype,
     min_feasible_tp,
@@ -210,6 +211,35 @@ def test_resolve_checkpoint_weight_bytes_no_safetensors_at_all():
     assert _resolve_checkpoint_weight_bytes([_fake_sibling("README.md", 512)], index_json=None) is None
 
 
+def test_classify_model_kind_by_pipeline_tag():
+    assert classify_model_kind("automatic-speech-recognition", None) == "transcription"
+    assert classify_model_kind("feature-extraction", None) == "pooling"
+    assert classify_model_kind("sentence-similarity", None) == "pooling"
+    assert classify_model_kind("text-generation", None) == "generative"
+
+
+def test_classify_model_kind_by_architecture_fallback():
+    """No/unhelpful pipeline_tag: fall back to config.json's architectures."""
+    assert classify_model_kind(None, ["WhisperForConditionalGeneration"]) == "transcription"
+    assert classify_model_kind(None, ["Qwen3ForSequenceClassification"]) == "pooling"
+    assert classify_model_kind(None, ["SomeCustomEmbeddingModel"]) == "pooling"
+    assert classify_model_kind(None, ["Qwen3ForCausalLM"]) == "generative"
+
+
+def test_classify_model_kind_defaults_to_generative_when_unknown():
+    """Never widen fatal probing to a model we can't positively identify —
+    unknown must keep the safe, lenient generative behavior."""
+    assert classify_model_kind(None, None) == "generative"
+    assert classify_model_kind("some-unrelated-tag", []) == "generative"
+    assert classify_model_kind(None, ["SomeNovelArchitectureForFoo"]) == "generative"
+
+
+def test_classify_model_kind_pipeline_tag_wins_over_architecture():
+    """pipeline_tag (HF's own curated tag) is checked first — an
+    architecture-name false-positive substring must not override it."""
+    assert classify_model_kind("text-generation", ["SomeEmbeddingWrapperForCausalLM"]) == "generative"
+
+
 def test_fetch_hf_model_metadata_success(tmp_path):
     index_path = tmp_path / "model.safetensors.index.json"
     index_path.write_text(json.dumps({"metadata": {"total_size": 5_000_000_000}, "weight_map": {}}))
@@ -250,6 +280,29 @@ def test_fetch_hf_model_metadata_success(tmp_path):
     assert meta.num_key_value_heads == 8
     assert meta.max_context_length == 8192
     assert meta.quantization_method == "awq"
+
+
+def test_fetch_hf_model_metadata_captures_pipeline_tag_and_architectures(tmp_path):
+    """Both signals classify_model_kind needs must survive the fetch (and,
+    via the cache, a JSON round-trip — see put()/get())."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"num_hidden_layers": 1, "architectures": ["WhisperForConditionalGeneration"]}))
+
+    fake_api = MagicMock()
+    fake_api.model_info.return_value = MagicMock(
+        siblings=[_fake_sibling("model.safetensors", 1_000_000)],
+        pipeline_tag="automatic-speech-recognition",
+    )
+
+    with (
+        patch("huggingface_hub.HfApi", return_value=fake_api),
+        patch("huggingface_hub.hf_hub_download", return_value=str(config_path)),
+    ):
+        meta = fetch_hf_model_metadata("openai/whisper-large-v3", token=None)
+
+    assert meta.pipeline_tag == "automatic-speech-recognition"
+    assert meta.architectures == ["WhisperForConditionalGeneration"]
+    assert classify_model_kind(meta.pipeline_tag, meta.architectures) == "transcription"
 
 
 def test_fetch_hf_model_metadata_quantization_method_defaults_to_none():
@@ -445,6 +498,55 @@ def test_cache_put_sweeps_a_malformed_entry_belonging_to_another_model(tmp_path)
 
     assert "org/broken" not in cache._entries  # noqa: SLF001
     assert cache.get("org/fine") is not None
+
+
+def test_cache_treats_entry_missing_pipeline_tag_as_stale(tmp_path):
+    """A cache entry written by an older schema version has no
+    pipeline_tag/architectures keys at all, and without a schema-version
+    stamp HfModelMetadata(**entry) would silently default them to None —
+    indistinguishable from "this model genuinely has no pipeline_tag" and
+    misclassifying it generative forever (up to the 24h TTL) instead of
+    refetching once for the new fields."""
+    cache = HfModelInfoCache(tmp_path)
+    # An older-schema entry shape: no _cache_schema_version, no
+    # pipeline_tag, no architectures.
+    cache._entries["Alibaba-NLP/gte-Qwen2-1.5B-instruct"] = {  # noqa: SLF001
+        "weight_bytes": 7104788480,
+        "kv_per_token_bytes": 57344,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 28,
+        "kv_head_dim": 128.0,
+        "torch_dtype": "float32",
+        "max_context_length": 131072,
+        "quantization_method": None,
+        "fetched_at": time.time(),  # fresh — must be invalidated on shape, not TTL
+        "source": "hf",
+        "error": None,
+    }
+
+    assert cache.get("Alibaba-NLP/gte-Qwen2-1.5B-instruct") is None
+    assert "Alibaba-NLP/gte-Qwen2-1.5B-instruct" not in cache._entries  # noqa: SLF001
+
+
+def test_cache_accepts_current_schema_entry_with_pipeline_tag(tmp_path):
+    """A freshly cache.put() entry (current schema) must round-trip its
+    pipeline_tag/architectures — the positive counterpart to the
+    stale-entry test above."""
+    cache = HfModelInfoCache(tmp_path)
+    cache.put(
+        "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+        HfModelMetadata(
+            weight_bytes=7104788480,
+            pipeline_tag="sentence-similarity",
+            architectures=["Qwen2ForCausalLM"],
+            source="hf",
+        ),
+    )
+
+    got = cache.get("Alibaba-NLP/gte-Qwen2-1.5B-instruct")
+    assert got is not None
+    assert got.pipeline_tag == "sentence-similarity"
+    assert got.architectures == ["Qwen2ForCausalLM"]
 
 
 def test_fetch_hf_model_metadata_uses_cache_without_refetching(tmp_path):

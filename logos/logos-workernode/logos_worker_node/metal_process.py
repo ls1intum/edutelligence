@@ -46,7 +46,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from logos_worker_node.metal import default_metal_venv
+from logos_worker_node.metal import resolve_metal_vllm_binary
 from logos_worker_node.models import LaneConfig, MetalConfig
 from logos_worker_node.vllm_compat import (
     _infer_default_chat_template_kwargs,
@@ -151,26 +151,13 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         The worker runs in its own virtualenv, which deliberately does not
         contain vLLM or mlx — those live in the vllm-metal venv created by its
         install.sh. So unlike the CUDA path, the interpreter running this code
-        is never the right place to look first.
+        is never the right place to look first. Shared with the Metal
+        calibration probe via resolve_metal_vllm_binary — both must agree
+        on where vllm actually lives.
         """
-        configured = (configured_binary or "").strip()
-        # A lane-level vllm_binary is almost always the schema default "vllm";
-        # only treat it as authoritative when it actually points somewhere.
-        explicit = configured if (configured and configured != "vllm") else ""
-        # default_metal_venv() reads LOGOS_METAL_VENV — the same variable
-        # scripts/install-macos.sh installs into — so a custom venv location
-        # is found here instead of silently falling through to PATH.
-        candidates = [
-            explicit,
-            (self._metal_config.vllm_binary or "").strip(),
-            os.path.join(default_metal_venv(), "bin", "vllm"),
-        ]
-        for candidate in candidates:
-            if not candidate:
-                continue
-            resolved = os.path.abspath(os.path.expanduser(candidate))
-            if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
-                return [resolved]
+        resolved = resolve_metal_vllm_binary(configured_binary, self._metal_config.vllm_binary)
+        if resolved is not None:
+            return [resolved]
 
         # Fall back to the inherited resolution (PATH, sibling, module form) so
         # non-standard installs still work, and so the error it raises when

@@ -848,24 +848,70 @@ async def test_start_calibration_session_refuses_when_node_unhealthy(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_start_calibration_session_refuses_on_metal_backend(tmp_path, monkeypatch):
-    """Calibration measures against nvidia-smi and samples /proc/meminfo —
-    neither exists on macOS, so the Metal backend must refuse the session up
-    front, by construction and without any operator flag. The refusal must
-    start no session and name model_profile_overrides as the alternative."""
+async def test_start_calibration_session_routes_metal_backend_to_metal_probe(tmp_path, monkeypatch):
+    """On Metal, the session must start (not refuse) and route each model
+    to calibrate_model_metal — never calibrate_with_tp_escalation, which
+    would call nvidia-smi. sleep_level is forced to 0 regardless of what
+    was requested: CuMemAllocator sleep is CUDA-only."""
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["some/model"],
+    )
     client = LogosBridgeClient(app, cfg)
 
+    # The precheck classifies Metal models too (only the CUDA-only
+    # VRAM-fit half is skipped), so it needs HF metadata to not look like
+    # a permanently-unsupported repo (which would skip the model before
+    # it ever reaches calibrate_model_metal).
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="hf"),
+    )
+
+    seen_kwargs: dict = {}
+
+    def _fake_calibrate_metal(plan, **kwargs):
+        seen_kwargs.update(kwargs)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=8192.0,
+        )
+
+    def _must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("calibrate_with_tp_escalation must not run on the Metal backend")
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration_metal.calibrate_model_metal",
+        _fake_calibrate_metal,
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        _must_not_be_called,
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
     response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
-    assert response["ok"] is False
-    assert response.get("calibration_unavailable") is True
-    assert response.get("reason_code") == "metal-backend"
-    assert "model_profile_overrides" in response["error"]
-    assert client._active_calibration_session is None  # noqa: SLF001
+    assert response["ok"] is True
+    assert response["sleep_level"] == 0
+    await _drain_session(client)
+
+    assert "cancel_event" in seen_kwargs  # reached the Metal probe with real kwargs
     events = [e.event for e in app.state.lane_manager._event_log]
-    assert "calibration_session_started" not in events
+    assert "calibration_session_started" in events
+    assert "calibration_session_finished" in events
 
 
 @pytest.mark.asyncio
@@ -1303,6 +1349,9 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
     assert len(seen_plans) == 1
     assert seen_plans[0]["_hf_weight_bytes"] == 4 * 1024 * 1024 * 1024
     assert seen_plans[0]["_hf_max_tp_ceiling"] == 1
+    # No pipeline_tag/architectures on this HfModelMetadata —
+    # classify_model_kind defaults to "generative".
+    assert seen_plans[0]["_detected_model_kind"] == "generative"
 
     # A successful calibration overwrites the HF estimate with the real
     # measurement, but the HF-only fields (never measured by calibration)
@@ -1313,6 +1362,58 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
     assert profile.base_residency_mb == 4200.0
     assert profile.kv_per_token_bytes == 1024
     assert profile.max_context_length == 8192
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_classifies_transcription_model_into_plan(tmp_path, monkeypatch):
+    """A Whisper-like model's HF pipeline_tag must reach the calibration
+    plan as _detected_model_kind, routing the functional probe to
+    /v1/audio/transcriptions instead of /v1/completions. Isolated from
+    the VRAM-fit math: weight_bytes is left unset."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/whisper-large-v3"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            pipeline_tag="automatic-speech-recognition",
+            architectures=["WhisperForConditionalGeneration"],
+            source="hf",
+        ),
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=1000.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert seen_plans[0]["_detected_model_kind"] == "transcription"
 
 
 @pytest.mark.asyncio
@@ -1429,11 +1530,13 @@ async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monkeypatch):
-    """No nvidia-smi on Metal, so the VRAM-fit half could never run — skip
-    the whole precheck up front instead of fetching HF metadata for
-    nothing. Metal profiles come from model_profile_overrides, not this."""
+async def test_run_compatibility_precheck_skips_vram_fit_on_metal_backend(tmp_path, monkeypatch):
+    """No nvidia-smi on Metal, so only the VRAM-fit half is skipped — HF
+    metadata is still fetched and classified (model_kind is a pure
+    Hub/config.json lookup, backend-independent), so a Metal pooling or
+    transcription model isn't silently misclassified as generative."""
     from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
@@ -1441,16 +1544,26 @@ async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monke
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
     client = LogosBridgeClient(app, cfg)
 
-    fetch_spy = MagicMock(side_effect=AssertionError("should not fetch HF metadata on Metal"))
-    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", fetch_spy)
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,
+            pipeline_tag="feature-extraction",
+            source="hf",
+        ),
+    )
+    vram_spy = MagicMock(side_effect=AssertionError("nvidia-smi must never run on Metal"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", vram_spy)
 
     response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
 
     assert response["ok"] is True
-    assert response["hf_source"] == "skipped:metal-backend"
+    assert response["hf_source"] == "hf"
+    assert response["model_kind"] == "pooling"
     assert response["fit_tp_idle"] is None
+    assert response["per_gpu_total_mb"] is None
     assert response["unsupported_reason"] is None
-    fetch_spy.assert_not_called()
+    vram_spy.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1948,6 +2061,51 @@ async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_d
     assert response["unsupported_reason"] is None
     assert response["per_gpu_total_mb"] == 24000.0
     assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_reports_model_kind(tmp_path, monkeypatch):
+    """The precheck classifies every model it fetches HF metadata for,
+    generative default included, so the calibration loop can route its
+    functional probe without a second HF lookup."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(pipeline_tag="feature-extraction", source="hf"),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/embedding-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "pooling"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_model_kind_defaults_generative_on_fetch_failure(tmp_path, monkeypatch):
+    """No HF metadata at all (network down, unknown model, ...) must still
+    default to "generative" — never a fatal probe for a model we have no
+    classification signal for."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network down")),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/unreachable-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "generative"
 
 
 @pytest.mark.asyncio

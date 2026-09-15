@@ -967,3 +967,63 @@ def test_timing_fields_default_to_none_on_legacy_records():
     assert profile is not None
     assert profile.cold_load_time_s is None
     assert profile.wake_from_sleep_time_s is None
+
+
+# ---------------------------------------------------------------------------
+# mark_capacity_floor
+# ---------------------------------------------------------------------------
+
+
+def test_mark_capacity_floor_sets_value_on_fresh_profile():
+    registry = ModelProfileRegistry()
+    changed = registry.mark_capacity_floor("org/model", 16_000.0)
+
+    assert changed is True
+    profile = registry.get_profile("org/model")
+    assert profile is not None
+    assert profile.metal_capacity_floor_mb == pytest.approx(16_000.0)
+
+
+def test_mark_capacity_floor_raises_but_never_lowers():
+    """A bigger node failing too is stronger evidence; a smaller failed
+    node reported after must not erase that stronger evidence."""
+    registry = ModelProfileRegistry()
+    registry.mark_capacity_floor("org/model", 16_000.0)
+
+    raised = registry.mark_capacity_floor("org/model", 32_000.0)
+    assert raised is True
+    assert registry.get_profile("org/model").metal_capacity_floor_mb == pytest.approx(32_000.0)
+
+    lowered = registry.mark_capacity_floor("org/model", 8_000.0)
+    assert lowered is False
+    assert registry.get_profile("org/model").metal_capacity_floor_mb == pytest.approx(32_000.0)
+
+
+def test_mark_capacity_floor_round_trips_in_to_dict():
+    registry = ModelProfileRegistry()
+    registry.mark_capacity_floor("org/model", 24_000.0)
+
+    dumped = registry.get_all_profiles()["org/model"]
+    assert dumped["metal_capacity_floor_mb"] == pytest.approx(24_000.0)
+
+
+def test_manual_override_clears_a_false_positive_capacity_floor():
+    """An operator undoes a mistaken capacity-failure verdict by setting
+    the override to null — the only way to lower/reset the stored value."""
+    registry = ModelProfileRegistry()
+    registry.mark_capacity_floor("org/model", 32_000.0)
+
+    registry.add_overrides({"org/model": {"metal_capacity_floor_mb": None}})
+
+    profile = registry.get_profile("org/model")
+    assert profile.metal_capacity_floor_mb is None
+
+
+def test_manual_override_pins_an_explicit_capacity_floor():
+    registry = ModelProfileRegistry(
+        model_profile_overrides={"org/model": {"metal_capacity_floor_mb": 12_000.0}},
+    )
+    registry.seed_capabilities(["org/model"])
+
+    profile = registry.get_profile("org/model")
+    assert profile.metal_capacity_floor_mb == pytest.approx(12_000.0)

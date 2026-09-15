@@ -25,6 +25,12 @@ type CalibrateState =
   | { kind: 'success'; message: string }
   | { kind: 'error'; message: string };
 
+type StopState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string };
+
 export function tempColor(temp: number | null): string {
   if (temp === null) return 'rgb(var(--color-typography-500))';
   if (temp < 70) return 'rgb(var(--color-success))';
@@ -66,6 +72,13 @@ export class WorkerGpuPanel implements OnChanges {
    *  the same worker apart (A → B → A). */
   private calibrateGeneration = 0;
 
+  stopState = signal<StopState>({ kind: 'idle' });
+  /** Same staleness guards as calibrateProvider/calibrateGeneration, kept
+   *  separate so a stop click and a calibrate click in flight at once don't
+   *  clobber each other's state. */
+  private stopProvider: string | null = null;
+  private stopGeneration = 0;
+
   ngOnChanges(_changes: SimpleChanges): void {
     const resolved = this.resolvedActiveProvider;
     if (resolved === this.resolvedProvider) return;
@@ -79,6 +92,9 @@ export class WorkerGpuPanel implements OnChanges {
     this.calibrateState.set({ kind: 'idle' });
     this.calibrateProvider = null;
     this.calibrateGeneration += 1;
+    this.stopState.set({ kind: 'idle' });
+    this.stopProvider = null;
+    this.stopGeneration += 1;
     this.resolvedProvider = resolved;
   }
 
@@ -165,6 +181,15 @@ export class WorkerGpuPanel implements OnChanges {
 
   get canCalibrate(): boolean {
     return this.activeProviderId != null && !this.isOffline;
+  }
+
+  get isCalibrating(): boolean {
+    const active = this.resolvedActiveProvider;
+    return active != null && this.providerMeta[active]?.calibrating === true;
+  }
+
+  get canStop(): boolean {
+    return this.activeProviderId != null && this.isCalibrating && !this.isOffline;
   }
 
   usedPct(device: DeviceInfo): number {
@@ -279,6 +304,48 @@ export class WorkerGpuPanel implements OnChanges {
       } else {
         const detail = e.error?.error ?? `HTTP ${e.status}`;
         this.calibrateState.set({ kind: 'error', message: detail });
+      }
+    }
+  }
+
+  async handleStopCalibration(): Promise<void> {
+    const pid = this.activeProviderId;
+    const active = this.resolvedActiveProvider;
+    if (pid == null || active == null) return;
+    const generation = (this.stopGeneration += 1);
+    this.stopProvider = active;
+    this.stopState.set({ kind: 'loading' });
+
+    try {
+      const body = await this.statisticsService.stopCalibration(pid);
+      if (
+        generation !== this.stopGeneration ||
+        this.stopProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
+      const message = body?.was_active
+        ? body.current_model
+          ? `Calibration cancelled (was calibrating ${body.current_model}).`
+          : 'Calibration cancelled.'
+        : 'No calibration session was running.';
+      this.stopState.set({ kind: 'success', message });
+    } catch (err: unknown) {
+      if (
+        generation !== this.stopGeneration ||
+        this.stopProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
+      const e = err as { status?: number; error?: { error?: string } };
+      if (e.status === 404 || e.status === 501 || e.status === 0) {
+        this.stopState.set({
+          kind: 'error',
+          message: 'Action not available on this server yet.',
+        });
+      } else {
+        const detail = e.error?.error ?? `HTTP ${e.status}`;
+        this.stopState.set({ kind: 'error', message: detail });
       }
     }
   }

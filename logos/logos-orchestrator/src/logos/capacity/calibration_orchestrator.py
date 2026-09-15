@@ -55,16 +55,16 @@ class CalibrationConfig:
     All values can be overridden via environment variables so that
     operators can tune them without touching YAML.
 
-    LOGOS_CALIB_WINDOW_START  e.g. "02:00" (HH:MM, default 02:00)
-    LOGOS_CALIB_WINDOW_END    e.g. "05:00" (HH:MM, default 05:00)
+    LOGOS_CALIB_WINDOW_START  e.g. "03:00" (HH:MM, default 03:00)
+    LOGOS_CALIB_WINDOW_END    e.g. "08:00" (HH:MM, default 08:00)
     LOGOS_CALIB_TIMEZONE      e.g. "Europe/Berlin" (default Europe/Berlin)
     LOGOS_CALIB_ENABLED       "true" / "false" (default true)
     LOGOS_CALIB_SLEEP_LEVEL   "1" or "2" (default 1)
     LOGOS_CALIB_TICK_SECONDS  trigger-loop tick interval in seconds (default 60)
     """
 
-    window_start: time = field(default_factory=lambda: time(2, 0))
-    window_end: time = field(default_factory=lambda: time(5, 0))
+    window_start: time = field(default_factory=lambda: time(3, 0))
+    window_end: time = field(default_factory=lambda: time(8, 0))
     timezone: str = "Europe/Berlin"
     enabled: bool = True
     sleep_level: int = 1
@@ -104,13 +104,17 @@ class CalibrationConfig:
             except ValueError:
                 return default
 
+        # Single source of truth for defaults: the field declarations above.
+        # Falling back to literals here let them drift from those fields
+        # unnoticed (see the 02:00-05:00 vs 03:00-08:00 window mismatch).
+        defaults = cls()
         return cls(
-            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), time(3, 0)),
-            window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), time(8, 0)),
-            timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "Europe/Berlin").strip() or "Europe/Berlin",
-            enabled=_parse_bool(os.getenv("LOGOS_CALIB_ENABLED", ""), True),
-            sleep_level=_parse_int(os.getenv("LOGOS_CALIB_SLEEP_LEVEL", ""), 1),
-            tick_seconds=_parse_float(os.getenv("LOGOS_CALIB_TICK_SECONDS", ""), 60.0),
+            window_start=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_START", ""), defaults.window_start),
+            window_end=_parse_time(os.getenv("LOGOS_CALIB_WINDOW_END", ""), defaults.window_end),
+            timezone=os.getenv("LOGOS_CALIB_TIMEZONE", "").strip() or defaults.timezone,
+            enabled=_parse_bool(os.getenv("LOGOS_CALIB_ENABLED", ""), defaults.enabled),
+            sleep_level=_parse_int(os.getenv("LOGOS_CALIB_SLEEP_LEVEL", ""), defaults.sleep_level),
+            tick_seconds=_parse_float(os.getenv("LOGOS_CALIB_TICK_SECONDS", ""), defaults.tick_seconds),
         )
 
 
@@ -367,6 +371,38 @@ class CalibrationOrchestrator:
             return True
         return False
 
+    def _capacity_skip_models(self, provider_id: int) -> frozenset[str]:
+        """Models known, from any node's calibration history, to need more
+        capacity than *provider_id* has (Metal-only; always empty for CUDA).
+        Per model: max ``metal_capacity_floor_mb`` across every provider,
+        compared against this provider's own ``devices.total_memory_mb``.
+        """
+        try:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+        except Exception:
+            return frozenset()
+        if not isinstance(snap, dict):
+            return frozenset()
+        devices = (snap.get("runtime") or {}).get("devices") or {}
+        provider_capacity_mb = float(devices.get("total_memory_mb") or 0.0)
+        if provider_capacity_mb <= 0:
+            return frozenset()
+
+        floors: dict[str, float] = {}
+        for pid in self._facade.provider_ids():
+            try:
+                profiles = self._facade.get_model_profiles(pid)
+            except Exception:
+                continue
+            for model_name, profile in profiles.items():
+                floor = profile.metal_capacity_floor_mb
+                if floor is None:
+                    continue
+                if floor > floors.get(model_name, 0.0):
+                    floors[model_name] = floor
+
+        return frozenset(name for name, floor in floors.items() if provider_capacity_mb <= floor)
+
     def _provider_has_uncalibrated_models(self, provider_id: int) -> bool:
         """Return True when the worker still has at least one model that needs
         calibration. Mirrors the worker's own selection logic so we don't fire
@@ -379,8 +415,11 @@ class CalibrationOrchestrator:
             profiles = self._facade.get_model_profiles(provider_id)
         except Exception:
             profiles = {}
+        capacity_skip = self._capacity_skip_models(provider_id)
 
         for model_name in candidates:
+            if model_name in capacity_skip:
+                continue
             profile = profiles.get(model_name)
             if profile is not None and profile.calibration_unsupported:
                 continue
@@ -420,11 +459,12 @@ class CalibrationOrchestrator:
         # (e.g. from a duplicate connect) can clear it cleanly without us
         # also firing the same start a second time on the next tick.
         self._active_provider_id = provider_id
+        skip_models = sorted(self._capacity_skip_models(provider_id))
         try:
             await self._registry.send_command(
                 provider_id,
                 "start_calibration_session",
-                params={"sleep_level": self._config.sleep_level},
+                params={"sleep_level": self._config.sleep_level, "skip_models": skip_models},
                 timeout_seconds=30,
             )
             logger.info(
