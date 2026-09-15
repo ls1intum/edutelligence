@@ -22,7 +22,7 @@ from logos_worker_node.calibration import (
     wait_ready,
     warmup_inference,
 )
-from logos_worker_node.metal import read_host_memory_mb
+from logos_worker_node.metal import probe_device_info, read_wired_memory_mb
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,27 @@ def _spawn_vllm_metal(cmd: list[str], log_path: Path) -> subprocess.Popen[str]:
     return proc
 
 
+def _log_working_set_budget(model: str) -> None:
+    """Log the GPU working-set ceiling for context, if the mlx probe answers.
+
+    Informational only — never blocks or fails calibration if unreachable,
+    it just tells an operator reading the log how close a measurement
+    came to the working-set limit vllm-metal will actually enforce.
+    """
+    info = probe_device_info()
+    if not info:
+        return
+    working_set = info.get("max_recommended_working_set_size")
+    if not working_set:
+        return
+    logger.info(
+        "  %s: GPU working-set budget = %.0f MB (%s)",
+        model,
+        float(working_set) / (1024.0 * 1024.0),
+        info.get("device_name") or "Apple Silicon GPU",
+    )
+
+
 def calibrate_model_metal(
     plan: dict[str, Any],
     *,
@@ -149,13 +170,14 @@ def calibrate_model_metal(
         result.error = "cancelled"
         return result
 
-    baseline = read_host_memory_mb()
-    if baseline is None:
-        result.error = "metal host-memory read failed (vm_stat/hw.memsize unavailable)"
+    _log_working_set_budget(model)
+
+    baseline_used_mb = read_wired_memory_mb()
+    if baseline_used_mb is None:
+        result.error = "metal wired-memory read failed (vm_stat unavailable)"
         logger.warning("  ERROR: %s", result.error)
         return result
-    _total_mb, baseline_used_mb, _avail_mb = baseline
-    logger.info("        baseline used = %.0f MB", baseline_used_mb)
+    logger.info("        baseline wired = %.0f MB", baseline_used_mb)
 
     cmd = _build_metal_calibration_cmd(plan, vllm_binary, host, port)
     result.probe_command = " ".join(cmd)
@@ -173,16 +195,15 @@ def calibrate_model_metal(
             logger.warning("  %s: warmup request did not complete — measuring load-only footprint", model)
 
         time.sleep(_METAL_SETTLE_S)
-        loaded = read_host_memory_mb()
-        if loaded is None:
-            result.error = "metal host-memory read failed after load"
+        loaded_used_mb = read_wired_memory_mb()
+        if loaded_used_mb is None:
+            result.error = "metal wired-memory read failed after load"
             logger.warning("  ERROR: %s", result.error)
             return result
-        _total_mb, loaded_used_mb, _avail_mb = loaded
 
         base_residency_mb = max(loaded_used_mb - baseline_used_mb, 0.0)
         logger.info(
-            "  Results: base_residency_mb = %.0f MB (measured delta, weights + KV)",
+            "  Results: base_residency_mb = %.0f MB (wired-memory delta, weights + KV)",
             base_residency_mb,
         )
         result.success = True

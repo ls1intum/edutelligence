@@ -156,6 +156,22 @@ def read_host_memory_mb() -> tuple[float, float, float] | None:
     return total_mb, used_mb, available_mb
 
 
+def read_wired_memory_mb() -> float | None:
+    """Wired-down memory in MiB, or None on failure.
+
+    Same signal MetalMetricsCollector._poll() reports as GPU usage: wired
+    pages only change on an explicit pin (a Metal allocation) — steadier
+    for a before/after delta than read_host_memory_mb()'s broader figure.
+    """
+    stats = read_vm_stat()
+    if stats is None:
+        return None
+    wired = stats.get("Pages wired down")
+    if wired is None:
+        return None
+    return wired / _MB
+
+
 def read_swap_mb() -> tuple[float, float]:
     """Swap as (total_mb, used_mb). Returns (0, 0) when unreadable."""
     raw = _run(["sysctl", "-n", "vm.swapusage"])
