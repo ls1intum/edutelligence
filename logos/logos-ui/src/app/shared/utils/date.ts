@@ -12,6 +12,13 @@ function formatGermanDate(d: Date): string {
   return `${day}.${month}.${d.getFullYear()}`;
 }
 
+/** "DD.MM.YYYY" for an ISO timestamp; "—" when the value is missing/invalid. */
+export function formatIsoDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : formatGermanDate(d);
+}
+
 /**
  * "Last used" display for an ISO timestamp: "Never", "Today" or the German
  * date with the age in brackets, e.g. "24.08.2026 (2 days ago)".

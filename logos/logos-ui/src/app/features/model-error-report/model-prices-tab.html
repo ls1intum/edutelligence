@@ -1,0 +1,72 @@
+<div class="prices-header">
+  <div>
+    <h2>Prices</h2>
+    <p>
+      List prices per cloud provider, as published in the provider's model catalogue. Rates are
+      refreshed daily and historic rates are kept — the newest row of each item and variant is the
+      current one.
+    </p>
+  </div>
+</div>
+
+@if (hasError) {
+  <app-error-message variant="banner" message="Failed to load model prices." />
+} @else if (loading) {
+  <div class="prices-message">Loading prices…</div>
+} @else if (cards.length === 0) {
+  <div class="empty-state">
+    <h2>No cloud pricing available</h2>
+    <p>This model has no catalogue prices for any cloud provider.</p>
+  </div>
+} @else {
+  @for (card of cards; track card.provider.provider_id) {
+    <article class="price-provider-card">
+      <header class="price-provider-card__header">
+        <h3>{{ card.provider.provider_name }}</h3>
+        @if (card.provider.cloud_provider_type; as cloudType) {
+          <span class="price-provider-card__cloud-type">{{ cloudType }}</span>
+        }
+      </header>
+
+      @if (card.dimensions.length === 0) {
+        <p class="price-provider-card__empty">
+          No price data yet — this model has not been found in the provider's catalogue (its
+          requests are billed as free).
+        </p>
+      } @else {
+        <table class="price-table">
+          <thead>
+            <tr>
+              <th scope="col">Item</th>
+              <th scope="col">Variant</th>
+              <th scope="col">Rate</th>
+              <th scope="col">Since</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (dimension of card.dimensions; track dimension.quantity) {
+              @for (row of dimension.rows; track row.validFrom) {
+                <tr [class.price-table__row--current]="row.isCurrent">
+                  <td>
+                    <div class="price-table__item">
+                      {{ dimension.label }}
+                      <small>per {{ dimension.unitLabel }}</small>
+                    </div>
+                  </td>
+                  <td>{{ row.variantLabel ?? '—' }}</td>
+                  <td>
+                    {{ row.priceText }}
+                    @if (row.isCurrent) {
+                      <span class="price-table__current-badge">current</span>
+                    }
+                  </td>
+                  <td>{{ row.sinceText }}</td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      }
+    </article>
+  }
+}
