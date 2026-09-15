@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
-from .config import INTERRUPTION_FILE, REPLY_FILE, settings
+from .config import INTERRUPTION_FILE, REPLY_DIR, REPLY_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,14 @@ _MAX_REPLY_CHARS = 60000
 
 # How often an undelivered answer is retried before it is left alone.
 _MAX_REPLY_ATTEMPTS = 5
+
+# What a review reply has already delivered, kept in the session's state
+# directory — the runner's own, out of the agent's reach — so an attempt
+# that dies halfway resumes where it stopped instead of answering a thread
+# twice: the comment ids whose answers are in their threads, the thread
+# ids that are dealt with, and whether the summary and the re-requested
+# review have gone out.
+_REVIEW_REPLY_STATE_FILE = "review_reply_state.json"
 
 # How many sessions one request may have before the runner stops taking it
 # up again. A launch that cannot work, or a task nothing can be made of:
@@ -2224,51 +2232,31 @@ class SessionManager:
             return
         if (session or {}).get("reply_posted_at"):
             return
-        path = artifact_dir(session_id) / REPLY_FILE
-        try:
-            body = path.read_text().strip()
-        except FileNotFoundError:
-            body = ""
-        except OSError as exc:
-            # A mount that is not there yet, a permission, a read error: the
-            # file may well exist and be readable on the next pass, so this
-            # counts as an attempt rather than as an answer that was never
-            # written. Only a file that is genuinely absent is final.
-            await db.record_reply_attempt(session_id, delivered=False)
-            logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
+        if str((session or {}).get("trigger_kind") or "") == "review":
+            # A review is several questions, one per inline comment: the
+            # answers go back thread by thread, each thread resolved after,
+            # and the reviewer is asked to look at the pull request again.
+            try:
+                await self._post_review_reply(session_id, session or {}, target)
+            except Exception as exc:
+                # Counted, not given up on: the next scheduler pass resumes
+                # where this attempt stopped until it lands or the attempts
+                # run out.
+                await db.record_reply_attempt(session_id, delivered=False)
+                logger.warning("could not post the review answer of session %s (will retry): %s", session_id, exc)
+                await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the review reply: {exc}"})
+            return
+        await self._post_single_reply(session_id, session or {}, target)
+
+    async def _post_single_reply(self, session_id: int, session: dict[str, Any], target: str) -> None:
+        """One answer, posted where its question was asked."""
+        body = await self._read_answer(session_id)
+        if body is None:
             return
         if not body:
-            # A session that wrote nothing has nothing to say, and a thread
-            # is the wrong place to say so: "the session failed, run it
-            # again from the page" is the runner talking about itself in
-            # front of people who asked about their pull request. What that
-            # means is that the request was not dealt with — so it is dealt
-            # with again, quietly, and the thread hears from the attempt
-            # that has something to report.
-            if str((session or {}).get("status") or "") != SessionStatus.SUCCEEDED.value:
-                # A failed session was already taken up again by its
-                # settlement; doing it here too would spend two of the three
-                # attempts on one failure.
-                logger.info("session %s failed and left no answer; the settlement has it", session_id)
-                await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
-                return
-            logger.info("session %s left no answer; taking the work up again instead of saying so", session_id)
-            replacement = await self.take_up_again(session or {})
-            if replacement is None and await self._may_try_again(session or {}):
-                # The replacement could not be created — a database that
-                # blinked, not a decision. Left owing an answer, so the next
-                # sweep tries again: abandoning it first is how a request
-                # disappears between two failures.
-                logger.info("session %s could not be taken up again yet; leaving it owing an answer", session_id)
-                return
-            await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
+            await self._no_answer(session_id, session)
             return
-        if len(body) > _MAX_REPLY_CHARS:
-            # GitHub refuses a comment above its length limit outright, and
-            # an answer nobody receives is worse than a shortened one on a
-            # thread where somebody is waiting.
-            body = body[:_MAX_REPLY_CHARS].rstrip() + "\n\n_[answer truncated]_"
-            logger.info("the answer of session %s was truncated to fit a GitHub comment", session_id)
+        body = self._truncate_reply(body)
         try:
             url = await self._send_reply(target, body)
         except Exception as exc:
@@ -2281,6 +2269,226 @@ class SessionManager:
         await db.record_reply_attempt(session_id, delivered=True)
         await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
         logger.info("session %s answered at %s", session_id, url)
+
+    async def _read_answer(self, session_id: int) -> str | None:
+        """The session's summary answer; None when the file could not be read.
+
+        A mount that is not there yet, a permission, a read error: the file
+        may well exist and be readable on the next pass, so this counts as
+        an attempt rather than as an answer that was never written. Only a
+        file that is genuinely absent is final.
+        """
+        path = artifact_dir(session_id) / REPLY_FILE
+        try:
+            return path.read_text().strip()
+        except FileNotFoundError:
+            return ""
+        except OSError as exc:
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not read the answer of session %s (will retry): %s", session_id, exc)
+            return None
+
+    async def _no_answer(self, session_id: int, session: dict[str, Any]) -> None:
+        """What a session that wrote nothing still owes the request.
+
+        A session that wrote nothing has nothing to say, and a thread is
+        the wrong place to say so: "the session failed, run it again from
+        the page" is the runner talking about itself in front of people who
+        asked about their pull request. What that means is that the request
+        was not dealt with — so it is dealt with again, quietly, and the
+        thread hears from the attempt that has something to report.
+        """
+        if str((session or {}).get("status") or "") != SessionStatus.SUCCEEDED.value:
+            # A failed session was already taken up again by its settlement;
+            # doing it here too would spend two of the three attempts on one
+            # failure.
+            logger.info("session %s failed and left no answer; the settlement has it", session_id)
+            await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
+            return
+        logger.info("session %s left no answer; taking the work up again instead of saying so", session_id)
+        replacement = await self.take_up_again(session or {})
+        if replacement is None and await self._may_try_again(session or {}):
+            # The replacement could not be created — a database that blinked,
+            # not a decision. Left owing an answer, so the next sweep tries
+            # again: abandoning it first is how a request disappears between
+            # two failures.
+            logger.info("session %s could not be taken up again yet; leaving it owing an answer", session_id)
+            return
+        await db.abandon_reply(session_id, attempts=_MAX_REPLY_ATTEMPTS)
+
+    @staticmethod
+    def _truncate_reply(body: str) -> str:
+        """One answer, to a size GitHub will accept.
+
+        GitHub refuses a comment above its length limit outright, and an
+        answer nobody receives is worse than a shortened one on a thread
+        where somebody is waiting.
+        """
+        if len(body) > _MAX_REPLY_CHARS:
+            logger.info("an answer was truncated to fit a GitHub comment")
+            return body[:_MAX_REPLY_CHARS].rstrip() + "\n\n_[answer truncated]_"
+        return body
+
+    async def _post_review_reply(self, session_id: int, session: dict[str, Any], target: str) -> None:
+        """Deliver the answer to a changes-requested review, thread by thread.
+
+        Each inline comment gets its answer in its own thread, the threads
+        are resolved once they have their answer, and the reviewer is asked
+        to look at the pull request again — the "changes requested" state
+        stands until they do. What already reached GitHub is recorded as it
+        goes, so an attempt that dies halfway resumes instead of answering
+        a thread twice.
+        """
+        reference = re.fullmatch(r"pr-(\d+)-review-(\d+)", str(session.get("trigger_ref") or ""))
+        ask = re.fullmatch(r"issue:(\d+)", target)
+        if reference is None or ask is None or reference.group(1) != ask.group(1):
+            # A review session whose row does not name the review it
+            # answered: there are no threads to find, so the answer goes
+            # where a single answer always went.
+            logger.info("session %s answers a review its row does not name; posting its summary only", session_id)
+            await self._post_single_reply(session_id, session, target)
+            return
+        number = int(ask.group(1))
+        review_id = int(reference.group(2))
+
+        try:
+            review = await github.review(number, review_id)
+        except github.GitHubError as exc:
+            if exc.status == 404:
+                # The review is gone — deleted by its author or a
+                # moderator. Its threads are gone with it, and only the
+                # summary can still be said where it always went.
+                logger.info("the review session %s answered no longer exists; posting its summary only", session_id)
+                await self._post_single_reply(session_id, session, target)
+                return
+            raise
+        reviewer = str((review.get("user") or {}).get("login") or "")
+        comments = await github.review_comments(number, review_id)
+        valid = {c["id"] for c in comments if isinstance(c, dict) and isinstance(c.get("id"), int)}
+
+        state_path = state_dir(session_id) / _REVIEW_REPLY_STATE_FILE
+        state = self._read_review_reply_state(state_path)
+
+        # One answer per inline comment, named after the comment it answers.
+        per_comment: dict[int, str] = {}
+        replies_dir = artifact_dir(session_id) / REPLY_DIR
+        if replies_dir.is_dir():
+            for path in sorted(replies_dir.iterdir()):
+                if not path.is_file() or path.suffix != ".md" or not path.stem.isdigit():
+                    continue
+                comment_id = int(path.stem)
+                if comment_id not in valid or comment_id in state["replied"]:
+                    continue
+                try:
+                    body = path.read_text().strip()
+                except OSError as exc:
+                    # Unreadable is not absent: the next pass may read it.
+                    await db.record_reply_attempt(session_id, delivered=False)
+                    logger.warning(
+                        "could not read the answer to comment %s of session %s (will retry): %s",
+                        comment_id,
+                        session_id,
+                        exc,
+                    )
+                    return
+                if body:
+                    per_comment[comment_id] = body
+
+        summary = await self._read_answer(session_id)
+        if summary is None:
+            return
+        if not per_comment and not summary and not state["summary_posted"]:
+            await self._no_answer(session_id, session)
+            return
+
+        for comment_id in sorted(per_comment):
+            url = await github.reply_to_review_comment(
+                number, comment_id, self._truncate_reply(per_comment[comment_id])
+            )
+            state["replied"].append(comment_id)
+            self._write_review_reply_state(state_path, state)
+            await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True, "comment": comment_id})
+            logger.info("session %s answered comment %s on pull request %s", session_id, comment_id, number)
+
+        if state["replied"]:
+            await self._resolve_answered_threads(session_id, number, state, state_path)
+
+        if summary and not state["summary_posted"]:
+            url = await github.post_issue_comment(number, self._truncate_reply(summary))
+            state["summary_posted"] = True
+            self._write_review_reply_state(state_path, state)
+            await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
+            logger.info("session %s posted its summary on pull request %s", session_id, number)
+
+        if (
+            not state["review_rerequested"]
+            and reviewer
+            and str(session.get("status") or "") == SessionStatus.SUCCEEDED.value
+        ):
+            # The answers are in the threads and the checks have had their
+            # turn: the pull request goes back in front of the reviewer.
+            await github.request_pull_review(number, [reviewer])
+            state["review_rerequested"] = True
+            self._write_review_reply_state(state_path, state)
+            await db.add_event(session_id, EventKind.PULL_REQUEST, {"review_rerequested": reviewer})
+            logger.info("session %s asked %s to review pull request %s again", session_id, reviewer, number)
+
+        await db.record_reply_attempt(session_id, delivered=True)
+        logger.info("session %s answered its review on pull request %s", session_id, number)
+
+    async def _resolve_answered_threads(
+        self, session_id: int, number: int, state: dict[str, Any], state_path: Path
+    ) -> None:
+        """Resolve the threads whose answers just went out.
+
+        A thread a person already resolved stays as they left it, and a
+        comment that is a reply inside somebody else's thread has no thread
+        of its own to resolve — it is not in the map, and its thread is
+        somebody else's to close.
+        """
+        handled = set(state["resolved_threads"])
+        threads = await github.review_thread_map(number)
+        for comment_id in state["replied"]:
+            info = threads.get(comment_id) or {}
+            thread_id = str(info.get("thread") or "")
+            if not thread_id or thread_id in handled:
+                continue
+            if info.get("resolved"):
+                state["resolved_threads"].append(thread_id)
+                self._write_review_reply_state(state_path, state)
+                continue
+            await github.resolve_review_threads([thread_id])
+            state["resolved_threads"].append(thread_id)
+            self._write_review_reply_state(state_path, state)
+            logger.info("session %s resolved the thread of comment %s", session_id, comment_id)
+
+    @staticmethod
+    def _read_review_reply_state(path: Path) -> dict[str, Any]:
+        """The delivery state of a review reply, empty when it has none yet.
+
+        Corrupt or absent means "nothing delivered" — the same as a session
+        that has not started delivering. The alternative, refusing to
+        deliver because of a state file that will not parse, would lose an
+        answer over its own bookkeeping.
+        """
+        empty = {"replied": [], "resolved_threads": [], "summary_posted": False, "review_rerequested": False}
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return empty
+        if not isinstance(raw, dict):
+            return empty
+        return {
+            "replied": [c for c in raw.get("replied", []) if isinstance(c, int)],
+            "resolved_threads": [t for t in raw.get("resolved_threads", []) if isinstance(t, str)],
+            "summary_posted": bool(raw.get("summary_posted")),
+            "review_rerequested": bool(raw.get("review_rerequested")),
+        }
+
+    @staticmethod
+    def _write_review_reply_state(path: Path, state: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state))
 
     @staticmethod
     async def _send_reply(target: str, body: str) -> str:

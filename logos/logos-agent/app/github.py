@@ -422,6 +422,34 @@ async def _get_all_bounded(path: str, params: dict[str, Any] | None = None) -> t
     return collected, True
 
 
+# The REST API can post an answer into a review thread, but it cannot resolve
+# one: resolution is a GraphQL mutation, and it takes the thread's own node
+# id, which no REST listing of the pull request's comments carries. A call to
+# the same token as every REST call here — no second credential.
+_GRAPHQL = "https://api.github.com/graphql"
+
+
+async def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    """One call to the GraphQL surface. Raises on anything but usable data.
+
+    GitHub answers a bad call two ways: an HTTP error, or a 200 that carries
+    an ``errors`` list beside whatever data it did manage to return. Both are
+    failures — a mutation that reported an error changed nothing, and
+    treating its 200 as success would move on as if it had.
+    """
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(_GRAPHQL, headers=_headers(), json={"query": query, "variables": variables})
+    if response.status_code != 200:
+        raise GitHubError(
+            f"GraphQL failed ({response.status_code}): {response.text[:200]}", status=response.status_code
+        )
+    payload = response.json()
+    errors = payload.get("errors")
+    if errors:
+        raise GitHubError(f"GraphQL failed: {str(errors)[:200]}")
+    return payload.get("data") or {}
+
+
 async def _assigned(login: str) -> list[dict[str, Any]]:
     """Every open issue and pull request assigned to an account.
 
@@ -589,6 +617,20 @@ async def latest_changes_requested_review(number: int) -> dict[str, Any] | None:
     return outstanding[-1][1]
 
 
+async def review(number: int, review_id: int) -> dict[str, Any]:
+    """One submitted review, by its own id.
+
+    The review a session answered is read again when the answer is posted:
+    the pull request is re-requested of the reviewer whose name is on *that*
+    review — not whoever happens to hold the newest objection by then, and
+    not a name parsed out of a task that was written hours earlier.
+    """
+    payload = await _get(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}")
+    if not isinstance(payload, dict):
+        raise GitHubError(f"review {review_id} of #{number} answered with {type(payload).__name__}, not a review")
+    return payload
+
+
 async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     """The inline comments belonging to one submitted review.
 
@@ -600,6 +642,80 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}/comments")
     return [comment for comment in payload if isinstance(comment, dict)]
+
+
+# A pull request's review threads, paged. Each inline comment starts its own
+# thread, and it is the thread — not the comment — that resolution acts on.
+_THREADS_QUERY = """
+query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        nodes {
+          id
+          isResolved
+          comments(first: 1) {
+            nodes { databaseId }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
+    """The pull request's review threads, keyed by their first comment's id.
+
+    ``{comment id: {"thread": node id, "resolved": bool}}``. The first
+    comment of a thread is the one that started it — for a review, the
+    review's own inline comment — so this is how the id the answers are
+    named after finds the thread they belong to. A comment that is a reply
+    inside somebody else's thread starts no thread of its own and is not in
+    the map; answering it still works, its thread simply stays open.
+    """
+    owner, name = settings.repo_slug.split("/", 1)
+    mapped: dict[int, dict[str, Any]] = {}
+    after: str | None = None
+    for _ in range(_MAX_PAGES):
+        data = await _graphql(_THREADS_QUERY, {"owner": owner, "name": name, "number": number, "after": after})
+        connection = (data.get("repository") or {}).get("pullRequest", {}).get("reviewThreads") or {}
+        for node in connection.get("nodes") or []:
+            first = ((node.get("comments") or {}).get("nodes") or [None])[0]
+            comment_id = (first or {}).get("databaseId")
+            if isinstance(comment_id, int) and comment_id not in mapped:
+                mapped[comment_id] = {"thread": node.get("id"), "resolved": bool(node.get("isResolved"))}
+        page = connection.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return mapped
+        after = str(page.get("endCursor") or "")
+    logger.warning(
+        "the review threads of #%s hit the %s-page ceiling; newer threads were not mapped", number, _MAX_PAGES
+    )
+    return mapped
+
+
+async def resolve_review_threads(thread_ids: list[str]) -> None:
+    """Mark review threads as resolved, one at a time.
+
+    The gesture a person makes once a point is dealt with: the thread leaves
+    the pull request's active list. ``resolveReviewThread`` answers a null
+    when it could not resolve what it was given — the thread moved, or the
+    token may not act on it; that is logged and the rest still goes on. A
+    call that reports an error raises instead, and the caller retries the
+    whole sweep rather than claiming a resolution that did not happen.
+    """
+    for thread_id in thread_ids:
+        if not thread_id:
+            continue
+        data = await _graphql(
+            "mutation ResolveReviewThread($threadId: ID!) { resolveReviewThread(threadId: $threadId) { threadId } }",
+            {"threadId": thread_id},
+        )
+        if data.get("resolveReviewThread") is None:
+            logger.warning("could not resolve review thread %s: GitHub declined without an error", thread_id)
 
 
 async def pull_inline_comments(number: int) -> list[dict[str, Any]]:
@@ -1005,6 +1121,32 @@ async def reply_to_review_comment(number: int, comment_id: int, body: str) -> st
             f"reply to comment {comment_id} on #{number} failed ({response.status_code}): {response.text[:200]}"
         )
     return str(response.json().get("html_url") or "")
+
+
+async def request_pull_review(number: int, logins: list[str]) -> None:
+    """Ask the named people to review the pull request again.
+
+    A reviewer who asked for changes keeps the pull request in "changes
+    requested" until they look at it again — and nothing puts it back in
+    front of them: the state stands until the reviewer submits a new review.
+    This is the re-request: the answers are in the threads, the checks have
+    had their turn, and the ball is theirs. Asking someone who is already
+    requested is a no-op GitHub answers the same way, which is what makes
+    the call safe to retry.
+    """
+    if not logins:
+        return
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{_API}/repos/{settings.repo_slug}/pulls/{number}/requested_reviewers",
+            headers=_headers(),
+            json={"reviewers": list(logins)},
+        )
+    if response.status_code not in (200, 201, 204):
+        raise GitHubError(
+            f"review request on #{number} failed ({response.status_code}): {response.text[:200]}",
+            status=response.status_code,
+        )
 
 
 def head_of(pull: dict[str, Any]) -> tuple[str, str]:

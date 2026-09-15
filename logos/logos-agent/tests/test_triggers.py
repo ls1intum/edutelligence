@@ -1436,6 +1436,57 @@ class TestTaskConventions:
             assert "fails on the unfixed code" in task
 
 
+class TestReviewTaskReplyProtocol:
+    """How a review is answered: per comment, in the comment's own thread.
+
+    A review is several questions, and one big comment answers all of them
+    somewhere none of them was asked. The task therefore names each inline
+    comment by its id — the answers are files named after those ids — and
+    says where the runner takes each of them.
+    """
+
+    async def test_each_inline_comment_is_named_by_its_id(self):
+        task = await triggers.review_task(
+            772,
+            "A change",
+            review(9),
+            [
+                comment(41, 772, "the connection is closed early", path="app/x.py"),
+                comment(42, 772, "and here too", path="app/y.py"),
+            ],
+        )
+        assert "[comment 41]" in task
+        assert "[comment 42]" in task
+        assert "app/x.py:42" in task
+
+    async def test_the_answers_are_one_file_per_comment(self):
+        task = await triggers.review_task(772, "A change", review(9), [comment(41, 772, "fix this", path="app/x.py")])
+        assert "replies/" in task
+        assert "replies/41.md" not in task  # the agent composes the name from the id
+        assert "<comment id>.md" in task
+
+    async def test_the_task_says_where_each_answer_goes(self):
+        task = await triggers.review_task(772, "A change", review(9), [comment(41, 772, "fix this", path="app/x.py")])
+        # The agent does not hold the credential; the runner posts each
+        # answer into its own thread, resolves the thread, and asks the
+        # reviewer to look again.
+        assert "own thread" in task
+        assert "resolves the thread" in task
+        assert "look at the pull request again" in task
+
+    async def test_the_summary_file_keeps_its_role_for_body_points(self):
+        task = await triggers.review_task(772, "A change", review(9), [comment(41, 772, "fix this", path="app/x.py")])
+        assert "reply.md" in task
+        assert "review body alone" in task
+
+    async def test_a_comment_without_an_id_is_still_rendered(self):
+        task = await triggers.review_task(
+            772, "A change", review(9), [{"body": "fix this", "path": "app/x.py", "line": 3}]
+        )
+        assert "app/x.py:3" in task
+        assert "[comment " not in task
+
+
 class TestOtherReviewComments:
     """An inline answer can see the review comments it is asked to act on.
 

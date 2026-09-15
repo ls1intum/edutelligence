@@ -1027,3 +1027,219 @@ class TestAskingWhoIsInATeam:
         monkeypatch.setattr(github, "settings", replace(github.settings, trusted_teams=()))
 
         assert await github.in_a_trusted_team("tobias") is None
+
+
+class FakeGraphQLResponse:
+    def __init__(self, status_code, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def fake_graphql_client(monkeypatch, calls, answers):
+    """Point the GraphQL endpoint at a stub.
+
+    ``answers`` is a list of (status_code, payload) pairs, one per call;
+    when the calls outlast the script, the last answer repeats.
+    """
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            calls.append({"method": "POST", "url": url, "json": json})
+            status, payload = answers[min(len(calls) - 1, len(answers) - 1)]
+            return FakeGraphQLResponse(status, payload)
+
+    monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok"))
+
+
+def _thread_payload(thread_id: str, comment_id: int, resolved: bool = False) -> dict:
+    return {
+        "id": thread_id,
+        "isResolved": resolved,
+        "comments": {"nodes": [{"databaseId": comment_id}]},
+    }
+
+
+def _threads_payload(nodes, has_next: bool = False, end_cursor: str = "cursor-1") -> dict:
+    return {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "nodes": nodes,
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                }
+            }
+        }
+    }
+
+
+class TestReviewRepliesAndReRequests:
+    """What the runner posts after a review session: one answer per thread,
+    the threads resolved, and the reviewer asked to look again."""
+
+    async def test_a_single_review_is_read_by_its_id(self, monkeypatch):
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            return {"id": 42, "user": {"login": "claudia"}, "state": "CHANGES_REQUESTED"}
+
+        monkeypatch.setattr(github, "_get", fake_get)
+
+        review = await github.review(772, 42)
+        assert asked == ["/repos/ls1intum/edutelligence/pulls/772/reviews/42"]
+        assert review["user"]["login"] == "claudia"
+
+    async def test_the_review_request_posts_the_named_reviewers(self, monkeypatch):
+        calls: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                calls.append({"url": url, "json": json})
+                return FakeGraphQLResponse(200)
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(github, "settings", replace(github.settings, github_token="tok"))
+
+        await github.request_pull_review(772, ["claudia"])
+
+        assert calls == [
+            {
+                "url": "https://api.github.com/repos/ls1intum/edutelligence/pulls/772/requested_reviewers",
+                "json": {"reviewers": ["claudia"]},
+            }
+        ]
+
+    async def test_an_empty_review_request_posts_nothing(self, monkeypatch):
+        calls: list = []
+        fake_graphql_client(monkeypatch, calls, [(200, {})])
+
+        await github.request_pull_review(772, [])
+
+        assert calls == []
+
+    async def test_the_thread_map_keys_threads_by_their_first_comment(self, monkeypatch):
+        calls: list = []
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [
+                (
+                    200,
+                    {
+                        "data": _threads_payload(
+                            [_thread_payload("PRRT_1", 101), _thread_payload("PRRT_2", 102, resolved=True)]
+                        )
+                    },
+                )
+            ],
+        )
+
+        mapped = await github.review_thread_map(772)
+
+        assert mapped == {
+            101: {"thread": "PRRT_1", "resolved": False},
+            102: {"thread": "PRRT_2", "resolved": True},
+        }
+        assert calls[0]["url"] == "https://api.github.com/graphql"
+        assert calls[0]["json"]["variables"] == {
+            "owner": "ls1intum",
+            "name": "edutelligence",
+            "number": 772,
+            "after": None,
+        }
+
+    async def test_the_thread_map_follows_the_next_page(self, monkeypatch):
+        calls: list = []
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [
+                (200, {"data": _threads_payload([_thread_payload("PRRT_1", 101)], has_next=True)}),
+                (200, {"data": _threads_payload([_thread_payload("PRRT_2", 102)], has_next=False)}),
+            ],
+        )
+
+        mapped = await github.review_thread_map(772)
+
+        assert set(mapped) == {101, 102}
+        assert calls[1]["json"]["variables"]["after"] == "cursor-1"
+
+    async def test_a_thread_without_a_comment_is_not_mapped(self, monkeypatch):
+        calls: list = []
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [(200, {"data": _threads_payload([{"id": "PRRT_1", "isResolved": False, "comments": {"nodes": []}}])})],
+        )
+
+        assert await github.review_thread_map(772) == {}
+
+    async def test_resolving_threads_runs_one_mutation_per_thread(self, monkeypatch):
+        calls: list = []
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [
+                (200, {"data": {"resolveReviewThread": {"threadId": "PRRT_1"}}}),
+                (200, {"data": {"resolveReviewThread": {"threadId": "PRRT_2"}}}),
+            ],
+        )
+
+        await github.resolve_review_threads(["PRRT_1", "PRRT_2"])
+
+        assert len(calls) == 2
+        assert all("resolveReviewThread" in c["json"]["query"] for c in calls)
+        assert calls[0]["json"]["variables"] == {"threadId": "PRRT_1"}
+        assert calls[1]["json"]["variables"] == {"threadId": "PRRT_2"}
+
+    async def test_a_declined_resolution_does_not_stop_the_rest(self, monkeypatch):
+        # GitHub answers a null when it will not resolve what it was given;
+        # the other threads still get their call.
+        calls: list = []
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [
+                (200, {"data": {"resolveReviewThread": None}}),
+                (200, {"data": {"resolveReviewThread": {"threadId": "PRRT_2"}}}),
+            ],
+        )
+
+        await github.resolve_review_threads(["PRRT_1", "PRRT_2"])
+
+        assert len(calls) == 2
+
+    async def test_a_graphql_error_is_an_error(self, monkeypatch):
+        fake_graphql_client(monkeypatch, [], [(200, {"errors": [{"message": "forbidden"}]})])
+
+        with pytest.raises(github.GitHubError):
+            await github.resolve_review_threads(["PRRT_1"])
+
+    async def test_a_graphql_http_error_is_an_error(self, monkeypatch):
+        fake_graphql_client(monkeypatch, [], [(403, None)])
+
+        with pytest.raises(github.GitHubError):
+            await github.review_thread_map(772)
