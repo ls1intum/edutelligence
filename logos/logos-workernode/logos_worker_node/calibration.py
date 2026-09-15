@@ -3380,8 +3380,13 @@ def calibrate_with_tp_escalation(
         return plan, _try_calibrate(retried_plan, **cal_kwargs)
 
     def _is_fatal(result: CalibrationResult) -> bool:
-        _err = result.error or ""
-        return "does not recognize this architecture" in _err or "Cannot access gated repo" in _err
+        # calibrate_model normalizes fatal model-level errors into
+        # result.error ("unsupported model (<code>): ...") and records the
+        # reason code in result.unsupported_reason — the raw vLLM needle is
+        # no longer present in result.error, so the reason code is the only
+        # reliable fatal predicate (and it covers every pattern in
+        # vllm_compat._FATAL_LOAD_ERROR_PATTERNS, not just two of them).
+        return result.unsupported_reason is not None
 
     tp = max_tp
     current_plan = {**plan, "tensor_parallel_size": tp}
