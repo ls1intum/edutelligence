@@ -50,13 +50,16 @@ needed (the dev compose enables it).
 ### In-stack rate limits (Traefik)
 
 Both compose files attach generous Traefik `rateLimit` middleware to the
-orchestrator routers (429 when exceeded):
+API routers (429 when exceeded). The higher-priority routers that actually
+serve `/api/*` (webservice, agent, the logosnode operator paths) carry the
+limiter alongside their strip-prefix middleware, so no request reaches a
+service unthrottled:
 
 | Middleware | Routers | Default (avg rps / burst) |
 |---|---|---|
-| `rl-model` | `/v1`, `/openai`, `/api` | 100 / 200 |
+| `rl-model` | `/v1`, `/openai`, and the orchestrator's `/api` fallback | 100 / 200 |
 | `rl-jobs` | `/jobs` | 50 / 100 |
-| `rl-admin` | `/health`, `/docs`, `/metrics`, `/logosdb/providers/logosnode` | 20 / 40 |
+| `rl-admin` | `/health`, `/docs`, `/metrics`, `/logosdb/providers/logosnode`, and the higher-priority `/api/*` routers (webservice identity/config/admin/WebSocket, logosnode operator actions, agent) | 20 / 40 |
 
 Tune per deployment via `.env`: `LOGOS_RATE_LIMIT_MODEL_AVG`,
 `LOGOS_RATE_LIMIT_MODEL_BURST`, `LOGOS_RATE_LIMIT_JOBS_AVG`,

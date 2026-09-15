@@ -212,7 +212,10 @@ services:
       - "traefik.http.routers.logos-orchestrator-api-logosnode.tls=true"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.tls.certresolver=letsencrypt"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api"
+      # Higher-priority routers serving /api carry the limiter alongside
+      # their strip middleware — a limit on the priority-100 fallback alone
+      # would be bypassed by every request selected by these rules.
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.priority=201"
 
       # Service-Port
@@ -276,7 +279,7 @@ services:
       - "traefik.http.routers.webservice-identity.tls=true"
       - "traefik.http.routers.webservice-identity.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-identity.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-identity.middlewares=strip-api"
+      - "traefik.http.routers.webservice-identity.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-identity.priority=200"
 
       # === Routing: /api/logosdb ===
@@ -285,7 +288,7 @@ services:
       - "traefik.http.routers.webservice-config.tls=true"
       - "traefik.http.routers.webservice-config.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-config.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-config.middlewares=strip-api"
+      - "traefik.http.routers.webservice-config.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-config.priority=200"
 
       # === Routing: the operator-facing logosnode admin actions ===
@@ -303,7 +306,7 @@ services:
       - "traefik.http.routers.webservice-logosnode-admin.tls=true"
       - "traefik.http.routers.webservice-logosnode-admin.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-logosnode-admin.priority=202"
 
       # === Routing: /api/admin ===
@@ -312,7 +315,7 @@ services:
       - "traefik.http.routers.webservice-admin.tls=true"
       - "traefik.http.routers.webservice-admin.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-admin.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-admin.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-admin.priority=200"
 
       # === Routing: /api/ws/stats, /api/ws/stats/v2 (WebSocket) ===
@@ -321,7 +324,7 @@ services:
       - "traefik.http.routers.webservice-ws.tls=true"
       - "traefik.http.routers.webservice-ws.tls.certresolver=letsencrypt"
       - "traefik.http.routers.webservice-ws.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-ws.middlewares=strip-api"
+      - "traefik.http.routers.webservice-ws.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-ws.priority=200"
 
       # Service-Port
@@ -484,7 +487,7 @@ services:
       - "traefik.http.routers.agent-api.tls=true"
       - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.agent-api.service=logos-agent-svc"
-      - "traefik.http.routers.agent-api.middlewares=strip-api-agent"
+      - "traefik.http.routers.agent-api.middlewares=strip-api-agent,rl-admin"
       - "traefik.http.routers.agent-api.priority=200"
 
       - "traefik.http.services.logos-agent-svc.loadbalancer.server.port=8082"
