@@ -120,8 +120,9 @@ class CapacityPlanner:
     # can opportunistically load another copy — a second lane on the SAME
     # worker (intra-node scale-out in the demand pass, e.g. two 8B instances
     # sharing VRAM) or a lane on another worker (the cross-provider pass) —
-    # without eviction. Rollout is behind LOGOS_REPLICATE_ON_FREE_VRAM
-    # (default off); the only other gate is the sustained-demand floor below.
+    # without eviction. On by default — opt out with
+    # LOGOS_REPLICATE_ON_FREE_VRAM=false; the only other gate is the
+    # sustained-demand floor below.
     # There is deliberately no hard copy cap: the no-eviction rule bounds each
     # copy to genuinely free VRAM, growth is at most one lane per worker plus
     # one cross-provider replica per cycle, and idle replicas are reaped by the
@@ -368,12 +369,13 @@ class CapacityPlanner:
         )
         # Speculative replication: after the main demand pass, emit
         # additional load actions for hot models onto workers with free
-        # VRAM (no eviction). One replica per cycle per model. Off by
-        # default — this consumes more VRAM, so operators should opt in.
-        self._replicate_on_free_vram = os.environ.get("LOGOS_REPLICATE_ON_FREE_VRAM", "false").strip().lower() in (
-            "1",
-            "true",
-            "yes",
+        # VRAM (no eviction). One replica per cycle per model. On by
+        # default — it consumes extra VRAM on hot models, so operators who
+        # want to cap it opt out by setting the flag to false.
+        self._replicate_on_free_vram = os.environ.get("LOGOS_REPLICATE_ON_FREE_VRAM", "true").strip().lower() not in (
+            "0",
+            "false",
+            "no",
         )
 
         # ── Tunable switching/anti-starvation knobs (env-overridable) ──────────
@@ -844,8 +846,8 @@ class CapacityPlanner:
         # Speculative replication: after the per-provider demand pass, look
         # for hot models that have a single (or few) loaded copy and idle
         # workers with capability + free VRAM. Emits one replica load per
-        # model per cycle, no eviction. Off by default; see
-        # LOGOS_REPLICATE_ON_FREE_VRAM.
+        # model per cycle, no eviction. On by default; opt out via
+        # LOGOS_REPLICATE_ON_FREE_VRAM=false.
         if self._replicate_on_free_vram and cluster_lanes_by_model is not None:
             all_actions.extend(
                 self._compute_replication_actions(
@@ -4515,7 +4517,7 @@ class CapacityPlanner:
         host it (the cross-worker distribution; the demand pass owns
         intra-node additional lanes).
 
-        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
+        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM`` is set to false.
 
         Candidate workers pass through ``_is_plannable`` for the same
         reasons the main demand pass does — a replica is a plain ``load``,
