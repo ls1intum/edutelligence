@@ -12,11 +12,19 @@ function formatGermanDate(d: Date): string {
   return `${day}.${month}.${d.getFullYear()}`;
 }
 
-/** "DD.MM.YYYY" for an ISO timestamp; "—" when the value is missing/invalid. */
+/**
+ * "DD.MM.YYYY" for the calendar date an ISO timestamp is valid on; "—" when
+ * the value is missing/invalid.
+ *
+ * Catalogue `valid_from` values are UTC midnight: the first ten characters
+ * are the effective date. Routing them through `new Date` would shift the
+ * date by a day in UTC-negative time zones, so only the date part is read.
+ */
 export function formatIsoDate(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : formatGermanDate(d);
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!match) return '—';
+  return `${match[3]}.${match[2]}.${match[1]}`;
 }
 
 /**

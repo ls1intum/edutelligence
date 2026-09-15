@@ -378,6 +378,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly priceProviders = signal<readonly ModelProviderPrices[]>([]);
   readonly pricesLoading = signal(false);
   readonly pricesError = signal(false);
+  /** True once a price response arrived — only then is "no cloud provider" a fact. */
+  readonly pricesLoaded = signal(false);
 
   // ==========================================================================
   // Tabs
@@ -408,15 +410,16 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   /**
    * The Prices tab only exists for cloud models: a model served solely by
-   * local (logosnode) providers has no catalogue pricing to show.
+   * local (logosnode) providers has no catalogue pricing to show. Until a
+   * successful response proves that, the tab stays visible so its loading
+   * and error states remain reachable.
    */
   readonly visibleTabs = computed<readonly ModelErrorTab[]>(() => {
     const hasCloudProvider = this.priceProviders().some(
       provider => provider.provider_type === 'cloud'
     );
-    return hasCloudProvider
-      ? this.tabs
-      : this.tabs.filter(tab => tab !== 'prices');
+    if (hasCloudProvider || !this.pricesLoaded()) return this.tabs;
+    return this.tabs.filter(tab => tab !== 'prices');
   });
 
   /** Cloud providers of this model with their price rows grouped for display. */
@@ -719,6 +722,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     try {
       const response = await this.modelService.getModelPrices(modelId);
       this.priceProviders.set(response.providers ?? []);
+      this.pricesLoaded.set(true);
     } catch {
       this.priceProviders.set([]);
       this.pricesError.set(true);

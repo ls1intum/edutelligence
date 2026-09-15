@@ -30,8 +30,7 @@
 
       @if (card.dimensions.length === 0) {
         <p class="price-provider-card__empty">
-          No price data yet — this model has not been found in the provider's catalogue (its
-          requests are billed as free).
+          No price data yet — this model has not been found in the provider's catalogue.
         </p>
       } @else {
         <table class="price-table">
@@ -44,8 +43,11 @@
             </tr>
           </thead>
           <tbody>
-            @for (dimension of card.dimensions; track dimension.quantity) {
-              @for (row of dimension.rows; track row.validFrom) {
+            @for (
+              dimension of card.dimensions;
+              track dimension.quantity + '|' + dimension.unit
+            ) {
+              @for (row of dimension.rows; track row.key) {
                 <tr [class.price-table__row--current]="row.isCurrent">
                   <td>
                     <div class="price-table__item">

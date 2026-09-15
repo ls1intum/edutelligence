@@ -169,6 +169,12 @@ export function variantLabel(minContextTokens: number, serviceTier: string): str
 }
 
 export interface PriceRow {
+  /**
+   * Stable @for tracking key: rows of different variants (context tier,
+   * service tier) share their valid_from timestamp within one updater run,
+   * so validFrom alone is not unique within a dimension.
+   */
+  readonly key: string;
   readonly validFrom: string;
   readonly sinceText: string;
   readonly priceText: string;
@@ -220,6 +226,7 @@ export function groupPriceRows(prices: readonly ModelPriceEntry[]): readonly Pri
     );
 
     const priceRows: PriceRow[] = ordered.map((row, index) => ({
+      key: row.valid_from + '|' + row.min_context_tokens + '|' + row.service_tier,
       validFrom: row.valid_from,
       sinceText: formatIsoDate(row.valid_from),
       priceText: formatPricePerUnit(row.price_per_k_unit, unit),
@@ -241,7 +248,9 @@ export function groupPriceRows(prices: readonly ModelPriceEntry[]): readonly Pri
 
   return dimensions.sort(
     (a, b) =>
-      dimensionRank(a.quantity) - dimensionRank(b.quantity) || a.quantity.localeCompare(b.quantity),
+      dimensionRank(a.quantity) - dimensionRank(b.quantity) ||
+      a.quantity.localeCompare(b.quantity) ||
+      a.unit.localeCompare(b.unit),
   );
 }
 

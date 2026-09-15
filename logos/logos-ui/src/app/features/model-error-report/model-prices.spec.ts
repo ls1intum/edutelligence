@@ -119,6 +119,19 @@ describe('groupPriceRows', () => {
     expect(rows.every((row) => row.isCurrent)).toBe(true);
   });
 
+  it('gives rows sharing a valid_from timestamp unique tracking keys', () => {
+    // One updater run assigns the same timestamp to the base, context-tier
+    // and service-tier rows of a dimension.
+    const dimensions = groupPriceRows([
+      makePrice(),
+      makePrice({ min_context_tokens: 272_000 }),
+      makePrice({ service_tier: 'batch' }),
+    ]);
+
+    const keys = dimensions[0]!.rows.map((row) => row.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
   it('renders pre-formatted price and date text for the template', () => {
     const dimensions = groupPriceRows([makePrice()]);
     const row = dimensions[0]!.rows[0]!;
