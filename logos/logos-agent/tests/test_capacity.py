@@ -633,7 +633,7 @@ class TestAFailureThatSaysSomething:
                 raise Refused()
 
         monkeypatch.setattr(capacity.httpx, "AsyncClient", FakeClient)
-        monkeypatch.setattr(capacity, "settings", replace(capacity.settings, agent_api_key="tok"))
+        monkeypatch.setattr(capacity, "settings", replace(capacity.settings, internal_secret="tok"))
 
         with caplog.at_level(logging.WARNING):
             reading = await capacity.read_load()
@@ -658,7 +658,7 @@ class TestAFailureThatSaysSomething:
                 raise ValueError("no route to host")
 
         monkeypatch.setattr(capacity.httpx, "AsyncClient", FakeClient)
-        monkeypatch.setattr(capacity, "settings", replace(capacity.settings, agent_api_key="tok"))
+        monkeypatch.setattr(capacity, "settings", replace(capacity.settings, internal_secret="tok"))
 
         with caplog.at_level(logging.WARNING):
             await capacity.read_load()
