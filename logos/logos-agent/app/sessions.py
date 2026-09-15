@@ -95,6 +95,18 @@ _REVIEW_REPLY_STATE_FILE = "review_reply_state.json"
 # errors, an unparseable query — is handed back to the retry.
 _PERMANENT_RESOLUTION_ERRORS = frozenset({"NOT_FOUND", "FORBIDDEN", "UNAUTHENTICATED"})
 
+
+def _reply_marker(session_id: int, comment_id: int) -> str:
+    """The hidden mark that ties a posted answer to the session that wrote it.
+
+    An HTML comment, invisible in the thread. A reply that GitHub accepted
+    but whose confirmation never arrived is still in its thread — on the
+    next pass, this is how it is recognized as already delivered instead
+    of being answered twice.
+    """
+    return f"<!-- logos reply {session_id} {comment_id} -->"
+
+
 # How many sessions one request may have before the runner stops taking it
 # up again. A launch that cannot work, or a task nothing can be made of:
 # three attempts survives an accident and is few enough to notice.
@@ -2470,9 +2482,21 @@ class SessionManager:
             return
 
         for comment_id in sorted(per_comment):
-            url = await github.reply_to_review_comment(
-                number, comment_id, self._truncate_reply(per_comment[comment_id])
-            )
+            marker = _reply_marker(session_id, comment_id)
+            # The reply may already be in its thread: a previous pass posted
+            # it and lost the confirmation on the way back, and the state
+            # never learned of it. The marker in the thread is the answer
+            # to whether posting again would be a duplicate.
+            if await github.review_reply_is_in_thread(number, comment_id, marker):
+                state["replied"].append(comment_id)
+                self._write_review_reply_state(state_path, state)
+                await db.add_event(
+                    session_id, EventKind.PULL_REQUEST, {"reply": True, "comment": comment_id, "found": True}
+                )
+                logger.info("session %s found its answer to comment %s already in the thread", session_id, comment_id)
+                continue
+            body = self._truncate_reply(per_comment[comment_id]) + "\n\n" + marker
+            url = await github.reply_to_review_comment(number, comment_id, body)
             state["replied"].append(comment_id)
             self._write_review_reply_state(state_path, state)
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True, "comment": comment_id})

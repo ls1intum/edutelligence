@@ -3907,6 +3907,13 @@ class TestReviewReplyDelivery:
 
         return fake
 
+    @staticmethod
+    def _posted(comment_id, body):
+        """One answer as it reaches GitHub: the text and its delivery marker."""
+        from app import sessions
+
+        return (772, comment_id, body + "\n\n" + sessions._reply_marker(31, comment_id))
+
     def install(self, monkeypatch, tmp_path, row, *, comments=None, threads=None):
         """The review delivery, with every GitHub call recorded."""
         from app import sessions
@@ -3916,7 +3923,7 @@ class TestReviewReplyDelivery:
             "settings",
             replace(sessions.settings, artifact_root=str(tmp_path), state_root=str(tmp_path / "state")),
         )
-        recorded = {"threads": [], "summaries": [], "resolved": [], "re_requests": [], "attempts": []}
+        recorded = {"threads": [], "summaries": [], "resolved": [], "re_requests": [], "attempts": [], "checks": []}
 
         async def get_session(_session_id):
             return row
@@ -3958,6 +3965,10 @@ class TestReviewReplyDelivery:
         async def fake_resolve(thread_ids):
             recorded["resolved"].extend(thread_ids)
 
+        async def fake_find(number, comment_id, marker):
+            recorded["checks"].append((number, comment_id, marker))
+            return False
+
         async def fake_request(_number, logins):
             recorded["re_requests"].extend(logins)
 
@@ -3973,6 +3984,7 @@ class TestReviewReplyDelivery:
         monkeypatch.setattr(sessions.github, "post_issue_comment", fake_summary)
         monkeypatch.setattr(sessions.github, "review_thread_map", fake_threads_map)
         monkeypatch.setattr(sessions.github, "resolve_review_threads", fake_resolve)
+        monkeypatch.setattr(sessions.github, "review_reply_is_in_thread", fake_find)
         monkeypatch.setattr(sessions.github, "request_pull_review", fake_request)
         return recorded
 
@@ -3989,8 +4001,8 @@ class TestReviewReplyDelivery:
         await sessions.SessionManager()._post_reply(31)
 
         assert recorded["threads"] == [
-            (772, 101, "the close is now after the drain"),
-            (772, 102, "already addressed on line 40"),
+            self._posted(101, "the close is now after the drain"),
+            self._posted(102, "already addressed on line 40"),
         ]
         assert recorded["summaries"] == []
         assert recorded["resolved"] == ["PRRT_1", "PRRT_2"]
@@ -4009,7 +4021,7 @@ class TestReviewReplyDelivery:
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "fixed"), (772, 102, "fixed too")]
+        assert recorded["threads"] == [self._posted(101, "fixed"), self._posted(102, "fixed too")]
         assert recorded["summaries"] == [(772, "and the body point: the default is documented now")]
         assert recorded["re_requests"] == ["claudia"]
 
@@ -4058,7 +4070,7 @@ class TestReviewReplyDelivery:
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "what I managed to say")]
+        assert recorded["threads"] == [self._posted(101, "what I managed to say")]
         assert recorded["re_requests"] == []
         assert recorded["attempts"] == [(31, True)]
 
@@ -4088,7 +4100,7 @@ class TestReviewReplyDelivery:
         await manager._post_reply(31)
         await manager._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "one"), (772, 102, "two")]
+        assert recorded["threads"] == [self._posted(101, "one"), self._posted(102, "two")]
         assert recorded["summaries"] == [(772, "the body point")]
         assert recorded["resolved"] == ["PRRT_1", "PRRT_2"]
         assert recorded["re_requests"] == ["claudia"]
@@ -4128,7 +4140,7 @@ class TestReviewReplyDelivery:
         await manager._post_reply(31)
         await manager._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "one"), (772, 102, "two")]
+        assert recorded["threads"] == [self._posted(101, "one"), self._posted(102, "two")]
         assert recorded["summaries"] == []
         assert recorded["re_requests"] == ["claudia"]
         assert recorded["attempts"] == [(31, False), (31, True)]
@@ -4153,7 +4165,7 @@ class TestReviewReplyDelivery:
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "one")]
+        assert recorded["threads"] == [self._posted(101, "one")]
         assert recorded["resolved"] == []
         assert recorded["re_requests"] == ["claudia"]
         assert recorded["attempts"] == [(31, True)]
@@ -4212,11 +4224,51 @@ class TestReviewReplyDelivery:
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "one")]
+        assert recorded["threads"] == [self._posted(101, "one")]
         assert recorded["resolved"] == []
         assert recorded["re_requests"] == []
         assert recorded["attempts"] == [(31, False)]
         assert json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())["resolved_threads"] == []
+
+    async def test_a_lost_post_confirmation_is_not_answered_twice(self, monkeypatch, tmp_path):
+        # GitHub created the reply, but the confirmation never arrived and
+        # the state never learned of it. The next pass must find the answer
+        # already in its thread by its marker and record it as delivered —
+        # posting again would answer the comment twice.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        posted_remotely = {"n": 0}
+
+        async def lost_confirmation(number, comment_id, body):
+            posted_remotely["n"] += 1
+            if posted_remotely["n"] == 1:
+                raise RuntimeError("the confirmation never arrived")
+            recorded["threads"].append((number, comment_id, body))
+            return f"https://github.com/x/y#issuecomment-{comment_id}"
+
+        async def find(_number, comment_id, _marker):
+            recorded["checks"].append((comment_id,))
+            return posted_remotely["n"] >= 1
+
+        monkeypatch.setattr(sessions.github, "reply_to_review_comment", lost_confirmation)
+        monkeypatch.setattr(sessions.github, "review_reply_is_in_thread", find)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        # The first pass posted and lost the confirmation; the second found
+        # the marker and recorded the answer without posting it again.
+        assert recorded["threads"] == []
+        assert [c[0] for c in recorded["checks"]] == [101, 101]
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, False), (31, True)]
+        state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
+        assert state["replied"] == [101]
 
     async def test_a_review_row_without_a_reference_posts_the_summary_only(self, monkeypatch, tmp_path):
         from app import sessions
@@ -4343,7 +4395,11 @@ class TestReviewReplyDelivery:
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "one"), (772, 102, "two"), (772, 103, "three")]
+        assert recorded["threads"] == [
+            self._posted(101, "one"),
+            self._posted(102, "two"),
+            self._posted(103, "three"),
+        ]
         assert recorded["resolved"] == ["PRRT_2"]
 
     async def test_a_review_with_no_inline_comments_is_answered_as_one(self, monkeypatch, tmp_path):
@@ -4376,7 +4432,7 @@ class TestReviewReplyDelivery:
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "the answer")]
+        assert recorded["threads"] == [self._posted(101, "the answer")]
         assert recorded["attempts"] == [(31, True)]
 
 

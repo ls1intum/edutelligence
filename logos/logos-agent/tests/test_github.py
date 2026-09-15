@@ -1197,6 +1197,73 @@ class TestReviewRepliesAndReRequests:
 
         assert await github.review_thread_map(772) == {}
 
+    async def test_a_posted_reply_is_found_in_its_thread(self, monkeypatch):
+        # The marker lives in the reply's body; the look-up asks the thread
+        # that owns the comment for it, and only that thread.
+        calls: list = []
+        payload = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 101, "body": "the question"},
+                                            {"databaseId": 500, "body": "the answer\n\n<!-- logos reply 31 101 -->"},
+                                        ]
+                                    }
+                                },
+                                {
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 102, "body": "another question"},
+                                            {"databaseId": 501, "body": "an answer to something else"},
+                                        ]
+                                    }
+                                },
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            }
+        }
+        fake_graphql_client(monkeypatch, calls, [(200, payload)])
+
+        assert await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->") is True
+        assert await github.review_reply_is_in_thread(772, 102, "<!-- logos reply 31 102 -->") is False
+
+    async def test_the_reply_look_follows_the_next_page(self, monkeypatch):
+        # The thread with the comment is on the second page: the look-up
+        # must not give up after a page that does not contain it.
+        calls: list = []
+        first = {"comments": {"nodes": [{"databaseId": 101, "body": "the question"}]}}
+        second = {"comments": {"nodes": [{"databaseId": 102, "body": "<!-- logos reply 31 102 -->"}]}}
+        page_one = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {"nodes": [first], "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"}}
+                    }
+                }
+            }
+        }
+        page_two = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {"nodes": [second], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+                    }
+                }
+            }
+        }
+        fake_graphql_client(monkeypatch, calls, [(200, page_one), (200, page_two)])
+
+        assert await github.review_reply_is_in_thread(772, 102, "<!-- logos reply 31 102 -->") is True
+        assert calls[1]["json"]["variables"]["after"] == "cursor-1"
+
     async def test_resolving_threads_runs_one_mutation_per_thread(self, monkeypatch):
         # The exact request, pinned to the schema: the mutation takes the id
         # wrapped in `input` and answers with the thread it resolved. Any

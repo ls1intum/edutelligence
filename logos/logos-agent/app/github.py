@@ -705,6 +705,57 @@ async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
     return mapped
 
 
+# A thread's whole conversation, paged. A reply that a lost POST
+# confirmation left behind is one of a thread's comments, and only the
+# bodies can say whether it is there.
+_REPLY_THREAD_QUERY = """
+query ReviewThreadReply($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        nodes {
+          comments(first: 100) {
+            nodes { databaseId body }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+async def review_reply_is_in_thread(number: int, comment_id: int, marker: str) -> bool:
+    """Whether the marked answer is already in the thread of its comment.
+
+    A POST that GitHub accepted but whose confirmation never arrived left
+    the reply in the thread without the delivery state ever learning of
+    it. Before the same answer is posted again, the thread is asked for
+    the marker that ties a posted answer to the session that wrote it —
+    and an answer that could not be looked for on every thread raises
+    rather than risking the duplicate.
+    """
+    owner, name = settings.repo_slug.split("/", 1)
+    after: str | None = None
+    for _ in range(_MAX_PAGES):
+        data = await _graphql(_REPLY_THREAD_QUERY, {"owner": owner, "name": name, "number": number, "after": after})
+        connection = (data.get("repository") or {}).get("pullRequest", {}).get("reviewThreads") or {}
+        for node in connection.get("nodes") or []:
+            comments = (node.get("comments") or {}).get("nodes") or []
+            if not any(isinstance(c, dict) and c.get("databaseId") == comment_id for c in comments):
+                continue
+            return any(isinstance(c, dict) and marker in str(c.get("body") or "") for c in comments)
+        page = connection.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return False
+        after = str(page.get("endCursor") or "")
+    raise GitHubError(
+        f"could not finish looking for the posted answer of comment {comment_id} on #{number}: "
+        f"more than {_MAX_PAGES} pages of review threads"
+    )
+
+
 async def resolve_review_threads(thread_ids: list[str]) -> None:
     """Mark review threads as resolved, one at a time.
 
