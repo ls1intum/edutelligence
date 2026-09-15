@@ -28,6 +28,7 @@ import {
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { ModelAccess } from '../model-access/model-access';
 import {
   benchmarkConfigurationRows,
   servingCommand,
@@ -41,7 +42,8 @@ import {
 type ModelErrorTab =
   | 'error_report'
   | 'complete_logs'
-  | 'performance';
+  | 'performance'
+  | 'access';
 
 type CalibrationStatus =
   | 'success'
@@ -258,6 +260,7 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
     ScrollingModule,
     ErrorMessageComponent,
     DataTableComponent,
+    ModelAccess,
   ],
 
   templateUrl: './model-error-report.html',
@@ -377,12 +380,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly tabs: readonly ModelErrorTab[] = [
     'complete_logs',
     'performance',
+    'access',
   ];
 
   readonly tabLabel: Record<ModelErrorTab, string> = {
     error_report: 'Error Report',
     complete_logs: 'Complete Logs',
     performance: 'Performance',
+    access: 'Access',
   };
 
   readonly hasAnyLogText = computed(() => {
@@ -584,6 +589,13 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     );
 
     this.modelId.set(id);
+
+    // Model rows deep-link to the access tab (?tab=access); only known tabs
+    // override the default, everything else falls back to complete logs.
+    const tabParam = this.route.snapshot.queryParamMap.get('tab') as ModelErrorTab | null;
+    if (tabParam != null && this.tabs.includes(tabParam)) {
+      this.activeTab.set(tabParam);
+    }
 
     await this.fetchModel(id);
   }

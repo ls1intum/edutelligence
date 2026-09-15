@@ -1,0 +1,192 @@
+// Rendered inside the model-details view (third tab), whose root already
+// carries the page padding — this container must stay un-padded.
+.model-access {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+// ── Model facts ────────────────────────────────────────────────────────────
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
+  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  min-width: 0;
+}
+
+.fact-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-wider);
+  text-transform: uppercase;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.fact-value {
+  font-size: var(--font-size-md);
+  color: rgb(var(--nav-active-text));
+  overflow-wrap: anywhere;
+}
+
+// ── Notice (model without host provider) ───────────────────────────────────
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  margin-bottom: 28px;
+  font-size: var(--font-size-md);
+
+  &--error {
+    background: rgb(var(--color-error) / 0.08);
+    border: 1px solid rgb(var(--color-error) / 0.35);
+    color: rgb(var(--color-error));
+
+    i { flex-shrink: 0; }
+  }
+}
+
+// ── Sections ───────────────────────────────────────────────────────────────
+.section {
+  margin-bottom: 32px;
+}
+
+.section-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--nav-active-text));
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-count {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgb(var(--nav-item-text) / var(--opacity-ghost));
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.section-hint {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  margin: 0 0 12px;
+  max-width: 72ch;
+}
+
+.hint-flag {
+  font-weight: var(--font-weight-semibold);
+
+  &--orphaned { color: rgb(var(--color-error)); }
+  &--provider-only { color: rgb(var(--color-warning)); }
+}
+
+// ── Matrix cells ───────────────────────────────────────────────────────────
+.cell-strong {
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.cell-link {
+  color: rgb(var(--color-text-accent));
+  text-decoration: none;
+
+  &:hover,
+  &:focus-visible { text-decoration: underline; }
+}
+
+.cell-muted {
+  color: rgb(var(--color-typography-700));
+}
+
+.check {
+  font-size: var(--font-size-lg);
+
+  &--yes { color: rgb(var(--color-success)); }
+  &--no { color: rgb(var(--color-typography-700)); opacity: 0.55; }
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+
+  &--ok {
+    background: rgb(var(--color-success) / 0.12);
+    color: rgb(var(--color-success));
+  }
+
+  &--orphaned {
+    background: rgb(var(--color-error) / 0.12);
+    color: rgb(var(--color-error));
+  }
+
+  &--provider-only {
+    background: rgb(var(--color-warning) / 0.14);
+    color: rgb(var(--color-warning));
+  }
+}
+
+.cell-key {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.key-inactive {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgb(var(--nav-item-text) / var(--opacity-ghost));
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  white-space: nowrap;
+}
+
+// Row highlights: the whole point of the page is making the broken states
+// visible, so they are tinted, not just badged.
+.table-row {
+  &--orphaned {
+    background: rgb(var(--color-error) / 0.05);
+  }
+
+  &--provider-only {
+    background: rgb(var(--color-warning) / 0.05);
+  }
+}
+
+// ── States ─────────────────────────────────────────────────────────────────
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 0;
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  font-size: var(--font-size-md);
+
+  i { font-size: var(--font-size-xl); }
+}
+
+@media (max-width: 768px) {
+  .facts { grid-template-columns: 1fr 1fr; }
+}

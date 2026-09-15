@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.repository;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -13,6 +14,60 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
     boolean existsByNameIgnoreCase(String name);
 
     List<Model> findByNameIgnoreCase(String name);
+
+    /**
+     * Single-model twin of {@link #findAllWithPricing()} for the admin model
+     * access page — same price pick (most recently routed provider) and the
+     * same LIMIT 1 lateral instead of a per-model MAX, for the same reason.
+     */
+    @Query(value = """
+        SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
+               m.weight_quality, m.tags, m.description,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
+                FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
+                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                  AND tt.name = 'billed_input_uncached'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
+               ) AS input_usd_per_million,
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
+                FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
+                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                  AND tt.name = 'billed_output_text'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
+               ) AS output_usd_per_million,
+               (SELECT MAX(le.timestamp_request)
+                FROM log_entry le
+                WHERE le.model_id = m.id
+               ) AS last_used_at
+        FROM models m
+        LEFT JOIN LATERAL (
+            SELECT le.provider_id
+            FROM log_entry le
+            WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC
+            LIMIT 1
+        ) dp ON true
+        WHERE m.id = :modelId
+        """, nativeQuery = true)
+    Optional<ModelWithPriceProjection> findWithPricingById(@Param("modelId") Integer modelId);
 
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
