@@ -89,6 +89,9 @@ CREATED_BY = "logos-agent (trigger)"
 
 # Where a session writes an answer for the runner to post.
 REPLY_FILE = "reply.md"
+# One directory per answered review: one file per inline comment, named
+# after the comment's id, so each answer can be posted into its own thread.
+REPLY_DIR = "replies"
 
 # The head of a pull request the pass could not read. Not the same as None:
 # None is an answer — the lookup succeeded and the head is confirmed not
@@ -263,6 +266,10 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
     nothing in the body and everything in the inline comments, so a task
     built from the body alone would ask an agent to fix nothing in
     particular.
+
+    The comment's own id travels with it too. The answer goes back into the
+    comment's own thread, and the file that carries it is named after the
+    id — an agent that cannot name the comment cannot answer it.
     """
     rendered: list[str] = []
     for comment in comments:
@@ -273,10 +280,16 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
             continue
         if len(body) > MAX_COMMENT_CHARS:
             body = body[:MAX_COMMENT_CHARS] + " […]"
-        rendered.append(f"- {path}:{line}\n  {body}")
+        comment_id = comment.get("id")
+        prefix = f"[comment {comment_id}] " if isinstance(comment_id, int) else ""
+        rendered.append(f"- {prefix}{path}:{line}\n  {body}")
     if not rendered:
         return ""
-    return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
+    # Every comment is shown, whatever the review carries: the answer is
+    # owed for each of them, and a comment the task never showed cannot be
+    # answered. A long review is a long task; an incomplete one is a
+    # session that can never deliver.
+    return "Inline comments:\n\n" + "\n\n".join(rendered) + "\n\n"
 
 
 async def review_request_task(number: int, title: str, body: str, requester: str, *, branch: str | None = None) -> str:
@@ -339,10 +352,16 @@ async def review_task(
         f"Check each point against the current code before you change anything — lines "
         f"move, and some of it may already be addressed. Fix what is still valid, add "
         f"regression coverage for it, and run the tests and linters of the part you "
-        f"touched. Write your reply to the review into `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` "
-        f"— in English, saying for each point what you changed and how you verified it, "
-        f"or why it needed no change; the runner posts it for you. Do not merge the pull "
-        f"request and do not force-push."
+        f"touched.\n\n"
+        f"Answer each inline comment where it was made: one file per comment under "
+        f"`$LOGOS_ARTIFACT_DIR/{REPLY_DIR}/`, named after the id the comment is listed "
+        f"with — `{REPLY_DIR}/<comment id>.md`. Each one in English, saying what you "
+        f"changed and how you verified it, or why it needed no change; the runner posts "
+        f"it into that comment's own thread, resolves the thread, and asks the reviewer "
+        f"to look at the pull request again. Only a point that no inline comment "
+        f"carries — one that lives in the review body alone — goes into "
+        f"`$LOGOS_ARTIFACT_DIR/{REPLY_FILE}`, where the runner posts it as a single "
+        f"comment. Do not merge the pull request and do not force-push."
     )
 
 
