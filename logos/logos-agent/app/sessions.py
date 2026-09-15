@@ -109,7 +109,8 @@ def _reply_marker(session_id: int, comment_id: int) -> str:
 
 def _answer_marker(session_id: int) -> str:
     """The hidden mark of a session's single answer, the one that is posted
-    as a whole where an answer always went.
+    as a whole where an answer always went — and of its first chunk, when
+    the answer is too long for one comment and is said in order.
 
     Comment POSTs are not idempotent: a confirmation that never arrived
     leaves the answer posted without the delivery state ever learning of
@@ -117,6 +118,17 @@ def _answer_marker(session_id: int) -> str:
     recognized as already delivered instead of being said twice.
     """
     return f"<!-- logos answer {session_id} -->"
+
+
+def _answer_chunk_marker(session_id: int, chunk: int) -> str:
+    """The hidden mark of the session's answer, continuation chunk ``chunk``.
+
+    Deliberately its own mark per chunk, not the answer's: every chunk was
+    posted on its own, so every chunk is reconciled on its own — a retry
+    resumes after the chunks whose marks are already on the pull request,
+    and says none of them twice.
+    """
+    return f"<!-- logos answer {session_id} chunk {chunk} -->"
 
 
 def _summary_marker(session_id: int) -> str:
@@ -2296,6 +2308,12 @@ class SessionManager:
         whole answer at once: the summary and every per-comment answer, in
         whatever mix was written — none of it may be left unsaid in a
         fallback where the threads cannot receive it.
+
+        A comment cannot say more than GitHub's limit, so an answer that
+        long is not shortened: it is posted in order, one bounded chunk at
+        a time, and every chunk carries its own mark. Each mark is the
+        durable record of its chunk — a retry reconciles chunk by chunk,
+        resumes where the delivery stopped, and says nothing twice.
         """
         body = await self._read_answer(session_id)
         if body is None:
@@ -2311,25 +2329,27 @@ class SessionManager:
             await self._no_answer(session_id, session)
             return
         try:
-            body = self._truncate_reply(body)
-            if target.startswith("issue:"):
-                # The answer's POST is not idempotent: a confirmation lost
-                # on the way back leaves it posted without the state
-                # knowing, and the mark on the pull request is the answer
-                # to whether posting again would say it twice. The look-up
-                # fails like the POST: the attempt is recorded undelivered,
-                # and the next pass tries again.
-                marker = _answer_marker(session_id)
-                if await github.issue_comment_contains(int(target.partition(":")[2]), marker):
-                    await db.record_reply_attempt(session_id, delivered=True)
-                    await db.add_event(session_id, EventKind.PULL_REQUEST, {"reply": True, "found": True})
-                    logger.info("session %s found its answer already at %s", session_id, target)
-                    return
-                body += "\n\n" + marker
-            url = await self._send_reply(target, body)
+            url = ""
+            for index, chunk in enumerate(self._reply_chunks(body)):
+                if target.startswith("issue:"):
+                    # The answer's POST is not idempotent: a confirmation
+                    # lost on the way back leaves the chunk posted without
+                    # the state knowing, and the mark on the pull request
+                    # is the answer to whether posting again would say it
+                    # twice. A chunk already found is the delivery's
+                    # durable record of itself, and the pass resumes after
+                    # it. The look-up fails like the POST: the attempt is
+                    # recorded undelivered, and the next pass tries again.
+                    marker = _answer_marker(session_id) if index == 0 else _answer_chunk_marker(session_id, index)
+                    if await github.issue_comment_contains(int(target.partition(":")[2]), marker):
+                        logger.info("session %s found its answer chunk %s already at %s", session_id, index, target)
+                        continue
+                    chunk += "\n\n" + marker
+                url = await self._send_reply(target, chunk)
         except Exception as exc:
-            # Counted, not given up on: the next scheduler pass tries again
-            # until it lands or the attempts run out.
+            # Counted, not given up on: the next scheduler pass resumes
+            # after the chunks whose marks it finds, and tries again until
+            # the answer is whole or the attempts run out.
             await db.record_reply_attempt(session_id, delivered=False)
             logger.warning("could not post the answer of session %s (will retry): %s", session_id, exc)
             await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the reply: {exc}"})
@@ -2427,6 +2447,27 @@ class SessionManager:
             logger.info("an answer was truncated to fit a GitHub comment")
             return body[:_MAX_REPLY_CHARS].rstrip() + "\n\n_[answer truncated]_"
         return body
+
+    @staticmethod
+    def _reply_chunks(body: str) -> list[str]:
+        """An answer split into sizes GitHub will accept, in order.
+
+        GitHub refuses a comment above its length limit outright, so an
+        answer that long is not shortened but said across the comments it
+        needs, each within the limit and nothing of it dropped. A chunk
+        breaks at a line end where it can, so the split does not tear a
+        line in half; a run longer than the limit is cut anyway.
+        """
+        chunks: list[str] = []
+        while len(body) > _MAX_REPLY_CHARS:
+            cut = body.rfind("\n", 0, _MAX_REPLY_CHARS)
+            if cut <= 0:
+                cut = _MAX_REPLY_CHARS
+            chunks.append(body[:cut].rstrip())
+            body = body[cut:].lstrip("\n")
+        if body:
+            chunks.append(body)
+        return chunks
 
     async def _post_review_reply(self, session_id: int, session: dict[str, Any], target: str) -> None:
         """Deliver the answer to a changes-requested review, thread by thread.

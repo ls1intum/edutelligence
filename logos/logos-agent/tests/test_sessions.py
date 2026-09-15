@@ -3896,7 +3896,7 @@ class TestReplyDelivery:
 
         assert attempts == [(7, False)]
 
-    async def test_an_oversized_answer_is_shortened_rather_than_refused(self, monkeypatch, tmp_path):
+    async def test_an_oversized_answer_is_split_rather_than_truncated(self, monkeypatch, tmp_path):
         from app import sessions
 
         monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
@@ -3917,10 +3917,14 @@ class TestReplyDelivery:
         await sessions.SessionManager()._post_reply(7)
 
         # GitHub rejects a body over 65 536 characters outright, and a
-        # rejected answer is no answer. The marker follows the truncated
-        # text.
-        assert len(posted[0]) < 65_000
-        assert posted[0].endswith("_[answer truncated]_\n\n" + sessions._answer_marker(7))
+        # rejected answer is no answer. The oversized answer is not
+        # shortened with its tail lost: it is said in order across the
+        # comments it needs, each within the limit, each under its own
+        # mark, and none of it is dropped.
+        assert len(posted) == 2
+        assert all(len(body) < 65_536 for body in posted)
+        assert posted[0] == "x" * 60_000 + "\n\n" + sessions._answer_marker(7)
+        assert posted[1] == "x" * 20_000 + "\n\n" + sessions._answer_chunk_marker(7, 1)
 
 
 class TestReviewReplyDelivery:
@@ -4575,6 +4579,89 @@ class TestReviewReplyDelivery:
         assert recorded["threads"] == []
         assert recorded["re_requests"] == []
         assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_combined_answer_over_the_comment_cap_is_not_lost(self, monkeypatch, tmp_path):
+        # A deleted review owes every per-comment answer, and their
+        # combined text can exceed the size of one GitHub comment. It must
+        # not be shortened with the tail left unsaid: it is posted in
+        # order, one bounded chunk at a time, each under its own mark, and
+        # none of it is dropped.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row, comments=[{"id": 101, "body": "note"}])
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("b" * 40_000)
+        (directory / "reply.md").write_text("a" * 40_000)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert len(recorded["summaries"]) == 2
+        first, second = recorded["summaries"]
+        assert first[1].startswith("a" * 100)
+        assert first[1].endswith("\n\n" + sessions._answer_marker(31))
+        assert second[1].startswith("b" * 100)
+        assert second[1].endswith("\n\n" + sessions._answer_chunk_marker(31, 1))
+        for body in (first[1], second[1]):
+            assert len(body) < 65_536
+        # Nothing of the answer is lost: every one of its characters is in
+        # one of the chunks (the marks are stripped out of the count).
+        text = first[1].removesuffix("\n\n" + sessions._answer_marker(31)) + second[1].removesuffix(
+            "\n\n" + sessions._answer_chunk_marker(31, 1)
+        )
+        assert text.count("a") == 40_000
+        assert text.count("b") == 40_000
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_retry_resumes_after_the_chunks_already_posted(self, monkeypatch, tmp_path):
+        # The first pass posted the first chunk and lost the confirmation
+        # on the way back. The next pass finds that chunk's mark on the
+        # pull request and resumes after it — the posted chunk is not said
+        # twice, and the answer ends whole.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row, comments=[{"id": 101, "body": "note"}])
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("b" * 40_000)
+        (directory / "reply.md").write_text("a" * 40_000)
+        posted = {"n": 0}
+
+        async def flaky_post(number, body):
+            posted["n"] += 1
+            if posted["n"] == 1:
+                raise RuntimeError("the confirmation never arrived")
+            recorded["summaries"].append((number, body))
+            return f"https://github.com/x/y#issuecomment-{number}"
+
+        async def contains(_number, marker):
+            # The first chunk's mark is on the pull request only after
+            # pass one has posted it and lost the confirmation.
+            return posted["n"] >= 1 and marker == sessions._answer_marker(31)
+
+        monkeypatch.setattr(sessions.github, "post_issue_comment", flaky_post)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", contains)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        # Pass one died on its first chunk. Pass two found that chunk's
+        # mark and posted only what was still owed — one chunk, not two.
+        assert recorded["summaries"] == [(772, "b" * 40_000 + "\n\n" + sessions._answer_chunk_marker(31, 1))]
+        assert recorded["attempts"] == [(31, False), (31, True)]
 
     async def test_a_thread_someone_resolved_stays_theirs(self, monkeypatch, tmp_path):
         # A thread a person resolved on purpose is not reopened by the
