@@ -17,6 +17,16 @@ export const DEFAULT_BENCHMARK_SETTINGS: BenchmarkSettings = {
   profile: 'synchronous', concurrency: 1, seed: 42, max_output_tokens: 512, serving_overrides: {},
 };
 
+export const COMPARISON_SAMPLE_SIZE = 50;
+
+/** Keep cache and precision choices while preparing a repeatable one-parameter comparison. */
+export function comparisonBaseline(settings: BenchmarkSettings): BenchmarkSettings {
+  return {
+    ...DEFAULT_BENCHMARK_SETTINGS, profile: 'concurrent', concurrency: 4,
+    serving_overrides: { ...structuredClone(settings.serving_overrides), tensor_parallel_size: 1, pipeline_parallel_size: 1 },
+  };
+}
+
 export interface DatasetMetadata {
   dataset: string;
   subset: string;

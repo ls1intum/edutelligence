@@ -11,7 +11,7 @@ import {
 import { NgClass } from '@angular/common';
 import { BenchmarkComparison } from './benchmark-comparison';
 import { BenchmarkSettingsEditor } from './benchmark-settings-editor';
-import { BenchmarkSettings, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
+import { BenchmarkSettings, COMPARISON_SAMPLE_SIZE, comparisonBaseline, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
 import {
   CdkVirtualScrollViewport,
   ScrollingModule,
@@ -348,7 +348,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkStartingPairId = signal<number | null>(null);
   readonly benchmarkCancellingJobId = signal<number | null>(null);
   readonly benchmarkStartError = signal<string | null>(null);
-  readonly benchmarkSampleSize = signal(5);
+  readonly benchmarkSampleSize = signal(COMPARISON_SAMPLE_SIZE);
   readonly benchmarkSettings = signal<BenchmarkSettings>({ ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: {} });
   readonly benchmarkSettingsValid = signal(true);
   readonly selectedBenchmarkPairId = signal<number | null>(null);
@@ -356,6 +356,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     pair => pair.model_provider_id === this.selectedBenchmarkPairId(),
   ) ?? this.benchmarkPairs()[0] ?? null);
 
+
+  useComparisonBaseline(): void {
+    if (this.selectedBenchmarkPair()?.provider_type !== 'logosnode') return;
+    this.benchmarkSettings.set(comparisonBaseline(this.benchmarkSettings()));
+    this.benchmarkSampleSize.set(COMPARISON_SAMPLE_SIZE);
+  }
 
   useBenchmarkConfiguration(benchmark: ModelProviderBenchmark): void {
     this.benchmarkSettings.set(settingsFromBenchmark(benchmark));
@@ -823,7 +829,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   setBenchmarkSampleSize(value: string): void {
     const parsed = Number(value);
-    this.benchmarkSampleSize.set(Number.isFinite(parsed) ? Math.min(100, Math.max(1, Math.round(parsed))) : 5);
+    this.benchmarkSampleSize.set(Number.isFinite(parsed) ? Math.min(100, Math.max(1, Math.round(parsed))) : COMPARISON_SAMPLE_SIZE);
   }
 
   formatSampleCount(count: number): string {

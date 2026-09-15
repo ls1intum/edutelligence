@@ -1,4 +1,4 @@
-import { benchmarkErrorMessage } from './benchmark-settings';
+import { COMPARISON_SAMPLE_SIZE, comparisonBaseline, benchmarkErrorMessage } from './benchmark-settings';
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
@@ -19,6 +19,18 @@ const recorded = {
 } as unknown as ModelProviderBenchmark;
 
 describe('Next benchmark settings', () => {
+  it('prepares the comparison baseline without changing cache settings or the original draft', () => {
+    const previous = settingsFromBenchmark(recorded);
+    const baseline = comparisonBaseline(previous);
+    expect(COMPARISON_SAMPLE_SIZE).toBe(50);
+    expect(baseline).toMatchObject({ dataset: 'openai/gsm8k', subset: 'main', split: 'test',
+      text_column: 'question', seed: 42, max_output_tokens: 512, profile: 'concurrent', concurrency: 4,
+      serving_overrides: { tensor_parallel_size: 1, pipeline_parallel_size: 1, enable_prefix_caching: false, kv_cache_memory_bytes: '1024' } });
+    (baseline.serving_overrides['hf_overrides'] as any).nested.value = 9;
+    expect((previous.serving_overrides['hf_overrides'] as any).nested.value).toBe(1);
+    expect(previous.serving_overrides['tensor_parallel_size']).toBe(2);
+  });
+
   it('copies the recorded dataset, normalized concurrency and serving values into an independent draft', () => {
     const draft = settingsFromBenchmark(recorded);
     expect(draft).toMatchObject({ dataset: 'org/prompts', subset: 'default', split: 'validation',

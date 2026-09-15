@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input, signal } from '@an
 import { DatePipe } from '@angular/common';
 import { ModelProviderBenchmark } from '../../shared/models/provider.model';
 import { benchmarkConfigurationItems, servingConfigurationItems } from './benchmark-configuration';
+import { canCompare, comparisonSettings, isolatedRuns, parameterValue } from './benchmark-isolation';
 
 export type ComparisonMetric = 'throughput' | 'ttft' | 'ttlt';
 
@@ -34,43 +35,40 @@ export class BenchmarkComparison {
   readonly runs = input.required<readonly ModelProviderBenchmark[]>();
   readonly metrics = COMPARISON_METRICS;
   readonly metric = signal<ComparisonMetric>('throughput');
-  readonly selectedIds = signal<readonly number[] | null>(null);
-  readonly providerFilter = signal('');
-  readonly datasetFilter = signal('');
+  readonly baselineId = signal<number | null>(null);
   readonly orderedRuns = computed(() => [...this.runs()].sort((a, b) =>
     Date.parse(b.recorded_at) - Date.parse(a.recorded_at) || b.id - a.id));
-  readonly selected = computed(() => {
-    const ids = this.selectedIds();
-    return ids === null ? this.orderedRuns().slice(0, 3)
-      : this.orderedRuns().filter(run => ids.includes(run.id));
-  });
-  readonly providers = computed(() => [...new Map(this.orderedRuns().map(run =>
-    [run.provider_id, run.provider_name])).entries()]);
-  readonly datasets = computed(() => [...new Set(this.runs().map(run => run.dataset))].sort());
-  readonly filteredRuns = computed(() => this.orderedRuns().filter(run =>
-    (!this.providerFilter() || String(run.provider_id) === this.providerFilter()) &&
-    (!this.datasetFilter() || run.dataset === this.datasetFilter())));
+  readonly eligibleRuns = computed(() => this.orderedRuns().filter(canCompare));
+  readonly baseline = computed(() => this.eligibleRuns().find(run => run.id === this.baselineId())
+    ?? this.eligibleRuns().find(run => run.dataset === 'openai/gsm8k' && run.sample_size === 50
+      && parameterValue(run, 'tensor_parallel_size') === 1 && parameterValue(run, 'max_concurrency') === 4)
+    ?? this.eligibleRuns()[0] ?? null);
+  readonly baselineSettings = computed(() => this.baseline() ? comparisonSettings(this.baseline()!) : {});
   readonly activeMetric = computed(() => this.metrics.find(metric => metric.key === this.metric())!);
-  readonly chartRows = computed(() => this.selected().map(run => ({ run, value: comparisonValue(run, this.metric()) })));
+  readonly charts = computed(() => {
+    const baseline = this.baseline();
+    if (!baseline) return [];
+    return ([
+      { key: 'tensor_parallel_size', label: 'Tensor parallelism', fixed: `Concurrency fixed at ${this.baselineSettings()['max_concurrency']}` },
+      { key: 'max_concurrency', label: 'Concurrent requests', fixed: `TP fixed at ${this.baselineSettings()['tensor_parallel_size']}` },
+    ] as const).map(parameter => {
+      const runs = isolatedRuns(this.orderedRuns(), baseline, parameter.key);
+      const values = [...new Set(runs.map(run => parameterValue(run, parameter.key)!))];
+      return { ...parameter, groups: values.map(value => ({ parameter: value,
+        rows: runs.filter(run => parameterValue(run, parameter.key) === value)
+          .map(run => ({ run, value: comparisonValue(run, this.metric()) })),
+      })) };
+    });
+  });
+  readonly selected = computed(() => [...new Map(this.charts().flatMap(chart => chart.groups)
+    .flatMap(group => group.rows).map(row => [row.run.id, row.run])).values()]);
+  readonly excludedCount = computed(() => this.runs().length - this.selected().length);
   readonly chartMax = computed(() => {
-    const max = Math.max(0, ...this.chartRows().map(row => row.value ?? 0));
+    const max = Math.max(0, ...this.selected().map(run => comparisonValue(run, this.metric()) ?? 0));
     if (max === 0) return 1;
     const step = 10 ** Math.floor(Math.log10(max));
     return Math.ceil(max / step) * step;
   });
-  readonly differentInputs = computed(() => new Set(this.selected().map(run => JSON.stringify(
-    benchmarkConfigurationItems(run).filter(item => [
-      'dataset', 'subset', 'split', 'text_column', 'sample_size', 'max_output_tokens', 'seed',
-    ].includes(item.key)).map(item => item.value),
-  ))).size > 1);
-
-  isSelected(id: number): boolean { return this.selected().some(run => run.id === id); }
-
-  toggleRun(id: number): void {
-    const ids = this.selected().map(run => run.id);
-    this.selectedIds.set(ids.includes(id) ? ids.filter(value => value !== id)
-      : ids.length < 5 ? [...ids, id] : ids);
-  }
 
   format(value: number | null): string {
     if (value === null) return '—';

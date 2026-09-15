@@ -552,7 +552,12 @@
                   <h3>Run benchmark</h3>
                   <p>{{ benchmarkSettings().dataset }} · {{ benchmarkSettings().subset }}/{{ benchmarkSettings().split }} · {{ benchmarkSettings().max_output_tokens }} max output tokens · one unmeasured warm-up request</p>
                 </div>
-                <span>One active run per provider</span>
+                @if (selectedBenchmarkPair()?.provider_type === 'logosnode') {
+                  <button type="button" class="benchmark-run-button" (click)="useComparisonBaseline()"
+                    title="Prepare GSM8K main/test, 50 requests, 512 max output tokens, seed 42, TP 1, PP 1 and concurrency 4. Other worker settings stay unchanged.">
+                    Use comparison baseline
+                  </button>
+                }
               </header>
 
               <label class="benchmark-worker-select">Worker / provider for the next benchmark
