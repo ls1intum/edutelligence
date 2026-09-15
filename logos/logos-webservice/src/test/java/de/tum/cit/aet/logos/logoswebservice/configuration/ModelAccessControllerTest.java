@@ -182,6 +182,32 @@ class ModelAccessControllerTest {
     }
 
     @Test
+    void getModelAccess_inactiveKeyIsNeverEffective() throws Exception {
+        // An inactive key holding both grants still cannot authenticate (request
+        // auth looks keys up with is_active = true), so it must never show
+        // effective access even though both grants are present.
+        jdbc.update("UPDATE api_keys SET use_custom_permissions = true, is_active = false WHERE id = 3001");
+        mvc.perform(put("/admin/api-keys/3001/model-permissions")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_ids\":[5001]}"))
+           .andExpect(status().isOk());
+        mvc.perform(put("/admin/api-keys/3001/provider-permissions")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_ids\":[6001]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(get("/admin/models/5001/access").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.api_keys.length()").value(1))
+           .andExpect(jsonPath("$.api_keys[0].is_active").value(false))
+           .andExpect(jsonPath("$.api_keys[0].model_grant").value(true))
+           .andExpect(jsonPath("$.api_keys[0].provider_grants[0].granted").value(true))
+           .andExpect(jsonPath("$.api_keys[0].effective_access").value(false));
+    }
+
+    @Test
     void getModelAccess_keyWithOnlyHostProviderGrantIsListed() throws Exception {
         jdbc.update("UPDATE api_keys SET use_custom_permissions = true WHERE id = 3001");
         mvc.perform(put("/admin/api-keys/3001/provider-permissions")

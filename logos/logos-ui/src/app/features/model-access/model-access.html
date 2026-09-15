@@ -1,28 +1,13 @@
 <div class="model-access">
 
-  <a class="breadcrumb" routerLink="/models">
-    <i class="pi pi-chevron-left" aria-hidden="true"></i> Models
-  </a>
-
   @if (loading()) {
     <div class="loading-state">
       <i class="pi pi-spin pi-spinner"></i>
-      <span>Loading model…</span>
+      <span>Loading model access…</span>
     </div>
   } @else if (loadError()) {
     <app-error-message variant="banner" message="Failed to load model access, please refresh." />
   } @else if (access(); as a) {
-
-    <!-- ── Header ──────────────────────────────────────────────────────── -->
-    <header class="page-header">
-      <div class="header-left">
-        <h1 class="model-name">{{ a.model.name }}</h1>
-        <p class="page-subtitle">Model Access</p>
-      </div>
-      <a class="btn-secondary header-action" [routerLink]="['/models', a.model.id, 'details']">
-        <i class="pi pi-file" aria-hidden="true"></i> Error report
-      </a>
-    </header>
 
     <!-- ── Model facts ─────────────────────────────────────────────────── -->
     <div class="facts">

@@ -182,9 +182,9 @@ export class Models implements OnInit {
     return `Not used for ${daysSince(iso)} days`;
   }
 
-  /** Model row click: the access page (hosting providers, team/key grant matrix). */
+  /** Model row click: the model details view, opened on the Access tab (hosting providers, team/key grant matrix). */
   openModel(model: Model): void {
-    this.router.navigate(['/models', model.id, 'access']);
+    this.router.navigate(['/models', model.id, 'details'], { queryParams: { tab: 'access' } });
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

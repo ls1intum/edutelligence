@@ -1,54 +1,9 @@
+// Rendered inside the model-details view (third tab), whose root already
+// carries the page padding — this container must stay un-padded.
 .model-access {
-  padding: 36px 32px 48px;
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-}
-
-.breadcrumb {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
-  text-decoration: none;
-  margin-bottom: 16px;
-  opacity: var(--opacity-link);
-  transition: opacity 0.15s;
-
-  &:hover { opacity: 1; }
-}
-
-// ── Header ─────────────────────────────────────────────────────────────────
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.model-name {
-  font-size: var(--font-size-3xl);
-  font-weight: var(--font-weight-bold);
-  color: rgb(var(--nav-active-text));
-  margin: 0 0 2px;
-  overflow-wrap: anywhere;
-}
-
-.page-subtitle {
-  font-size: var(--font-size-md);
-  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
-  margin: 0;
-}
-
-.header-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-top: 6px;
 }
 
 // ── Model facts ────────────────────────────────────────────────────────────
@@ -233,8 +188,5 @@
 }
 
 @media (max-width: 768px) {
-  .model-access { padding: 24px 16px 32px; }
-
-  .page-header { flex-direction: column; }
   .facts { grid-template-columns: 1fr 1fr; }
 }

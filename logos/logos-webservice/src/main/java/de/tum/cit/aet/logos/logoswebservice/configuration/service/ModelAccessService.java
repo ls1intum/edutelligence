@@ -139,6 +139,10 @@ public class ModelAccessService {
             Set<Integer> granted = grantedProviderIds.getOrDefault(key.getKeyId(), Set.of());
             List<ProviderGrantDTO> grantsDTO = providerGrantsFor(providers, granted::contains);
             boolean modelGrant = Boolean.TRUE.equals(key.getModelGrant());
+            boolean isActive = Boolean.TRUE.equals(key.getIsActive());
+            // An inactive key can never authenticate (request auth looks keys up
+            // with is_active = true), so it never has effective access — even
+            // with the model grant and a host-provider grant.
             return new KeyAccessDTO(
                 key.getKeyId(),
                 key.getKeyName(),
@@ -147,7 +151,7 @@ public class ModelAccessService {
                 key.getTeamName(),
                 modelGrant,
                 grantsDTO,
-                effective(modelGrant, grantsDTO));
+                isActive && effective(modelGrant, grantsDTO));
         }).toList();
     }
 
