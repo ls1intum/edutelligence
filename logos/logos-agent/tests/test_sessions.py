@@ -999,6 +999,9 @@ class TestAnAnswerThatWasNeverWritten:
             posted.append((number, body))
             return f"https://github.com/x/y/issues/{number}#issuecomment-1"
 
+        async def issue_comment_contains(_number, _marker):
+            return False
+
         async def record_reply_attempt(session_id, *, delivered):
             attempts.append((session_id, delivered))
 
@@ -1013,6 +1016,7 @@ class TestAnAnswerThatWasNeverWritten:
         monkeypatch.setattr(sessions.db, "abandon_reply", abandon_reply)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
         monkeypatch.setattr(sessions.github, "post_issue_comment", post_issue_comment)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", issue_comment_contains)
         return posted, attempts
 
     async def test_a_silent_session_is_taken_up_again_rather_than_announced(self, monkeypatch, tmp_path):
@@ -1057,7 +1061,7 @@ class TestAnAnswerThatWasNeverWritten:
 
         await sessions.manager._post_reply(30)
 
-        assert posted[0][1] == "The alignment is fixed by the flex rule on line 42."
+        assert posted[0][1] == "The alignment is fixed by the flex rule on line 42.\n\n" + sessions._answer_marker(30)
 
     async def test_an_unreadable_file_is_retried_rather_than_abandoned(self, monkeypatch, tmp_path):
         # A mount that is not there yet is not an answer that was never
@@ -1107,6 +1111,9 @@ class TestAnAnswerThatWasNeverWritten:
             posted.append((number, body))
             return f"https://github.com/x/y/issues/{number}#issuecomment-1"
 
+        async def issue_comment_contains(_number, _marker):
+            return False
+
         async def record_reply_attempt(_session_id, *, delivered):
             if delivered:
                 row["reply_posted_at"] = "2026-09-09T00:00:00Z"
@@ -1119,6 +1126,7 @@ class TestAnAnswerThatWasNeverWritten:
         monkeypatch.setattr(sessions.github, "post_issue_comment", post_issue_comment)
         monkeypatch.setattr(sessions.db, "record_reply_attempt", record_reply_attempt)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", issue_comment_contains)
 
         directory = tmp_path / "30"
         directory.mkdir()
@@ -1126,7 +1134,7 @@ class TestAnAnswerThatWasNeverWritten:
 
         await asyncio.gather(sessions.manager._post_reply(30), sessions.manager._post_reply(30))
 
-        assert posted == [(886, "The answer.")]
+        assert posted == [(886, "The answer.\n\n" + sessions._answer_marker(30))]
 
 
 class TestReactionsOnAThread:
@@ -3795,6 +3803,7 @@ class TestReplyDelivery:
         monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
         monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
         monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", self._async_value(False))
         monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(failing_reply))
 
         await sessions.SessionManager()._post_reply(7)
@@ -3824,11 +3833,12 @@ class TestReplyDelivery:
         monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
         monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
         monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", self._async_value(False))
         monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
 
         await sessions.SessionManager().deliver_pending_replies()
 
-        assert posted == [("issue:772", "the answer")]
+        assert posted == [("issue:772", "the answer\n\n" + sessions._answer_marker(7))]
         assert attempts == [(7, True)]
 
     async def test_a_delivered_answer_is_not_posted_twice(self, monkeypatch, tmp_path):
@@ -3856,7 +3866,37 @@ class TestReplyDelivery:
 
         assert posted == []
 
-    async def test_an_oversized_answer_is_shortened_rather_than_refused(self, monkeypatch, tmp_path):
+    async def test_a_failed_marker_lookup_is_recorded_as_pending(self, monkeypatch, tmp_path):
+        # The look-up for a lost confirmation fails like the POST it
+        # protects: the attempt is recorded undelivered and the next pass
+        # tries again, and nothing escapes to the settlement.
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("the answer")
+        attempts: list = []
+
+        async def broken(_number, _marker):
+            raise RuntimeError("rate limited")
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        async def send(_target, _body):
+            raise AssertionError("a failed look-up must not reach the POST")
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", broken)
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        await sessions.SessionManager()._post_reply(7)
+
+        assert attempts == [(7, False)]
+
+    async def test_an_oversized_answer_is_split_rather_than_truncated(self, monkeypatch, tmp_path):
         from app import sessions
 
         monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
@@ -3871,14 +3911,908 @@ class TestReplyDelivery:
         monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "issue:772"}))
         monkeypatch.setattr(sessions.db, "record_reply_attempt", self._async_value(None))
         monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", self._async_value(False))
         monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
 
         await sessions.SessionManager()._post_reply(7)
 
         # GitHub rejects a body over 65 536 characters outright, and a
-        # rejected answer is no answer.
-        assert len(posted[0]) < 65_000
-        assert posted[0].endswith("_[answer truncated]_")
+        # rejected answer is no answer. The oversized answer is not
+        # shortened with its tail lost: it is said in order across the
+        # comments it needs, each within the limit, each under its own
+        # mark, and none of it is dropped.
+        assert len(posted) == 2
+        assert all(len(body) < 65_536 for body in posted)
+        assert posted[0] == "x" * 60_000 + "\n\n" + sessions._answer_marker(7)
+        assert posted[1] == "x" * 20_000 + "\n\n" + sessions._answer_chunk_marker(7, 1)
+
+    def test_the_chunks_reproduce_the_body_exactly(self):
+        # The split must be lossless: the fallback promises the complete
+        # answer, and a boundary the splitter ate — a trailing space, a
+        # blank line — is formatting changed, not just moved.
+        from app import sessions
+
+        body = "first line\n\n" + "z" * 60_000 + "\n\nmid   \n\nlast line\n\n"
+        chunks = sessions.SessionManager._reply_chunks(body)
+
+        assert len(chunks) == 3
+        assert all(len(chunk) <= sessions._MAX_REPLY_CHARS for chunk in chunks)
+        assert "".join(chunks) == body
+
+    async def test_an_inline_answer_resumes_after_its_posted_chunks(self, monkeypatch, tmp_path):
+        # The review_comment target is answered in chunks too, and every
+        # chunk is reconciled in its thread: a retry after a failed chunk
+        # resumes after the chunks already in the thread instead of
+        # duplicating them.
+        from app import sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        (tmp_path / "7").mkdir()
+        (tmp_path / "7" / "reply.md").write_text("x" * 80_000)
+        posted: list = []
+        attempts: list = []
+
+        async def send(target, body):
+            posted.append((target, body))
+            if len(posted) == 1:
+                raise RuntimeError("the confirmation never arrived")
+            return "url"
+
+        async def find(_number, _comment_id, marker, _threads):
+            return bool(posted) and marker == sessions._answer_marker(7)
+
+        async def record(session_id, *, delivered):
+            attempts.append((session_id, delivered))
+
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value({"reply_target": "review_comment:772:101"}))
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "review_thread_map", self._async_value({}))
+        monkeypatch.setattr(sessions.github, "review_reply_is_in_thread", find)
+        monkeypatch.setattr(sessions.SessionManager, "_send_reply", staticmethod(send))
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(7)
+        await manager._post_reply(7)
+
+        # Pass one posted the first chunk and died on the second. Pass
+        # two found the first chunk's mark in the thread and posted only
+        # what was still owed — the posted chunk is not said twice.
+        assert posted == [
+            ("review_comment:772:101", "x" * 60_000 + "\n\n" + sessions._answer_marker(7)),
+            ("review_comment:772:101", "x" * 20_000 + "\n\n" + sessions._answer_chunk_marker(7, 1)),
+        ]
+        assert attempts == [(7, False), (7, True)]
+
+
+class TestReviewReplyDelivery:
+    """A review is answered thread by thread, and the reviewer is asked back.
+
+    One big comment answers every question somewhere none of them was asked:
+    each inline comment gets its answer in its own thread, the threads are
+    resolved once they have their answer, and the pull request is put back in
+    front of the reviewer — whose "changes requested" stands until they look
+    again.
+    """
+
+    REVIEW_ROW = {
+        "id": 31,
+        "trigger_kind": "review",
+        "trigger_ref": "pr-772-review-5085681761",
+        "reply_target": "issue:772",
+        "reply_posted_at": None,
+        "status": "succeeded",
+    }
+
+    @staticmethod
+    def _async_value(value):
+        async def fake(*_args, **_kwargs):
+            return value
+
+        return fake
+
+    @staticmethod
+    def _posted(comment_id, body):
+        """One answer as it reaches GitHub: the text and its delivery marker."""
+        from app import sessions
+
+        return (772, comment_id, body + "\n\n" + sessions._reply_marker(31, comment_id))
+
+    @staticmethod
+    def _single(body):
+        """The single answer as it reaches GitHub, its marker included."""
+        from app import sessions
+
+        return (772, body + "\n\n" + sessions._answer_marker(31))
+
+    @staticmethod
+    def _summarized(body):
+        """The review summary as it reaches GitHub, its marker included."""
+        from app import sessions
+
+        return (772, body + "\n\n" + sessions._summary_marker(31))
+
+    def install(self, monkeypatch, tmp_path, row, *, comments=None, threads=None):
+        """The review delivery, with every GitHub call recorded."""
+        from app import sessions
+
+        monkeypatch.setattr(
+            sessions,
+            "settings",
+            replace(sessions.settings, artifact_root=str(tmp_path), state_root=str(tmp_path / "state")),
+        )
+        recorded = {
+            "threads": [],
+            "summaries": [],
+            "resolved": [],
+            "re_requests": [],
+            "attempts": [],
+            "checks": [],
+            "issue_checks": [],
+            "maps": [],
+        }
+
+        async def get_session(_session_id):
+            return row
+
+        async def fake_review(_number, _review_id):
+            return {"id": 5085681761, "user": {"login": "claudia"}}
+
+        async def fake_comments(_number, _review_id):
+            # Bodies matter: only a comment that carries something to
+            # answer is actionable, and its reply is owed before the
+            # review may be re-requested.
+            return (
+                comments
+                if comments is not None
+                else [
+                    {"id": 101, "body": "the close must come after the drain"},
+                    {"id": 102, "body": "this path is never reached"},
+                ]
+            )
+
+        async def fake_reply(number, comment_id, body):
+            recorded["threads"].append((number, comment_id, body))
+            return f"https://github.com/x/y#issuecomment-{comment_id}"
+
+        async def fake_summary(number, body):
+            recorded["summaries"].append((number, body))
+            return f"https://github.com/x/y#issuecomment-{number}"
+
+        async def fake_threads_map(_number):
+            recorded["maps"].append(_number)
+            return (
+                threads
+                if threads is not None
+                else {
+                    101: {"thread": "PRRT_1", "resolved": False},
+                    102: {"thread": "PRRT_2", "resolved": False},
+                }
+            )
+
+        async def fake_resolve(thread_ids):
+            recorded["resolved"].extend(thread_ids)
+
+        async def fake_find(number, comment_id, marker, threads=None):
+            recorded["checks"].append((number, comment_id, marker))
+            return False
+
+        async def fake_issue_contains(number, marker):
+            recorded["issue_checks"].append((number, marker))
+            return False
+
+        async def fake_request(_number, logins):
+            recorded["re_requests"].extend(logins)
+
+        async def record(session_id, *, delivered):
+            recorded["attempts"].append((session_id, delivered))
+
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.db, "record_reply_attempt", record)
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+        monkeypatch.setattr(sessions.github, "review", fake_review)
+        monkeypatch.setattr(sessions.github, "review_comments", fake_comments)
+        monkeypatch.setattr(sessions.github, "reply_to_review_comment", fake_reply)
+        monkeypatch.setattr(sessions.github, "post_issue_comment", fake_summary)
+        monkeypatch.setattr(sessions.github, "review_thread_map", fake_threads_map)
+        monkeypatch.setattr(sessions.github, "resolve_review_threads", fake_resolve)
+        monkeypatch.setattr(sessions.github, "review_reply_is_in_thread", fake_find)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", fake_issue_contains)
+        monkeypatch.setattr(sessions.github, "request_pull_review", fake_request)
+        return recorded
+
+    async def test_each_comment_gets_its_answer_in_its_own_thread(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("the close is now after the drain")
+        (directory / "replies" / "102.md").write_text("already addressed on line 40")
+        (directory / "replies" / "notes.txt").write_text("not an answer to a comment")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [
+            self._posted(101, "the close is now after the drain"),
+            self._posted(102, "already addressed on line 40"),
+        ]
+        assert recorded["summaries"] == []
+        assert recorded["resolved"] == ["PRRT_1", "PRRT_2"]
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, True)]
+        # The delivery asks two comments and resolves two threads, but the
+        # map with all of its pages is built once for the whole of it.
+        assert recorded["maps"] == [772]
+
+    async def test_the_summary_is_posted_alongside_the_thread_answers(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("fixed")
+        (directory / "replies" / "102.md").write_text("fixed too")
+        (directory / "reply.md").write_text("and the body point: the default is documented now")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [self._posted(101, "fixed"), self._posted(102, "fixed too")]
+        assert recorded["summaries"] == [self._summarized("and the body point: the default is documented now")]
+        assert recorded["re_requests"] == ["claudia"]
+
+    async def test_a_comment_the_review_does_not_carry_is_not_answered(self, monkeypatch, tmp_path):
+        # A file named after a comment the review does not contain is not an
+        # answer to the review: posting it would write into a thread that
+        # does not belong to this review. Left with nothing to say, the
+        # session is taken up again rather than answered.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "999.md").write_text("an answer for a comment that is not in this review")
+        taken_up: list = []
+        abandoned: list = []
+
+        async def take_up_again(_self, session):
+            taken_up.append(session["id"])
+            return 99
+
+        async def abandon(session_id, *, attempts):
+            abandoned.append(session_id)
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+        monkeypatch.setattr(sessions.db, "abandon_reply", abandon)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == []
+        assert recorded["re_requests"] == []
+        assert taken_up == [31]
+        assert abandoned == [31]
+
+    async def test_the_reviewer_is_not_asked_back_when_the_work_did_not_land(self, monkeypatch, tmp_path):
+        # A failed session pushed nothing: asking the reviewer to look again
+        # at the same code would be a re-request without a change. The
+        # answers that were written still go out.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW, status="failed")
+        recorded = self.install(monkeypatch, tmp_path, row, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("what I managed to say")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [self._posted(101, "what I managed to say")]
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_retry_resumes_where_the_attempt_stopped(self, monkeypatch, tmp_path):
+        # The re-request dies on the first delivery pass. The next pass must
+        # not answer a thread twice: what reached GitHub stays, the rest
+        # goes out.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "replies" / "102.md").write_text("two")
+        (directory / "reply.md").write_text("the body point")
+        calls = {"n": 0}
+
+        async def flaky_request(_number, logins):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("rate limited")
+            recorded["re_requests"].extend(logins)
+
+        monkeypatch.setattr(sessions.github, "request_pull_review", flaky_request)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        assert recorded["threads"] == [self._posted(101, "one"), self._posted(102, "two")]
+        assert recorded["summaries"] == [self._summarized("the body point")]
+        assert recorded["resolved"] == ["PRRT_1", "PRRT_2"]
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, False), (31, True)]
+
+    async def test_a_retry_without_a_summary_is_not_no_answer(self, monkeypatch, tmp_path):
+        # Every answer is a per-comment file; there is no reply.md. The
+        # first pass gets them all out and then dies on the re-request. The
+        # second must resume — a retry that finds nothing new to post is
+        # not an answerless session, and restarting one would re-answer a
+        # review that is already answered.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "replies" / "102.md").write_text("two")
+        calls = {"n": 0}
+
+        async def flaky_request(_number, logins):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("rate limited")
+            recorded["re_requests"].extend(logins)
+
+        monkeypatch.setattr(sessions.github, "request_pull_review", flaky_request)
+        taken_up: list = []
+
+        async def take_up_again(_self, session):
+            taken_up.append(session["id"])
+            return 99
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        assert recorded["threads"] == [self._posted(101, "one"), self._posted(102, "two")]
+        assert recorded["summaries"] == []
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, False), (31, True)]
+        assert taken_up == []
+
+    async def test_a_refused_resolution_leaves_the_thread_open_but_delivers(self, monkeypatch, tmp_path):
+        # GitHub can answer a resolution and still refuse it — the thread is
+        # gone, or the token may not act on it. The thread stays open for a
+        # person and is recorded as dealt with; the re-requested review does
+        # not wait on a thread that will never resolve.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+
+        async def refused(_thread_ids):
+            raise sessions.github.GitHubError("could not resolve: not found", graphql_type="NOT_FOUND")
+
+        monkeypatch.setattr(sessions.github, "resolve_review_threads", refused)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [self._posted(101, "one")]
+        assert recorded["resolved"] == []
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, True)]
+        state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
+        assert state["resolved_threads"] == ["PRRT_1"]
+
+    async def test_an_incomplete_answer_is_not_delivered(self, monkeypatch, tmp_path):
+        # The review asked two things and only one was answered. Delivering
+        # the one that exists would put the pull request back in front of
+        # the reviewer with a question still open, so the session is taken
+        # up again and nothing goes out.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("answered")
+        taken_up: list = []
+        abandoned: list = []
+
+        async def take_up_again(_self, session):
+            taken_up.append(session["id"])
+            return 99
+
+        async def abandon(session_id, *, attempts):
+            abandoned.append(session_id)
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+        monkeypatch.setattr(sessions.db, "abandon_reply", abandon)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == []
+        assert recorded["resolved"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == []
+        assert taken_up == [31]
+        assert abandoned == [31]
+
+    async def test_a_retryable_resolution_error_hands_the_sweep_back(self, monkeypatch, tmp_path):
+        # A rate limit on the resolution will lift: swallowing it would
+        # leave a thread open that a retry could have closed. The delivery
+        # fails like any other — the posted answers stay, the attempt is
+        # recorded as undelivered, and the sweep is tried again.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+
+        async def limited(_thread_ids):
+            raise sessions.github.GitHubError("rate limited", graphql_type="RATE_LIMITED")
+
+        monkeypatch.setattr(sessions.github, "resolve_review_threads", limited)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [self._posted(101, "one")]
+        assert recorded["resolved"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, False)]
+        assert json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())["resolved_threads"] == []
+
+    async def test_a_lost_post_confirmation_is_not_answered_twice(self, monkeypatch, tmp_path):
+        # GitHub created the reply, but the confirmation never arrived and
+        # the state never learned of it. The next pass must find the answer
+        # already in its thread by its marker and record it as delivered —
+        # posting again would answer the comment twice.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        posted_remotely = {"n": 0}
+
+        async def lost_confirmation(number, comment_id, body):
+            posted_remotely["n"] += 1
+            if posted_remotely["n"] == 1:
+                raise RuntimeError("the confirmation never arrived")
+            recorded["threads"].append((number, comment_id, body))
+            return f"https://github.com/x/y#issuecomment-{comment_id}"
+
+        async def find(_number, comment_id, _marker, _threads=None):
+            recorded["checks"].append((comment_id,))
+            return posted_remotely["n"] >= 1
+
+        monkeypatch.setattr(sessions.github, "reply_to_review_comment", lost_confirmation)
+        monkeypatch.setattr(sessions.github, "review_reply_is_in_thread", find)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        # The first pass posted and lost the confirmation; the second found
+        # the marker and recorded the answer without posting it again.
+        assert recorded["threads"] == []
+        assert [c[0] for c in recorded["checks"]] == [101, 101]
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, False), (31, True)]
+        state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
+        assert state["replied"] == [101]
+
+    async def test_a_lost_summary_confirmation_is_not_posted_twice(self, monkeypatch, tmp_path):
+        # GitHub created the summary comment, but the confirmation never
+        # arrived and the state never learned of it. The next pass must
+        # find the summary on the pull request by its mark and record it
+        # as posted — posting again would say the same thing twice.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "reply.md").write_text("the body point")
+        posted_remotely = {"n": 0}
+
+        async def lost_summary(number, body):
+            posted_remotely["n"] += 1
+            if posted_remotely["n"] == 1:
+                raise RuntimeError("the confirmation never arrived")
+            recorded["summaries"].append((number, body))
+            return f"https://github.com/x/y#issuecomment-{number}"
+
+        async def contains(_number, _marker):
+            return posted_remotely["n"] >= 1
+
+        monkeypatch.setattr(sessions.github, "post_issue_comment", lost_summary)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", contains)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        assert recorded["summaries"] == []
+        assert recorded["re_requests"] == ["claudia"]
+        assert recorded["attempts"] == [(31, False), (31, True)]
+        state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
+        assert state["summary_posted"] is True
+
+    async def test_a_lost_single_reply_confirmation_is_not_posted_twice(self, monkeypatch, tmp_path):
+        # The deleted-review fallback owes one combined answer. GitHub
+        # created it, the confirmation never arrived: the next pass finds
+        # the mark on the pull request and records the delivery without
+        # saying the answer twice.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        posted_remotely = {"n": 0}
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        async def lost_summary(number, body):
+            posted_remotely["n"] += 1
+            if posted_remotely["n"] == 1:
+                raise RuntimeError("the confirmation never arrived")
+            recorded["summaries"].append((number, body))
+            return f"https://github.com/x/y#issuecomment-{number}"
+
+        async def contains(_number, _marker):
+            return posted_remotely["n"] >= 1
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        monkeypatch.setattr(sessions.github, "post_issue_comment", lost_summary)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", contains)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        assert recorded["summaries"] == []
+        assert recorded["attempts"] == [(31, False), (31, True)]
+
+    async def test_a_deleted_review_after_a_posted_summary_still_posts_the_answers(self, monkeypatch, tmp_path):
+        # The summary reached the pull request, the re-request failed, and
+        # the review — with its threads — was deleted before the retry. The
+        # summary's mark must not stand for the combined answer: the thread
+        # answers were lost with the threads, and they still have to be said.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "reply.md").write_text("the body point")
+        reviews_seen = {"n": 0}
+        requests_seen = {"n": 0}
+        posted = {"summary": False}
+
+        async def gone_later(_number, _review_id):
+            reviews_seen["n"] += 1
+            if reviews_seen["n"] >= 2:
+                raise sessions.github.GitHubError("the review is gone (404)", status=404)
+            return {"id": 5085681761, "user": {"login": "claudia"}}
+
+        async def flaky_request(_number, logins):
+            requests_seen["n"] += 1
+            if requests_seen["n"] == 1:
+                raise RuntimeError("rate limited")
+            recorded["re_requests"].extend(logins)
+
+        async def post_summary(number, body):
+            posted["summary"] = True
+            recorded["summaries"].append((number, body))
+            return f"https://github.com/x/y#issuecomment-{number}"
+
+        async def contains(_number, marker):
+            # Only the summary's mark can be on the pull request: the
+            # thread answers went into the threads that are now gone.
+            return posted["summary"] and marker == sessions._summary_marker(31)
+
+        monkeypatch.setattr(sessions.github, "review", gone_later)
+        monkeypatch.setattr(sessions.github, "request_pull_review", flaky_request)
+        monkeypatch.setattr(sessions.github, "post_issue_comment", post_summary)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", contains)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        # Pass one answered the thread, posted the summary, and died on
+        # the re-request. Pass two found the review gone and posted the
+        # combined answer under its own mark — the summary's did not stand
+        # for it.
+        assert recorded["threads"] == [self._posted(101, "one")]
+        assert recorded["summaries"] == [
+            self._summarized("the body point"),
+            self._single("the body point\n\n**Answer to review comment 101:**\n\none"),
+        ]
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, False), (31, True)]
+
+    async def test_a_review_row_without_a_reference_posts_the_summary_only(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW, trigger_ref="pr-772")
+        recorded = self.install(monkeypatch, tmp_path, row)
+        directory = tmp_path / "31"
+        directory.mkdir()
+        (directory / "reply.md").write_text("the whole answer")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [self._single("the whole answer")]
+        assert recorded["threads"] == []
+        assert recorded["re_requests"] == []
+
+    async def test_a_deleted_review_posts_the_summary_only(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row)
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        directory.mkdir()
+        (directory / "reply.md").write_text("the whole answer")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [self._single("the whole answer")]
+        assert recorded["threads"] == []
+        assert recorded["re_requests"] == []
+
+    async def test_a_deleted_review_with_no_summary_posts_the_thread_answers(self, monkeypatch, tmp_path):
+        # A review with inline comments is answered with per-comment files;
+        # its task says the summary file is not written. When the review —
+        # and with it its threads — is gone before delivery, the answers
+        # must not be lost with it: combined, they go where an answer
+        # always went, instead of spending replacement sessions on a review
+        # that can never be answered again.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row)
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("the close is now after the drain")
+        (directory / "replies" / "102.md").write_text("already addressed on line 40")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [
+            self._single(
+                "**Answer to review comment 101:**\n\nthe close is now after the drain\n\n"
+                "**Answer to review comment 102:**\n\nalready addressed on line 40"
+            )
+        ]
+        assert recorded["threads"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_deleted_review_posts_the_summary_and_the_thread_answers(self, monkeypatch, tmp_path):
+        # A review with a body-level point and inline comments is answered
+        # with a summary and per-comment files. Where its threads are gone,
+        # the single comment carries all of it — the summary on top, every
+        # answer under it — and none of it is left unsaid.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row)
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("the close is now after the drain")
+        (directory / "reply.md").write_text("and the body point: the default is documented now")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [
+            self._single(
+                "and the body point: the default is documented now\n\n"
+                "**Answer to review comment 101:**\n\nthe close is now after the drain"
+            )
+        ]
+        assert recorded["threads"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_combined_answer_over_the_comment_cap_is_not_lost(self, monkeypatch, tmp_path):
+        # A deleted review owes every per-comment answer, and their
+        # combined text can exceed the size of one GitHub comment. It must
+        # not be shortened with the tail left unsaid: it is posted in
+        # order, one bounded chunk at a time, each under its own mark, and
+        # none of it is dropped.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row, comments=[{"id": 101, "body": "note"}])
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("b" * 40_000)
+        (directory / "reply.md").write_text("a" * 40_000)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert len(recorded["summaries"]) == 2
+        first, second = recorded["summaries"]
+        assert first[1].startswith("a" * 100)
+        assert first[1].endswith("\n\n" + sessions._answer_marker(31))
+        assert second[1].count("b") == 40_000
+        assert second[1].endswith("\n\n" + sessions._answer_chunk_marker(31, 1))
+        for body in (first[1], second[1]):
+            assert len(body) < 65_536
+        # Nothing of the answer is lost: every one of its characters is in
+        # one of the chunks (the marks are stripped out of the count).
+        text = first[1].removesuffix("\n\n" + sessions._answer_marker(31)) + second[1].removesuffix(
+            "\n\n" + sessions._answer_chunk_marker(31, 1)
+        )
+        assert text.count("a") == 40_000
+        assert text.count("b") == 40_000
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_retry_resumes_after_the_chunks_already_posted(self, monkeypatch, tmp_path):
+        # The first pass posted the first chunk and lost the confirmation
+        # on the way back. The next pass finds that chunk's mark on the
+        # pull request and resumes after it — the posted chunk is not said
+        # twice, and the answer ends whole.
+        from app import sessions
+
+        row = dict(self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, row, comments=[{"id": 101, "body": "note"}])
+
+        async def gone(_number, _review_id):
+            raise sessions.github.GitHubError("the review is gone (404)", status=404)
+
+        monkeypatch.setattr(sessions.github, "review", gone)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("b" * 40_000)
+        (directory / "reply.md").write_text("a" * 40_000)
+        posted = {"n": 0}
+
+        async def flaky_post(number, body):
+            posted["n"] += 1
+            if posted["n"] == 1:
+                raise RuntimeError("the confirmation never arrived")
+            recorded["summaries"].append((number, body))
+            return f"https://github.com/x/y#issuecomment-{number}"
+
+        async def contains(_number, marker):
+            # The first chunk's mark is on the pull request only after
+            # pass one has posted it and lost the confirmation.
+            return posted["n"] >= 1 and marker == sessions._answer_marker(31)
+
+        monkeypatch.setattr(sessions.github, "post_issue_comment", flaky_post)
+        monkeypatch.setattr(sessions.github, "issue_comment_contains", contains)
+
+        manager = sessions.SessionManager()
+        await manager._post_reply(31)
+        await manager._post_reply(31)
+
+        # Pass one died on its first chunk. Pass two found that chunk's
+        # mark and posted only what was still owed — one chunk, not two.
+        assert recorded["summaries"] == [(772, "b" * 40_000 + "\n\n" + sessions._answer_chunk_marker(31, 1))]
+        assert recorded["attempts"] == [(31, False), (31, True)]
+
+    async def test_a_thread_someone_resolved_stays_theirs(self, monkeypatch, tmp_path):
+        # A thread a person resolved on purpose is not reopened by the
+        # runner, and a comment that is a reply inside somebody else's
+        # thread has no thread of its own to close.
+        from app import sessions
+
+        recorded = self.install(
+            monkeypatch,
+            tmp_path,
+            self.REVIEW_ROW,
+            comments=[{"id": 101, "body": "one"}, {"id": 102, "body": "two"}, {"id": 103, "body": "three"}],
+            threads={
+                101: {"thread": "PRRT_1", "resolved": True},
+                102: {"thread": "PRRT_2", "resolved": False},
+            },
+        )
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "replies" / "102.md").write_text("two")
+        (directory / "replies" / "103.md").write_text("three")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [
+            self._posted(101, "one"),
+            self._posted(102, "two"),
+            self._posted(103, "three"),
+        ]
+        assert recorded["resolved"] == ["PRRT_2"]
+
+    async def test_one_thread_with_two_answers_is_resolved_once(self, monkeypatch, tmp_path):
+        # Two answered comments in one thread: the map names the thread
+        # for both, and the sweep resolves it once — a repeated mutation
+        # is the rate budget spent twice, and a second call reporting an
+        # unclassified error would stop the sweep before the re-request.
+        from app import sessions
+
+        recorded = self.install(
+            monkeypatch,
+            tmp_path,
+            self.REVIEW_ROW,
+            comments=[{"id": 101, "body": "one"}, {"id": 102, "body": "two"}],
+            threads={
+                101: {"thread": "PRRT_1", "resolved": False},
+                102: {"thread": "PRRT_1", "resolved": False},
+            },
+        )
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+        (directory / "replies" / "102.md").write_text("two")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["resolved"] == ["PRRT_1"]
+        assert recorded["re_requests"] == ["claudia"]
+        state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
+        assert state["resolved_threads"] == ["PRRT_1"]
+
+    async def test_a_review_with_no_inline_comments_is_answered_as_one(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[])
+        directory = tmp_path / "31"
+        directory.mkdir()
+        (directory / "reply.md").write_text("the body was the whole review")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [self._summarized("the body was the whole review")]
+        assert recorded["threads"] == []
+        assert recorded["resolved"] == []
+        assert recorded["re_requests"] == ["claudia"]
+
+    async def test_a_corrupt_delivery_state_is_not_an_error(self, monkeypatch, tmp_path):
+        # The state is the runner's own bookkeeping; a file that will not
+        # parse means "nothing delivered yet", not "refuse to deliver".
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("the answer")
+        state = tmp_path / "state" / "31"
+        state.mkdir(parents=True)
+        (state / "review_reply_state.json").write_text("not json")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [self._posted(101, "the answer")]
+        assert recorded["attempts"] == [(31, True)]
 
 
 class TestOperatorControls:

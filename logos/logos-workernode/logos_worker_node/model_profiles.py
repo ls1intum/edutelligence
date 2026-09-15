@@ -219,7 +219,7 @@ class ModelProfileRecord:
     # True when calibration has classified this model as permanently
     # unsupported on this worker — bad repo id, gated repo without token,
     # vLLM architecture mismatch, etc. (see FatalLoadErrorPattern in
-    # calibration.py). The master's calibration orchestrator skips models
+    # vllm_compat.py). The master's calibration orchestrator skips models
     # flagged this way so it doesn't burn a maintenance window each night
     # watching the same identity-level error reproduce. Cleared by an
     # operator (delete the entry from calibration_unsupported_models.txt
@@ -231,14 +231,14 @@ class ModelProfileRecord:
     calibration_unsupported_reason: str | None = None
     # --max-model-len that calibration auto-injected because the operator's
     # pinned kv_cache_memory_bytes couldn't hold one request at the model's
-    # default max_seq_len (see calibration.py's _extract_vllm_max_model_len_suggestion).
+    # default max_seq_len (see vllm_compat.py's _extract_vllm_max_model_len_suggestion).
     # None = the model fit at default and no flag was passed during calibration.
     # The lane spawner reuses this so production matches the configuration that
     # actually passed the binary search.
     calibration_max_model_len: int | None = None
     # --max-num-seqs that calibration auto-injected for a hybrid Mamba/SSM
     # model whose state-cache block pool was smaller than vLLM's default 1024
-    # (see calibration.py's _extract_vllm_max_num_seqs_suggestion). None = no
+    # (see vllm_compat.py's _extract_vllm_max_num_seqs_suggestion). None = no
     # cap was needed. The lane spawner reuses this so production runs with the
     # same ceiling that passed calibration — otherwise the lane reverts to
     # 1024 and aborts CUDA-graph capture at startup.

@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
+from logos.pipeline.latency_store import LatencyStore
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.models import CapacityPlanAction, LaneSchedulerSignals, ModelProfile
 from logos.terminal_logging import (
@@ -119,8 +120,9 @@ class CapacityPlanner:
     # can opportunistically load another copy — a second lane on the SAME
     # worker (intra-node scale-out in the demand pass, e.g. two 8B instances
     # sharing VRAM) or a lane on another worker (the cross-provider pass) —
-    # without eviction. Rollout is behind LOGOS_REPLICATE_ON_FREE_VRAM
-    # (default off); the only other gate is the sustained-demand floor below.
+    # without eviction. On by default — opt out with
+    # LOGOS_REPLICATE_ON_FREE_VRAM=false; the only other gate is the
+    # sustained-demand floor below.
     # There is deliberately no hard copy cap: the no-eviction rule bounds each
     # copy to genuinely free VRAM, growth is at most one lane per worker plus
     # one cross-provider replica per cycle, and idle replicas are reaped by the
@@ -280,6 +282,7 @@ class CapacityPlanner:
         cycle_seconds: float = 10.0,
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
+        latency_store: Optional[LatencyStore] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
@@ -287,6 +290,7 @@ class CapacityPlanner:
         self._cycle_seconds = cycle_seconds
         self._enabled = enabled
         self._on_state_change = on_state_change
+        self._latency_store = latency_store
         self._lane_idle_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
@@ -365,12 +369,13 @@ class CapacityPlanner:
         )
         # Speculative replication: after the main demand pass, emit
         # additional load actions for hot models onto workers with free
-        # VRAM (no eviction). One replica per cycle per model. Off by
-        # default — this consumes more VRAM, so operators should opt in.
-        self._replicate_on_free_vram = os.environ.get("LOGOS_REPLICATE_ON_FREE_VRAM", "false").strip().lower() in (
-            "1",
-            "true",
-            "yes",
+        # VRAM (no eviction). One replica per cycle per model. On by
+        # default — it consumes extra VRAM on hot models, so operators who
+        # want to cap it opt out by setting the flag to false.
+        self._replicate_on_free_vram = os.environ.get("LOGOS_REPLICATE_ON_FREE_VRAM", "true").strip().lower() not in (
+            "0",
+            "false",
+            "no",
         )
 
         # ── Tunable switching/anti-starvation knobs (env-overridable) ──────────
@@ -769,6 +774,7 @@ class CapacityPlanner:
             provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
         self._refresh_engine_cache_metrics(provider_ids)
+        self._refresh_latency_store_metrics()
 
         # Cross-provider best-first ranking: pre-score every (provider,
         # model) candidate so the cheapest worker for each model wins,
@@ -840,8 +846,8 @@ class CapacityPlanner:
         # Speculative replication: after the per-provider demand pass, look
         # for hot models that have a single (or few) loaded copy and idle
         # workers with capability + free VRAM. Emits one replica load per
-        # model per cycle, no eviction. Off by default; see
-        # LOGOS_REPLICATE_ON_FREE_VRAM.
+        # model per cycle, no eviction. On by default; opt out via
+        # LOGOS_REPLICATE_ON_FREE_VRAM=false.
         if self._replicate_on_free_vram and cluster_lanes_by_model is not None:
             all_actions.extend(
                 self._compute_replication_actions(
@@ -935,6 +941,18 @@ class CapacityPlanner:
                 mtp_rate = agg["mtp_accepted"] / agg["mtp_draft"] if agg["mtp_draft"] > 0 else None
                 entries.append((model, provider_name, prefix_rate, mtp_rate))
         prom.update_engine_cache_metrics(entries)
+
+    def _refresh_latency_store_metrics(self) -> None:
+        """Publish EWMA learned-latency gauges from the latency store."""
+        if getattr(self, "_latency_store", None) is None:
+            return
+        try:
+            rows = self._latency_store.snapshot_metrics(
+                get_provider_name=lambda pid: self._facade.get_provider_name(pid)
+            )
+            prom.update_latency_store_metrics(rows)
+        except Exception:
+            logger.debug("Failed to refresh latency store metrics", exc_info=True)
 
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
         """Print a colored cluster overview for the current planner cycle."""
@@ -4584,7 +4602,7 @@ class CapacityPlanner:
         host it (the cross-worker distribution; the demand pass owns
         intra-node additional lanes).
 
-        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
+        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM`` is set to false.
 
         Candidate workers pass through ``_is_plannable`` for the same
         reasons the main demand pass does — a replica is a plain ``load``,

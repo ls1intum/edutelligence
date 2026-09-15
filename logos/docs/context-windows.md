@@ -18,8 +18,19 @@ This document covers the four places that fact shows up.
 ## 1. What the API reports
 
 `GET /v1/models` (and `/v1/models/{id}`) carry up to four fields per model. Each
-is omitted when unknown, so cloud models and never-calibrated models keep the
-object they had before any of this existed.
+is omitted when unknown, so a model whose window no source knows keeps the
+object it had before any of this existed. The sources, in the order they are
+folded in: the workernode runtime snapshots (what is served), the windows a
+cloud upstream publishes on its own `/v1/models` (measured), the historic
+maximum the database keeps per model, and — for a model no measured source
+knows at all, the Azure family first among them — the input context window the
+upstream registry publishes for the model. The webservice refreshes
+`model_capabilities` from that registry once a day; the orchestrator folds the
+value in only for models nothing else reports, so it never widens a window a
+source measured. And only for models a cloud provider is associated with: a
+cloud upstream serves a catalog model at its published size, but a local
+model's window is a property of the calibrated lane, so a local-only model
+with no lane up must not be reported as serving the registry's figure.
 
 | Field                       | Meaning                                                                    |
 | --------------------------- | -------------------------------------------------------------------------- |
@@ -301,4 +312,4 @@ capacity is tight; the routing in §3 gives them the best available shot.
 | The very first message of a session 400s with `you requested 20000 output tokens` | The lane came up narrower than the window the session was sized from — the cold-start case: with no lane up, only `max_model_len_overall` is known, and that is the widest window the model has *ever* been calibrated for, not what the planner will give a new lane from the capacity free right now. The next start sizes itself against the lane that is now up. |
 | `maximum context length is N tokens` 400s | The request landed on a deployment narrower than the estimate expected — most likely one that reports no window. Switch that wrapper to `LOGOS_CONTEXT_SOURCE=guaranteed`. |
 | A model is never placed on a node | The placement floor cannot be met there. Look for the "no calibrated KV point serves the required minimum" line and lower `min_context_fraction` for that model in the worker's config.yml. |
-| `max_model_len` absent from `/v1/models` | Nothing reports a window that always holds: a cloud model, a vLLM lane running at the model's native maximum (which the worker does not report), or every workernode offline. In the last case `max_model_len_overall` still carries the model's historic maximum, and the claude-logos wrapper sizes the session from it (startup line says "no lane is up yet"). |
+| `max_model_len` absent from `/v1/models` | Nothing reports a window that always holds: a cloud model whose upstream publishes no window and whose registry entry names none, a vLLM lane running at the model's native maximum (which the worker does not report), or every workernode offline. In the last case `max_model_len_overall` still carries the model's historic maximum, and the claude-logos wrapper sizes the session from it (startup line says "no lane is up yet"). |

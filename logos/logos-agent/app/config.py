@@ -48,6 +48,12 @@ def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 # either of those modules so neither has to import the other.
 REPLY_FILE = "reply.md"
 
+# The directory a session answers a review's inline comments in: one file
+# per comment, named after the comment's id, so the runner can post each
+# answer into the thread it belongs to rather than one big comment that
+# answers every thread somewhere none of them was asked.
+REPLY_DIR = "replies"
+
 # The file the runner appends to whenever it freezes a session, relative to
 # the session's state directory — not the artefact directory: the state
 # directory is the runner's own, mounted into the session read-only, so the
