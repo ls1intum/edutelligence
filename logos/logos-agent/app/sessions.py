@@ -90,6 +90,11 @@ _MAX_REPLY_ATTEMPTS = 5
 # review have gone out.
 _REVIEW_REPLY_STATE_FILE = "review_reply_state.json"
 
+# GraphQL error types that will not change on a retry: the thread is gone,
+# or this token may never act on it. Everything else — rate limits, server
+# errors, an unparseable query — is handed back to the retry.
+_PERMANENT_RESOLUTION_ERRORS = frozenset({"NOT_FOUND", "FORBIDDEN", "UNAUTHENTICATED"})
+
 # How many sessions one request may have before the runner stops taking it
 # up again. A launch that cannot work, or a task nothing can be made of:
 # three attempts survives an accident and is few enough to notice.
@@ -2404,6 +2409,20 @@ class SessionManager:
         if not per_comment and not summary and not state["summary_posted"] and not state["replied"]:
             await self._no_answer(session_id, session)
             return
+        # The review asked more than was answered. Delivering what exists
+        # would re-request the reviewer for a review that is not done, so
+        # the session is taken up again and the missing comments get their
+        # turn. A comment with an empty body is not counted: the task never
+        # shows the agent such a comment, and expecting its reply would make
+        # the delivery incomplete forever.
+        actionable = {
+            c["id"]
+            for c in comments
+            if isinstance(c, dict) and isinstance(c.get("id"), int) and str(c.get("body") or "").strip()
+        }
+        if actionable - (set(state["replied"]) | set(per_comment)):
+            await self._no_answer(session_id, session)
+            return
 
         for comment_id in sorted(per_comment):
             url = await github.reply_to_review_comment(
@@ -2448,11 +2467,11 @@ class SessionManager:
         A thread a person already resolved stays as they left it, and a
         comment that is a reply inside somebody else's thread has no thread
         of its own to resolve — it is not in the map, and its thread is
-        somebody else's to close. A thread GitHub refuses outright (it is
-        gone, or the token may not act on it) is recorded and left open: it
-        will not resolve on a retry, and the re-requested review must not
-        wait on it. A transport-level failure still raises, and the sweep
-        is tried again.
+        somebody else's to close. A refusal that will not change on a retry
+        (the thread is gone, or the token may never act on it) is recorded
+        and left open: the re-requested review must not wait on it. Any
+        other failure — a rate limit, a server error, an HTTP failure — is
+        handed back, and the sweep is tried again with the whole delivery.
         """
         handled = set(state["resolved_threads"])
         threads = await github.review_thread_map(number)
@@ -2468,7 +2487,10 @@ class SessionManager:
             try:
                 await github.resolve_review_threads([thread_id])
             except github.GitHubError as exc:
-                if exc.status is not None:
+                # Only a refusal the retry could not fix is swallowed:
+                # every other error type — or an unknown one — means the
+                # sweep fails and is tried again.
+                if exc.status is not None or exc.graphql_type not in _PERMANENT_RESOLUTION_ERRORS:
                     raise
                 logger.warning(
                     "could not resolve the thread of comment %s (left open for a person): %s", comment_id, exc

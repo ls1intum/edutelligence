@@ -3925,7 +3925,17 @@ class TestReviewReplyDelivery:
             return {"id": 5085681761, "user": {"login": "claudia"}}
 
         async def fake_comments(_number, _review_id):
-            return comments if comments is not None else [{"id": 101}, {"id": 102}]
+            # Bodies matter: only a comment that carries something to
+            # answer is actionable, and its reply is owed before the
+            # review may be re-requested.
+            return (
+                comments
+                if comments is not None
+                else [
+                    {"id": 101, "body": "the close must come after the drain"},
+                    {"id": 102, "body": "this path is never reached"},
+                ]
+            )
 
         async def fake_reply(number, comment_id, body):
             recorded["threads"].append((number, comment_id, body))
@@ -3994,11 +4004,12 @@ class TestReviewReplyDelivery:
         directory = tmp_path / "31"
         (directory / "replies").mkdir(parents=True)
         (directory / "replies" / "101.md").write_text("fixed")
+        (directory / "replies" / "102.md").write_text("fixed too")
         (directory / "reply.md").write_text("and the body point: the default is documented now")
 
         await sessions.SessionManager()._post_reply(31)
 
-        assert recorded["threads"] == [(772, 101, "fixed")]
+        assert recorded["threads"] == [(772, 101, "fixed"), (772, 102, "fixed too")]
         assert recorded["summaries"] == [(772, "and the body point: the default is documented now")]
         assert recorded["re_requests"] == ["claudia"]
 
@@ -4040,7 +4051,7 @@ class TestReviewReplyDelivery:
         from app import sessions
 
         row = dict(self.REVIEW_ROW, status="failed")
-        recorded = self.install(monkeypatch, tmp_path, row)
+        recorded = self.install(monkeypatch, tmp_path, row, comments=[{"id": 101, "body": "note"}])
         directory = tmp_path / "31"
         (directory / "replies").mkdir(parents=True)
         (directory / "replies" / "101.md").write_text("what I managed to say")
@@ -4130,13 +4141,13 @@ class TestReviewReplyDelivery:
         # not wait on a thread that will never resolve.
         from app import sessions
 
-        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
         directory = tmp_path / "31"
         (directory / "replies").mkdir(parents=True)
         (directory / "replies" / "101.md").write_text("one")
 
         async def refused(_thread_ids):
-            raise sessions.github.GitHubError("could not resolve: not found")
+            raise sessions.github.GitHubError("could not resolve: not found", graphql_type="NOT_FOUND")
 
         monkeypatch.setattr(sessions.github, "resolve_review_threads", refused)
 
@@ -4148,6 +4159,64 @@ class TestReviewReplyDelivery:
         assert recorded["attempts"] == [(31, True)]
         state = json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())
         assert state["resolved_threads"] == ["PRRT_1"]
+
+    async def test_an_incomplete_answer_is_not_delivered(self, monkeypatch, tmp_path):
+        # The review asked two things and only one was answered. Delivering
+        # the one that exists would put the pull request back in front of
+        # the reviewer with a question still open, so the session is taken
+        # up again and nothing goes out.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("answered")
+        taken_up: list = []
+        abandoned: list = []
+
+        async def take_up_again(_self, session):
+            taken_up.append(session["id"])
+            return 99
+
+        async def abandon(session_id, *, attempts):
+            abandoned.append(session_id)
+
+        monkeypatch.setattr(sessions.SessionManager, "take_up_again", take_up_again)
+        monkeypatch.setattr(sessions.db, "abandon_reply", abandon)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == []
+        assert recorded["resolved"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == []
+        assert taken_up == [31]
+        assert abandoned == [31]
+
+    async def test_a_retryable_resolution_error_hands_the_sweep_back(self, monkeypatch, tmp_path):
+        # A rate limit on the resolution will lift: swallowing it would
+        # leave a thread open that a retry could have closed. The delivery
+        # fails like any other — the posted answers stay, the attempt is
+        # recorded as undelivered, and the sweep is tried again.
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
+        directory = tmp_path / "31"
+        (directory / "replies").mkdir(parents=True)
+        (directory / "replies" / "101.md").write_text("one")
+
+        async def limited(_thread_ids):
+            raise sessions.github.GitHubError("rate limited", graphql_type="RATE_LIMITED")
+
+        monkeypatch.setattr(sessions.github, "resolve_review_threads", limited)
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["threads"] == [(772, 101, "one")]
+        assert recorded["resolved"] == []
+        assert recorded["re_requests"] == []
+        assert recorded["attempts"] == [(31, False)]
+        assert json.loads((tmp_path / "state" / "31" / "review_reply_state.json").read_text())["resolved_threads"] == []
 
     async def test_a_review_row_without_a_reference_posts_the_summary_only(self, monkeypatch, tmp_path):
         from app import sessions
@@ -4194,7 +4263,7 @@ class TestReviewReplyDelivery:
             monkeypatch,
             tmp_path,
             self.REVIEW_ROW,
-            comments=[{"id": 101}, {"id": 102}, {"id": 103}],
+            comments=[{"id": 101, "body": "one"}, {"id": 102, "body": "two"}, {"id": 103, "body": "three"}],
             threads={
                 101: {"thread": "PRRT_1", "resolved": True},
                 102: {"thread": "PRRT_2", "resolved": False},
@@ -4231,7 +4300,7 @@ class TestReviewReplyDelivery:
         # parse means "nothing delivered yet", not "refuse to deliver".
         from app import sessions
 
-        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW)
+        recorded = self.install(monkeypatch, tmp_path, self.REVIEW_ROW, comments=[{"id": 101, "body": "note"}])
         directory = tmp_path / "31"
         (directory / "replies").mkdir(parents=True)
         (directory / "replies" / "101.md").write_text("the answer")

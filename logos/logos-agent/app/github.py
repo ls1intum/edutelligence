@@ -42,12 +42,16 @@ class GitHubError(RuntimeError):
     The status is part of the failure, not decoration: "this account is not
     in that team" and "this token may not ask" both arrive as an exception,
     and only the code tells them apart. Losing it made every non-member look
-    like an unanswerable question.
+    like an unanswerable question. A GraphQL call that HTTP-delivered adds
+    its error type on top — the same split, one level down: "thread is
+    gone" and "rate limited" both arrive as an exception with no status,
+    and only the type tells them apart.
     """
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(self, message: str, *, status: int | None = None, graphql_type: str | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.graphql_type = graphql_type
 
 
 class IdentityError(RuntimeError):
@@ -446,7 +450,11 @@ async def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     payload = response.json()
     errors = payload.get("errors")
     if errors:
-        raise GitHubError(f"GraphQL failed: {str(errors)[:200]}")
+        # The call was delivered and refused, so no status carries the
+        # reason — the error's type does, and a caller that decides between
+        # retrying and giving up needs it.
+        gtype = next((e.get("type") for e in errors if isinstance(e, dict) and e.get("type")), None)
+        raise GitHubError(f"GraphQL failed: {str(errors)[:200]}", graphql_type=gtype)
     return payload.get("data") or {}
 
 

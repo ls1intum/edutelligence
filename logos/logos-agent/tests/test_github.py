@@ -1242,10 +1242,15 @@ class TestReviewRepliesAndReRequests:
         assert len(calls) == 2
 
     async def test_a_graphql_error_is_an_error(self, monkeypatch):
-        fake_graphql_client(monkeypatch, [], [(200, {"errors": [{"message": "forbidden"}]})])
+        fake_graphql_client(monkeypatch, [], [(200, {"errors": [{"message": "forbidden", "type": "FORBIDDEN"}]})])
 
-        with pytest.raises(github.GitHubError):
+        with pytest.raises(github.GitHubError) as excinfo:
             await github.resolve_review_threads(["PRRT_1"])
+
+        # The type is what separates a refusal a retry cannot fix from one
+        # that can, so it has to reach the caller.
+        assert excinfo.value.graphql_type == "FORBIDDEN"
+        assert excinfo.value.status is None
 
     async def test_a_graphql_http_error_is_an_error(self, monkeypatch):
         fake_graphql_client(monkeypatch, [], [(403, None)])
