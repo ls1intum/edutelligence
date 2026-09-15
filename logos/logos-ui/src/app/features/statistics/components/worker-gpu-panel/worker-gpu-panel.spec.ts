@@ -247,6 +247,16 @@ describe('WorkerGpuPanel stop calibration', () => {
     expect(panel.canStop).toBe(false);
   });
 
+  it('does not offer the button once the calibrating worker goes offline', () => {
+    expect(panel.canStop).toBe(true);
+    fixture.componentRef.setInput('providerMeta', {
+      'w-a': { provider_id: 1, calibrating: true, connection_state: 'offline' },
+      'w-b': { provider_id: 2, calibrating: false },
+    });
+    fixture.detectChanges();
+    expect(panel.canStop).toBe(false);
+  });
+
   it('shows the cancelled message for the worker it stopped', async () => {
     const pending = panel.handleStopCalibration();
     expect(panel.stopState().kind).toBe('loading');
@@ -258,6 +268,18 @@ describe('WorkerGpuPanel stop calibration', () => {
     expect(panel.stopState()).toEqual({
       kind: 'success',
       message: 'Calibration cancelled (was calibrating org/a).',
+    });
+  });
+
+  it('shows a generic cancelled message when current_model is absent', async () => {
+    const pending = panel.handleStopCalibration();
+    stopResult.body = { was_active: true };
+    settleStop?.();
+    await pending;
+
+    expect(panel.stopState()).toEqual({
+      kind: 'success',
+      message: 'Calibration cancelled.',
     });
   });
 

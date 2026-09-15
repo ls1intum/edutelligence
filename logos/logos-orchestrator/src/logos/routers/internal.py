@@ -740,7 +740,7 @@ async def internal_logosnode_stop_calibration(data: InternalStopCalibrationReque
         was_active,
         current_model or "<none>",
     )
-    return {
+    result = {
         "message": (
             f"Calibration session on {pname} cancelled (was calibrating {current_model})"
             if was_active
@@ -749,6 +749,7 @@ async def internal_logosnode_stop_calibration(data: InternalStopCalibrationReque
         "was_active": was_active,
         "current_model": current_model,
     }
+    return JSONResponse(content=result, status_code=200)
 
 
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])

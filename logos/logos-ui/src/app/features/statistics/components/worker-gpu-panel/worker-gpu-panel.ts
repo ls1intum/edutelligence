@@ -189,7 +189,7 @@ export class WorkerGpuPanel implements OnChanges {
   }
 
   get canStop(): boolean {
-    return this.activeProviderId != null && this.isCalibrating;
+    return this.activeProviderId != null && this.isCalibrating && !this.isOffline;
   }
 
   usedPct(device: DeviceInfo): number {
@@ -325,7 +325,9 @@ export class WorkerGpuPanel implements OnChanges {
       )
         return;
       const message = body?.was_active
-        ? `Calibration cancelled (was calibrating ${body.current_model}).`
+        ? body.current_model
+          ? `Calibration cancelled (was calibrating ${body.current_model}).`
+          : 'Calibration cancelled.'
         : 'No calibration session was running.';
       this.stopState.set({ kind: 'success', message });
     } catch (err: unknown) {

@@ -623,12 +623,14 @@ async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
         was_active,
         current_model or "<none>",
     )
-    return {
-        "message": (
-            f"Calibration session on {pname} cancelled (was calibrating {current_model})"
-            if was_active
-            else f"No calibration session was running on {pname}"
-        ),
-        "was_active": was_active,
-        "current_model": current_model,
-    }
+    return JSONResponse(
+        content={
+            "message": (
+                f"Calibration session on {pname} cancelled (was calibrating {current_model})"
+                if was_active
+                else f"No calibration session was running on {pname}"
+            ),
+            "was_active": was_active,
+            "current_model": current_model,
+        }
+    )

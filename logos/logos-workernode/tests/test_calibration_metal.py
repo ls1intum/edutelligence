@@ -27,7 +27,7 @@ from logos_worker_node.models import MetalConfig
 
 
 def test_build_cmd_basic_flags():
-    cmd = _build_metal_calibration_cmd({"model": "org/model"}, "vllm", "127.0.0.1", 11499)
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
     assert cmd[:3] == ["vllm", "serve", "org/model"]
     assert "--host" in cmd and "127.0.0.1" in cmd
     assert "--port" in cmd and "11499" in cmd
@@ -41,14 +41,14 @@ def test_build_cmd_basic_flags():
 def test_build_cmd_omits_gpu_memory_utilization_by_default():
     """No explicit fraction unless the plan pins one — lets vllm-metal
     self-size against VLLM_METAL_MEMORY_FRACTION / the real working set."""
-    cmd = _build_metal_calibration_cmd({"model": "org/model"}, "vllm", "127.0.0.1", 11499)
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
     assert "--gpu-memory-utilization" not in cmd
 
 
 def test_build_cmd_forwards_explicit_gpu_memory_utilization():
     cmd = _build_metal_calibration_cmd(
         {"model": "org/model", "gpu_memory_utilization": 0.85},
-        "vllm",
+        ["vllm"],
         "127.0.0.1",
         11499,
     )
@@ -59,7 +59,7 @@ def test_build_cmd_forwards_explicit_gpu_memory_utilization():
 def test_build_cmd_forwards_quantization_and_enforce_eager():
     cmd = _build_metal_calibration_cmd(
         {"model": "org/model", "quantization": "awq", "enforce_eager": True},
-        "vllm",
+        ["vllm"],
         "127.0.0.1",
         11499,
     )
@@ -70,7 +70,7 @@ def test_build_cmd_forwards_quantization_and_enforce_eager():
 def test_build_cmd_forwards_extra_args():
     cmd = _build_metal_calibration_cmd(
         {"model": "org/model", "extra_args": ["--trust-remote-code"]},
-        "vllm",
+        ["vllm"],
         "127.0.0.1",
         11499,
     )
@@ -81,19 +81,19 @@ def test_build_cmd_enables_prefix_caching_by_default():
     """Matches the CUDA calibration path's own default (calibration.py):
     this changes vLLM's KV-cache accounting, so probing without it
     measures a different process than the production lane runs."""
-    cmd = _build_metal_calibration_cmd({"model": "org/model"}, "vllm", "127.0.0.1", 11499)
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
     assert "--enable-prefix-caching" in cmd
 
 
 def test_build_cmd_respects_explicit_prefix_caching_disable():
     cmd = _build_metal_calibration_cmd(
-        {"model": "org/model", "enable_prefix_caching": False}, "vllm", "127.0.0.1", 11499
+        {"model": "org/model", "enable_prefix_caching": False}, ["vllm"], "127.0.0.1", 11499
     )
     assert "--enable-prefix-caching" not in cmd
 
 
 def test_build_cmd_forwards_max_num_seqs():
-    cmd = _build_metal_calibration_cmd({"model": "org/model", "max_num_seqs": 64}, "vllm", "127.0.0.1", 11499)
+    cmd = _build_metal_calibration_cmd({"model": "org/model", "max_num_seqs": 64}, ["vllm"], "127.0.0.1", 11499)
     idx = cmd.index("--max-num-seqs")
     assert cmd[idx + 1] == "64"
 
@@ -124,6 +124,16 @@ def test_build_env_forwards_worker_metal_tuning_knobs():
 def test_build_env_prepends_resolved_binary_dir_to_path():
     env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], None)
     assert env["PATH"].split(":")[0] == "/fake/vllm-metal/bin"
+
+
+def test_build_env_applies_plan_env_overrides_after_worker_overrides():
+    """Per-model engines.vllm.model_overrides.<model>.env_overrides must
+    win over a node-wide engines.metal.env_overrides default, matching
+    production precedence (MetalVllmProcessHandle._build_env)."""
+    mc = MetalConfig(env_overrides={"FOO": "worker", "BAR": "worker"})
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], mc, plan_env_overrides={"FOO": "plan"})
+    assert env["FOO"] == "plan"
+    assert env["BAR"] == "worker"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -244,6 +254,22 @@ def test_fails_when_wait_ready_raises():
     mocks["stop"].assert_called_once()
 
 
+def test_spawn_oserror_yields_failed_result_not_a_raised_exception():
+    """subprocess.Popen raising OSError (e.g. exec permission denied) must
+    produce a normal failed CalibrationResult with a probe log, not an
+    unhandled exception — and must not call stop_vllm(None)."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0])
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration_metal._spawn_vllm_metal",
+        side_effect=OSError("Permission denied"),
+    )
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "Permission denied" in result.error
+    mocks["stop"].assert_not_called()
+
+
 def test_cancelled_before_spawn_short_circuits():
     cancel_event = threading.Event()
     cancel_event.set()
@@ -310,14 +336,40 @@ def test_detected_model_kind_is_forwarded_to_warmup():
 
 
 def test_fails_cleanly_when_vllm_binary_cannot_be_resolved():
-    """No vllm-metal venv, no worker override, no explicit path: must fail
-    with a clear reason instead of a bare FileNotFoundError from Popen."""
+    """No vllm-metal venv, no worker override, no explicit path, and no
+    PATH/sibling/module fallback either: must fail with a clear reason
+    instead of a bare FileNotFoundError from Popen."""
     patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0])
     patches["resolve_binary"] = patch(
         "logos_worker_node.calibration_metal.resolve_metal_vllm_binary", return_value=None
+    )
+    patches["resolve_generic_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_generic_vllm_binary", return_value=None
     )
     result, mocks = _run({"model": "org/model"}, patches)
 
     assert not result.success
     assert "vllm binary not found" in result.error
     mocks["spawn"].assert_not_called()
+
+
+def test_falls_back_to_generic_resolution_when_metal_specific_lookup_fails():
+    """A bare "vllm" the metal-specific lookup won't treat as explicit and
+    that isn't in the vllm-metal venv can still resolve via PATH/sibling/
+    module — the same fallback production falls back to
+    (MetalVllmProcessHandle._resolve_vllm_binary) — instead of failing a
+    configuration that would actually run in production."""
+    patches, mock_proc = _patch_metal_infra(wired_memory_sequence=[4000.0, 11500.0])
+    patches["resolve_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_metal_vllm_binary", return_value=None
+    )
+    patches["resolve_generic_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_generic_vllm_binary",
+        return_value=["/usr/local/bin/vllm"],
+    )
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert result.success
+    mocks["spawn"].assert_called_once()
+    cmd = mocks["spawn"].call_args.args[0]
+    assert cmd[:3] == ["/usr/local/bin/vllm", "serve", "org/model"]

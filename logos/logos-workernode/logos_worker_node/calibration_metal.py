@@ -25,6 +25,7 @@ from logos_worker_node.calibration import (
 )
 from logos_worker_node.metal import probe_device_info, read_wired_memory_mb, resolve_metal_vllm_binary
 from logos_worker_node.models import MetalConfig
+from logos_worker_node.vllm_process import resolve_generic_vllm_binary
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ _STALE_CUDA_ENV_KEYS = ("CUDA_VISIBLE_DEVICES", "CUDA_HOME", "LD_LIBRARY_PATH", 
 
 def _build_metal_calibration_cmd(
     plan: dict[str, Any],
-    vllm_binary: str,
+    vllm_prefix: list[str],
     host: str,
     port: int,
 ) -> list[str]:
@@ -46,10 +47,12 @@ def _build_metal_calibration_cmd(
 
     Mirrors MetalVllmProcessHandle._build_cmd's flag set, off the plain
     plan dict the CUDA calibration path already uses (not a LaneConfig).
+    ``vllm_prefix`` is one or more tokens (e.g. ``[sys.executable, "-m",
+    "vllm"]`` for the module-fallback form), not a single executable path.
     """
     model = plan["model"]
     cmd = [
-        vllm_binary,
+        *vllm_prefix,
         "serve",
         model,
         "--host",
@@ -86,7 +89,11 @@ def _build_metal_calibration_cmd(
     return cmd
 
 
-def _build_metal_calibration_env(cmd: list[str], worker_metal_config: MetalConfig | None) -> dict[str, str]:
+def _build_metal_calibration_env(
+    cmd: list[str],
+    worker_metal_config: MetalConfig | None,
+    plan_env_overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Environment for the Metal calibration probe.
 
     Mirrors MetalVllmProcessHandle._build_env / _build_process_env's Metal
@@ -97,6 +104,11 @@ def _build_metal_calibration_env(cmd: list[str], worker_metal_config: MetalConfi
     No HF_HOME override either: unlike the CUDA path, Metal calibration
     does not integrate with the tmpfs RAM model cache (out of scope, see
     module docstring), so it always loads from the plain HF cache.
+
+    ``plan_env_overrides`` is the per-model
+    ``engines.vllm.model_overrides.<model>.env_overrides`` the calibration
+    plan carries through — applied after the worker-wide overrides, same
+    precedence as production (MetalVllmProcessHandle._build_env).
     """
     env = os.environ.copy()
     for key in _STALE_CUDA_ENV_KEYS:
@@ -111,6 +123,8 @@ def _build_metal_calibration_env(cmd: list[str], worker_metal_config: MetalConfi
         env["VLLM_METAL_MULTIMODAL_MODE"] = mc.multimodal_mode
     if mc.env_overrides:
         env.update(mc.env_overrides)
+    if plan_env_overrides:
+        env.update(plan_env_overrides)
 
     # The resolved binary's own directory first, so vLLM resolves any
     # helper executable it shells out to from the vllm-metal venv rather
@@ -122,10 +136,13 @@ def _build_metal_calibration_env(cmd: list[str], worker_metal_config: MetalConfi
 
 
 def _spawn_vllm_metal(
-    cmd: list[str], log_path: Path, worker_metal_config: MetalConfig | None = None
+    cmd: list[str],
+    log_path: Path,
+    worker_metal_config: MetalConfig | None = None,
+    plan_env_overrides: dict[str, str] | None = None,
 ) -> subprocess.Popen[str]:
     """Spawn the Metal calibration probe process."""
-    env = _build_metal_calibration_env(cmd, worker_metal_config)
+    env = _build_metal_calibration_env(cmd, worker_metal_config, plan_env_overrides)
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("a", encoding="utf-8")
@@ -240,20 +257,27 @@ def calibrate_model_metal(
     resolved_binary = resolve_metal_vllm_binary(
         vllm_binary, worker_metal_config.vllm_binary if worker_metal_config else ""
     )
-    if resolved_binary is None:
+    # No explicit/worker/venv candidate resolved — fall back to the same
+    # PATH/sibling/module resolution production falls back to
+    # (MetalVllmProcessHandle._resolve_vllm_binary), instead of failing a
+    # configuration that would actually run in production.
+    vllm_prefix = [resolved_binary] if resolved_binary is not None else resolve_generic_vllm_binary(vllm_binary)
+    if vllm_prefix is None:
         result.error = (
             "vllm binary not found for Metal calibration — checked the "
-            "configured/worker paths and the vllm-metal venv "
-            "(LOGOS_METAL_VENV or ~/.venv-vllm-metal/bin/vllm)"
+            "configured/worker paths, the vllm-metal venv "
+            "(LOGOS_METAL_VENV or ~/.venv-vllm-metal/bin/vllm), PATH, the "
+            "interpreter sibling, well-known venv roots, and the vllm module"
         )
         logger.warning("  ERROR: %s", result.error)
         return result
 
-    cmd = _build_metal_calibration_cmd(plan, resolved_binary, host, port)
+    cmd = _build_metal_calibration_cmd(plan, vllm_prefix, host, port)
     result.probe_command = " ".join(cmd)
-    proc = _spawn_vllm_metal(cmd, log_path, worker_metal_config)
 
+    proc: subprocess.Popen[str] | None = None
     try:
+        proc = _spawn_vllm_metal(cmd, log_path, worker_metal_config, plan.get("env_overrides"))
         wait_ready(base_url, ready_timeout_s, proc, cancel_event=cancel_event)
 
         if cancel_event is not None and cancel_event.is_set():
@@ -294,9 +318,10 @@ def calibrate_model_metal(
         result.base_residency_mb = base_residency_mb
         result.calibrated_at = time.time()
         return result
-    except (RuntimeError, TimeoutError) as exc:
+    except (RuntimeError, TimeoutError, OSError) as exc:
         result.error = str(exc)
         logger.warning("  ERROR: %s", result.error)
         return result
     finally:
-        stop_vllm(proc)
+        if proc is not None:
+            stop_vllm(proc)

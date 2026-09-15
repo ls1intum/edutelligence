@@ -178,6 +178,62 @@ def _discover_pip_cuda_lib_dirs() -> list[str]:
     return dirs
 
 
+def resolve_generic_vllm_binary(configured_binary: str) -> list[str] | None:
+    """PATH/sibling/module resolution for the vLLM CLI, backend-agnostic.
+
+    Returns a list of tokens (so a module-form result like
+    ``[sys.executable, "-m", "vllm"]`` is not mistaken for one path), or
+    ``None`` if nothing is found. Shared by ``VllmProcessHandle`` (which
+    tries its own explicit/venv candidates first) and the Metal
+    calibration probe, which has no explicit/venv candidate of its own to
+    try first.
+
+    Resolution order:
+      1. ``configured_binary`` (absolute/relative path or bare command name)
+      2. ``PATH`` lookup for configured name, then plain ``vllm``
+      3. Sibling executable next to the active interpreter (handles unactivated venvs)
+      4. Well-known venv roots: ``/opt/venv/bin/vllm``, ``/usr/local/bin/vllm``
+      5. Module fallback: ``sys.executable -m vllm`` (works when the package is
+         installed but the entry-point script is absent or not on PATH)
+    """
+    raw = (configured_binary or "vllm").strip() or "vllm"
+
+    # 1) Configured path (absolute or relative path-like value)
+    if os.path.sep in raw or (os.path.altsep and os.path.altsep in raw):
+        candidate = os.path.abspath(os.path.expanduser(raw))
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return [candidate]
+
+    # 2) PATH lookup (configured name first, then plain 'vllm')
+    for cmd_name in dict.fromkeys((raw, "vllm")):
+        found = shutil.which(cmd_name)
+        if found:
+            return [found]
+
+    # 3) Sibling to the active interpreter (correct for activated venvs)
+    venv_sibling = str(Path(sys.executable).resolve().with_name("vllm"))
+    if os.path.isfile(venv_sibling) and os.access(venv_sibling, os.X_OK):
+        return [venv_sibling]
+
+    # 4) Well-known venv/install roots (handles non-activated /opt/venv setups)
+    for root in ("/opt/venv/bin", "/usr/local/bin"):
+        candidate = os.path.join(root, "vllm")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return [candidate]
+
+    # 5) Module fallback: works when the package is installed but the script
+    #    entry-point is missing or not on PATH (e.g. bare pip install without bin)
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("vllm") is not None:
+            return [sys.executable, "-m", "vllm"]
+    except Exception:
+        pass
+
+    return None
+
+
 def _speculative_decoding_requested(vc: Any) -> bool:
     """True when this lane runs vLLM with a draft model.
 
@@ -1881,39 +1937,11 @@ class VllmProcessHandle:
         """
         raw = (configured_binary or "vllm").strip() or "vllm"
 
-        # 1) Configured path (absolute or relative path-like value)
-        if os.path.sep in raw or (os.path.altsep and os.path.altsep in raw):
-            candidate = os.path.abspath(os.path.expanduser(raw))
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return [candidate]
+        resolved = resolve_generic_vllm_binary(raw)
+        if resolved is not None:
+            return resolved
 
-        # 2) PATH lookup (configured name first, then plain 'vllm')
-        for cmd_name in dict.fromkeys((raw, "vllm")):
-            found = shutil.which(cmd_name)
-            if found:
-                return [found]
-
-        # 3) Sibling to the active interpreter (correct for activated venvs)
         venv_sibling = str(Path(sys.executable).resolve().with_name("vllm"))
-        if os.path.isfile(venv_sibling) and os.access(venv_sibling, os.X_OK):
-            return [venv_sibling]
-
-        # 4) Well-known venv/install roots (handles non-activated /opt/venv setups)
-        for root in ("/opt/venv/bin", "/usr/local/bin"):
-            candidate = os.path.join(root, "vllm")
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return [candidate]
-
-        # 5) Module fallback: works when the package is installed but the script
-        #    entry-point is missing or not on PATH (e.g. bare pip install without bin)
-        try:
-            import importlib.util
-
-            if importlib.util.find_spec("vllm") is not None:
-                return [sys.executable, "-m", "vllm"]
-        except Exception:
-            pass
-
         checked = [
             raw,
             "PATH",
