@@ -672,13 +672,21 @@ def _is_our_marker(comment: Any, marker: str) -> bool:
     participant can write the expected marker into an unanswered thread
     and suppress the answer that is still owed. A marker counts only when
     the account it was posted by is the account the runner posts with.
+
+    The comparison is case-insensitive exactly like :func:`verify_identities`
+    accepts the configured identity: an operator may set the login in any
+    casing, and a marker posted by that very account must still be
+    recognized, or the lost-confirmation retry would duplicate the answer.
     """
     if not isinstance(comment, dict):
         return False
     if marker not in str(comment.get("body") or ""):
         return False
     author = comment.get("author") or comment.get("user") or {}
-    return isinstance(author, dict) and author.get("login") == settings.github_login
+    login = author.get("login") if isinstance(author, dict) else None
+    if not isinstance(login, str):
+        return False
+    return login.strip().lower() == settings.github_login.strip().lower()
 
 
 # A pull request's review threads, paged. Each inline comment starts its own

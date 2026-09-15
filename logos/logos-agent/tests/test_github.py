@@ -1380,6 +1380,41 @@ class TestReviewRepliesAndReRequests:
 
         assert await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->") is False
 
+    async def test_the_thread_marker_author_check_ignores_casing(self, monkeypatch):
+        # Startup accepts the configured identity in any casing, so a
+        # marker posted by that very account must be recognized here too —
+        # otherwise a lost confirmation is never reconciled and the retry
+        # duplicates the answer. The fake's configured login is "logos".
+        calls: list = []
+        map_answer = {"data": _threads_payload([_thread_payload("PRRT_1", 101)])}
+        fake_graphql_client(
+            monkeypatch,
+            calls,
+            [
+                (200, map_answer),
+                (
+                    200,
+                    {"data": _thread_comments_payload(["the answer\n\n<!-- logos reply 31 101 -->"], author="Logos")},
+                ),
+            ],
+        )
+
+        assert await github.review_reply_is_in_thread(772, 101, "<!-- logos reply 31 101 -->") is True
+
+    async def test_the_issue_marker_author_check_ignores_casing(self, monkeypatch):
+        # The same rule on the REST look-up: the default configured login
+        # is "LogosOSSAgent", and the API hands the account back in any
+        # casing.
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            return [{"body": "<!-- logos answer 31 -->", "user": {"login": "logosossagent"}}]
+
+        monkeypatch.setattr(github, "_get", fake_get)
+
+        assert await github.issue_comment_contains(772, "<!-- logos answer 31 -->") is True
+
     async def test_the_map_reads_out_a_thread_beyond_its_first_page(self, monkeypatch):
         # A thread that holds more comments than its first page: the rest
         # is read out of the thread, so a target after comment 100 still
