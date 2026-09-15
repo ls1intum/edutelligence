@@ -36,7 +36,9 @@ async def test_route_and_execute_no_deployments_async():
 
 
 async def test_route_and_execute_proxy_branch(monkeypatch):
-    """route_and_execute delegates to _execute_proxy_mode when body has 'model'."""
+    """route_and_execute delegates to _execute_proxy_mode when body has 'model',
+    forwarding the ingress stamp so model-specified requests get the same
+    whole-request queue-wait budget as resource-mode ones."""
     called = {}
 
     async def fake_proxy(
@@ -50,8 +52,10 @@ async def test_route_and_execute_proxy_branch(monkeypatch):
         request_path=None,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["proxy"] = True
+        called["ingress_at"] = ingress_at
         return {"status": "proxy"}
 
     monkeypatch.setattr(main, "_execute_proxy_mode", fake_proxy)
@@ -64,9 +68,11 @@ async def test_route_and_execute_proxy_branch(monkeypatch):
         path="chat/completions",
         log_id=1,
         is_async_job=False,
+        ingress_at=1234.5,
     )
     assert out == {"status": "proxy"}
     assert called.get("proxy") is True
+    assert called["ingress_at"] == 1234.5
 
 
 async def test_route_and_execute_resource_branch(monkeypatch):

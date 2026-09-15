@@ -1,9 +1,11 @@
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import logos as main
 from logos import PipelineRequest, RequestPipeline, SchedulingResult
+from logos.routers import user_facing as user_facing_mod
 
 
 async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
@@ -68,6 +70,155 @@ async def test_execute_resource_mode_failure_records_error(monkeypatch):
             is_async_job=False,
         )
     assert exc.value.status_code == 503
+
+
+async def test_execute_resource_mode_queue_timeout_returns_429_with_retry_after(monkeypatch):
+    """A queue-wait timeout is overload, not unavailability.
+
+    The client spent its wait window without a lane, so the answer is a
+    retryable 429 + Retry-After — the signal a retry policy (including
+    Claude Code's auto-mode classifier, which honours overload-retry since
+    v2.1.243) can recover from — not an opaque 503.
+    """
+
+    class Result:
+        success = False
+        error = "Queue wait timeout after 280s"
+        execution_context = None
+        provider_id = None
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-1"}
+        queue_timeout_s = 280.0
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type(
+            "P",
+            (),
+            {
+                "process": AsyncMock(return_value=Result()),
+                "record_completion": lambda *a, **k: None,
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+
+    # A queue timeout RETURNS the 429 instead of raising: raising would funnel
+    # through route_and_execute's HTTPException handler, which re-records the
+    # log row as "error" and clobbers the "timeout" result status the failure
+    # record above wrote. The body is built with the same helper
+    # _http_exception_handler uses, so it keeps the OpenAI error shape.
+    response = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1}],
+        body={},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1),
+        log_id=1,
+        is_async_job=False,
+    )
+    assert isinstance(response, main.JSONResponse)
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)
+    body = json.loads(response.body)
+    assert body["error"]["type"] == "rate_limit_error"
+    assert "timeout" in body["error"]["message"].lower()
+
+
+async def test_execute_resource_mode_queue_timeout_job_gets_retryable_body(monkeypatch):
+    """Async jobs get the same overload semantics as direct requests."""
+
+    class Result:
+        success = False
+        error = "Queue wait timeout after 280s"
+        execution_context = None
+        provider_id = None
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-1"}
+        queue_timeout_s = 280.0
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type(
+            "P",
+            (),
+            {
+                "process": AsyncMock(return_value=Result()),
+                "record_completion": lambda *a, **k: None,
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+
+    out = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1}],
+        body={},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1),
+        log_id=1,
+        is_async_job=True,
+    )
+    assert out["status_code"] == 429
+    assert out["data"]["error"]["type"] == "rate_limit_error"
+    assert "timeout" in out["data"]["error"]["message"].lower()
+    # The header rides along in the job result so the polling endpoint can
+    # re-serve it (a fresh JSONResponse in get_job_status would drop it).
+    assert out["headers"] == {"Retry-After": str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)}
+
+
+async def test_get_job_status_forwards_stored_429_headers(monkeypatch):
+    """A job result that stored a 429 with Retry-After re-serves the header
+    when the client polls, instead of building a bare JSONResponse."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_user_by_api_key(self, key_value):
+            return None
+
+    # get_job_status moved to the routers package with the route-handler
+    # extraction; it keeps its own module-level bindings, so patch there.
+    monkeypatch.setattr(user_facing_mod, "DBManager", DummyDB)
+    monkeypatch.setattr(user_facing_mod, "authenticate_api_key", lambda headers: MagicMock(api_key_id=1, team_id=7))
+    monkeypatch.setattr(
+        user_facing_mod,
+        "JobService",
+        type(
+            "J",
+            (),
+            {
+                "fetch": staticmethod(
+                    lambda job_id: {
+                        "api_key_id": 1,
+                        "team_id": 7,
+                        "status": main.JobStatus.SUCCESS.value,
+                        "result_payload": {
+                            "status_code": 429,
+                            "data": {"error": "Queue wait timeout after 280s"},
+                            "headers": {"Retry-After": str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)},
+                        },
+                        "error_message": None,
+                        "created_at": None,
+                        "updated_at": None,
+                    }
+                )
+            },
+        ),
+        raising=False,
+    )
+
+    response = await user_facing_mod.get_job_status(42, MagicMock(headers={}))
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == str(main._QUEUE_TIMEOUT_RETRY_AFTER_S)
 
 
 async def test_execute_resource_mode_forwards_api_key_priority_to_pipeline(monkeypatch):
@@ -193,11 +344,13 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
         called["allowed_models_override"] = allowed_models_override
         called["request_id"] = request_id
+        called["ingress_at"] = ingress_at
         return {"status": "resource"}
 
     monkeypatch.setattr(main, "DBManager", DummyDB)
@@ -213,6 +366,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         ],
         log_id=None,
         is_async_job=False,
+        ingress_at=987.6,
     )
 
     assert result == {"status": "resource"}
@@ -220,6 +374,10 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     assert called["body"]["model"] == "gemma2:2b"
     assert called["allowed_models_override"] == [27]
     assert called["request_id"] is None
+    # The ingress stamp must reach the resource-mode pipeline: proxy-mode
+    # requests queue the same way, so the queue-wait budget has to start at
+    # ingress like in resource mode.
+    assert called["ingress_at"] == 987.6
 
 
 async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
@@ -251,6 +409,7 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -307,6 +466,7 @@ async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["deployments"] = deployments
         called["body"] = body
@@ -362,6 +522,7 @@ async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeyp
         skip_laura=False,
         priority=1,
         required_provider_id=None,
+        ingress_at=None,
     ):
         called["body"] = body
         return {"status": "resource"}

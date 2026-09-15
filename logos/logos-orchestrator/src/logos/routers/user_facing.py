@@ -501,9 +501,14 @@ async def get_job_status(job_id: int, request: Request):
         if isinstance(job_status_code, int) and job_status_code >= 400:
             job_data = result_payload.get("data") or {}
             corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
+            # Re-serve the headers the job result carried (e.g. Retry-After
+            # on a 429) — a fresh JSONResponse would drop them.
+            stored_headers = result_payload.get("headers")
+            headers = stored_headers if isinstance(stored_headers, dict) else None
             return JSONResponse(
                 content={**return_payload, "result": None, "error": error_body},
                 status_code=corrected_sc,
+                headers=headers,
             )
 
     if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
