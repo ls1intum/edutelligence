@@ -640,6 +640,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         # 0. Initialize the execution state
         state = AgentPipelineExecutionState[DTO, VARIANT]()
+        # Bound before anything fallible runs: the run accumulates usage into the run-local state,
+        # while a subclass' outer error path lives outside this method and can only reach
+        # self.tokens. Both names point at the same list, so a run that dies mid-flight reports
+        # what it spent up to that point, and never the leftovers of the instance's previous run.
+        state.tokens = []
+        self.tokens = state.tokens
         state.dto = dto
         state.db = VectorDatabase()
         state.variant = variant
@@ -651,7 +657,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.result = ""
         state.llm = None
         state.prompt = None
-        state.tokens = []
         state.local = local  # Store local flag in state
         state.query_text = ""
         state.lecture_content_storage = {}
