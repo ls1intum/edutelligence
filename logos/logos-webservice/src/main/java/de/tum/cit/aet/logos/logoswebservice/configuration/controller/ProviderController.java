@@ -24,6 +24,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelPro
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LaneLoadStatusRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.StopCalibrationRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
@@ -130,6 +131,19 @@ public class ProviderController {
         if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
         try {
             return workerAdminClient.calibrateUncalibrated(req.providerId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/stop_calibration")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> stopCalibration(@RequestBody StopCalibrationRequestDTO req) {
+        if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
+        try {
+            return workerAdminClient.stopCalibration(req.providerId());
         } catch (RestClientResponseException e) {
             return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
         } catch (Exception e) {
