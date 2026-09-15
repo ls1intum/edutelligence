@@ -500,6 +500,55 @@ def test_cache_put_sweeps_a_malformed_entry_belonging_to_another_model(tmp_path)
     assert cache.get("org/fine") is not None
 
 
+def test_cache_treats_pre_963_entry_missing_pipeline_tag_as_stale(tmp_path):
+    """Confirmed live on the hochbruegge dev worker: a cache entry written
+    before issue #963 has no pipeline_tag/architectures keys at all, and
+    without a schema-version stamp HfModelMetadata(**entry) would silently
+    default them to None — indistinguishable from "this model genuinely
+    has no pipeline_tag" and misclassifying it generative forever (up to
+    the 24h TTL) instead of refetching once for the new fields."""
+    cache = HfModelInfoCache(tmp_path)
+    # A real pre-#963 entry shape: no _cache_schema_version, no
+    # pipeline_tag, no architectures.
+    cache._entries["Alibaba-NLP/gte-Qwen2-1.5B-instruct"] = {  # noqa: SLF001
+        "weight_bytes": 7104788480,
+        "kv_per_token_bytes": 57344,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 28,
+        "kv_head_dim": 128.0,
+        "torch_dtype": "float32",
+        "max_context_length": 131072,
+        "quantization_method": None,
+        "fetched_at": time.time(),  # fresh — must be invalidated on shape, not TTL
+        "source": "hf",
+        "error": None,
+    }
+
+    assert cache.get("Alibaba-NLP/gte-Qwen2-1.5B-instruct") is None
+    assert "Alibaba-NLP/gte-Qwen2-1.5B-instruct" not in cache._entries  # noqa: SLF001
+
+
+def test_cache_accepts_current_schema_entry_with_pipeline_tag(tmp_path):
+    """A freshly cache.put() entry (current schema) must round-trip its
+    pipeline_tag/architectures — the positive counterpart to the
+    stale-entry test above."""
+    cache = HfModelInfoCache(tmp_path)
+    cache.put(
+        "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+        HfModelMetadata(
+            weight_bytes=7104788480,
+            pipeline_tag="sentence-similarity",
+            architectures=["Qwen2ForCausalLM"],
+            source="hf",
+        ),
+    )
+
+    got = cache.get("Alibaba-NLP/gte-Qwen2-1.5B-instruct")
+    assert got is not None
+    assert got.pipeline_tag == "sentence-similarity"
+    assert got.architectures == ["Qwen2ForCausalLM"]
+
+
 def test_fetch_hf_model_metadata_uses_cache_without_refetching(tmp_path):
     cache = HfModelInfoCache(tmp_path)
     cache.put("org/model", HfModelMetadata(weight_bytes=999, source="hf"))

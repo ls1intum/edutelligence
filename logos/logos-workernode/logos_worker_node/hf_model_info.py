@@ -32,6 +32,15 @@ _CACHE_FILENAME = "hf_model_info_cache.json"
 _SUCCESS_CACHE_TTL_S = 24 * 3600  # config.json/safetensors rarely change
 _ERROR_CACHE_TTL_S = 3600  # retry failures (network blips, rate limits) sooner
 
+# Bumped whenever a new HfModelMetadata field's absence would be silently
+# misread as a legitimate value rather than "never fetched" — e.g.
+# pipeline_tag/architectures (issue #963): an entry written before they
+# existed has no such key at all, and HfModelMetadata(**entry) would
+# otherwise default it to None indistinguishably from a model that
+# genuinely has no pipeline_tag on the Hub, misclassifying it generative.
+_CACHE_SCHEMA_VERSION = 2
+_CACHE_VERSION_KEY = "_cache_schema_version"  # not a real field — see put()/_is_valid_entry
+
 # "can serve at least one short request" bar for the min-KV skip gate.
 MIN_VIABLE_CONTEXT_TOKENS = 2048
 
@@ -436,9 +445,22 @@ class HfModelInfoCache:
         # otherwise raise out of get()/put() — a dataclass doesn't
         # validate types, so e.g. a string weight_bytes would reach
         # _fits_at_tp's math and crash the whole calibration run.
-        if not (isinstance(entry, dict) and set(entry.keys()) <= _HF_METADATA_FIELDS):
+        #
+        # The schema-version stamp catches a different failure mode: a
+        # dataclass field ADDED after this entry was written (e.g.
+        # pipeline_tag/architectures for issue #963) is simply absent from
+        # the JSON, which HfModelMetadata(**entry) then silently defaults
+        # to None — a real "field never fetched" is then indistinguishable
+        # from "this model genuinely has no pipeline_tag on the Hub", and
+        # classify_model_kind reads that None as "generative" either way.
+        # Rejecting anything not stamped with the CURRENT version forces a
+        # refetch instead of serving a pre-#963 entry as if it were complete.
+        if not isinstance(entry, dict) or entry.get(_CACHE_VERSION_KEY) != _CACHE_SCHEMA_VERSION:
             return False
-        for key, value in entry.items():
+        fields_only = {k: v for k, v in entry.items() if k != _CACHE_VERSION_KEY}
+        if not (set(fields_only.keys()) <= _HF_METADATA_FIELDS):
+            return False
+        for key, value in fields_only.items():
             expected_types = _HF_METADATA_VALUE_TYPES.get(key)
             if expected_types is None:
                 continue
@@ -468,7 +490,8 @@ class HfModelInfoCache:
                 # model checked often should never accumulate stale copies.
                 del self._entries[model_name]
                 return None
-            return HfModelMetadata(**entry)
+            fields_only = {k: v for k, v in entry.items() if k != _CACHE_VERSION_KEY}
+            return HfModelMetadata(**fields_only)
 
     def put(self, model_name: str, meta: HfModelMetadata) -> None:
         with self._lock:
@@ -476,7 +499,9 @@ class HfModelInfoCache:
             # Sweep everything invalid or past its TTL, not just model_name —
             # otherwise a dropped-from-config model keeps a stale/broken entry
             # forever, and one malformed entry keeps raising out of every
-            # future put() sweep too.
+            # future put() sweep too. Also opportunistically clears out
+            # pre-#963 entries missing the version stamp on the very next
+            # write, rather than waiting out their full 24h TTL.
             for name in [n for n, e in self._entries.items() if not self._is_valid_entry(e) or self._is_expired(e)]:
                 del self._entries[name]
             # asdict(), not a hand-picked field list — a manually maintained
@@ -484,6 +509,7 @@ class HfModelInfoCache:
             # making every cached (non-cold) precheck quietly regress.
             entry = asdict(meta)
             entry["fetched_at"] = meta.fetched_at or time.time()
+            entry[_CACHE_VERSION_KEY] = _CACHE_SCHEMA_VERSION
             self._entries[model_name] = entry
             if self._path is None:
                 return
