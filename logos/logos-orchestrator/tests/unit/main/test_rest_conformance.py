@@ -54,7 +54,11 @@ def test_classify_registered_as_vllm_native_route():
     # /v1) — without this registration a calibrated classification model
     # is unreachable from clients even though calibration itself talks to
     # vLLM directly and never goes through this router.
-    routes = {(route.path, method) for route in main.app.routes for method in getattr(route, "methods", None) or ()}
+    routes = {
+        (route.path, method)
+        for route in iter_route_contexts(main.app.routes)
+        for method in getattr(route, "methods", None) or ()
+    }
     assert ("/classify", "POST") in routes
 
 
