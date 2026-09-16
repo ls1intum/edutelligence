@@ -272,7 +272,7 @@
   position: relative;
 
   &--on { background: rgb(var(--color-primary-500)); }
-  &:disabled { opacity: var(--opacity-overlay); cursor: not-allowed; }
+  &:disabled { background: rgb(var(--color-outline-300)); opacity: var(--opacity-overlay); cursor: not-allowed; }
 }
 
 .toggle-thumb {
