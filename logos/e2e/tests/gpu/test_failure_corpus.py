@@ -17,6 +17,7 @@ every model's compile cache on the node.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,11 @@ POISONED = [e for e in ENTRIES if e.expect.poisoned_cache]
 BENIGN = [e for e in ENTRIES if e.benign]
 
 SHARDED_COMPLETION_MARKER = ".logos_sharded_complete"
+
+#: Where the worker persists failure logs. Hardcoded in
+#: ``VllmProcessHandle._persist_failure_logs``, so a test can only scope itself
+#: within it — never redirect it, and never delete from it.
+WORKER_LOG_DIR = Path("/tmp/logos-vllm-logs")
 
 
 def _ids(entries):
@@ -254,40 +260,38 @@ async def test_fatal_cuda_error_does_not_purge_the_compile_cache(gpu_sim, cache_
         assert len(env.invocations()) == 1
 
 
-async def test_failure_logs_are_persisted_for_postmortem(gpu_sim, lane, monkeypatch, tmp_path):
+async def test_failure_logs_are_persisted_for_postmortem(gpu_sim, lane):
     """The captured log has to outlive the process that produced it.
 
     Without this the only record of a startup failure is whatever the worker's
     own stdout buffer still holds by the time someone looks.
     """
-    log_dir = tmp_path / "vllm-logs"
-
-    # The worker hardcodes /tmp/logos-vllm-logs, which is a real directory a
-    # developer's own worker writes postmortems into. Redirect just that one
-    # path so the test cannot read another run's logs — or delete someone's.
-    real_path = Path
-
-    def _redirect_log_dir(*args, **kwargs):
-        if args and str(args[0]) == "/tmp/logos-vllm-logs":
-            return real_path(log_dir)
-        return real_path(*args, **kwargs)
-
-    monkeypatch.setattr("logos_worker_node.vllm_process.Path", _redirect_log_dir)
+    # Isolation by unique lane id, not by redirecting the path.
+    #
+    # The worker hardcodes /tmp/logos-vllm-logs. Monkeypatching
+    # `vllm_process.Path` to redirect that one directory looked tidier, but it
+    # replaced a name the spawn path itself uses and left the worker unable to
+    # start — the log buffer came back empty and this test failed on a symptom
+    # three steps from the cause.
+    #
+    # The real hazard the isolation was for is *deleting* files from a shared
+    # directory a developer's own worker writes postmortems into. This deletes
+    # nothing, and a lane id unique per run means the glob cannot pick up
+    # another run's files either.
+    lane_id = f"e2e-postmortem-{uuid.uuid4().hex[:8]}"
     gpu_sim(GpuScenario.homogeneous("l40s", 1), VllmScript(emit_log="cuda_devices_busy.log", exit_code=1))
 
-    async with lane() as handle:
+    async with lane(lane_id=lane_id) as handle:
         error = await lane_harness.try_spawn(handle, lane_harness.lane_config())
 
-        # Each precondition is asserted separately: this test depends on the
-        # spawn failing, on the corpus log reaching the worker's buffer, and on
-        # the redirect being in effect. Checking only the final file would
-        # report all three failures as "no log was persisted".
+        # Asserted separately so a failure names its own cause: this test needs
+        # the spawn to fail *and* the corpus log to reach the worker's buffer.
+        # Checking only the final file reports both as "no log was persisted".
         assert error is not None, "the lane started; there is no failure to persist"
         assert handle.has_fatal_cuda_errors, "the corpus log never reached the worker's log buffer"
 
         handle.persist_recent_logs("e2e_corpus")
 
-    assert log_dir.is_dir(), f"nothing was written under {log_dir} — the path redirect did not take effect"
-    written = sorted(log_dir.glob("*_e2e_corpus.log"))
-    assert written, f"no failure log was persisted; {log_dir} holds {sorted(p.name for p in log_dir.iterdir())}"
+    written = sorted(WORKER_LOG_DIR.glob(f"{lane_id}_*_e2e_corpus.log"))
+    assert written, f"no failure log was persisted under {WORKER_LOG_DIR}"
     assert "all CUDA-capable devices are busy or unavailable" in written[-1].read_text()
