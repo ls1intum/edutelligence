@@ -93,19 +93,18 @@ export class ModelAccess implements OnInit {
   }
 
   /**
-   * One-click repair: adds the hosting provider to the team's provider
-   * grants. The team's complete existing set is re-read and preserved —
-   * only the missing provider is appended — and the matrix is reloaded
-   * with the usual loading/error feedback.
+   * One-click repair: atomically adds the hosting provider to the team's
+   * provider grants. The backend performs a single idempotent upsert, so the
+   * team's other grants are preserved by construction and a concurrent admin
+   * edit can neither be clobbered nor trigger the model-grant cascade. The
+   * matrix is then reloaded with the usual loading/error feedback.
    */
   async grantProviderToTeam(teamId: number, providerId: number): Promise<void> {
     if (this.granting()) return;
     this.granting.set(true);
     this.grantError.set(null);
     try {
-      const current = await this.teamService.getTeamProviderPermissions(teamId);
-      const next = [...new Set([...current, providerId])];
-      await this.teamService.setTeamProviderPermissions(teamId, next);
+      await this.teamService.addTeamProviderPermission(teamId, providerId);
       const id = Number(this.route.snapshot.paramMap.get('id'));
       await this.load(id);
     } catch {

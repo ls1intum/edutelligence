@@ -9,8 +9,10 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -35,6 +37,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 class PermissionControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
@@ -183,5 +186,57 @@ class PermissionControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$").isArray())
            .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void addTeamProviderPermission_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/admin/teams/2001/provider-permissions/6001")
+                .with(TestJwt.adminUser()))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void addTeamProviderPermission_addsOnlyThisGrant() throws Exception {
+        // A second provider so "the other grants are kept" is observable.
+        jdbc.update("INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format) "
+            + "VALUES (6002, 'second-provider', 'https://api.second.example', 'cloud', 'LOCAL', 'Authorization', 'Bearer {}')");
+
+        mvc.perform(put("/admin/teams/2001/model-permissions")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_ids\":[5001]}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(post("/admin/teams/2001/provider-permissions/6001")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Team provider permission added"));
+        mvc.perform(post("/admin/teams/2001/provider-permissions/6002")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+
+        // Each add appends one grant without replacing the team's other grants...
+        mvc.perform(get("/admin/teams/2001/provider-permissions")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(2))
+           .andExpect(jsonPath("$[0]").value(6001))
+           .andExpect(jsonPath("$[1]").value(6002));
+
+        // ...re-adding the same grant is idempotent (no duplicate rows)...
+        mvc.perform(post("/admin/teams/2001/provider-permissions/6001")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+        mvc.perform(get("/admin/teams/2001/provider-permissions")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(2));
+
+        // ...and the add path never re-runs the model-grant cascade.
+        mvc.perform(get("/admin/teams/2001/model-permissions")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(1))
+           .andExpect(jsonPath("$[0]").value(5001));
     }
 }

@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -111,6 +112,19 @@ public class PermissionController {
             @RequestBody SetProviderPermissionsRequestDTO body) {
         permissionService.setTeamProviderPermissions(teamId, body.providerIds());
         return ResponseEntity.ok(Map.of("result", "Team provider permissions updated"));
+    }
+
+    /**
+     * One-click repair from the model access page: atomically adds a single
+     * team-provider grant without replacing the team's other grants.
+     */
+    @PostMapping("/teams/{teamId}/provider-permissions/{providerId}")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> addTeamProviderPermission(
+            @PathVariable Integer teamId,
+            @PathVariable Integer providerId) {
+        permissionService.addTeamProviderPermission(teamId, providerId);
+        return ResponseEntity.ok(Map.of("result", "Team provider permission added"));
     }
 
     private void enforceKeyAccess(Integer keyId, AuthContext auth) {

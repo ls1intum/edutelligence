@@ -79,4 +79,16 @@ public class PermissionService {
             .map(pid -> new TeamProviderPermission(teamId, pid)).toList());
         teamModelRepo.deleteCascadeForTeam(teamId);
     }
+
+    /**
+     * Atomic one-click repair (model access page): appends a single
+     * team-provider grant. Unlike the full-set PUT above — which works from a
+     * client-side snapshot and can clobber a concurrent admin edit — this is a
+     * single upsert that touches nothing but the requested row, so the team's
+     * other grants and the model-grant cascade are left alone.
+     */
+    @Transactional
+    public void addTeamProviderPermission(int teamId, Integer providerId) {
+        teamProviderRepo.grantIfAbsent(teamId, providerId);
+    }
 }
