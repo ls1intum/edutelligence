@@ -62,6 +62,33 @@ def _is_metal_capacity_failure(returncode: int | None, log_tail: str) -> bool:
     return any(marker in lowered for marker in _METAL_MEMORY_MARKERS)
 
 
+def _record_capacity_floor_if_applicable(
+    result: CalibrationResult,
+    *,
+    proc: subprocess.Popen[str] | None,
+    log_path: Path,
+    working_set_mb: float | None,
+    model: str,
+) -> None:
+    """Stamp ``result`` with this node's capacity floor when a crashed
+    probe looks like a memory-capacity failure. Shared by every path that
+    treats a dead vLLM process as a calibration failure, so a crash
+    during warmup is classified exactly like one during spawn/wait_ready.
+    """
+    returncode = proc.poll() if proc is not None else None
+    log_tail = _read_log_since(log_path, 0) if log_path.exists() else ""
+    if working_set_mb and _is_metal_capacity_failure(returncode, log_tail):
+        result.capacity_oom = True
+        result.metal_capacity_floor_mb = working_set_mb
+        logger.warning(
+            "  %s: failure looks like a memory-capacity issue — this "
+            "node's working-set budget (%.0f MB) is being recorded as "
+            "a floor this model did not fit under",
+            model,
+            working_set_mb,
+        )
+
+
 # Matches VllmConfig.mm_processor_cache_gb's own default (models.py) — vLLM's
 # built-in default, applied when the plan has no per-model override. Every
 # production lane (CUDA and Metal) passes --mm-processor-cache-gb
@@ -360,6 +387,21 @@ def calibrate_model_metal(
                 )
                 logger.warning("  ERROR: %s", result.error)
                 return result
+            if proc is not None and proc.poll() is not None:
+                # The warmup didn't just time out or answer non-200 — the
+                # process is gone. A "generative" model tolerates a slow
+                # or flaky first token, but not a dead process: measuring
+                # memory now would read a footprint from after the crash,
+                # and skip the capacity-floor classification entirely.
+                result.error = (
+                    f"vLLM exited during warmup (returncode={proc.poll()}): "
+                    f"{model} crashed answering its own serving endpoint"
+                )
+                logger.warning("  ERROR: %s", result.error)
+                _record_capacity_floor_if_applicable(
+                    result, proc=proc, log_path=log_path, working_set_mb=working_set_mb, model=model
+                )
+                return result
             logger.warning("  %s: warmup request did not complete — measuring load-only footprint", model)
 
         time.sleep(_METAL_SETTLE_S)
@@ -382,18 +424,9 @@ def calibrate_model_metal(
     except (RuntimeError, TimeoutError, OSError) as exc:
         result.error = str(exc)
         logger.warning("  ERROR: %s", result.error)
-        returncode = proc.poll() if proc is not None else None
-        log_tail = _read_log_since(log_path, 0) if log_path.exists() else ""
-        if working_set_mb and _is_metal_capacity_failure(returncode, log_tail):
-            result.capacity_oom = True
-            result.metal_capacity_floor_mb = working_set_mb
-            logger.warning(
-                "  %s: failure looks like a memory-capacity issue — this "
-                "node's working-set budget (%.0f MB) is being recorded as "
-                "a floor this model did not fit under",
-                model,
-                working_set_mb,
-            )
+        _record_capacity_floor_if_applicable(
+            result, proc=proc, log_path=log_path, working_set_mb=working_set_mb, model=model
+        )
         return result
     finally:
         if proc is not None:

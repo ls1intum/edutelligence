@@ -2931,13 +2931,14 @@ def test_begin_calibration_session_prefers_idle_gpus_over_busy_ones() -> None:
 
 def test_begin_calibration_session_falls_back_when_idle_gpus_insufficient() -> None:
     """3 GPUs, lanes on GPU 0 AND 1: only GPU 2 is idle — not enough for a
-    2-GPU slice, so it falls back to the naive [0, 1] slice (some lane
-    still has to be killed either way)."""
+    2-GPU slice on its own, so the idle GPU is kept and only the missing
+    slot comes from the busy set ([2, 0]), instead of the naive [0, 1]
+    slice that would kill both lanes when sparing one was possible."""
     manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 3, lane_port_start=15221, lane_port_end=15230)
     manager._handles["a"] = _StubHandle(LaneConfig(model="m1", vllm=True, gpu_devices="0"))  # noqa: SLF001
     manager._handles["b"] = _StubHandle(LaneConfig(model="m2", vllm=True, gpu_devices="1"))  # noqa: SLF001
 
-    assert manager.begin_calibration_session() == frozenset({0, 1})
+    assert manager.begin_calibration_session() == frozenset({0, 2})
 
 
 def test_lane_gpu_set_parses_selectors() -> None:

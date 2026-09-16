@@ -796,10 +796,19 @@ def test_select_calibration_gpus_prefers_fully_idle_slice():
 
 
 def test_select_calibration_gpus_falls_back_when_not_enough_idle():
-    """Only one GPU idle but the slice needs two: fall back to 0..slice-1,
-    matching calibration_gpu_slice's naive behavior (some lane still killed)."""
-    assert select_calibration_gpus(3, busy_gpus=[0, 1]) == [0, 1]
+    """Only one GPU idle but the slice needs two: keep the idle one and
+    fill the remaining slot from the busy GPUs, instead of discarding it
+    for the naive 0..slice-1 prefix (some lane is still killed, but only
+    one instead of two)."""
+    assert select_calibration_gpus(3, busy_gpus=[0, 1]) == [2, 0]
     assert select_calibration_gpus(3, busy_gpus=[0, 1, 2]) == [0, 1]
+
+
+def test_select_calibration_gpus_partial_idle_uses_every_idle_gpu_first():
+    """5 GPUs, slice needs 4, only 2 idle: both idle GPUs are kept and
+    only the missing 2 slots come from the busy set — never a fallback
+    that discards an idle GPU the naive 0..slice-1 prefix ignores."""
+    assert select_calibration_gpus(5, busy_gpus=[0, 1, 2]) == [3, 4, 0, 1]
 
 
 def test_select_calibration_gpus_power_of_two_node_ignores_busy():

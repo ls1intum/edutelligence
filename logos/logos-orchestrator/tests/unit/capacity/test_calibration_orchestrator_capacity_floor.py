@@ -3,8 +3,11 @@
 ``_capacity_skip_models`` compares a candidate provider's own working-set
 budget (``devices.total_memory_mb``) against the max
 ``metal_capacity_floor_mb`` recorded for a model anywhere in the cluster,
-and skips models the candidate could never fit. CUDA profiles never set
-the field, so this is always empty for a CUDA-only cluster.
+and skips models the candidate could never fit. It only ever applies to
+a Metal candidate (``devices.mode == "metal"``) — a Metal working-set
+floor says nothing about CUDA VRAM headroom, and CUDA nodes report their
+own nonzero ``total_memory_mb`` too, so the mode check is load-bearing,
+not just a case that never occurs in practice.
 
 Same fixture style as the neighbouring GPU-slice tests —
 ``CalibrationOrchestrator.__new__`` plus fake ``_registry`` / ``_facade``.
@@ -18,8 +21,8 @@ from logos.capacity.calibration_orchestrator import CalibrationOrchestrator
 from logos.sdi.models import ModelProfile
 
 
-def _snapshot(total_memory_mb: float) -> dict:
-    return {"runtime": {"devices": {"total_memory_mb": total_memory_mb}}}
+def _snapshot(total_memory_mb: float, mode: str = "metal") -> dict:
+    return {"runtime": {"devices": {"total_memory_mb": total_memory_mb, "mode": mode}}}
 
 
 def _profile(model_name: str, floor_mb: float | None) -> ModelProfile:
@@ -95,4 +98,26 @@ def test_empty_when_provider_capacity_unknown():
 def test_ignores_provider_whose_profiles_raise():
     orch = _orch(snapshot=_snapshot(8_000.0), provider_ids=[1, 2], profiles_by_provider={})
     orch._facade.get_model_profiles.side_effect = RuntimeError("offline")
+    assert orch._capacity_skip_models(2) == frozenset()
+
+
+def test_cuda_candidate_is_never_skipped_by_a_metal_floor():
+    """Mixed cluster: a Metal node recorded a real floor for a model, and
+    the CUDA candidate's own total_memory_mb happens to be smaller than
+    it (a Metal working-set number and CUDA VRAM aren't comparable) — the
+    CUDA candidate must not be skipped just because it isn't Metal."""
+    orch = _orch(
+        snapshot=_snapshot(4_000.0, mode="nvidia"),
+        provider_ids=[1, 2],
+        profiles_by_provider={1: {"org/model": _profile("org/model", 8_000.0)}},
+    )
+    assert orch._capacity_skip_models(2) == frozenset()
+
+
+def test_empty_when_candidate_mode_is_unknown():
+    orch = _orch(
+        snapshot=_snapshot(4_000.0, mode="derived"),
+        provider_ids=[1, 2],
+        profiles_by_provider={1: {"org/model": _profile("org/model", 8_000.0)}},
+    )
     assert orch._capacity_skip_models(2) == frozenset()

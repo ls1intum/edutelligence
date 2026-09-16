@@ -362,6 +362,35 @@ def test_pooling_warmup_failure_fails_calibration():
     assert mocks["warmup"].call_args.kwargs.get("model_kind") == "pooling"
 
 
+def test_generative_crash_during_warmup_is_not_recorded_as_success():
+    """A process that exits mid-warmup (e.g. an OOM during the first real
+    generation) must not be reported as a load-only success — a dead
+    process, not a slow/flaky first token, is what warmup_ok=False plus
+    proc.poll() != None means."""
+    patches, mock_proc = _patch_metal_infra(wired_memory_sequence=[4000.0], warmup_ok=False)
+    mock_proc.poll.return_value = 1
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "exited during warmup" in result.error
+
+
+def test_generative_crash_during_warmup_still_classifies_capacity_floor():
+    """Same crash, shaped like an OS OOM kill (SIGKILL) — the
+    capacity-floor classifier must still run, exactly as it does for a
+    crash during spawn/wait_ready."""
+    patches, mock_proc = _patch_metal_infra(wired_memory_sequence=[4000.0], warmup_ok=False)
+    mock_proc.poll.return_value = -9
+    info = {"max_recommended_working_set_size": 20_000 * 1024 * 1024, "device_name": "M3 Pro"}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch("logos_worker_node.calibration_metal._read_log_since", return_value="")
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is True
+    assert result.metal_capacity_floor_mb == pytest.approx(20_000.0)
+
+
 def test_model_kind_defaults_to_generative_and_is_forwarded_to_warmup():
     patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
     _result, mocks = _run({"model": "org/model"}, patches)

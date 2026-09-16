@@ -384,6 +384,11 @@ class CalibrationOrchestrator:
         if not isinstance(snap, dict):
             return frozenset()
         devices = (snap.get("runtime") or {}).get("devices") or {}
+        # A Metal working-set floor says nothing about CUDA VRAM headroom
+        # — only ever apply it to another Metal provider, never compare
+        # it against a CUDA node's own total_memory_mb.
+        if devices.get("mode") != "metal":
+            return frozenset()
         provider_capacity_mb = float(devices.get("total_memory_mb") or 0.0)
         if provider_capacity_mb <= 0:
             return frozenset()

@@ -3366,19 +3366,24 @@ def select_calibration_gpus(available_gpus: int, busy_gpus: Iterable[int] = ()) 
     Same slice size as :func:`calibration_gpu_slice` (the largest power-of-two
     ≤ ``available_gpus``), but the indices favor GPUs outside *busy_gpus* —
     so on a 3-GPU node with a model loaded only on GPU 0, calibration picks
-    ``[1, 2]`` instead of unconditionally killing lanes on ``[0, 1]``. Falls
-    back to :func:`calibration_gpu_slice`'s naive ``0..slice_size-1`` slice
-    when too few GPUs are idle to cover the needed size.
+    ``[1, 2]`` instead of unconditionally killing lanes on ``[0, 1]``. When
+    too few GPUs are idle to cover the needed size, every idle GPU is still
+    kept and only the remaining slots are filled from the busy ones — a
+    3-GPU node with 0 and 1 busy picks ``[2, 0]``, not the naive ``[0, 1]``,
+    which would tear down both serving lanes when sparing one was possible.
     """
     n = int(available_gpus) if available_gpus else 0
     if n < 1:
         return []
     slice_size = 1 << (n.bit_length() - 1)
+    if slice_size == n:
+        # The slice spans the whole node — every GPU is used either way,
+        # so idle preference cannot change what gets torn down.
+        return list(range(n))
     busy = {int(i) for i in busy_gpus}
     idle = [i for i in range(n) if i not in busy]
-    if len(idle) >= slice_size:
-        return idle[:slice_size]
-    return list(range(slice_size))
+    ordered = idle + [i for i in range(n) if i in busy]
+    return ordered[:slice_size]
 
 
 def _plan_needs_gpu_pin(gpu_devices: str) -> bool:
