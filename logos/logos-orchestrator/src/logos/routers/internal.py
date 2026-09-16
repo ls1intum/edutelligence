@@ -218,6 +218,35 @@ async def internal_provider_status(request: Request):
     return {"providers": providers}
 
 
+@router.get("/internal/perf_trace/{request_id}", tags=["admin"])
+async def internal_perf_trace(request: Request, request_id: str):
+    """Fetch and consume the env-gated perf trace of one request (issue #980).
+
+    Only available with ``LOGOS_PERF_TRACE`` enabled — then each request's
+    phase timings accumulate in memory and are exposed here exactly once
+    (take/pop semantics). The benchmark harness reads it to build the
+    nanosecond phase report; with tracing disabled the store is empty and
+    this endpoint always 404s.
+    """
+    _require_internal_secret(request, disabled_detail="Perf trace endpoint disabled")
+    from logos import perf_trace  # noqa: PLC0415 (keep the hot path import-free)
+
+    trace = perf_trace.take(request_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="No perf trace for request (tracing disabled or already taken)")
+    return trace
+
+
+@router.delete("/internal/perf_trace", tags=["admin"])
+async def internal_perf_trace_flush(request: Request):
+    """Drop all pending perf traces (benchmark harness cleanup)."""
+    _require_internal_secret(request, disabled_detail="Perf trace endpoint disabled")
+    from logos import perf_trace  # noqa: PLC0415
+
+    perf_trace.reset()
+    return {"status": "ok"}
+
+
 @router.get("/internal/model_context_windows", tags=["admin"])
 async def internal_model_context_windows(request: Request):
     """Served context window per model name, for the Spring webservice.

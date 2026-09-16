@@ -148,7 +148,7 @@ async def test_streaming_requests_are_guarded_too(monkeypatch):
     """Resource mode can resolve to Whisper and answer synchronously even for stream: true."""
     guarded = []
 
-    async def fake_auth_parse_log(request, use_profile_auth=False):
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock()
         auth.api_key_id = 88
         return {}, auth, {"stream": True}, "127.0.0.1", None

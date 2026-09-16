@@ -24,6 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
+from logos import perf_trace
 from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
@@ -2213,16 +2214,21 @@ async def _sync_response(
         if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = force_non_streaming_payload(prepared_payload)
             try:
-                rpc_result = await _logosnode_registry.send_command(
-                    provider_id=provider_id,
-                    action="infer",
-                    params={
-                        "lane_id": context.lane_id,
-                        "payload": sync_payload,
-                        "request_path": request_path,
-                    },
-                    timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
-                )
+                with perf_trace.phase(request_id, "rpc.send_command"):
+                    rpc_result = await _logosnode_registry.send_command(
+                        provider_id=provider_id,
+                        action="infer",
+                        params={
+                            "lane_id": context.lane_id,
+                            "payload": sync_payload,
+                            "request_path": request_path,
+                        },
+                        timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
+                    )
+                # The worker returns its own (LOGOS_WORKER_PERF_TRACE-gated)
+                # phase breakdown inside the command result; merge it under
+                # rpc.worker.* so the transport cost is the difference.
+                perf_trace.merge_worker(request_id, rpc_result.get("perf"))
                 status_override = int(rpc_result.get("status_code", 200))
                 response_payload = rpc_result.get("body")
                 rpc_headers = rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else {}
@@ -2345,52 +2351,55 @@ async def _sync_response(
         )
 
         if log_id:
-            with DBManager() as db:
-                if exec_result.success:
-                    db.set_time_at_first_token(log_id)
-                db.set_response_payload(
-                    log_id,
-                    response_payload,
-                    provider_id,
-                    model_id,
-                    usage_tokens,
-                    policy_id,
-                    classification_stats,
-                    service_tier=extract_service_tier(response_payload),
-                    request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
-                    queue_depth_at_arrival=(
-                        scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
-                    ),
-                    utilization_at_arrival=(
-                        scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
-                    ),
-                )
-                # Persist the final result_status directly by log_id. record_completion
-                # below only runs when scheduling_stats is present (it keys off
-                # request_id), which left cloud requests with no scheduling stats —
-                # e.g. a failed Azure call — at result_status NULL, rendering grey
-                # (neither success nor error) on the statistics page.
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
-                    error_message=(
-                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
-                    ),
-                )
+            with perf_trace.phase(request_id, "db.response_block"):
+                with DBManager() as db:
+                    if exec_result.success:
+                        db.set_time_at_first_token(log_id)
+                    db.set_response_payload(
+                        log_id,
+                        response_payload,
+                        provider_id,
+                        model_id,
+                        usage_tokens,
+                        policy_id,
+                        classification_stats,
+                        service_tier=extract_service_tier(response_payload),
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
+                        queue_depth_at_arrival=(
+                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
+                        ),
+                        utilization_at_arrival=(
+                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                        ),
+                    )
+                    # Persist the final result_status directly by log_id.
+                    # record_completion below only runs when scheduling_stats is
+                    # present (it keys off request_id), which left cloud requests
+                    # with no scheduling stats — e.g. a failed Azure call — at
+                    # result_status NULL, rendering grey (neither success nor
+                    # error) on the statistics page.
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
+                        error_message=(
+                            error_message if timed_out else (exec_result.error if not exec_result.success else None)
+                        ),
+                    )
 
         if scheduling_stats:
             status = "timeout" if timed_out else ("success" if exec_result.success else "error")
-            _pipeline.record_completion(
-                request_id=scheduling_stats.get("request_id"),
-                result_status=status,
-                error_message=(
-                    error_message if timed_out else (exec_result.error if not exec_result.success else None)
-                ),
-                cold_start=scheduling_stats.get("is_cold_start"),
-                usage_tokens=usage_tokens,
-            )
+            with perf_trace.phase(request_id, "monitoring.record_complete"):
+                _pipeline.record_completion(
+                    request_id=scheduling_stats.get("request_id"),
+                    result_status=status,
+                    error_message=(
+                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
+                    ),
+                    cold_start=scheduling_stats.get("is_cold_start"),
+                    usage_tokens=usage_tokens,
+                )
 
         if rl_key:
             from logos.rate_limiter import get_rate_limiter
@@ -2473,16 +2482,17 @@ async def _sync_response(
                 job_data = response_payload
             return {"status_code": status_code, "data": job_data}
         else:
-            response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-            if exec_result.raw_body is not None and exec_result.success:
-                if exec_result.content_type:
-                    response_headers["content-type"] = exec_result.content_type
-                return Response(
-                    content=exec_result.raw_body,
-                    status_code=status_code,
-                    headers=response_headers,
-                )
-            return JSONResponse(content=response_payload, status_code=status_code, headers=response_headers)
+            with perf_trace.phase(request_id, "http.response_build"):
+                response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
+                if exec_result.raw_body is not None and exec_result.success:
+                    if exec_result.content_type:
+                        response_headers["content-type"] = exec_result.content_type
+                    return Response(
+                        content=exec_result.raw_body,
+                        status_code=status_code,
+                        headers=response_headers,
+                    )
+                return JSONResponse(content=response_payload, status_code=status_code, headers=response_headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -2709,22 +2719,23 @@ async def _execute_proxy_mode(
         model_id = matching_deployments[0]["model_id"] if len(matching_deployments) == 1 else None
         model_name = requested_model_name if model_id is not None else None
     else:
-        with DBManager() as db:
-            models_info = db.get_models_info(auth.key_value)
+        with perf_trace.phase(request_id, "mode.resolve_model"):
+            with DBManager() as db:
+                models_info = db.get_models_info(auth.key_value)
 
-        model_name = _resolve_requested_model_name(requested_model_name, models_info)
-        if model_name is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Model '{requested_model_name}' not available for this key",
-            )
+            model_name = _resolve_requested_model_name(requested_model_name, models_info)
+            if model_name is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Model '{requested_model_name}' not available for this key",
+                )
 
-        model_id = None
-        for row in models_info:
-            mid, name = row["id"], row["name"]
-            if name == model_name:
-                model_id = mid
-                break
+            model_id = None
+            for row in models_info:
+                mid, name = row["id"], row["name"]
+                if name == model_name:
+                    model_id = mid
+                    break
 
     if model_id is None:
         raise HTTPException(
@@ -2898,34 +2909,35 @@ async def _execute_resource_mode(
             if rl_info.get("tpm") is not None:
                 rl_tpm_key = rl_key
 
-    with DBManager() as db:
-        try:
-            _check_budget_if_cloud(
-                db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
-            )
-        except Exception as e:
+    with perf_trace.phase(request_id, "mode.budget_check"):
+        with DBManager() as db:
             try:
-                _pipeline.scheduler.release(
-                    result.model_id,
-                    result.provider_id,
-                    provider_type,
-                    result.scheduling_stats.get("request_id") or request_id,
+                _check_budget_if_cloud(
+                    db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
                 )
-            except Exception:
-                logger.warning("Failed to release scheduler slot after budget reject")
-            if isinstance(e, HTTPException) and is_async_job:
-                _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
-                _record_log_failure(
-                    log_id,
-                    result.scheduling_stats.get("request_id") or request_id,
-                    str(e.detail),
-                    model_id=result.model_id,
-                    provider_id=result.provider_id,
-                    classification_stats=result.classification_stats,
-                    scheduling_stats=result.scheduling_stats,
-                )
-                return {"status_code": e.status_code, "data": err_body}
-            raise
+            except Exception as e:
+                try:
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.provider_id,
+                        provider_type,
+                        result.scheduling_stats.get("request_id") or request_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to release scheduler slot after budget reject")
+                if isinstance(e, HTTPException) and is_async_job:
+                    _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
+                    _record_log_failure(
+                        log_id,
+                        result.scheduling_stats.get("request_id") or request_id,
+                        str(e.detail),
+                        model_id=result.model_id,
+                        provider_id=result.provider_id,
+                        classification_stats=result.classification_stats,
+                        scheduling_stats=result.scheduling_stats,
+                    )
+                    return {"status_code": e.status_code, "data": err_body}
+                raise
 
     # Execute and Respond
     try:
@@ -3407,9 +3419,17 @@ async def handle_sync_request(path: str, request: Request):
     if is_batch_api_path(path):
         return await handle_batch_api_request(request)
 
-    # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
-    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+    # The request id is minted before authentication so perf tracing can cover
+    # the auth phases as well; it lands in the DB with the log metrics update
+    # below either way.
     request_id = secrets.token_urlsafe(16)
+    perf_trace.begin(request_id)
+
+    # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
+    with perf_trace.phase(request_id, "auth.parse_log"):
+        headers, auth, body, client_ip, log_id = await auth_parse_log(
+            request, use_profile_auth=True, request_id=request_id
+        )
 
     # Publish the request to the live view from the moment it is known, so the
     # statistics feed shows its (estimated) prompt size while it waits for a
@@ -3421,18 +3441,21 @@ async def handle_sync_request(path: str, request: Request):
         try:
             with DBManager() as db:
                 if log_id:
-                    db.update_log_entry_metrics(
-                        log_id=log_id,
-                        request_id=request_id,
-                        timeout_s=body.get("timeout_s"),
-                    )
-                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+                    with perf_trace.phase(request_id, "setup.update_metrics"):
+                        db.update_log_entry_metrics(
+                            log_id=log_id,
+                            request_id=request_id,
+                            timeout_s=body.get("timeout_s"),
+                        )
+                with perf_trace.phase(request_id, "setup.deployments"):
+                    raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
             required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
             if required_provider_id is not None:
                 raw_deployments = [
                     deployment for deployment in raw_deployments if deployment["provider_id"] == required_provider_id
                 ]
-            deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+            with perf_trace.phase(request_id, "setup.filter_logosnode"):
+                deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
         except HTTPException as e:
             _record_log_failure(log_id, request_id, str(e.detail), result_status="error")
             raise
@@ -3480,9 +3503,12 @@ async def handle_sync_request(path: str, request: Request):
         # here.
         if not isinstance(response, StreamingResponse):
             _live_streams.finish(request_id)
+        # For streaming responses the trace ends here as well (early by design:
+        # the interesting pre-stream phases are what the trace captures).
+        perf_trace.finish(request_id)
 
 
-async def auth_parse_log(request: Request, use_profile_auth: bool = False):
+async def auth_parse_log(request: Request, use_profile_auth: bool = False, request_id: Optional[str] = None):
     """
     Authenticate, parse, and log incoming requests.
 
@@ -3507,7 +3533,8 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     # callers from consuming the audio upload/base64 memory budget.
     headers = dict(request.headers)
     client_ip = get_client_ip(request)
-    auth = authenticate_api_key(headers) if use_profile_auth else None
+    with perf_trace.phase(request_id, "auth.api_key"):
+        auth = authenticate_api_key(headers) if use_profile_auth else None
 
     # OpenAI-compatible audio uploads use multipart/form-data. Other inference
     # operations retain the existing JSON request contract.
@@ -3532,7 +3559,8 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
             # key settings exactly like any other key. Budget is checked later,
             # once permitted deployments are known (see _check_budget_if_cloud).
             s = auth.settings or {}
-            team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
+            with perf_trace.phase(request_id, "auth.team_lookup"):
+                team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
 
             generic_rpm = s.get("rpm_limit")
             generic_tpm = s.get("tpm_limit")
@@ -3555,16 +3583,17 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
             if local_rpm is not None or local_tpm is not None:
                 auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
 
-            r_log, c_log = db.log_usage(
-                api_key_id=auth.api_key_id,
-                team_id=auth.team_id,
-                user_id=auth.user_id,
-                environment=auth.environment,
-                log_level=auth.log_level,
-                client_ip=client_ip,
-                input_payload=sanitized_payload_for_logging(body),
-                headers=sanitized_headers_for_persistence(headers),
-            )
+            with perf_trace.phase(request_id, "auth.log_usage_insert"):
+                r_log, c_log = db.log_usage(
+                    api_key_id=auth.api_key_id,
+                    team_id=auth.team_id,
+                    user_id=auth.user_id,
+                    environment=auth.environment,
+                    log_level=auth.log_level,
+                    client_ip=client_ip,
+                    input_payload=sanitized_payload_for_logging(body),
+                    headers=sanitized_headers_for_persistence(headers),
+                )
             if c_log == 200:
                 log_id = int(r_log["log-id"])
 

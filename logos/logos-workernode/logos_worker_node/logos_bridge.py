@@ -9,6 +9,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
@@ -28,6 +29,7 @@ except Exception:  # noqa: BLE001
 
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.metal import is_metal_backend
+from logos_worker_node import perf_trace as worker_perf
 from logos_worker_node.models import (
     LaneConfig,
     LaneEvent,
@@ -56,6 +58,16 @@ _MAX_CALIBRATION_LOG_DOWNLOAD_BYTES = 10 * 1024 * 1024
 # Commands that can grow this node's VRAM footprint. Refused while a
 # calibration session holds the GPU — see _execute_command.
 _VRAM_GROWING_ACTIONS = frozenset({"add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"})
+
+
+_NULL_PERF_PHASE = nullcontext()
+
+
+def _perf_phase(tracer: Any, name: str) -> Any:
+    """Traced phase when a tracer is active, a no-op context manager otherwise."""
+    if tracer is None:
+        return _NULL_PERF_PHASE
+    return tracer.phase(name)
 
 
 class _CalibrationSession:
@@ -2113,47 +2125,58 @@ class LogosBridgeClient:
         if not isinstance(payload, dict):
             raise ValueError("payload must be an object")
 
+        tracer = worker_perf.begin()
+
         # Atomically validate-and-count the lane (closes the dispatch-to-sleep
         # race: the lane cannot be slept/evicted between selection and counting).
-        lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
+        # Includes the per-request lane status build (the W2 optimisation
+        # target) — that is why the phase is named lane.acquire.
+        with _perf_phase(tracer, "lane.acquire"):
+            lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
         try:
-            request_path = params.get("request_path")
-            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
-            request_kwargs, request_headers = httpx_request_parts(payload)
+            with _perf_phase(tracer, "relay.prepare"):
+                request_path = params.get("request_path")
+                target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+                request_kwargs, request_headers = httpx_request_parts(payload)
             async with httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT) as client:
-                upstream = await client.post(
-                    target_url,
-                    headers=request_headers,
-                    **request_kwargs,
-                )
+                with _perf_phase(tracer, "relay.post"):
+                    upstream = await client.post(
+                        target_url,
+                        headers=request_headers,
+                        **request_kwargs,
+                    )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
         finally:
-            await lane_manager.decrement_active_requests(lane_id)
+            with _perf_phase(tracer, "lane.decrement"):
+                await lane_manager.decrement_active_requests(lane_id)
 
-        content_type = upstream.headers.get("content-type")
-        media_type = (content_type or "").partition(";")[0].strip().lower()
-        is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
-        is_successful_multipart = upstream.status_code < 400 and isinstance(payload.get(MULTIPART_PAYLOAD_KEY), dict)
-        is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
-        body_base64 = None
-        if is_successful_multipart:
-            if is_text_response:
-                body = upstream.text
-            elif is_json_response:
-                try:
-                    body = upstream.json()
-                except ValueError:
+        with _perf_phase(tracer, "relay.parse"):
+            content_type = upstream.headers.get("content-type")
+            media_type = (content_type or "").partition(";")[0].strip().lower()
+            is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
+            is_successful_multipart = (
+                upstream.status_code < 400 and isinstance(payload.get(MULTIPART_PAYLOAD_KEY), dict)
+            )
+            is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
+            body_base64 = None
+            if is_successful_multipart:
+                if is_text_response:
+                    body = upstream.text
+                elif is_json_response:
+                    try:
+                        body = upstream.json()
+                    except ValueError:
+                        body = None
+                        body_base64 = base64.b64encode(upstream.content).decode("ascii")
+                else:
                     body = None
                     body_base64 = base64.b64encode(upstream.content).decode("ascii")
             else:
-                body = None
-                body_base64 = base64.b64encode(upstream.content).decode("ascii")
-        else:
-            try:
-                body = upstream.json()
-            except ValueError:
-                body = upstream.text
+                try:
+                    body = upstream.json()
+                except ValueError:
+                    body = upstream.text
 
         headers = {}
         if content_type:
@@ -2166,6 +2189,8 @@ class LogosBridgeClient:
         if body_base64 is not None:
             result["body_base64"] = body_base64
             result["body_encoding"] = "base64"
+        if tracer is not None:
+            result["perf"] = tracer.finish()
         return result
 
     async def _execute_stream_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:

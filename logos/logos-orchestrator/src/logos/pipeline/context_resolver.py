@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode
 
+from logos import perf_trace
 from logos.anthropic_compat import UpstreamDialect, dialect_for, forward_path_for, is_messages_path, translate_request
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
@@ -79,6 +80,7 @@ class ContextResolver:
         model_id: int,
         provider_id: int,
         request_path: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> Optional[ExecutionContext]:
         """
         Resolve all DB information needed to execute a request with authorization verification.
@@ -98,46 +100,48 @@ class ContextResolver:
         Returns:
             `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
         """
-        with DBManager() as db:
-            auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
-            if not auth_info:
-                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
-                return None
+        with perf_trace.phase(request_id, "context.resolve_db"):
+            with DBManager() as db:
+                auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
+                if not auth_info:
+                    logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
+                    return None
 
-            provider_type_raw = (auth_info.get("provider_type") or "").lower()
-            provider_type = (
-                "logosnode"
-                if provider_type_raw
-                in {
-                    "logosnode",
-                    "node",
-                    "node_controller",
-                    "logos_worker_node",
-                }
-                else provider_type_raw
-            )
-            cloud_type = str(auth_info.get("cloud_provider_type") or "").lower() or None
-            auth_name = (auth_info.get("auth_name") or "").strip()
-            auth_format = auth_info.get("auth_format") or ""
-            api_key = auth_info.get("api_key")
+                provider_type_raw = (auth_info.get("provider_type") or "").lower()
+                provider_type = (
+                    "logosnode"
+                    if provider_type_raw
+                    in {
+                        "logosnode",
+                        "node",
+                        "node_controller",
+                        "logos_worker_node",
+                    }
+                    else provider_type_raw
+                )
+                cloud_type = str(auth_info.get("cloud_provider_type") or "").lower() or None
+                auth_name = (auth_info.get("auth_name") or "").strip()
+                auth_format = auth_info.get("auth_format") or ""
+                api_key = auth_info.get("api_key")
 
-            # Cloud credentials get the convention the provider form advertises
-            # filled in — see ``cloud_auth_header``, which the model sync uses
-            # against the same providers. A provider that configured a header
-            # but has no key cannot authenticate at all, which is an error
-            # rather than an unauthenticated request.
-            auth_value = auth_format.format(api_key or "")
-            if provider_type != "logosnode":
-                header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
-                if header is None:
-                    if auth_name or auth_format:
-                        logger.error(
-                            f"No API key for model {model_id} / "
-                            f"provider {auth_info.get('provider_name', provider_id)}"
-                        )
-                        return None
-                else:
-                    auth_name, auth_value = header
+                # Cloud credentials get the convention the provider form
+                # advertises filled in — see ``cloud_auth_header``, which the
+                # model sync uses against the same providers. A provider that
+                # configured a header but has no key cannot authenticate at
+                # all, which is an error rather than an unauthenticated
+                # request.
+                auth_value = auth_format.format(api_key or "")
+                if provider_type != "logosnode":
+                    header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
+                    if header is None:
+                        if auth_name or auth_format:
+                            logger.error(
+                                f"No API key for model {model_id} / "
+                                f"provider {auth_info.get('provider_name', provider_id)}"
+                            )
+                            return None
+                    else:
+                        auth_name, auth_value = header
 
         provider_name = auth_info["provider_name"]
         model_name = auth_info["model_name"]
@@ -162,28 +166,30 @@ class ContextResolver:
                         exc,
                     )
             if self._logosnode_registry is not None:
-                lane = prepared_lane
-                if lane is None:
-                    lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
-                # Retry loop: lane may be transitioning (loading/waking) after
-                # reevaluate_model_queues dispatched us.
-                if lane is None:
-                    # Retry up to ~120s — must survive worst-case multi-lane
-                    # drain (busy vLLM lanes with continuous batching can have
-                    # 10-20 active requests that must finish before sleep) plus
-                    # sleep/wake cycle (~5s).  First 10 retries are 1s apart
-                    # (fast path); remaining retries back off to 2s.
-                    for attempt in range(65):
-                        await asyncio.sleep(1.0 if attempt < 10 else 2.0)
+                with perf_trace.phase(request_id, "context.select_lane"):
+                    lane = prepared_lane
+                    if lane is None:
                         lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
-                        if lane is not None:
-                            logger.info(
-                                "Lane became available after %ds for provider=%s model=%s",
-                                attempt + 1,
-                                provider_name,
-                                model_name,
-                            )
-                            break
+                    # Retry loop: lane may be transitioning (loading/waking)
+                    # after reevaluate_model_queues dispatched us.
+                    if lane is None:
+                        # Retry up to ~120s — must survive worst-case
+                        # multi-lane drain (busy vLLM lanes with continuous
+                        # batching can have 10-20 active requests that must
+                        # finish before sleep) plus sleep/wake cycle (~5s).
+                        # First 10 retries are 1s apart (fast path); remaining
+                        # retries back off to 2s.
+                        for attempt in range(65):
+                            await asyncio.sleep(1.0 if attempt < 10 else 2.0)
+                            lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                            if lane is not None:
+                                logger.info(
+                                    "Lane became available after %ds for provider=%s model=%s",
+                                    attempt + 1,
+                                    provider_name,
+                                    model_name,
+                                )
+                                break
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:

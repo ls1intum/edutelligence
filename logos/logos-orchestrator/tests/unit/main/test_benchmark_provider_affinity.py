@@ -395,7 +395,7 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
 
 @pytest.mark.asyncio
 async def test_sync_request_records_affinity_http_errors_on_the_request_log(monkeypatch):
-    async def fake_auth_parse_log(request, use_profile_auth=False):
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock(api_key_id=5)
         return {}, auth, {"model": "org/model"}, "127.0.0.1", 99
 

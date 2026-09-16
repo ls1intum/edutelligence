@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from logos import perf_trace
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.dbmodules import ThresholdLevel
@@ -194,7 +195,8 @@ class RequestPipeline:
         # 1. Classification. PROXY mode still runs the policy + token stages
         # (so policy thresholds remain enforced) but skips Laura's heavy ML
         # ranking — the caller already named the model.
-        classification_result = self._classify(request)
+        with perf_trace.phase(request_id, "pipeline.classify"):
+            classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
                 request_id=request_id,
@@ -252,7 +254,8 @@ class RequestPipeline:
 
         schedule_start_s = time.perf_counter()
         try:
-            scheduling_result = await self._scheduler.schedule(scheduling_request)
+            with perf_trace.phase(request_id, "pipeline.schedule"):
+                scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
             logger.warning("Request %s timed out waiting in queue", request_id)
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
@@ -348,13 +351,14 @@ class RequestPipeline:
         # 3. Resolve execution context (with authorization check)
         #    For logosnode providers, the lane may be starting (not yet ready to
         #    accept requests). Retry with backoff instead of failing immediately.
-        ctx_result = await self._resolve_context_with_retry(
-            scheduling_result=scheduling_result,
-            classification_result=classification_result,
-            request_path=request.request_path,
-            request_id=request_id,
-            schedule_start_s=schedule_start_s,
-        )
+        with perf_trace.phase(request_id, "pipeline.context"):
+            ctx_result = await self._resolve_context_with_retry(
+                scheduling_result=scheduling_result,
+                classification_result=classification_result,
+                request_path=request.request_path,
+                request_id=request_id,
+                schedule_start_s=schedule_start_s,
+            )
         if not ctx_result.success:
             return ctx_result
 
@@ -409,6 +413,7 @@ class RequestPipeline:
                     model_id=scheduling_result.model_id,
                     provider_id=scheduling_result.provider_id,
                     request_path=request_path,
+                    request_id=request_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")

@@ -75,7 +75,7 @@ def _empty_then_raw_filter():
 
 
 def _stub_sync_path(monkeypatch, body, raw, filter_fn):
-    async def fake_auth_parse_log(request, use_profile_auth=False):
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock()
         auth.api_key_id = 88
         return {}, auth, body, "127.0.0.1", None
