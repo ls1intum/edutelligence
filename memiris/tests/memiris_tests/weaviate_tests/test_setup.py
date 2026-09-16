@@ -1,7 +1,7 @@
 import pytest
 from requests import Response, get
-from testcontainers.core.waiting_utils import (  # type: ignore[import-untyped]
-    wait_container_is_ready,
+from testcontainers.core.waiting_utils import (
+    wait_container_is_ready,  # type: ignore[import-untyped]
 )
 from testcontainers.weaviate import WeaviateContainer  # type: ignore
 
