@@ -52,8 +52,10 @@ from logos_worker_node.calibration import (
     parse_gpu_indices,
     pin_plan_gpu_devices,
     plans_from_config,
+    probe_classification,
     probe_generative,
     probe_pooling,
+    probe_reranking,
     probe_transcription,
     result_to_profile_dict,
     sample_vram_mb,
@@ -3436,6 +3438,21 @@ def test_probe_pooling_hits_embeddings_endpoint():
     assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/v1/embeddings"
 
 
+def test_probe_classification_hits_classify_endpoint():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_classification(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/classify"
+
+
+def test_probe_reranking_hits_rerank_endpoint_with_query_and_documents():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_reranking(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/rerank"
+    body = mock_post.call_args.kwargs["body"]
+    assert body["query"]
+    assert body["documents"]
+
+
 def test_probe_transcription_hits_audio_endpoint_with_wav_fixture():
     with patch("logos_worker_node.calibration._post_multipart", return_value=(200, {})) as mock_post:
         assert probe_transcription(_CALIB_BASE_URL, "openai/whisper-large-v3", 10.0) is True
@@ -3456,17 +3473,22 @@ def test_warmup_inference_dispatches_by_model_kind():
     ):
         warmup_inference(_CALIB_BASE_URL, "m", model_kind="generative")
         warmup_inference(_CALIB_BASE_URL, "m", model_kind="pooling")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="classification")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="reranking")
         warmup_inference(_CALIB_BASE_URL, "m", model_kind="transcription")
         # An unrecognized kind must never silently drop the warmup — falls
         # back to the generative probe.
         warmup_inference(_CALIB_BASE_URL, "m", model_kind="something-new")
 
     post_urls = [c.args[0] for c in mock_post.call_args_list]
-    # generative, pooling, and the unknown-kind fallback (generative again)
-    # all go through _post; only transcription uses _post_multipart.
+    # generative, pooling, classification, reranking, and the unknown-kind
+    # fallback (generative again) all go through _post; only transcription
+    # uses _post_multipart.
     assert post_urls == [
         f"{_CALIB_BASE_URL}/v1/completions",
         f"{_CALIB_BASE_URL}/v1/embeddings",
+        f"{_CALIB_BASE_URL}/classify",
+        f"{_CALIB_BASE_URL}/rerank",
         f"{_CALIB_BASE_URL}/v1/completions",
     ]
     assert mock_multipart.call_count == 1
@@ -3499,6 +3521,63 @@ def test_calibrate_pooling_model_succeeds_via_the_right_endpoint():
 
     assert result.success, result.error
     assert any(u.endswith("/v1/embeddings") for u in urls)
+
+
+def test_calibrate_classification_model_fails_fast_when_classify_probe_fails():
+    """A sequence-classification model that can't answer one /classify
+    request must fail calibration outright, never reach [CALIBRATED]."""
+    post, urls = _capturing_post(**{"/classify": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="classification"), sleep_level=0)
+
+    assert result.success is False
+    assert "classification" in result.error
+    assert any(u.endswith("/classify") for u in urls)
+    # Never reached Phase 3 — no /v1/completions was ever sent for it.
+    assert not any(u.endswith("/v1/completions") for u in urls)
+
+
+def test_calibrate_classification_model_succeeds_via_the_right_endpoint():
+    """Proves routing, not just gating: /v1/embeddings is broken for this
+    model (it's a classifier, not an embedder) but /classify works fine."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="classification"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/classify") for u in urls)
+
+
+def test_calibrate_reranking_model_fails_fast_when_rerank_probe_fails():
+    """A reranker that can't answer one /rerank request must fail
+    calibration outright, never reach [CALIBRATED]."""
+    post, urls = _capturing_post(**{"/rerank": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="reranking"), sleep_level=0)
+
+    assert result.success is False
+    assert "reranking" in result.error
+    assert any(u.endswith("/rerank") for u in urls)
+    assert not any(u.endswith("/v1/completions") for u in urls)
+
+
+def test_calibrate_reranking_model_succeeds_via_the_right_endpoint():
+    """Proves routing, not just gating: /v1/embeddings is broken for this
+    model (it's a reranker, not an embedder) but /rerank works fine."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="reranking"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/rerank") for u in urls)
 
 
 def test_calibrate_transcription_model_fails_fast_when_audio_probe_fails():

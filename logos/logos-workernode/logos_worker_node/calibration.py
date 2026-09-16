@@ -1050,9 +1050,25 @@ def probe_generative(base_url: str, model: str, timeout_s: float) -> bool:
 
 
 def probe_pooling(base_url: str, model: str, timeout_s: float) -> bool:
-    """One ``/v1/embeddings`` request — pooling models' real serving path."""
+    """One ``/v1/embeddings`` request — embedding models' real serving path."""
     body = {"model": model, "input": "hi"}
     status, _ = _post(f"{base_url}/v1/embeddings", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+def probe_classification(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/classify`` request — sequence-classification models' real
+    serving path (vLLM never serves these from ``/v1/embeddings``)."""
+    body = {"model": model, "input": "hi"}
+    status, _ = _post(f"{base_url}/classify", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+def probe_reranking(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/rerank`` request — reranker models' real serving path (query
+    + documents, not a bare embeddings call)."""
+    body = {"model": model, "query": "hi", "documents": ["hi"]}
+    status, _ = _post(f"{base_url}/rerank", body=body, timeout_s=timeout_s)
     return status == 200
 
 
@@ -1084,6 +1100,8 @@ def probe_transcription(base_url: str, model: str, timeout_s: float) -> bool:
 _PROBE_BY_MODEL_KIND: dict[str, Callable[[str, str, float], bool]] = {
     "generative": probe_generative,
     "pooling": probe_pooling,
+    "classification": probe_classification,
+    "reranking": probe_reranking,
     "transcription": probe_transcription,
 }
 
@@ -1092,7 +1110,7 @@ _PROBE_BY_MODEL_KIND: dict[str, Callable[[str, str, float], bool]] = {
 # Phase 2.5 / 5.5). "generative" stays non-fatal, deliberately, to avoid
 # false positives on transient first-token flakiness — only the classes
 # with a real, working functional probe are fatal.
-_FATAL_PROBE_MODEL_KINDS = frozenset({"pooling", "transcription"})
+_FATAL_PROBE_MODEL_KINDS = frozenset({"pooling", "classification", "reranking", "transcription"})
 
 
 def warmup_inference(
@@ -1108,9 +1126,10 @@ def warmup_inference(
     Triton autotune, real KV page allocation) so the awake VRAM sample
     reflects post-first-request peak, not post-load. ``model_kind`` (from
     ``classify_model_kind``) picks the matching endpoint — completions,
-    embeddings, or transcription — instead of always assuming
-    ``/v1/completions``, which silently no-ops for pooling/ASR models and
-    never catches a serving-breaking config for them.
+    embeddings, classify, rerank, or transcription — instead of always
+    assuming ``/v1/completions``, which silently no-ops for pooling/
+    classification/reranking/ASR models and never catches a serving-breaking
+    config for them.
     """
     probe = _PROBE_BY_MODEL_KIND.get(model_kind, probe_generative)
     return probe(base_url, model, timeout_s)
@@ -2721,10 +2740,10 @@ def _calibrate_model_probe(
                     cold_load_time_s,
                 )
         elif model_kind in _FATAL_PROBE_MODEL_KINDS:
-            # A classified pooling/transcription model has a real, working
-            # probe — a failure here is the model itself not serving one
-            # request on its own endpoint, not a missed /v1/completions
-            # mismatch. Must not reach [CALIBRATED].
+            # A classified pooling/classification/reranking/transcription
+            # model has a real, working probe — a failure here is the model
+            # itself not serving one request on its own endpoint, not a
+            # missed /v1/completions mismatch. Must not reach [CALIBRATED].
             partial.error = (
                 f"functional probe failed ({model_kind}): {model} did not answer "
                 "one request on its own serving endpoint"
@@ -2938,8 +2957,9 @@ def _calibrate_model_probe(
                         sleep_failure_reason = "post-wake test request failed — model does not serve after sleep/wake"
                     elif not post_wake_ok:
                         # Did not serve one before sleep either. For a
-                        # classified pooling/transcription model that is
-                        # unreachable here — Phase 2.5 already failed the
+                        # classified pooling/classification/reranking/
+                        # transcription model that is unreachable here —
+                        # Phase 2.5 already failed the
                         # run outright on the same probe. This remains a
                         # genuine "no evidence" case only for an
                         # unclassified/generative model (a transient 5xx,

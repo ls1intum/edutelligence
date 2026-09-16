@@ -215,15 +215,27 @@ def test_classify_model_kind_by_pipeline_tag():
     assert classify_model_kind("automatic-speech-recognition", None) == "transcription"
     assert classify_model_kind("feature-extraction", None) == "pooling"
     assert classify_model_kind("sentence-similarity", None) == "pooling"
+    assert classify_model_kind("text-classification", None) == "classification"
+    assert classify_model_kind("text-ranking", None) == "reranking"
     assert classify_model_kind("text-generation", None) == "generative"
 
 
 def test_classify_model_kind_by_architecture_fallback():
     """No/unhelpful pipeline_tag: fall back to config.json's architectures."""
     assert classify_model_kind(None, ["WhisperForConditionalGeneration"]) == "transcription"
-    assert classify_model_kind(None, ["Qwen3ForSequenceClassification"]) == "pooling"
+    assert classify_model_kind(None, ["Qwen3ForSequenceClassification"]) == "classification"
+    assert classify_model_kind(None, ["Qwen3ForReranker"]) == "reranking"
     assert classify_model_kind(None, ["SomeCustomEmbeddingModel"]) == "pooling"
     assert classify_model_kind(None, ["Qwen3ForCausalLM"]) == "generative"
+
+
+def test_classify_model_kind_classification_and_reranking_are_not_pooling():
+    """Regression: sequence-classification and reranker models must not be
+    routed through vLLM's /v1/embeddings — it isn't their serving path."""
+    assert classify_model_kind("text-classification", None) != "pooling"
+    assert classify_model_kind("text-ranking", None) != "pooling"
+    assert classify_model_kind(None, ["Qwen3ForSequenceClassification"]) != "pooling"
+    assert classify_model_kind(None, ["BgeReranker"]) != "pooling"
 
 
 def test_classify_model_kind_defaults_to_generative_when_unknown():

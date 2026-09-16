@@ -53,11 +53,17 @@ REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED = "model-not-found-or-unauthorized"
 REASON_MODEL_GATED = "model-gated"
 
 # Model class calibration's functional probe must route by: a model
-# whose serving endpoint isn't /v1/completions (pooling, ASR) never
-# looks broken there, so a fatal serving flag combination would go
-# uncaught. "generative" is also the default classify_model_kind returns
-# when neither signal below is conclusive — deliberately, never widened
-# without a positive signal.
+# whose serving endpoint isn't /v1/completions (pooling, classification,
+# reranking, ASR) never looks broken there, so a fatal serving flag
+# combination would go uncaught. "generative" is also the default
+# classify_model_kind returns when neither signal below is conclusive —
+# deliberately, never widened without a positive signal.
+#
+# "pooling" here means specifically vLLM's /v1/embeddings serving path.
+# Sequence-classification and reranking models are also "pooling" models
+# internally, but vLLM serves them from /classify and /rerank respectively
+# — never from /v1/embeddings — so they get their own kinds/probes instead
+# of being lumped into "pooling" (see classify_model_kind).
 #
 # pipeline_tag (HF's own curated tag) is authoritative whenever it names
 # a kind we recognize — checked whole, never combined with the
@@ -71,8 +77,8 @@ _PIPELINE_TAG_KIND: dict[str, str] = {
     "image-text-to-text": "generative",
     "feature-extraction": "pooling",
     "sentence-similarity": "pooling",
-    "text-classification": "pooling",
-    "text-ranking": "pooling",
+    "text-classification": "classification",
+    "text-ranking": "reranking",
     "automatic-speech-recognition": "transcription",
 }
 
@@ -80,10 +86,10 @@ _PIPELINE_TAG_KIND: dict[str, str] = {
 # own curated tag) didn't already decide it — a repo with a missing/generic
 # tag still classifies correctly off its config.json architectures list.
 _TRANSCRIPTION_ARCH_MARKERS = ("Whisper",)
+_CLASSIFICATION_ARCH_MARKERS = ("ForSequenceClassification",)
+_RERANKING_ARCH_MARKERS = ("Reranker",)
 _POOLING_ARCH_MARKERS = (
     "Embedding",
-    "ForSequenceClassification",
-    "Reranker",
     "ForTextEncoding",
     "RewardModel",
 )
@@ -110,7 +116,7 @@ def classify_model_kind(
     pipeline_tag: str | None, architectures: list[str] | None, model_type: str | None = None
 ) -> str:
     """Route calibration's functional probe: "generative" / "pooling" /
-    "transcription".
+    "classification" / "reranking" / "transcription".
 
     Deliberately conservative: defaults to "generative" whenever no
     signal is conclusive, so an unrecognized model gets the safe,
@@ -123,6 +129,12 @@ def classify_model_kind(
     for arch in architectures or ():
         if any(marker in arch for marker in _TRANSCRIPTION_ARCH_MARKERS):
             return "transcription"
+    for arch in architectures or ():
+        if any(marker in arch for marker in _CLASSIFICATION_ARCH_MARKERS):
+            return "classification"
+    for arch in architectures or ():
+        if any(marker in arch for marker in _RERANKING_ARCH_MARKERS):
+            return "reranking"
     for arch in architectures or ():
         if any(marker in arch for marker in _POOLING_ARCH_MARKERS):
             return "pooling"
