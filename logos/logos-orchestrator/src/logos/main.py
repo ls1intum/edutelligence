@@ -68,6 +68,7 @@ from logos.logosnode_snapshot import (
     _sample_snapshot_id,
 )
 from logos.middleware import APIPrefixStripperMiddleware
+from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
@@ -104,6 +105,7 @@ from logos.terminal_logging import (
     format_number,
     model_name_cache,
     paint,
+    provider_name_cache,
     style_duration,
     style_model,
     style_request_id,
@@ -1291,6 +1293,7 @@ async def start_pipeline():
         demand_tracker=_demand_tracker,
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
+        latency_store=_latency_store,
     )
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
@@ -1629,6 +1632,34 @@ def _log_request_completion(
     logger.info(" ".join(parts))
 
 
+def _record_ettft_accuracy(scheduling_stats: Optional[dict]) -> None:
+    """Observe |ettft_estimate - actual_ttft| at the moment the first token arrives.
+
+    Uses ``schedule_start_s`` from scheduling_stats (captured in pipeline.py
+    immediately before the scheduler is invoked) so that the measured interval
+    covers the same phases as the ETTFT model: reclaim → state_overhead →
+    queue_wait → prefill → TTFT.  Returns without recording when
+    ``schedule_start_s`` is absent (e.g. timeout or error paths).
+    """
+    if not scheduling_stats:
+        return
+    ettft_ms = scheduling_stats.get("ettft_estimate_ms")
+    if not isinstance(ettft_ms, (int, float)) or not math.isfinite(ettft_ms):
+        return
+    schedule_start = scheduling_stats.get("schedule_start_s")
+    if not isinstance(schedule_start, float):
+        return
+    tier = str(scheduling_stats.get("ettft_tier") or "unknown")
+    provider_id = scheduling_stats.get("provider_id")
+    provider = provider_name_cache.get(provider_id) if provider_id is not None else "unknown"
+    prom.record_ettft_outcome(
+        estimate_s=ettft_ms / 1000.0,
+        actual_ttft_s=time.perf_counter() - schedule_start,
+        provider=provider or str(provider_id),
+        tier=tier,
+    )
+
+
 def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
     """Response headers exposing the scheduling decision to the client.
 
@@ -1837,6 +1868,7 @@ async def _streaming_response(
                                     if log_id:
                                         with DBManager() as db:
                                             db.set_time_at_first_token(log_id)
+                                    _record_ettft_accuracy(scheduling_stats)
                                     ttft_recorded = True
                                 _live_streams.update(request_id, stream_log.streamed_tokens())
                                 yield chunk
@@ -2021,6 +2053,7 @@ async def _streaming_response(
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
+                    _record_ettft_accuracy(scheduling_stats)
                     ttft_recorded = True
 
             async for chunk in chunk_iter:
@@ -2032,6 +2065,7 @@ async def _streaming_response(
                     if log_id:
                         with DBManager() as db:
                             db.set_time_at_first_token(log_id)
+                    _record_ettft_accuracy(scheduling_stats)
                     ttft_recorded = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
@@ -3805,12 +3839,18 @@ _historic_max_context_cache: tuple[float, dict[str, int]] | None = None
 # so it is cached on the same terms as the historic maxima above.
 _cloud_context_cache: tuple[float, dict[str, dict[str, int]]] | None = None
 
+# The catalog view is refreshed once a day by the webservice, so it changes
+# even less often than the snapshots; the same short TTL keeps every model
+# endpoint off the database between refreshes.
+_catalog_context_cache: tuple[float, dict[str, int]] | None = None
+
 
 def _clear_historic_max_context_cache() -> None:
     """Drop the cached context lookups (used by the tests; production never needs it)."""
-    global _historic_max_context_cache, _cloud_context_cache
+    global _historic_max_context_cache, _cloud_context_cache, _catalog_context_cache
     _historic_max_context_cache = None
     _cloud_context_cache = None
+    _catalog_context_cache = None
 
 
 def _cloud_context_by_model() -> dict[str, dict[str, int]]:
@@ -3867,6 +3907,38 @@ def _historic_max_context_by_model() -> dict[str, int]:
     return historic
 
 
+def _catalog_context_by_model() -> dict[str, int]:
+    """Model name -> the input context window the model catalog publishes for it.
+
+    The last word in the chain of sources: a cloud provider's own
+    ``/v1/models`` (what it publishes) and the workernode snapshots (what is
+    served) both report nothing for a model whose upstream publishes no window
+    at all — the Azure family first among them. For those, the size the
+    webservice refreshes from the upstream registry into
+    ``model_capabilities`` is the best knowledge there is: not a measurement
+    of what Logos serves, but the published limit of the model itself, which
+    a provider serves in full whenever it serves it. Returns an empty mapping
+    when the database cannot be reached, on the same terms as the other
+    lookups: the endpoints answer without the catalog rather than failing.
+    """
+    global _catalog_context_cache
+    now = time.monotonic()
+    cached = _catalog_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            contexts = db.get_catalog_context_by_model()
+    except Exception:
+        # Fail open — every measured source still stands on its own — and the
+        # endpoints keep the model objects they had before the catalog
+        # existed, for one TTL.
+        logger.warning("Failed to load the catalog context windows by model", exc_info=True)
+        return {}
+    _catalog_context_cache = (now, contexts)
+    return contexts
+
+
 def _served_context_window_stats() -> dict[str, dict[str, int]]:
     """Per-model context windows derived from the logosnode runtime snapshots.
 
@@ -3889,6 +3961,12 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
                      database keeps per model (#829): when every workernode
                      is offline, that — not a client-side guess — is what the
                      clients size the session from.
+
+    When no source above says anything at all — a cloud model whose upstream
+    publishes no window of its own — the window the model catalog records for
+    it stands in: the published limit of the model, which the provider serves
+    in full whenever it serves it. It fills in a model only when nothing
+    measured is known, never over a figure a source reported.
     """
     stats: dict[str, dict[str, int]] = {}
     try:
@@ -3961,6 +4039,19 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
         entry = stats.setdefault(model, {})
         if value > entry.get("overall", 0):
             entry["overall"] = value
+
+    # Nothing measured so far — no live lane, no cloud self-report, no
+    # historic mark — and the model is known to the upstream catalog: publish
+    # the window the catalog records for it. A provider serves a catalog
+    # model at its full published size whenever it serves it at all, so the
+    # single number is the minimum, the maximum and the ceiling alike.
+    # Measured sources are folded in before this, so a model they already
+    # know keeps their narrower figures: the catalog must never widen what
+    # was actually served.
+    for model, value in _catalog_context_by_model().items():
+        if model in stats:
+            continue
+        stats[model] = {"current_min": value, "current_max": value, "overall": value}
     return stats
 
 
@@ -3994,8 +4085,9 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 
     ``max_model_len`` repeats the first of those under the name vLLM itself
     uses, so an OpenAI-compatible client that already reads that field keeps
-    working. Every field is omitted when unknown, so cloud models and
-    never-calibrated models keep the object they had before any of this existed.
+    working. Every field is omitted when no source knows it, so a model whose
+    window is measured by nothing — and known to no catalog — keeps the object
+    it had before any of this existed.
     """
     if not entry:
         return {}

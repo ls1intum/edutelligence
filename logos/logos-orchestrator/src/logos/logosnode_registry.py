@@ -317,6 +317,11 @@ class ProviderSession:
     last_heartbeat: datetime = field(default_factory=_utc_now)
     first_status_received: bool = False
     latest_runtime: dict[str, Any] = field(default_factory=dict)
+    # Merged, lane-relabeled vLLM /metrics text most recently pushed by this
+    # worker (see LogosNodeBridge._send_vllm_metrics on the worker side).
+    # Empty until the first "vllm_metrics" message arrives; naturally
+    # forgotten once the session is popped on disconnect.
+    latest_vllm_metrics_text: str = ""
     latest_events: list[dict[str, Any]] = field(default_factory=list)
     recent_samples: deque[dict[str, Any]] = field(default_factory=deque)
     pending_commands: dict[str, asyncio.Future] = field(default_factory=dict)
@@ -1044,6 +1049,11 @@ class LogosNodeRuntimeRegistry:
         if session is not None:
             session.last_heartbeat = _utc_now()
 
+    async def on_vllm_metrics(self, provider_id: int, metrics_text: str) -> None:
+        session = await self._get_session(provider_id)
+        if session is not None:
+            session.latest_vllm_metrics_text = metrics_text
+
     async def on_command_result(self, provider_id: int, payload: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -1370,6 +1380,13 @@ class LogosNodeRuntimeRegistry:
             "max_lanes": session.max_lanes,
             "runtime_revision": session.runtime_revision,
         }
+
+    def peek_vllm_metrics(self, provider_id: int) -> tuple[str, str] | None:
+        """Return (worker_id, metrics_text) for the last vLLM metrics push, if any."""
+        session = self._sessions.get(int(provider_id))
+        if session is None or not session.latest_vllm_metrics_text:
+            return None
+        return session.worker_id, session.latest_vllm_metrics_text
 
     def has_received_first_status(self, provider_id: int) -> bool:
         """Check if a provider has sent at least one status update since connecting."""

@@ -165,6 +165,12 @@ export class Batches implements OnInit, OnDestroy {
     return `${done} / ${counts.total}${counts.failed ? ` (${counts.failed} failed)` : ''}`;
   }
 
+  /** The batch id is an opaque random token; this is what tells two batches apart. */
+  createdAtOf(batch: BatchObject): string {
+    if (batch.created_at === null || batch.created_at === undefined) return '—';
+    return new Date(batch.created_at * 1000).toLocaleString();
+  }
+
   isTerminal(batch: BatchObject): boolean {
     return TERMINAL.has(batch.status);
   }

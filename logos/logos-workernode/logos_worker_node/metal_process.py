@@ -48,14 +48,13 @@ from typing import Any
 
 from logos_worker_node.metal import default_metal_venv
 from logos_worker_node.models import LaneConfig, MetalConfig
-from logos_worker_node.vllm_process import (
-    _DEFAULT_LANE_CONTEXT_LENGTH,
-    VllmProcessHandle,
+from logos_worker_node.vllm_compat import (
     _infer_default_chat_template_kwargs,
     _infer_reasoning_parser,
     _infer_tool_call_parser,
     _resolve_chat_template,
 )
+from logos_worker_node.vllm_process import _DEFAULT_LANE_CONTEXT_LENGTH, VllmProcessHandle
 
 logger = logging.getLogger(__name__)
 
