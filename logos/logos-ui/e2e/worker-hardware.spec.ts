@@ -41,17 +41,51 @@ test.describe('worker hardware', () => {
     expect(real, `console errors on /statistics:\n${real.join('\n')}`).toEqual([]);
   });
 
-  test('every simulated GPU reaches the browser', async ({ page }) => {
+  test('the selected worker renders its real GPU model', async ({ page }) => {
     await page.goto('/statistics');
     await expect(page.locator(routedContent)).toBeVisible();
 
+    // The panel shows one provider at a time: `activeProvider` resolves to a
+    // single worker and `devices` returns only that worker's cards. An earlier
+    // version of this test expected every simulated GPU on screen at once,
+    // which the page never promised — it failed on the node that simply was not
+    // the selected one. Fleet completeness is the API tier's job
+    // (tests/node/test_node_registration.py asserts both nodes and their exact
+    // hardware); what the browser has to prove is that the selected worker's
+    // real model reaches the DOM rather than a placeholder.
     const body = page.locator('body');
-    for (const node of SIMULATED_FLEET) {
-      await expect(
-        body,
-        `the UI never showed ${node.gpu} — it is reported by a live simulated node`,
-      ).toContainText(node.gpu, { timeout: 30_000 });
-    }
+    await expect(body, 'the panel reported no providers connected').not.toContainText(
+      /No providers connected/i,
+    );
+
+    const anyFleetGpu = new RegExp(SIMULATED_FLEET.map(node => node.gpu).join('|'));
+    await expect(
+      body,
+      `no simulated GPU model reached the browser; expected one of ${SIMULATED_FLEET.map(n => n.gpu).join(', ')}`,
+    ).toContainText(anyFleetGpu, { timeout: 30_000 });
+  });
+
+  test('both simulated workers are selectable', async ({ page }) => {
+    await page.goto('/statistics');
+    await expect(page.locator(routedContent)).toBeVisible();
+
+    // The completeness check the test above cannot make: the provider selector
+    // is where every connected worker becomes visible to an operator, so a node
+    // that registered but never reached the UI shows up here as a missing
+    // option rather than as a silently narrower dropdown.
+    // app-select collapses to a plain label when it has one option or fewer, so
+    // "not visible" here is itself the failure signal: it means fewer workers
+    // reached the UI than registered, not that the control moved.
+    const selector = page.getByLabel(/select provider/i);
+    await expect(
+      selector,
+      'the provider <select> did not render — with one option or fewer app-select collapses, ' +
+        'so this means fewer than two workers reached the statistics page',
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      selector.locator('option'),
+      `expected one option per simulated worker (${SIMULATED_FLEET.length})`,
+    ).toHaveCount(SIMULATED_FLEET.length, { timeout: 30_000 });
   });
 
   test('the providers page lists the registered worker nodes', async ({ page }) => {
