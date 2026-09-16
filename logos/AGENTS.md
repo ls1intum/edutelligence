@@ -309,6 +309,38 @@ back. Take the screenshots against a local dev stack (`docker
 compose -f docker-compose.dev.yaml up` + `ng serve`), log in with one of the
 seeded users (see below), and attach the images to the PR description.
 
+**Screenshots go into the PR description only — never commit them to the
+repository.** Host them in a public gist and embed the raw URLs.
+
+#### Hosting screenshots in a gist (do it this way or the images won't render)
+
+⚠️ The Gist REST API stores file `content` **literally** (it does NOT
+base64-decode it), and `gh gist create` refuses binary files outright.
+Uploading a PNG via `gh api` therefore stores the base64 string as ASCII
+text: the raw URL serves `text/plain`, and GitHub's PR description does not
+render the image (it silently shows nothing / a broken link).
+
+A gist is a git repository — push the binaries with git instead:
+
+```bash
+# 1) create a placeholder gist (text files ARE fine via the API)
+GIST_ID=$(echo "screenshots" | gh gist create - -p -f README.md | grep -oE '[0-9a-f]{32}')
+
+# 2) clone it with the gh token and push the real images
+git clone "https://x-access-token:$(gh auth token)@gist.github.com/$GIST_ID.git" /tmp/gist-$GIST_ID
+cp shot-desktop.png shot-mobile.png /tmp/gist-$GIST_ID/
+cd /tmp/gist-$GIST_ID && git add -A && git commit -m "screenshots" && git push
+
+# 3) embed in the PR description
+#    https://gist.githubusercontent.com/<your-user>/<GIST_ID>/raw/shot-desktop.png
+```
+
+**Always verify before finishing:**
+`curl -sI https://gist.githubusercontent.com/<user>/<GIST_ID>/raw/shot.png`
+must return `200 image/png`. If it says `text/plain`, the "image" is actually
+text — fix it via the git push above (no need to change the PR description
+URLs, the gist ID stays the same).
+
 ### PR Description Template
 ```markdown
 ## Closes #NNN
