@@ -47,10 +47,65 @@ The API docs (`/docs`, `/redoc`, `/openapi.json`) publish the full endpoint map
 and are **off by default**; set `LOGOS_DOCS_ENABLED=1` in `.env` only where
 needed (the dev compose enables it).
 
-### In-stack rate limits (Traefik)
+### Layer 1: per-IP limits (nginx rate gateway, in-stack)
+
+Every public request (443 and 8080) first passes the `logos-rate-gateway`
+container — an nginx that enforces a request budget **per client IP**,
+which Traefik cannot do natively (its `rateLimit` middleware counts per
+service, not per client). Only then does the gateway forward to Traefik's
+*internal* entrypoint (`:8090`, no published host port), where the normal
+routers apply. TLS is terminated at the public entrypoint and re-signalled
+via `X-Forwarded-Proto`, so services still see `https`.
+
+Two budget classes, both answered with 429 when exceeded:
+
+| Class | Paths | Default (avg rps / burst) |
+|---|---|---|
+| model | `/v1`, `/openai`, `/logosdb/...`, the UI, everything else | 30 / 60 |
+| control | `/jobs`, `/api`, `/docs`, `/metrics`, `/health`, `/ws` | 5 / 20 |
+
+Tune per deployment in the node's `.env` (all optional):
+
+- `LOGOS_IP_RATE_LIMIT_AVG` / `LOGOS_IP_RATE_LIMIT_BURST` — the model budget.
+- `LOGOS_IP_CONTROL_RATE_LIMIT_AVG` / `LOGOS_IP_CONTROL_RATE_LIMIT_BURST` —
+  the control-plane budget.
+- `LOGOS_RATE_LIMIT_WHITELISTED_IPS` — frees specific IPs from **all**
+  limits, e.g. the chair's benchmark rig or an office egress IP. Space-
+  separated IPv4 addresses and CIDRs:
+
+  ```env
+  # .env on the core node
+  LOGOS_RATE_LIMIT_WHITELISTED_IPS="129.79.32.0/20 1.2.3.4"
+  ```
+
+  Malformed entries are skipped with a line in `docker logs
+  logos-rate-gateway` — a typo in the `.env` degrades to "no whitelist",
+  it cannot crash-loop the gateway (and with it the whole stack).
+- `LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS` — the source ranges allowed to carry
+  `X-Forwarded-For`. Defaults to `172.16.0.0/12` (the Docker bridge
+  ranges), which matches no public client, so a header forged from the
+  internet is stripped before it reaches the gateway. **If the node sits
+  behind the chair's nginx (or any other reverse proxy), add that proxy's
+  CIDR here too** — otherwise every client counts as that one proxy IP and
+  the per-IP isolation is lost:
+
+  ```env
+  LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS="172.16.0.0/12 129.79.32.0/20"
+  ```
+
+- `LOGOS_GATEWAY_UPSTREAM` — where the gateway forwards (default
+  `traefik:8090`); only change if the internal entrypoint moves.
+
+The dev compose runs the same gateway with looser defaults (300/600 and
+50/100) so local benchmarking is not throttled; the direct ports 18080 and
+18082 bypass it entirely (debugging).
+
+### Layer 2: per-service limits (Traefik)
 
 Both compose files attach generous Traefik `rateLimit` middleware to the
-API routers (429 when exceeded). The higher-priority routers that actually
+API routers (429 when exceeded). These count per service rather than per
+client — they cap one service even when many IPs share the same key, which
+the per-IP layer above cannot see. The higher-priority routers that actually
 serve `/api/*` (webservice, agent, the logosnode operator paths) carry the
 limiter alongside their strip-prefix middleware, so no request reaches a
 service unthrottled:
@@ -64,45 +119,37 @@ service unthrottled:
 Tune per deployment via `.env`: `LOGOS_RATE_LIMIT_MODEL_AVG`,
 `LOGOS_RATE_LIMIT_MODEL_BURST`, `LOGOS_RATE_LIMIT_JOBS_AVG`,
 `LOGOS_RATE_LIMIT_JOBS_BURST`, `LOGOS_RATE_LIMIT_ADMIN_AVG`,
-`LOGOS_RATE_LIMIT_ADMIN_BURST`. Note Traefik counts requests **per service,
-not per client IP** — this layer stops floods, it does not isolate one
-abusive client. The dev compose uses higher defaults (500/1000, 250/500,
-100/200) so local benchmarking is not throttled.
+`LOGOS_RATE_LIMIT_ADMIN_BURST`. The dev compose uses higher defaults
+(500/1000, 250/500, 100/200) so local benchmarking is not throttled.
 
 Per-API-key request budgets on the model paths are enforced inside the
 orchestrator (per key's configured `cloud_rl`/`local_rl`); the in-stack limits
 are the backstop for unauthenticated or leaked-key abuse.
 
-### Per-IP limits in the nginx in front
+### Optional: an additional per-client brake in the nginx in front
 
-The stack sits behind the chair's nginx ingress, which is the right place for
-per-client limiting (Traefik cannot do it natively). Recommended snippet for
-the server/location that proxies to a Logos core node:
+The stack no longer *needs* per-client limits in the chair's nginx ingress —
+they now live in the stack and travel with the deployment. If you still want
+a second brake there (to protect other vhosts on the same box, or to shed a
+flood before it reaches the node's IP at all), the same nginx pattern
+applies:
 
 ```nginx
 # Per-client flood protection for the Logos API. Generous on purpose:
 # real clients (coding assistants, benchmark drivers) stay far below these
 # rates; this is a brake, not a budget.
 limit_req_zone $binary_remote_addr zone=logos_api:10m rate=30r/s;
-limit_req_zone $binary_remote_addr zone=logos_burst:10m rate=5r/s;
 
 server {
     # ...
     location / {
         proxy_pass http://logos-core:443;
-        # Model API: one assistant session bursts at most a few requests per
-        # second at startup; 30 r/s per IP with a small burst headroom.
         limit_req zone=logos_api burst=60 nodelay;
-    }
-    # Control-plane paths (jobs, admin, docs, metrics) are hammered far less.
-    location ~ ^/(jobs|api|docs|metrics|health)(/|$) {
-        proxy_pass http://logos-core:443;
-        limit_req zone=logos_burst burst=20 nodelay;
     }
 }
 ```
 
-Adjust the zones/rates to the deployment's traffic; `limit_req_status 429;`
+Adjust the zone/rate to the deployment's traffic; `limit_req_status 429;`
 keeps the status code aligned with the in-stack limits.
 
 ## Apple Silicon (MLX) worker nodes
