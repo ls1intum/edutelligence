@@ -74,27 +74,28 @@ public class ModelController {
      *
      * <p>
      * A 401 here is exactly what lets a caller test a leaked key for validity, so repeated 401s from one address
-     * are rate limited (see {@link IpRateLimiterService#hasAuthFailureBudget}); a successful call never spends
-     * that budget, so real traffic stays governed by the key's own limits.
+     * are rate limited: {@link IpRateLimiterService#tryReserveAuthFailureSlot} atomically checks and reserves the
+     * budget before authentication runs, so a burst of concurrent requests cannot all slip through on the same
+     * free slot. The reservation is given back on success (see {@link IpRateLimiterService#releaseAuthFailureSlot})
+     * so real traffic stays governed by the key's own limits instead.
      */
     @PostMapping("/get_model_health")
     public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
         String clientIp = IpRateLimiterService.clientIp(request);
-        if (!rateLimiter.hasAuthFailureBudget(clientIp)) {
+        if (!rateLimiter.tryReserveAuthFailureSlot(clientIp)) {
             throw new RateLimitExceededException(60);
         }
 
         String apiKey = extractApiKey(request);
         if (apiKey == null) {
-            rateLimiter.consumeAuthFailure(clientIp);
             return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
         }
         return modelService.getModelHealth(apiKey)
-            .map(ResponseEntity::ok)
-            .orElseGet(() -> {
-                rateLimiter.consumeAuthFailure(clientIp);
-                return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
-            });
+            .map(result -> {
+                rateLimiter.releaseAuthFailureSlot(clientIp);
+                return ResponseEntity.ok(result);
+            })
+            .orElseGet(() -> ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key")));
     }
 
     static String extractApiKey(HttpServletRequest request) {

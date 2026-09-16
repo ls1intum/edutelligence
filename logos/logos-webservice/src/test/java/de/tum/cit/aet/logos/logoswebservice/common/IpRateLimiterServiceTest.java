@@ -1,5 +1,11 @@
 package de.tum.cit.aet.logos.logoswebservice.common;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -49,21 +55,69 @@ class IpRateLimiterServiceTest {
     }
 
     @Test
-    void authFailureBudget_isSpentOnlyByConsume() {
+    void authFailureSlot_reservedOnlyOnceLimitIsReached() {
         IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, 2));
 
-        // Merely checking never spends the budget.
-        for (int i = 0; i < 10; i++) {
-            assertTrue(limiter.hasAuthFailureBudget("9.9.9.9"));
-        }
-
-        limiter.consumeAuthFailure("9.9.9.9");
-        assertTrue(limiter.hasAuthFailureBudget("9.9.9.9")); // one slot left
-        limiter.consumeAuthFailure("9.9.9.9");
-        assertFalse(limiter.hasAuthFailureBudget("9.9.9.9"));
+        assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+        assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+        assertFalse(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
 
         // A different source address still has its own budget.
-        assertTrue(limiter.hasAuthFailureBudget("8.8.8.8"));
+        assertTrue(limiter.tryReserveAuthFailureSlot("8.8.8.8"));
+    }
+
+    @Test
+    void releaseAuthFailureSlot_givesTheBudgetBackOnSuccess() {
+        IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, 1));
+
+        assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+        assertFalse(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+
+        // The caller that reserved the slot authenticated successfully after all.
+        limiter.releaseAuthFailureSlot("9.9.9.9");
+        assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+    }
+
+    @Test
+    void concurrentAuthFailures_neverExceedTheConfiguredLimit() throws InterruptedException {
+        // Regression: hasAuthFailureBudget + consumeAuthFailure used to be a check-then-record pair with the
+        // database lookup in between, so a burst of concurrent requests could all observe the same free slot
+        // before any of them recorded a failure. tryReserveAuthFailureSlot checks and reserves atomically, so
+        // concurrency must not let more callers through than the configured limit.
+        int limit = 5;
+        int concurrentCallers = 50;
+        IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, limit));
+
+        ExecutorService pool = Executors.newFixedThreadPool(concurrentCallers);
+        CountDownLatch ready = new CountDownLatch(concurrentCallers);
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicInteger reserved = new AtomicInteger();
+        try {
+            for (int i = 0; i < concurrentCallers; i++) {
+                pool.submit(() -> {
+                    ready.countDown();
+                    try {
+                        start.await();
+                    }
+                    catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    if (limiter.tryReserveAuthFailureSlot("9.9.9.9")) {
+                        reserved.incrementAndGet();
+                    }
+                });
+            }
+            ready.await();
+            start.countDown();
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS));
+        }
+        finally {
+            pool.shutdownNow();
+        }
+
+        assertEquals(limit, reserved.get());
     }
 
     @Test

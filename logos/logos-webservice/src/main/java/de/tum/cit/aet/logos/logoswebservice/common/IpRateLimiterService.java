@@ -16,8 +16,11 @@ import jakarta.servlet.http.HttpServletRequest;
  * <ul>
  * <li>Public endpoints (e.g. {@code /info}) — every request is bounded, via {@link #enforcePublicEndpoint}.</li>
  * <li>The failure path of API-key authentication (e.g. {@code /logosdb/get_model_health}) — only a 401 spends
- * budget, via {@link #hasAuthFailureBudget} (check before authenticating) and {@link #consumeAuthFailure} (spend
- * after a failure), so traffic that keeps authenticating successfully never approaches the limit.</li>
+ * budget. {@link #tryReserveAuthFailureSlot} atomically checks the budget and reserves a slot in the same
+ * operation (Tomcat handles requests on a pool of threads, so a plain check-then-record pair would let a burst
+ * of concurrent requests all observe the same free slot before any of them records a failure); the caller then
+ * gives the slot back via {@link #releaseAuthFailureSlot} once authentication turns out to have succeeded, so
+ * traffic that keeps authenticating successfully never approaches the limit.</li>
  * </ul>
  *
  * <p>
@@ -55,22 +58,36 @@ public class IpRateLimiterService {
     }
 
     /**
-     * Whether {@code clientIp} still has an unspent authentication-failure slot, without spending one. Call before
-     * attempting authentication; pair with {@link #consumeAuthFailure} on the failure path only.
+     * Atomically checks {@code clientIp}'s authentication-failure budget and, if any remains, reserves one slot
+     * from it in the same operation — so concurrent callers cannot all observe the same free slot the way a
+     * separate check-then-record pair would. Call before attempting authentication.
+     *
+     * <p>
+     * The reservation must be resolved afterward: give it back with {@link #releaseAuthFailureSlot} if
+     * authentication succeeds. Leave it in place — do nothing — if authentication fails; the reservation already
+     * counts as the spent unit.
+     *
+     * @return true if a slot was reserved (or the limiter is disabled/unlimited), false if the budget is exhausted
      */
-    public boolean hasAuthFailureBudget(String clientIp) {
+    public boolean tryReserveAuthFailureSlot(String clientIp) {
         if (!properties.enabled() || properties.authFailureRequestsPerMinute() <= 0 || clientIp == null) {
             return true;
         }
-        return count(key(clientIp, "auth_fail")) < properties.authFailureRequestsPerMinute();
+        return tryConsume(key(clientIp, "auth_fail"), properties.authFailureRequestsPerMinute());
     }
 
-    /** Spends one unit of {@code clientIp}'s authentication-failure budget, unconditionally. */
-    public void consumeAuthFailure(String clientIp) {
+    /** Gives back a slot reserved by {@link #tryReserveAuthFailureSlot}, once authentication succeeded after all. */
+    public void releaseAuthFailureSlot(String clientIp) {
         if (!properties.enabled() || properties.authFailureRequestsPerMinute() <= 0 || clientIp == null) {
             return;
         }
-        record(key(clientIp, "auth_fail"));
+        ArrayDeque<Long> window = requestWindows.computeIfAbsent(key(clientIp, "auth_fail"), k -> new ArrayDeque<>());
+        synchronized (window) {
+            // Any entry may be released, not necessarily the one this caller's own reservation added: every
+            // entry in the window is fungible for counting purposes, so removing one restores the budget by
+            // exactly the unit this caller is giving back, regardless of which concurrent reservation it was.
+            window.pollLast();
+        }
     }
 
     private boolean tryConsume(String key, int limit) {
@@ -82,21 +99,6 @@ public class IpRateLimiterService {
             }
             window.addLast(System.nanoTime());
             return true;
-        }
-    }
-
-    private int count(String key) {
-        ArrayDeque<Long> window = requestWindows.computeIfAbsent(key, k -> new ArrayDeque<>());
-        synchronized (window) {
-            prune(window);
-            return window.size();
-        }
-    }
-
-    private void record(String key) {
-        ArrayDeque<Long> window = requestWindows.computeIfAbsent(key, k -> new ArrayDeque<>());
-        synchronized (window) {
-            window.addLast(System.nanoTime());
         }
     }
 
