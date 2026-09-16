@@ -31,11 +31,16 @@ test.describe('navigation as a Logos admin', () => {
       await expect(page).toHaveTitle(route.title);
       // A lazy chunk that fails to load leaves the shell up and the outlet
       // empty, so the title alone is not enough — assert the *routed component*
-      // rendered. Angular places it as the next sibling of <router-outlet>,
-      // which is the only reliable marker: shell.html wraps the outlet in
-      // <main class="main-content">, so matching `main` would pass on exactly
-      // the blank-page failure this test exists to catch.
-      await expect(page.locator('router-outlet + *')).toBeVisible();
+      // rendered. Angular places it as the next sibling of its <router-outlet>.
+      //
+      // Scoped to the shell's outlet specifically: there are two in the tree —
+      // app-root's, whose sibling is <app-shell> itself, and the shell's nested
+      // one, whose sibling is the page. An unscoped `router-outlet + *` matches
+      // both and fails strict mode. Matching `main` instead would be worse
+      // still: shell.html wraps the outlet in <main class="main-content">, so
+      // it is present on exactly the blank-page failure this test exists to
+      // catch.
+      await expect(page.locator('app-shell router-outlet + *')).toBeVisible();
       expect(failures, `unhandled exception on ${route.path}:\n${failures.join('\n')}`).toEqual([]);
     });
   }

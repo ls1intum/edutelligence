@@ -18,7 +18,14 @@ import { ADMIN_USER, STORAGE_STATE } from './fixtures';
 setup('authenticate as a Logos admin', async ({ page }) => {
   await page.goto('/');
 
-  await page.getByRole('button', { name: /sign in with tum/i }).click();
+  // This is the first page load of the run, moments after the stack came up, so
+  // it pays for the Angular bundle and the app's first paint. The default
+  // 15s action timeout was not always enough — the first CI attempt timed out
+  // here and only the retry passed — so wait explicitly rather than let a slow
+  // cold start read as a broken login page.
+  const signIn = page.getByRole('button', { name: /sign in with tum/i });
+  await expect(signIn).toBeVisible({ timeout: 60_000 });
+  await signIn.click();
 
   // Keycloak's own login form, on its own origin.
   await page.waitForURL(/\/realms\/tum\/protocol\/openid-connect\/auth/, { timeout: 30_000 });
