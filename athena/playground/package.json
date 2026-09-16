@@ -57,7 +57,7 @@
     "@types/react-modal": "3.16.3",
     "@types/unzipper": "0.10.11",
     "axios": "1.13.1",
-    "eslint": "8.55.0",
+    "eslint": "8.57.1",
     "eslint-config-next": "15.5.25",
     "inquirer": "9.3.8",
     "mysql2": "3.9.8",
