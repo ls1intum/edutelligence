@@ -276,9 +276,18 @@ async def test_failure_logs_are_persisted_for_postmortem(gpu_sim, lane, monkeypa
     gpu_sim(GpuScenario.homogeneous("l40s", 1), VllmScript(emit_log="cuda_devices_busy.log", exit_code=1))
 
     async with lane() as handle:
-        await lane_harness.try_spawn(handle, lane_harness.lane_config())
+        error = await lane_harness.try_spawn(handle, lane_harness.lane_config())
+
+        # Each precondition is asserted separately: this test depends on the
+        # spawn failing, on the corpus log reaching the worker's buffer, and on
+        # the redirect being in effect. Checking only the final file would
+        # report all three failures as "no log was persisted".
+        assert error is not None, "the lane started; there is no failure to persist"
+        assert handle.has_fatal_cuda_errors, "the corpus log never reached the worker's log buffer"
+
         handle.persist_recent_logs("e2e_corpus")
 
-    written = sorted(log_dir.glob(f"{handle.lane_id}_*_e2e_corpus.log"))
-    assert written, "no failure log was persisted"
+    assert log_dir.is_dir(), f"nothing was written under {log_dir} — the path redirect did not take effect"
+    written = sorted(log_dir.glob("*_e2e_corpus.log"))
+    assert written, f"no failure log was persisted; {log_dir} holds {sorted(p.name for p in log_dir.iterdir())}"
     assert "all CUDA-capable devices are busy or unavailable" in written[-1].read_text()
