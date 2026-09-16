@@ -10,10 +10,15 @@ authors = [
     { name = "Tobias Wasner", email = "tobias.wasner@tum.de" }
 ]
 readme = "README.md"
-requires-python = ">=3.9,<4.0.0"
+requires-python = ">=3.11,<4.0.0"
 
 dependencies = [
-    "fastapi[standard] >= 0.115.9"
+    "fastapi[standard] >= 0.115.9",
+    # Security floor. python-multipart arrives through fastapi's "standard"
+    # extra, which only asks for >= 0.0.18. Consumers install shared from this
+    # manifest rather than from poetry.lock, so this constraint is what keeps
+    # them off a vulnerable version.
+    "python-multipart >= 0.0.30",
 ]
 
 [tool.poetry.group.dev.dependencies]
