@@ -106,6 +106,29 @@ docker compose exec logos-orchestrator python /app/tests/performance/run_api_wor
   --workload /app/tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv
 ```
 
+Remote run against a deployed environment (http-only, from a workstation):
+
+```bash
+./tests/performance/test_scheduling_performance.sh \
+  --logos-key "<ROOT_LOGOS_KEY>" \
+  --api-base "https://logos.example.org" \
+  --telemetry-base "http://<host-that-reaches-the-orchestrator>:8080" \
+  --internal-secret "$LOGOS_INTERNAL_SECRET" \
+  --workload tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv
+```
+
+The public `--api-base` serves `/v1/chat/completions`. The runtime snapshots
+(`runtime_samples.jsonl`) come from the internal endpoints
+`/logosdb/scheduler_state` and `/logosdb/providers/logosnode/status`, which are
+gated on the shared internal secret and are **not** on the public Traefik
+routers. Point `--telemetry-base` at a base that can reach the orchestrator
+directly (its own service port from a host on the same network, or a
+port-forward), and supply the secret via `--internal-secret` (or
+`LOGOS_INTERNAL_SECRET` in the environment). If the telemetry base is not
+reachable the run still completes, but `runtime_samples.jsonl` is empty and the
+runner prints a warning; `run_meta.json` records `telemetry_base` and
+`telemetry_ok`.
+
 ## What Gets Saved
 
 Each run is written into its own folder using the wrapper host's local timestamp:

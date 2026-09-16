@@ -20,6 +20,8 @@ err() { printf "[\033[1;31mFAIL\033[0m] %s\n" "$*"; }
 LOGOS_KEY=""
 WORKLOAD="tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv"
 API_BASE="http://localhost:18080"
+TELEMETRY_BASE=""
+INTERNAL_SECRET=""
 LATENCY_SLO_MS="10000"
 OUTPUT=""
 
@@ -49,6 +51,14 @@ while [[ $# -gt 0 ]]; do
       API_BASE="$2"
       shift 2
       ;;
+    --telemetry-base)
+      TELEMETRY_BASE="$2"
+      shift 2
+      ;;
+    --internal-secret)
+      INTERNAL_SECRET="$2"
+      shift 2
+      ;;
     --output)
       OUTPUT="$2"
       shift 2
@@ -59,7 +69,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       err "Unknown argument: $1"
-      echo "Usage: $0 --logos-key <KEY> [--workload <CSV>] [--api-base <URL>] [--output <PATH>] [--latency-slo-ms <MS>]"
+      echo "Usage: $0 --logos-key <KEY> [--workload <CSV>] [--api-base <URL>] [--telemetry-base <URL>] [--internal-secret <SECRET>] [--output <PATH>] [--latency-slo-ms <MS>]"
       exit 1
       ;;
   esac
@@ -68,7 +78,7 @@ done
 # Validate required arguments
 if [ -z "$LOGOS_KEY" ]; then
     err "Error: --logos-key is required"
-    echo "Usage: $0 --logos-key <KEY> [--workload <CSV>] [--api-base <URL>] [--output <PATH>] [--latency-slo-ms <MS>]"
+    echo "Usage: $0 --logos-key <KEY> [--workload <CSV>] [--api-base <URL>] [--telemetry-base <URL>] [--internal-secret <SECRET>] [--output <PATH>] [--latency-slo-ms <MS>]"
     exit 1
 fi
 
@@ -137,27 +147,46 @@ if is_local_api_base "$API_BASE"; then
     docker compose cp tests/performance/workloads/resource "$CONTAINER_NAME":/app/tests/performance/workloads >/dev/null
     docker compose cp src/logos/dbutils/dbmanager.py "$CONTAINER_NAME":/app/src/logos/dbutils/dbmanager.py >/dev/null
 
+    # Local runs exec inside the orchestrator container, so the internal
+    # telemetry endpoints (scheduler_state) are reachable on the same
+    # 127.0.0.1:8080 base, and the shared internal secret is already in the
+    # container environment (LOGOS_INTERNAL_SECRET).
     RUNNER_CMD=(
         python /app/tests/performance/run_api_workload.py
         --logos-key "$LOGOS_KEY"
         --workload "/app/$WORKLOAD"
         --api-base "http://127.0.0.1:8080"
+        --telemetry-base "${TELEMETRY_BASE:-http://127.0.0.1:8080}"
         --run-timestamp "$RUN_TIMESTAMP"
         --latency-slo-ms "$LATENCY_SLO_MS"
     )
+    if [ -n "$INTERNAL_SECRET" ]; then
+        RUNNER_CMD+=(--internal-secret "$INTERNAL_SECRET")
+    fi
     if [ -n "$OUTPUT" ]; then
         RUNNER_CMD+=(--output "/app/$OUTPUT")
     fi
     docker compose exec "$CONTAINER_NAME" "${RUNNER_CMD[@]}" || test_exit_code=$?
 else
+    # Remote runs hit the public --api-base for /v1. The internal telemetry
+    # endpoints (scheduler_state, provider status) are gated on the internal
+    # secret and are NOT on the public Traefik routers, so pass --telemetry-base
+    # pointing at a base that reaches the orchestrator internally (and
+    # --internal-secret, or LOGOS_INTERNAL_SECRET in the environment, to supply
+    # the shared secret). Without a reachable telemetry base the run still
+    # completes, but runtime_samples.jsonl is empty and the runner warns.
     RUNNER_CMD=(
         poetry run python tests/performance/run_api_workload.py
         --logos-key "$LOGOS_KEY"
         --workload "$WORKLOAD"
         --api-base "$API_BASE"
+        --telemetry-base "${TELEMETRY_BASE:-$API_BASE}"
         --run-timestamp "$RUN_TIMESTAMP"
         --latency-slo-ms "$LATENCY_SLO_MS"
     )
+    if [ -n "$INTERNAL_SECRET" ]; then
+        RUNNER_CMD+=(--internal-secret "$INTERNAL_SECRET")
+    fi
     if [ -n "$OUTPUT" ]; then
         RUNNER_CMD+=(--output "$OUTPUT")
     fi
