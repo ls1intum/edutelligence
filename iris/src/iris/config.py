@@ -151,6 +151,20 @@ class TranscriptionSettings(BaseModel):
     )
 
 
+class PipelineConcurrencySettings(BaseModel):
+    """Bounds for thread-pool concurrency of background pipeline executors."""
+
+    ask_user_max_workers: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Max number of ask-user pipeline executions (quiz sessions) that "
+            "may run concurrently. Requests beyond this limit queue behind "
+            "running ones instead of failing."
+        ),
+    )
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -162,6 +176,9 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    pipelines: PipelineConcurrencySettings = Field(
+        default_factory=PipelineConcurrencySettings
+    )
 
     @classmethod
     def get_settings(cls):

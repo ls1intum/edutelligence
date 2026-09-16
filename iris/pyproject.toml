@@ -62,6 +62,7 @@ coverage = "^7.13.4"
 detect-secrets = "^1.5.0"
 pre-commit = "^4.5.1"
 autoflake = "^2.3.1"
+testcontainers = "^4.15.0"
 
 [tool.isort]
 profile = "black"
@@ -85,6 +86,12 @@ show_missing = true
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that invoke a real, configured LLM (network access, API keys, model usage); excluded from the default run, opt in with `pytest -m integration`",
+]
+addopts = "-m 'not integration'"
 
 [virtualenvs]
 create = true
