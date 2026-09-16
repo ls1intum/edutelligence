@@ -85,12 +85,8 @@ async def test_reports_connected_at_and_worker_started_at(monkeypatch):
     ]
 
     fresh_heartbeat = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    connected_at = (
-        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
-    ).isoformat()
-    worker_started_at = (
-        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
-    ).isoformat()
+    connected_at = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)).isoformat()
+    worker_started_at = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).isoformat()
     registry = MagicMock()
     registry.peek_runtime_snapshot = lambda pid: (
         {
