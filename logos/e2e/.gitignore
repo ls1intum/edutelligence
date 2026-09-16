@@ -3,3 +3,8 @@
 __pycache__/
 .pytest_cache/
 node_modules/
+
+# The failure corpus is source, not output. The repo-root .gitignore excludes
+# `*.log*`, which would silently drop every captured vLLM failure — the one
+# thing this suite cannot be rebuilt without.
+!harness/corpus/**/*.log
