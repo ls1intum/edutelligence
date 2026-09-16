@@ -10,7 +10,7 @@ authors = [
     { name = "Tobias Wasner", email = "tobias.wasner@tum.de" }
 ]
 readme = "README.md"
-requires-python = ">=3.9,<4.0.0"
+requires-python = ">=3.11,<4.0.0"
 
 dependencies = [
     "fastapi[standard] >= 0.115.9"
