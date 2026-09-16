@@ -244,11 +244,15 @@ Sources: [Azure OpenAI global batch](https://learn.microsoft.com/en-us/azure/ai-
 
 ## The batch page in the UI
 
-**Batches** under *Personal* does the same three things without a script: pick
+**Batches** under *Management* does the same three things without a script: pick
 one of your API keys, upload a `.jsonl`, and watch the list. A running batch
 shows its progress, a finished one offers its results as a download, and an
 unfinished one can be cancelled. The page refreshes itself every 30 seconds
 while something is still moving.
+
+The page is an admin facility: only app admins and logos admins see the menu
+item, and the endpoints behind it refuse everyone else. Script use is
+unaffected — it talks to the Batch API directly, not through the page.
 
 It is a forward to the same API: the webservice calls the orchestrator's Batch
 API as the key you selected, so the per-line permission check, the ownership

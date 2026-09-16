@@ -184,6 +184,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             model_id, provider_id, provider_type, score, priority_int, ettft = best
             self._record_affinity(request, model_id, provider_id, provider_type, affinity)
             self._log_decision(request.request_id, scored, request.classified_models or [], best, False)
+            self._record_scheduling_metrics(model_id, provider_id, ettft)
             result = self._create_result(
                 model_id,
                 provider_id,
@@ -240,6 +241,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             logosnode_candidate,
             True,
         )
+        lc_model_id, lc_provider_id, _, _, _, lc_ettft = logosnode_candidate
+        self._record_scheduling_metrics(lc_model_id, lc_provider_id, lc_ettft)
         result = await self._queue_and_wait(logosnode_candidate, request)
         if result is not None:
             self._record_affinity(request, result.model_id, result.provider_id, result.provider_type, affinity)
@@ -366,6 +369,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         self._logosnode.get_provider_name(provider_id) or provider_id,
                         ettft.reasoning,
                     )
+                    prom.SCHEDULING_UNAVAILABLE_TOTAL.labels(
+                        model=self._logosnode.get_model_name(model_id, provider_id) or str(model_id),
+                        provider=self._logosnode.get_provider_name(provider_id) or str(provider_id),
+                    ).inc()
                     # Only logosnode gets fallback queueing — model may be
                     # transitioning (sleep→wake) and will become available.
                     # Cloud unavailable means truly rate-limited → skip.
@@ -448,6 +455,33 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             )
 
         return scored
+
+    def _record_scheduling_metrics(self, model_id: int, provider_id: int, ettft: "EttftEstimate") -> None:
+        """Record per-decision scheduling metrics for the selected candidate."""
+        model = self._logosnode.get_model_name(model_id, provider_id) or str(model_id)
+        provider = self._logosnode.get_provider_name(provider_id) or str(provider_id)
+        tier = ettft.tier.value
+        prom.SCHEDULING_TIER_TOTAL.labels(model=model, provider=provider, tier=tier).inc()
+        # learned_ttft is the residual after subtracting the four explicitly
+        # tracked components from the total estimate.
+        learned_ttft_s = max(
+            0.0,
+            ettft.expected_wait_s
+            - ettft.state_overhead_s
+            - ettft.queue_wait_s
+            - ettft.prefill_s
+            - ettft.reclaim_overhead_s,
+        )
+        prom.record_ettft_components(
+            model=model,
+            provider=provider,
+            tier=tier,
+            state_overhead_s=ettft.state_overhead_s,
+            queue_wait_s=ettft.queue_wait_s,
+            prefill_s=ettft.prefill_s,
+            learned_ttft_s=learned_ttft_s,
+            reclaim_overhead_s=ettft.reclaim_overhead_s,
+        )
 
     def _estimate_ettft(
         self, model_id: int, provider_id: int, provider_type: str, input_tokens: int = 0
@@ -892,6 +926,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             is_cold_at_queue=is_cold_at_queue,
             provider_affinity=request.required_provider_id,
         )
+        # Start the hold timer immediately after enqueue so that logging,
+        # queue-depth reads, and the capacity-task setup are included in the
+        # reported duration — they are part of the request's queue residence.
+        _hold_start = time.monotonic()
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
             "Request %s queued for model=%s worker=%s " "(corrected_score=%.2f, tier=%s, depth=%s)",
@@ -920,6 +958,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 request.timeout_s if request.timeout_s else global_timeout_s(1200)
             )  # 20 min queue wait (or LOGOS_TIMEOUT_S)
             result = await asyncio.wait_for(future, timeout=timeout)
+            prom.ADMISSION_HOLD_DURATION_SECONDS.observe(time.monotonic() - _hold_start)
 
             # Attach ETTFT info to the dequeued result (decision-time values:
             # the estimate and warmth as seen when the request was enqueued)

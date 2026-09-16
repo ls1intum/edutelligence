@@ -567,6 +567,76 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
     runtime_status.assert_not_awaited()
 
 
+def _app_with_vllm_engine_config(endpoints):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(running_vllm_endpoints=lambda: endpoints)
+    app.state.config = SimpleNamespace(
+        engines=SimpleNamespace(vllm=SimpleNamespace(metrics_path="/custom-metrics", metrics_timeout_seconds=7))
+    )
+    return app
+
+
+@pytest.mark.asyncio
+async def test_send_vllm_metrics_forwards_merged_text(monkeypatch):
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _app_with_vllm_engine_config([("lane-a", "model-a", 19001)])
+    client = LogosBridgeClient(app, cfg)
+
+    collect = AsyncMock(return_value="vllm:num_requests_running 1.0\n")
+    monkeypatch.setattr("logos_worker_node.logos_bridge.collect_vllm_metrics_text", collect)
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    collect.assert_awaited_once_with([("lane-a", "model-a", 19001)], metrics_path="/custom-metrics", timeout_s=7)
+    assert sends == [
+        {
+            "type": "vllm_metrics",
+            "worker_id": client.worker_id,
+            "metrics_text": "vllm:num_requests_running 1.0\n",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_vllm_metrics_forwards_empty_export_too(monkeypatch):
+    """An empty export must still be sent — it's what tells the orchestrator
+
+    the last lane went away, so it can drop the stale series instead of
+    keeping the latest non-empty snapshot forever."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _app_with_vllm_engine_config([])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.collect_vllm_metrics_text",
+        AsyncMock(return_value=""),
+    )
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    assert sends == [
+        {
+            "type": "vllm_metrics",
+            "worker_id": client.worker_id,
+            "metrics_text": "",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
     """Idle worker (no lane churn) must still resend runtime status periodically.
