@@ -1,10 +1,8 @@
 name: Logos - Deploy to Prod
 
 on:
-  workflow_run:
-    workflows: ["Logos - Build"]
-    branches: [main]
-    types: [completed]
+  # Manual deploys only: the workflow_run trigger on "Logos - Build" was
+  # removed so prod no longer auto-deploys on every push to main.
   workflow_dispatch:
     inputs:
       image-tag:
@@ -18,7 +16,6 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     strategy:
       # Deploy each node independently: one unreachable host must not cancel
