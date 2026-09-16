@@ -76,17 +76,52 @@ async def test_arch_list_is_passed_through_to_the_build(spawned):
 
 
 async def test_mixed_architecture_node_gets_no_backend_override(spawned):
-    """A node with one pre-Ampere and one Ampere card must not be forced to Triton.
+    """Pin what a mixed pre-Ampere/Ampere node actually does today.
 
-    ``_auto_attention_backend`` only overrides when *every* card is pre-Ampere.
-    Forcing TRITON_ATTN on the mixed node would needlessly slow the newer card;
-    the sm75 card is handled by not scheduling FlashInfer work onto it.
+    ``_auto_attention_backend`` only overrides when *every* card is pre-Ampere,
+    so a mixed node gets no override — forcing TRITON_ATTN would needlessly slow
+    the newer card.
+
+    The consequence is asserted rather than explained away: with the lane's
+    ``gpu_devices`` unset the worker falls back to the worker-wide ``all`` and
+    never sets ``CUDA_VISIBLE_DEVICES``, so the sm75 card stays visible to a
+    lane that may pick FlashInfer — the JIT path that crashes pre-Ampere
+    drivers. Nothing in the worker currently prevents that pairing; a mixed node
+    is safe only while placement keeps such lanes off the old card. Asserting it
+    here means the day that changes, this test changes with it, in view.
     """
     env, handle, ctx = await spawned(GpuScenario(profiles=["rtx2080ti", "l40s"]))
     try:
         await handle.spawn(lane_harness.lane_config())
         assert env.arg_value(ATTENTION_BACKEND_FLAG) is None
         assert env.last_env().get("TORCH_CUDA_ARCH_LIST") == "7.5;8.9"
+        assert "CUDA_VISIBLE_DEVICES" not in env.last_env(), (
+            "the lane is pinned to a device set — if the worker started doing "
+            "this, the pre-Ampere exposure described above is gone and this "
+            "test should assert the pinning instead"
+        )
+    finally:
+        await ctx.__aexit__(None, None, None)
+
+
+async def test_lane_pinned_to_the_ampere_card_hides_the_pre_ampere_one(spawned):
+    """Pinning is the mechanism that makes a mixed node safe.
+
+    The companion to the test above: an operator who confines the lane to the
+    sm89 card must actually get a lane that cannot see the sm75 one, so
+    FlashInfer's JIT has no pre-Ampere driver to crash.
+    """
+    env, handle, ctx = await spawned(GpuScenario(profiles=["rtx2080ti", "l40s"]))
+    try:
+        config = lane_harness.lane_config()
+        config.gpu_devices = "1"  # the L40S
+        await handle.spawn(config)
+
+        assert env.last_env().get("CUDA_VISIBLE_DEVICES") == "1"
+        assert env.arg_value(ATTENTION_BACKEND_FLAG) is None
+        # Only the pinned card may carry the lane's allocation.
+        assert env.used_mb(0) == 0.0, "the pre-Ampere card was allocated against despite the pinning"
+        assert env.used_mb(1) > 0
     finally:
         await ctx.__aexit__(None, None, None)
 

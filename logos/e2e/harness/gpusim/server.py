@@ -320,9 +320,14 @@ def _startup_banner(lane: Lane, port: int) -> str:
     return "\n".join(lines)
 
 
-def run(model: str, port: int, vram_mb: float, script: VllmScript, device_indices: list[int]) -> int:
-    """Serve until SIGTERM, holding *vram_mb* per device in the simulator."""
-    lane = Lane(model=model, script=script, vram_mb=vram_mb)
+def run(model: str, port: int, script: VllmScript, vram_by_device: dict[int, float]) -> int:
+    """Serve until SIGTERM, holding each device's own allocation in the simulator.
+
+    Keyed per device because a mixed-architecture tensor-parallel lane claims a
+    different amount on each card; one figure for the whole lane would book the
+    first GPU's share against all of them.
+    """
+    lane = Lane(model=model, script=script, vram_mb=sum(vram_by_device.values()))
     pid = os.getpid()
 
     # Bind before claiming VRAM. Binding is the step that can still fail (a port
@@ -334,17 +339,18 @@ def run(model: str, port: int, vram_mb: float, script: VllmScript, device_indice
     server.lane = lane  # type: ignore[attr-defined]
     server.daemon_threads = True
 
-    if vram_mb > 0 and device_indices:
+    claimed = {index: mb for index, mb in vram_by_device.items() if mb > 0}
+    if claimed:
         with gpustate.mutate() as sim:
-            for index in device_indices:
-                sim.allocate(pid, index, vram_mb)
+            for index, mb in claimed.items():
+                sim.allocate(pid, index, mb)
 
     print(_startup_banner(lane, port), flush=True)
 
     stopping = threading.Event()
 
     def _release() -> None:
-        if vram_mb <= 0 or not device_indices:
+        if not claimed:
             return
         try:
             with gpustate.mutate() as sim:
@@ -378,4 +384,11 @@ def run(model: str, port: int, vram_mb: float, script: VllmScript, device_indice
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via bin/vllm
-    sys.exit(run(sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), VllmScript.read(), [0]))
+    sys.exit(
+        run(
+            model=sys.argv[1],
+            port=int(sys.argv[2]),
+            script=VllmScript.read(),
+            vram_by_device={0: float(sys.argv[3])},
+        )
+    )

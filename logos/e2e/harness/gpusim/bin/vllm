@@ -109,25 +109,32 @@ def _target_devices(tensor_parallel_size: int) -> list[int]:
     return visible[:tensor_parallel_size]
 
 
-def _resolve_vram_mb(argv: list[str], script: VllmScript, devices: list[int]) -> float:
-    """VRAM this lane claims per device.
+def _resolve_vram_mb(argv: list[str], script: VllmScript, devices: list[int]) -> dict[int, float]:
+    """VRAM this lane claims, per device.
 
-    Defaults to ``gpu_memory_utilization × memory.total``, which is the
-    number vLLM itself gates startup on — so the planner's arithmetic and the
-    sim's ledger are describing the same quantity.
+    Defaults to ``gpu_memory_utilization × memory.total`` for *each* card,
+    which is the number vLLM itself gates startup on — so the planner's
+    arithmetic and the sim's ledger describe the same quantity.
+
+    Per device rather than one figure for the lane: on a mixed-architecture
+    node the cards have different capacities, so a single value taken from the
+    first GPU would book the wrong amount against every other one. The ledger
+    is the thing this simulator exists to get right, and a capacity test can
+    only be as trustworthy as the numbers underneath it.
     """
     if script.vram_mb is not None:
-        return script.vram_mb
+        return {index: script.vram_mb for index in devices}
     raw_gmu = _flag(argv, "--gpu-memory-utilization")
     gmu = float(raw_gmu) if raw_gmu else 0.9
     try:
         sim = gpustate.load()
     except gpustate.GpuSimStateError:
-        return 0.0
-    if not devices:
-        return 0.0
-    device = sim.device(devices[0])
-    return (device.memory_total_mb * gmu) if device else 0.0
+        return {}
+    allocations: dict[int, float] = {}
+    for index in devices:
+        device = sim.device(index)
+        allocations[index] = (device.memory_total_mb * gmu) if device else 0.0
+    return allocations
 
 
 def main(argv: list[str]) -> int:
@@ -161,13 +168,13 @@ def main(argv: list[str]) -> int:
     port = int(_flag(argv, "--port", "8000") or 8000)
     tp_size = int(_flag(argv, "--tensor-parallel-size", "1") or 1)
     devices = _target_devices(tp_size)
-    vram_mb = _resolve_vram_mb(argv, script, devices)
+    vram_by_device = _resolve_vram_mb(argv, script, devices)
 
     # Readiness is served, not slept: the port opens immediately and /health
     # answers 503 until `ready_after_s` has passed. That matches how the worker
     # observes a slow cold load, and lets a "never becomes ready" scenario be
     # expressed as a large `ready_after_s` without wedging the process.
-    return run_server(model=model, port=port, vram_mb=vram_mb, script=script, device_indices=devices)
+    return run_server(model=model, port=port, script=script, vram_by_device=vram_by_device)
 
 
 if __name__ == "__main__":

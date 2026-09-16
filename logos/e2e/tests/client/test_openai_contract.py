@@ -48,6 +48,17 @@ def test_unknown_model_is_a_structured_error_not_a_stack_trace(client):
         422,
     ), f"unknown model returned HTTP {caught.value.status_code} — a client cannot act on that"
 
+    # The status code alone does not make an error actionable, and the name of
+    # this test promises more than that: a client needs a parseable body saying
+    # what went wrong. An HTML error page or a bare string carries the right
+    # status and still tells an application nothing.
+    body = caught.value.response.json()
+    assert isinstance(body, dict), f"error body was not a JSON object: {body!r}"
+    error = body.get("error", body)
+    assert isinstance(error, dict), f"error body has no structured error object: {body!r}"
+    message = error.get("message") or error.get("detail") or ""
+    assert message, f"error body carries no message a client could surface: {body!r}"
+
 
 def test_missing_credentials_are_rejected(orchestrator_url):
     anonymous = openai.OpenAI(base_url=f"{orchestrator_url}/v1", api_key="not-a-key", max_retries=0)

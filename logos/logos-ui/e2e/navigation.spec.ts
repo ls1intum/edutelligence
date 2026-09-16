@@ -30,8 +30,12 @@ test.describe('navigation as a Logos admin', () => {
 
       await expect(page).toHaveTitle(route.title);
       // A lazy chunk that fails to load leaves the shell up and the outlet
-      // empty, so the title alone is not enough — assert something rendered.
-      await expect(page.locator('router-outlet + *, main, [role="main"]').first()).toBeVisible();
+      // empty, so the title alone is not enough — assert the *routed component*
+      // rendered. Angular places it as the next sibling of <router-outlet>,
+      // which is the only reliable marker: shell.html wraps the outlet in
+      // <main class="main-content">, so matching `main` would pass on exactly
+      // the blank-page failure this test exists to catch.
+      await expect(page.locator('router-outlet + *')).toBeVisible();
       expect(failures, `unhandled exception on ${route.path}:\n${failures.join('\n')}`).toEqual([]);
     });
   }
@@ -46,10 +50,26 @@ test.describe('unauthenticated access', () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
   test('a protected route sends an anonymous visitor to the login page', async ({ page }) => {
+    // Watching for the shell has to start before the navigation does. Asserting
+    // only that the login button eventually appears would pass even if the
+    // admin chrome painted first and was then replaced — and a flash of another
+    // tenant's navigation is a real leak, not a cosmetic one.
+    await page.addInitScript(() => {
+      (window as unknown as { __shellSeen: boolean }).__shellSeen = false;
+      const check = () => {
+        if (document.querySelector('app-shell, main.main-content')) {
+          (window as unknown as { __shellSeen: boolean }).__shellSeen = true;
+        }
+      };
+      new MutationObserver(check).observe(document.documentElement, { childList: true, subtree: true });
+      check();
+    });
+
     await page.goto('/statistics');
 
-    // The guard must not let the shell paint first — a flash of admin chrome
-    // before the redirect is a real leak, not a cosmetic one.
     await expect(page.getByRole('button', { name: /sign in with tum/i })).toBeVisible({ timeout: 30_000 });
+
+    const shellSeen = await page.evaluate(() => (window as unknown as { __shellSeen: boolean }).__shellSeen);
+    expect(shellSeen, 'the authenticated shell rendered before the redirect to login').toBe(false);
   });
 });
