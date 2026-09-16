@@ -261,6 +261,18 @@ services:
       - "traefik.http.routers.ws-stats.service=ws-svc"
       - "traefik.http.routers.ws-stats.middlewares=strip-api"
       - "traefik.http.routers.ws-stats.priority=200"
+      # The operator-facing lane actions, at priority 202 so they outrank the
+      # orchestrator's /api/logosdb/providers/logosnode catch-all (201). The UI
+      # sends a JWT and {provider_id, ...} to these; the orchestrator's own
+      # endpoints want a logos_key, so without this router the six paths below
+      # reach the wrong service and answer with a validation or auth error —
+      # and the browser tier would be exercising a route production does not
+      # use. Mirrors docker-compose.dev.yaml; keep the two lists in step.
+      - "traefik.http.routers.ws-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.ws-logosnode-admin.entrypoints=web8080"
+      - "traefik.http.routers.ws-logosnode-admin.service=ws-svc"
+      - "traefik.http.routers.ws-logosnode-admin.middlewares=strip-api"
+      - "traefik.http.routers.ws-logosnode-admin.priority=202"
       - "traefik.http.services.ws-svc.loadbalancer.server.port=8081"
     networks: [e2e]
 

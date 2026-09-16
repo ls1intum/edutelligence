@@ -12,6 +12,8 @@ driver on pre-Ampere cards, so a lane on an sm75 node that does not get
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from harness import lane as lane_harness
 from harness.gpusim.scenario import GpuProfile, GpuScenario, VllmScript
@@ -163,5 +165,38 @@ async def test_nccl_p2p_disabled_by_default_on_pcie_nodes(spawned):
         worker_env = env.last_env()
         assert worker_env.get("NCCL_P2P_DISABLE") == "1"
         assert worker_env.get("TORCH_NCCL_ASYNC_ERROR_HANDLING") == "1"
+    finally:
+        await ctx.__aexit__(None, None, None)
+
+
+async def test_credentials_are_not_recorded_in_the_simulator_state(spawned, monkeypatch):
+    """The recorded environment must never carry a live credential.
+
+    The worker copies its whole parent environment into the vLLM subprocess, so
+    under the compose stack the shim sees the node's real shared key
+    (LOGOS_API_KEY, minted at registration) alongside LOGOS_ADMIN_KEY and
+    LOGOS_INTERNAL_SECRET. Recording those verbatim would write live secrets
+    into gpusim.json — a file tests read and CI collects on failure.
+
+    Presence stays observable; only the value is withheld.
+    """
+    monkeypatch.setenv("LOGOS_API_KEY", "lg-secret-shared-key")
+    monkeypatch.setenv("LOGOS_INTERNAL_SECRET", "super-secret-value")
+    monkeypatch.setenv("HF_TOKEN", "hf_secret_token")
+
+    env, handle, ctx = await spawned(GpuScenario.homogeneous("l40s", 1))
+    try:
+        await handle.spawn(lane_harness.lane_config())
+
+        recorded = env.last_env()
+        for name in ("LOGOS_API_KEY", "LOGOS_INTERNAL_SECRET", "HF_TOKEN"):
+            assert recorded.get(name) == "<set>", f"{name} was recorded verbatim: {recorded.get(name)!r}"
+
+        blob = json.dumps(env.state().to_json())
+        for secret in ("lg-secret-shared-key", "super-secret-value", "hf_secret_token"):
+            assert secret not in blob, f"a credential reached the simulator state file: {secret!r}"
+
+        # Non-secret settings must still be recorded, or the capture is useless.
+        assert recorded.get("TORCH_CUDA_ARCH_LIST") == "8.9"
     finally:
         await ctx.__aexit__(None, None, None)

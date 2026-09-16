@@ -35,8 +35,23 @@ CORPUS_DIR = E2E_ROOT / "harness" / "corpus"
 #: deliberately; the rest is inherited noise.
 ENV_PREFIXES = ("VLLM_", "TORCH", "CUDA_", "NCCL_", "HF_", "FLASHINFER_", "CC", "LOGOS_")
 
-#: Recorded as a presence flag only — never the value.
-SECRET_ENV = {"HF_TOKEN"}
+#: Name fragments that mark a value as a credential. Matched on the variable
+#: *name*, not against a fixed list, because the worker inherits its whole
+#: parent environment into the vLLM subprocess: under the compose stack that
+#: includes LOGOS_API_KEY (the node's real shared key, minted at registration),
+#: LOGOS_ADMIN_KEY and LOGOS_INTERNAL_SECRET. Recording those verbatim would
+#: write live credentials into gpusim.json, which tests read and CI collects.
+#: A name-fragment rule keeps a newly added secret redacted by default, where an
+#: explicit list would silently leak it.
+SECRET_NAME_MARKERS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL")
+
+#: Stand-in recorded for a redacted value. Presence is still observable — that
+#: is what a test would assert on — but the value never lands on disk.
+REDACTED = "<set>"
+
+
+def _is_secret(name: str) -> bool:
+    return any(marker in name.upper() for marker in SECRET_NAME_MARKERS)
 
 
 def _flag(argv: list[str], name: str, default: str | None = None) -> str | None:
@@ -54,7 +69,7 @@ def _captured_env() -> dict[str, str]:
     for key, value in os.environ.items():
         if not key.startswith(ENV_PREFIXES):
             continue
-        captured[key] = "<set>" if key in SECRET_ENV else value
+        captured[key] = REDACTED if _is_secret(key) else value
     return captured
 
 
