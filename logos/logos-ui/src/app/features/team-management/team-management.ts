@@ -62,6 +62,10 @@ export class TeamManagement implements OnInit {
   createLoading = signal(false);
   createError = signal('');
 
+  // ── Team queue priority (logos_admin only) ──────────────────────────────
+  prioritySavingId = signal<number | null>(null);
+  priorityError = signal('');
+
   // ── Computed ─────────────────────────────────────────────────────────────
   isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
   isAppAdmin = computed(() => this.auth.currentUser()?.role === 'app_admin');
@@ -146,6 +150,30 @@ export class TeamManagement implements OnInit {
 
   navigateToTeam(id: number): void {
     this.router.navigate(['/teams', id]);
+  }
+
+  // ── Team queue priority ─────────────────────────────────────────────────
+  priorityLabel(team: Team): string {
+    if (team.priority === null || team.priority === undefined) return 'Default';
+    const known: Record<number, string> = { 1: 'Low', 5: 'Normal', 10: 'High' };
+    return known[team.priority] ?? String(team.priority);
+  }
+
+  /** Optimistic select change: rolls back and reports if the PATCH fails. */
+  async changeTeamPriority(team: Team, value: string): Promise<void> {
+    const priority = value === '' ? null : Number(value);
+    const previous = team.priority;
+    this.priorityError.set('');
+    this.teams.update((list) => list.map((t) => (t.id === team.id ? { ...t, priority } : t)));
+    this.prioritySavingId.set(team.id);
+    try {
+      await this.teamService.updateTeamPriority(team.id, priority);
+    } catch {
+      this.teams.update((list) => list.map((t) => (t.id === team.id ? { ...t, priority: previous } : t)));
+      this.priorityError.set(`Failed to update the queue priority of '${team.name}'.`);
+    } finally {
+      this.prioritySavingId.set(null);
+    }
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

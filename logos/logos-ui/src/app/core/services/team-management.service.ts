@@ -46,6 +46,11 @@ export class TeamManagementService {
     return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}`, payload));
   }
 
+  /** Sets the queue priority of a team's traffic (logos_admin only); null unsets it. */
+  updateTeamPriority(teamId: number, priority: number | null): Promise<void> {
+    return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}/priority`, { priority }));
+  }
+
   getTeamApiKeys(teamId: number): Promise<TeamApiKey[]> {
     return firstValueFrom(this.http.get<TeamApiKey[]>(`/api/admin/teams/${teamId}/api-keys`));
   }
