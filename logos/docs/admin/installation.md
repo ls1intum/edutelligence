@@ -50,7 +50,35 @@ development accounts. These accounts and their roles are defined in
 ## Production deployment
 
 For production, use `docker-compose.yaml` with images built and published by
-the Logos build workflow:
+the Logos build workflow. The workflow publishes the core images to the
+project's Harbor registry (team-internal), not to the GHCR default the
+compose file falls back to, so set both in `.env` and log in to the registry
+before pulling:
+
+```bash
+REGISTRY=<your-harbor>/logos
+IMAGE_TAG=<published tag>
+docker login <your-harbor>
+```
+
+If you do not have access to that registry, build the same images locally
+from the Dockerfiles the workflow uses and tag them for a registry the host
+can pull from (e.g. a local registry):
+
+```bash
+REGISTRY=localhost:5000
+IMAGE_TAG=latest
+docker build -t "$REGISTRY/logos:$IMAGE_TAG" -f logos/logos-orchestrator/Dockerfile .
+docker build -t "$REGISTRY/logos-webservice:$IMAGE_TAG" logos/logos-webservice
+docker build -t "$REGISTRY/logos-ui:$IMAGE_TAG" logos/logos-ui
+docker build -t "$REGISTRY/logos-db:$IMAGE_TAG" logos/db
+docker build -t "$REGISTRY/logos-agent:$IMAGE_TAG" -f logos/logos-agent/Dockerfile .
+docker build -t "$REGISTRY/logos-agent-gateway:$IMAGE_TAG" -f logos/agent-gateway/Dockerfile .
+```
+
+Set the same `REGISTRY` and `IMAGE_TAG` in `.env`, then start the stack
+(the worker node image is built on the GPU host instead — see the worker
+node guide):
 
 ```bash
 docker compose --env-file .env up -d
