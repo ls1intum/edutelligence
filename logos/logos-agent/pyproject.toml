@@ -17,7 +17,7 @@ dependencies = [
 dev = [
     "pytest>=8.3.5",
     "pytest-asyncio>=0.26.0",
-    "black==25.1.0",
+    "black==26.5.1",
     "flake8==7.1.2",
     "isort==6.0.1",
 ]
