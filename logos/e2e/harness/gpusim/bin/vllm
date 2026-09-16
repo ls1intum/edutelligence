@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Fake ``vllm`` CLI.
+
+Two jobs:
+
+1. **Record the invocation.** Every GPU-compatibility decision the worker makes
+   ends up as an argument or an environment variable on this command line —
+   ``VLLM_ATTENTION_BACKEND=TRITON_ATTN`` on pre-Ampere cards,
+   ``TORCH_CUDA_ARCH_LIST``, ``--tensor-parallel-size``,
+   ``--gpu-memory-utilization``, ``--load-format sharded_state``. Capturing it
+   verbatim is what lets a test assert on the decision rather than on a
+   side effect of it.
+
+2. **Enact the scripted behaviour.** Print a captured failure log and exit,
+   hang, leak VRAM, or serve normally via :mod:`harness.gpusim.server`.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+# harness/gpusim/bin/vllm -> harness/gpusim/bin -> harness/gpusim -> harness -> e2e
+E2E_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(E2E_ROOT))
+
+from harness.gpusim import state as gpustate  # noqa: E402
+from harness.gpusim.scenario import VllmScript  # noqa: E402
+from harness.gpusim.server import run as run_server  # noqa: E402
+
+CORPUS_DIR = E2E_ROOT / "harness" / "corpus"
+
+#: Environment prefixes worth recording. These are the ones the worker sets
+#: deliberately; the rest is inherited noise.
+ENV_PREFIXES = ("VLLM_", "TORCH", "CUDA_", "NCCL_", "HF_", "FLASHINFER_", "CC", "LOGOS_")
+
+#: Recorded as a presence flag only — never the value.
+SECRET_ENV = {"HF_TOKEN"}
+
+
+def _flag(argv: list[str], name: str, default: str | None = None) -> str | None:
+    """Read ``--name value``; returns *default* when absent."""
+    for index, arg in enumerate(argv):
+        if arg == name and index + 1 < len(argv):
+            return argv[index + 1]
+        if arg.startswith(f"{name}="):
+            return arg.split("=", 1)[1]
+    return default
+
+
+def _captured_env() -> dict[str, str]:
+    captured = {}
+    for key, value in os.environ.items():
+        if not key.startswith(ENV_PREFIXES):
+            continue
+        captured[key] = "<set>" if key in SECRET_ENV else value
+    return captured
+
+
+def _record(argv: list[str], model: str) -> None:
+    try:
+        with gpustate.mutate() as sim:
+            sim.vllm_invocations.append(
+                {
+                    "argv": list(argv),
+                    "model": model,
+                    "env": _captured_env(),
+                    "pid": os.getpid(),
+                    "cwd": os.getcwd(),
+                }
+            )
+    except gpustate.GpuSimStateError:
+        # No simulator state — nothing to record against. Serving still works,
+        # which keeps the shim usable for a quick manual run.
+        pass
+
+
+def _emit_corpus(name: str) -> None:
+    path = CORPUS_DIR / name
+    if not path.is_file():
+        print(f"gpusim: corpus file not found: {path}", file=sys.stderr)
+        return
+    # The worker merges our stderr into stdout and keeps the last 200 lines,
+    # so writing the log straight to stdout puts it exactly where the
+    # classifiers read it from.
+    sys.stdout.write(path.read_text(encoding="utf-8"))
+    sys.stdout.flush()
+
+
+def _target_devices(tensor_parallel_size: int) -> list[int]:
+    """Which simulated devices this lane occupies.
+
+    ``CUDA_VISIBLE_DEVICES`` pins the lane when the config set an explicit
+    device list; otherwise the lane takes the first TP devices, which is what
+    vLLM does.
+    """
+    try:
+        sim = gpustate.load()
+    except gpustate.GpuSimStateError:
+        return []
+    visible = [d.index for d in sim.visible_devices()]
+    pinned = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if pinned is not None:
+        if not pinned.strip():
+            return []
+        wanted = [int(p) for p in pinned.split(",") if p.strip().isdigit()]
+        visible = [i for i in visible if i in wanted]
+    return visible[:tensor_parallel_size]
+
+
+def _resolve_vram_mb(argv: list[str], script: VllmScript, devices: list[int]) -> float:
+    """VRAM this lane claims per device.
+
+    Defaults to ``gpu_memory_utilization × memory.total``, which is the
+    number vLLM itself gates startup on — so the planner's arithmetic and the
+    sim's ledger are describing the same quantity.
+    """
+    if script.vram_mb is not None:
+        return script.vram_mb
+    raw_gmu = _flag(argv, "--gpu-memory-utilization")
+    gmu = float(raw_gmu) if raw_gmu else 0.9
+    try:
+        sim = gpustate.load()
+    except gpustate.GpuSimStateError:
+        return 0.0
+    if not devices:
+        return 0.0
+    device = sim.device(devices[0])
+    return (device.memory_total_mb * gmu) if device else 0.0
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("--help", "-h"):
+        print("usage: vllm serve <model> [options]   (Logos E2E simulator stub)")
+        return 0
+    if argv[0] == "--version":
+        from harness.gpusim.server import FAKE_VLLM_VERSION  # noqa: PLC0415
+
+        print(FAKE_VLLM_VERSION)
+        return 0
+    if argv[0] != "serve":
+        print(f"gpusim vllm: unsupported subcommand {argv[0]!r}", file=sys.stderr)
+        return 2
+
+    serve_target = argv[1] if len(argv) > 1 else ""
+    # A pre-sharded lane serves a directory and aliases the real id back with
+    # --served-model-name; scripts are keyed by the real model id.
+    model = _flag(argv, "--served-model-name") or serve_target
+
+    _record(argv, model)
+
+    script = VllmScript.read().for_model(model)
+
+    if script.emit_log:
+        _emit_corpus(script.emit_log)
+
+    if script.exit_code is not None:
+        return script.exit_code
+
+    port = int(_flag(argv, "--port", "8000") or 8000)
+    tp_size = int(_flag(argv, "--tensor-parallel-size", "1") or 1)
+    devices = _target_devices(tp_size)
+    vram_mb = _resolve_vram_mb(argv, script, devices)
+
+    # Readiness is served, not slept: the port opens immediately and /health
+    # answers 503 until `ready_after_s` has passed. That matches how the worker
+    # observes a slow cold load, and lets a "never becomes ready" scenario be
+    # expressed as a large `ready_after_s` without wedging the process.
+    return run_server(model=model, port=port, vram_mb=vram_mb, script=script, device_indices=devices)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

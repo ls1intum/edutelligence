@@ -1,0 +1,141 @@
+# The E2E stack: real orchestrator, real database, real worker nodes, fake GPUs.
+#
+# Deliberately *not* an overlay on docker-compose.dev.yaml. The dev stack exists
+# to be developed against — it keeps a warm volume, seeds through Keycloak, and
+# binds well-known host ports. An E2E run needs the opposite: a database that is
+# empty every time, a key that is known before startup, and no port that can
+# collide with a dev stack someone left running.
+#
+# Two differences from production worth knowing when reading a failure:
+#   * schema migrations run as a one-shot Liquibase container rather than inside
+#     the webservice, so the inter-node tier does not have to wait on Keycloak;
+#   * worker nodes run the nodesim image (see harness/nodesim/Dockerfile).
+#
+# Build context for every service is the `logos/` directory.
+#
+#   docker compose -f e2e/harness/stack/docker-compose.e2e.yaml up --wait
+#
+# The `ui` profile adds Keycloak, the webservice and the UI for the Playwright
+# tier; leave it off and the stack comes up in roughly a third of the time.
+
+name: logos-e2e
+
+services:
+  logos-db:
+    build: ../../../db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: logosdb
+    # tmpfs, not a named volume: every run starts from an empty database, and
+    # nothing survives to be cleaned up between runs.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=postgres"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    networks: [e2e]
+
+  # One-shot: bring the schema up to the same revision the webservice would.
+  migrate:
+    image: liquibase/liquibase:4.31
+    depends_on:
+      logos-db:
+        condition: service_healthy
+    volumes:
+      - ../../../logos-webservice/src/main/resources:/liquibase/changelog:ro
+    command:
+      - --searchPath=/liquibase/changelog
+      - --changeLogFile=liquibase/changelog/master.xml
+      - --url=jdbc:postgresql://logos-db:5432/logosdb
+      - --username=postgres
+      - --password=root
+      - update
+    networks: [e2e]
+
+  # One-shot: the admin and developer keys the tests authenticate with.
+  seed:
+    image: postgres:17
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./seed.sql:/seed.sql:ro
+    environment:
+      PGPASSWORD: root
+    command: ["psql", "-h", "logos-db", "-U", "postgres", "-d", "logosdb", "-v", "ON_ERROR_STOP=1", "-f", "/seed.sql"]
+    networks: [e2e]
+
+  logos-orchestrator:
+    build:
+      context: ../../../../
+      dockerfile: ./logos/logos-orchestrator/Dockerfile
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    environment:
+      LOGOS_DB_URL: "postgresql://postgres:root@logos-db:5432/logosdb"
+      LOGOS_DOMAIN: "localhost"
+      # The stack speaks plain HTTP on an isolated network; without this the
+      # node auth and session endpoints refuse every request. The TLS-required
+      # path is covered separately in tests/node/test_node_registration.py.
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "true"
+      LOGOS_CAPACITY_PLANNER_ENABLED: "true"
+      LOGOS_SCHEDULER_ETTFT_ENABLED: "true"
+      LOGOS_INTERNAL_SECRET: "logos-e2e-internal-secret"
+      LOGOSNODE_INFER_TIMEOUT_SECONDS: "120"
+      LOGOSNODE_STREAM_TIMEOUT_SECONDS: "120"
+    ports:
+      - "${E2E_ORCHESTRATOR_PORT:-18090}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/docs > /dev/null"]
+      interval: 2s
+      timeout: 5s
+      retries: 45
+    networks: [e2e]
+
+  # A heterogeneous fleet on purpose: placement and eviction decisions that look
+  # right on identical nodes routinely get the mixed case wrong.
+  node-l40s:
+    build:
+      context: ../../../
+      dockerfile: ./e2e/harness/nodesim/Dockerfile
+    depends_on:
+      logos-orchestrator:
+        condition: service_healthy
+    environment:
+      LOGOS_SIM_PROFILE: l40s
+      LOGOS_SIM_GPU_COUNT: "2"
+      LOGOS_URL: "http://logos-orchestrator:8080"
+      LOGOS_ALLOW_INSECURE_HTTP: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health > /dev/null || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    networks: [e2e]
+
+  node-2080ti:
+    build:
+      context: ../../../
+      dockerfile: ./e2e/harness/nodesim/Dockerfile
+    depends_on:
+      logos-orchestrator:
+        condition: service_healthy
+    environment:
+      LOGOS_SIM_PROFILE: rtx2080ti
+      LOGOS_SIM_GPU_COUNT: "1"
+      LOGOS_URL: "http://logos-orchestrator:8080"
+      LOGOS_ALLOW_INSECURE_HTTP: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health > /dev/null || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    networks: [e2e]
+
+networks:
+  e2e:
+    driver: bridge

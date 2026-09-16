@@ -1,0 +1,8 @@
+{
+  "name": "NVIDIA RTX A6000",
+  "compute_cap": "8.6",
+  "memory_total_mb": 49140,
+  "idle_power_w": 25.0,
+  "idle_temp_c": 37.0,
+  "fan_speed": "30"
+}
