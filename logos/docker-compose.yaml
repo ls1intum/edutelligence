@@ -93,6 +93,7 @@ services:
       # blocks). Off restores the previous random tie-break placement.
       LOGOS_PREFIX_AFFINITY_ENABLED: "${LOGOS_PREFIX_AFFINITY_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
+      HF_TOKEN: "${HF_TOKEN:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       TZ: "${TZ:-Europe/Berlin}"

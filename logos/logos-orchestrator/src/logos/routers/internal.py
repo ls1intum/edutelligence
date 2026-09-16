@@ -205,6 +205,14 @@ async def internal_provider_status(request: Request):
         last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
         if isinstance(last_heartbeat, datetime.datetime):
             last_heartbeat = last_heartbeat.isoformat()
+        connected_at = runtime_snapshot.get("connected_at") if runtime_snapshot else None
+        if isinstance(connected_at, datetime.datetime):
+            connected_at = connected_at.isoformat()
+        # Self-reported by the worker — distinct from connected_at, so it
+        # reflects worker uptime even across bridge reconnects.
+        worker_started_at = (
+            (runtime_snapshot.get("runtime") or {}).get("process_started_at") if runtime_snapshot else None
+        )
         providers.append(
             {
                 "provider_id": provider_id,
@@ -213,6 +221,8 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "connected_at": connected_at if isinstance(connected_at, str) else None,
+                "worker_started_at": worker_started_at if isinstance(worker_started_at, str) else None,
                 "calibrating": _main._logosnode_registry.is_calibrating(provider_id),
             }
         )

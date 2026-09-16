@@ -1362,6 +1362,8 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        connected_at: provider.connected_at,
+        worker_started_at: provider.worker_started_at,
         calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
@@ -1389,6 +1391,8 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        connected_at: provider.connected_at,
+        worker_started_at: provider.worker_started_at,
         calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
@@ -1400,6 +1404,8 @@ export class Statistics implements OnInit, OnDestroy {
         JSON.stringify(current?.runtime_modes || []) === JSON.stringify(meta.runtime_modes || []) &&
         current?.transport_connected === meta.transport_connected &&
         current?.last_heartbeat === meta.last_heartbeat &&
+        current?.connected_at === meta.connected_at &&
+        current?.worker_started_at === meta.worker_started_at &&
         Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };

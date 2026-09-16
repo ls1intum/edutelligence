@@ -316,3 +316,53 @@ describe('WorkerGpuPanel stop calibration', () => {
     expect(panel.stopState().kind).toBe('idle');
   });
 });
+
+/**
+ * Worker-uptime and ws-uptime chips (issue #991): worker_started_at and
+ * connected_at are two independent clocks — a bridge reconnect resets the
+ * latter without restarting the worker process, so the labels must track
+ * their own timestamp rather than collapsing into one "uptime" value.
+ */
+describe('WorkerGpuPanel uptime labels', () => {
+  let fixture: ComponentFixture<WorkerGpuPanel>;
+  let panel: WorkerGpuPanel;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [WorkerGpuPanel],
+      providers: [{ provide: StatisticsService, useValue: {} }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WorkerGpuPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('providerLatestSamples', { 'w-a': null });
+    fixture.componentRef.setInput('providerDevices', {});
+    fixture.componentRef.setInput('lanesByProvider', {});
+    fixture.componentRef.setInput('activeProvider', 'w-a');
+  });
+
+  it('reads null for both labels when the worker predates uptime reporting', () => {
+    fixture.componentRef.setInput('providerMeta', { 'w-a': { provider_id: 1 } });
+    fixture.componentRef.setInput('nowMs', new Date('2026-09-16T12:00:00Z').getTime());
+    fixture.detectChanges();
+
+    expect(panel.workerUptimeLabel).toBeNull();
+    expect(panel.wsUptimeLabel).toBeNull();
+  });
+
+  it('formats worker uptime and ws uptime from their own independent timestamps', () => {
+    fixture.componentRef.setInput('providerMeta', {
+      'w-a': {
+        provider_id: 1,
+        // Worker process has been up a full day; the bridge reconnected 30
+        // minutes ago — the two chips must not read the same value.
+        worker_started_at: '2026-09-15T12:00:00Z',
+        connected_at: '2026-09-16T11:30:00Z',
+      },
+    });
+    fixture.componentRef.setInput('nowMs', new Date('2026-09-16T12:00:00Z').getTime());
+    fixture.detectChanges();
+
+    expect(panel.workerUptimeLabel).toBe('1d 0h');
+    expect(panel.wsUptimeLabel).toBe('30m');
+  });
+});
