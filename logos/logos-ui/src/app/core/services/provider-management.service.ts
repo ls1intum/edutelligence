@@ -47,6 +47,15 @@ export class ProviderManagementService {
     return firstValueFrom(this.http.post<void>('/api/logosdb/delete_provider', { provider_id: id }));
   }
 
+  /**
+   * Trigger the orchestrator to re-read every cloud provider's /v1/models
+   * listing now. The sync pass itself runs asynchronously on the
+   * orchestrator; this resolves as soon as it has been scheduled.
+   */
+  refreshModels(): Promise<{ result: string }> {
+    return firstValueFrom(this.http.post<{ result: string }>('/api/logosdb/refresh_models', {}));
+  }
+
   getProviderModels(providerId: number): Promise<ModelConnection[]> {
     return firstValueFrom(this.http.post<ModelConnection[]>('/api/logosdb/get_provider_models', { provider_id: providerId }));
   }

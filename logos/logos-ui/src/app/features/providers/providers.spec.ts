@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { ProviderManagementService } from '../../core/services/provider-management.service';
 import { AddProviderPayload, Provider, UpdateProviderPayload } from '../../shared/models/provider.model';
+import { Model } from '../../shared/models/model.model';
 import { Providers } from './providers';
 
 /**
@@ -29,28 +30,48 @@ const makeProvider = (overrides: Partial<Provider> = {}): Provider => ({
   ...overrides,
 });
 
+const makeModel = (id: number, name = `model-${id}`): Model => ({
+  id,
+  name,
+  description: null,
+  tags: null,
+  aliases: null,
+  weight_latency: null,
+  weight_accuracy: null,
+  weight_cost: null,
+  weight_quality: null,
+});
+
 describe('Providers', () => {
   let fixture: ComponentFixture<Providers>;
   let component: Providers;
   let addProvider: ReturnType<typeof vi.fn>;
   let updateProvider: ReturnType<typeof vi.fn>;
+  let refreshModels: ReturnType<typeof vi.fn>;
+  let getModels: ReturnType<typeof vi.fn>;
+  let getProviderModels: ReturnType<typeof vi.fn>;
 
   const optionValues = (options: { value: string }[]): string[] => options.map((o) => o.value);
 
   beforeEach(async () => {
     addProvider = vi.fn().mockResolvedValue({});
     updateProvider = vi.fn().mockResolvedValue({});
+    refreshModels = vi.fn().mockResolvedValue({ result: 'Model refresh triggered.' });
+    getModels = vi.fn().mockResolvedValue([]);
+    getProviderModels = vi.fn().mockResolvedValue([]);
     const providerService = {
       getProviders: vi.fn().mockResolvedValue([makeProvider()]),
       addProvider,
       updateProvider,
+      refreshModels,
+      getProviderModels,
     };
 
     await TestBed.configureTestingModule({
       imports: [Providers],
       providers: [
         { provide: ProviderManagementService, useValue: providerService },
-        { provide: ModelManagementService, useValue: { getModels: vi.fn().mockResolvedValue([]) } },
+        { provide: ModelManagementService, useValue: { getModels } },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(Providers);
@@ -127,6 +148,90 @@ describe('Providers', () => {
         Array.from(s.options).some((o) => o.value === 'logosnode'),
       );
       expect(typeSelect?.value).toBe('cloud');
+    });
+  });
+
+  describe('the model refresh', () => {
+    beforeEach(() => {
+      // The first change detection (and with it ngOnInit, which fetches the
+      // model list) is otherwise scheduled outside the test's control and can
+      // land inside the fake-timer window, skewing the call counts.
+      fixture.detectChanges();
+      getModels.mockClear();
+    });
+
+    it('triggers the backend sync and settles once the lists stop changing', async () => {
+      vi.useFakeTimers();
+      try {
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000);
+        await refresh;
+
+        expect(refreshModels).toHaveBeenCalledTimes(1);
+        // Initial snapshot plus one settle round: two identical fetches
+        // already settle the loop, so no further rounds run.
+        expect(getModels).toHaveBeenCalledTimes(2);
+        expect(component.refreshing()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps polling while the lists still change', async () => {
+      vi.useFakeTimers();
+      try {
+        getModels
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([makeModel(1)])
+          .mockResolvedValueOnce([makeModel(1), makeModel(2)])
+          .mockResolvedValueOnce([makeModel(1), makeModel(2)]);
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000 * 4);
+        await refresh;
+
+        expect(getModels).toHaveBeenCalledTimes(4);
+        expect(component.allModels().map((m) => m.id)).toEqual([1, 2]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('refetches the connections of an expanded provider', async () => {
+      vi.useFakeTimers();
+      try {
+        component.toggleExpand(component.providers()[0]!);
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000);
+        await refresh;
+
+        // One from the expansion itself, two from the refresh snapshots.
+        expect(getProviderModels).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not start a second refresh while one is running', async () => {
+      vi.useFakeTimers();
+      try {
+        const first = component.refreshModels();
+        const second = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000 * 2);
+        await Promise.all([first, second]);
+
+        expect(refreshModels).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('surfaces an error when the trigger fails', async () => {
+      refreshModels.mockRejectedValueOnce(new Error('orchestrator unreachable'));
+      await component.refreshModels();
+
+      expect(component.refreshError()).toBe(true);
+      expect(component.refreshing()).toBe(false);
+      expect(getModels).not.toHaveBeenCalled();
     });
   });
 });

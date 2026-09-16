@@ -4,6 +4,7 @@ import {
   inject,
   signal,
   OnInit,
+  OnDestroy,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
@@ -41,7 +42,7 @@ import { SelectComponent, AppSelectOption } from '../../shared/components/select
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './providers.scss',
 })
-export class Providers implements OnInit {
+export class Providers implements OnInit, OnDestroy {
   private providerService = inject(ProviderManagementService);
   private modelService = inject(ModelManagementService);
 
@@ -177,6 +178,10 @@ export class Providers implements OnInit {
   search = signal('');
   loadError = signal(false);
 
+  // ── Model refresh state ─────────────────────────────────────────────────
+  refreshing = signal(false);
+  refreshError = signal(false);
+
   // ── Expand state ─────────────────────────────────────────────────────────
   expandedId = signal<number | null>(null);
   providerModels = signal<Record<number, ModelConnection[]>>({});
@@ -287,6 +292,67 @@ export class Providers implements OnInit {
     } finally {
       this.loading.set(false);
     }
+  }
+
+  // ── Model refresh ─────────────────────────────────────────────────────────
+  // The orchestrator's cloud model sync is scheduled, not awaited: after the
+  // trigger returns it scrapes every cloud upstream in turn and writes models
+  // and links per provider. One refetch right after the trigger would mostly
+  // miss the pass, so the page keeps refetching the model lists until they
+  // stop changing (two identical snapshots in a row) or the rounds run out.
+  private static readonly REFRESH_SETTLE_INTERVAL_MS = 2000;
+  private static readonly REFRESH_SETTLE_MAX_ROUNDS = 8;
+
+  private refreshSettleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async refreshModels(): Promise<void> {
+    if (this.refreshing()) return;
+    this.refreshing.set(true);
+    this.refreshError.set(false);
+    try {
+      await this.providerService.refreshModels();
+      await this.waitForSyncToSettle();
+    } catch {
+      this.refreshError.set(true);
+    } finally {
+      this.refreshSettleTimer = null;
+      this.refreshing.set(false);
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (this.refreshSettleTimer !== null) clearTimeout(this.refreshSettleTimer);
+  }
+
+  private async waitForSyncToSettle(): Promise<void> {
+    let previous = await this.snapshotModelLists();
+    for (let round = 0; round < Providers.REFRESH_SETTLE_MAX_ROUNDS; round++) {
+      await new Promise<void>((resolve) => {
+        this.refreshSettleTimer = setTimeout(resolve, Providers.REFRESH_SETTLE_INTERVAL_MS);
+      });
+      const snapshot = await this.snapshotModelLists();
+      if (snapshot === previous) return;
+      previous = snapshot;
+    }
+  }
+
+  /**
+   * Refetch the model lists this page shows — the global model catalogue and,
+   * for an expanded row, that provider's connections — and return a string
+   * the settle loop can compare. Both lists move independently: the sync
+   * writes per provider, preserving links the operator configured by hand.
+   */
+  private async snapshotModelLists(): Promise<string> {
+    const models = await this.modelService.getModels();
+    this.allModels.set(models);
+    let connections = '';
+    const expanded = this.expandedId();
+    if (expanded !== null) {
+      const conns = await this.providerService.getProviderModels(expanded);
+      this.providerModels.update((m) => ({ ...m, [expanded]: conns }));
+      connections = JSON.stringify(conns.map((c) => c.model_id).sort((a, b) => a - b));
+    }
+    return JSON.stringify(models.map((m) => m.id).sort((a, b) => a - b)) + '|' + connections;
   }
 
   formatPrivacy(level: PrivacyLevel): string {

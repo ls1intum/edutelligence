@@ -112,6 +112,12 @@ public class ProviderController {
         }
     }
 
+    @PostMapping("/refresh_models")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> refreshModels() {
+        return ResponseEntity.ok(providerService.refreshModels());
+    }
+
     @PostMapping("/get_provider_models")
     public ResponseEntity<?> getProviderModels(
             @RequestBody GetProviderModelsRequestDTO req) {

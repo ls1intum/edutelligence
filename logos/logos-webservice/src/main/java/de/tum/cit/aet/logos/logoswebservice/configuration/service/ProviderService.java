@@ -187,6 +187,19 @@ public class ProviderService {
         return Map.of("result", "Disconnected model from provider.");
     }
 
+    /**
+     * Trigger an immediate cloud model sync in the orchestrator: every cloud
+     * provider's {@code /v1/models} listing is re-read now instead of at the
+     * next 15-minute interval. The pass is scheduled on the orchestrator and
+     * writes the resulting models and links itself, so nothing is stored here.
+     * Not transactional — there is no write to defer the notification past,
+     * which is exactly what lets the pass start at once.
+     */
+    public Map<String, Object> refreshModels() {
+        orchestratorNotificationService.notifyRefresh(false, true);
+        return Map.of("result", "Model refresh triggered.");
+    }
+
     public List<Map<String, Object>> getProviderModels(Integer providerId) {
         return modelProviderRepository.findModelsForProvider(providerId).stream()
             .map(p -> {

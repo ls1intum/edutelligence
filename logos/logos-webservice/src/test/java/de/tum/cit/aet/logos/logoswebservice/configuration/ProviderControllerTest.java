@@ -25,9 +25,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
@@ -54,6 +57,9 @@ class ProviderControllerTest {
     // Mocked so the price refresh triggered by connect_model_provider does not
     // reach the live litellm catalog during tests.
     @MockitoBean PriceUpdaterService priceUpdaterService;
+    // Mocked so tests can assert what the endpoint announces to the
+    // orchestrator instead of sending nothing (no orchestrator URL in tests).
+    @MockitoBean OrchestratorNotificationService orchestratorNotificationService;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -305,6 +311,30 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.totalProviders").isNumber());
+    }
+
+    @Test
+    void refreshModels_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+        verify(orchestratorNotificationService, never()).notifyRefresh(anyBoolean(), anyBoolean());
+    }
+
+    @Test
+    void refreshModels_triggersCloudModelSync() throws Exception {
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model refresh triggered."));
+
+        // syncCloudModels must be true: a plain pipeline refresh would leave
+        // the upstream listings unread until the next 15-minute interval.
+        verify(orchestratorNotificationService).notifyRefresh(false, true);
     }
 
     @Test
