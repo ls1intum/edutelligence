@@ -33,6 +33,9 @@ langsmith = ">=0.8.18"
 orjson = ">=3.11.6"
 protobuf = ">=5.29.6"
 urllib3 = ">=2.7.0"
+cryptography = ">=50.0.0"
+httpcore2 = ">=2.10.0"
+httpx2 = ">=2.12.0"
 # weaviate-client enforces a protobuf/grpcio pairing at import time
 # (weaviate/proto/v1/__init__.py): protobuf >= 6.30.0 requires grpcio
 # >= 1.72.0. Pin grpcio to match rather than relying on it resolving high
@@ -42,7 +45,7 @@ grpcio = ">=1.72.0"
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.19.1"
 pylint = "^4.0.5"
-black = "^26.1.0"
+black = "^26.3.1"
 isort = "^8.0.1"
 yamllint = "^1.38.0"
 bandit = "^1.9.4"
