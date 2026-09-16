@@ -129,7 +129,7 @@ public class VramService {
             sample.put("scheduler_signals", parseJsonOrEmpty(s.getSchedulerSignals()));
 
             // Only the latest sample per provider needs the rich payload — the
-            // frontend only ever reads scheduler_signals/loaded_models off the
+            // user interface only ever reads scheduler_signals/loaded_models off the
             // last point in a provider's series. Strip it from the one we just
             // superseded so historical points don't ship it too.
             Map<String, Object> previous = lastSampleByProvider.put(pid, sample);

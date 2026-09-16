@@ -308,7 +308,7 @@ class ContextResolver:
         # effort, but clients such as Claude Code send the Anthropic value
         # "high" in every request. vLLM forwards the value to the template,
         # which rejects it with an error surfaced as HTTP 500 — map the wider
-        # client scale onto the accepted one before forwarding (#749).
+        # client scale onto the accepted one before forwarding.
         payload = normalize_reasoning_effort(payload, context.model_name)
 
         # Azure Responses API resolves the deployment from the body's "model"

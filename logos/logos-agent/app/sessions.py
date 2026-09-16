@@ -1554,8 +1554,7 @@ class SessionManager:
         # The issue the fresh pull request closes — the session's own assigned
         # issue, by the number the row carries, not a reference the task text
         # happens to name. The task renders the issue's body and its
-        # conversation, and those point at other issues all the time; a "see
-        # #948" in them is a pointer, not an authorization to close #948. Only
+        # conversation, and those references do not authorize closure. Only
         # an assigned issue opens a fresh pull request, so only it has a
         # number to give; anything else leaves the body empty.
         closes = ""

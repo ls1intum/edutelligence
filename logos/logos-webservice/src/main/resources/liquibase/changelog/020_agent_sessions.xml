@@ -147,8 +147,8 @@
 
     <!-- Where a session came from, when the runner queued it by itself in
          response to something on GitHub (an opened issue, a review asking
-         for changes). The reference is the thing reacted to — 'issue-812',
-         'pr-772-review-5085681761' — and it is what keeps the reaction
+         for changes). The reference is the thing reacted to — an issue or
+         review identifier — and it is what keeps the reaction
          idempotent: a poll that sees the same event again finds the session
          it already queued instead of queueing a second one. Sessions a
          person created leave both columns null. -->
@@ -178,7 +178,7 @@
     <!-- Where a session's answer is posted when it finishes. The agent
          phase holds no GitHub credential, so it writes its reply into its
          artefact directory and the runner posts it — this column is what
-         tells the runner where: 'issue:772' for a thread, or
+         tells the runner where: '<issue-id>' for a thread, or
          'review_comment:772:3910035243' to answer inside an inline review
          thread. Null for sessions nobody asked a question. -->
     <changeSet id="020-agent-session-reply-target" author="logos">

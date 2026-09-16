@@ -177,7 +177,7 @@ export type LaneSleepAction = 'sleep' | 'wake' | null;
  * not coming. Sleep only on a lane that is awake and idle: the server first
  * drains in-flight requests (mode="wait"), so on a busy lane the click would
  * block for as long as the drain takes — the panel offers the action only
- * where it takes effect immediately. Lanes whose backend has no sleep mode
+ * where it takes effect immediately. Lanes whose engine has no sleep mode
  * (sleep mode disabled reports sleep_state "unsupported", a lane that never
  * slept reports "unknown") offer neither.
  */
@@ -654,7 +654,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       })
       .catch((err: unknown) => {
         if (generation !== this.loadStatusPollGeneration) return;
-        // A blip is fine — the next tick retries. 404/501 means the backend
+        // A blip is fine — the next tick retries. 404/501 means the application server
         // predates the load_status route, where the poll can never succeed:
         // stop and fall back to the lane-appearance check.
         const e = err as { status?: number };

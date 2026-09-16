@@ -112,7 +112,7 @@ services:
       - "traefik.http.routers.logos-orchestrator-jobs.service=logos-orchestrator"
       - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
 
-      # === Routing: /api (UI-internal endpoints; backend strips /api prefix) ===
+      # === Routing: /api (UI-internal endpoints; application server strips /api prefix) ===
       - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
       - "traefik.http.routers.logos-orchestrator-api.entrypoints=web8080"
       - "traefik.http.routers.logos-orchestrator-api.service=logos-orchestrator"
