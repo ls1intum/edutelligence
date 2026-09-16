@@ -1339,51 +1339,36 @@ async def _handle_file_upload(request: Request, auth: AuthContext, headers: Dict
 
 
 def _assert_still_permitted(
-    db: DBManager, auth: AuthContext, provider: Dict[str, Any], models_source: Optional[Dict[str, Any]]
+    db: DBManager, auth: AuthContext, provider: Dict[str, Any], input_file: Dict[str, Any]
 ) -> None:
-    """The key acting on this object may still use what it lives on.
+    """The key that creates the batch may still use what the file lives on.
 
     Ownership says who may order the job — the team. It does not say what the
-    acting key may still run: permissions can be key-specific, and they can
-    move after creation. Without this re-check a narrower team key — or the
-    creating key after its links were revoked — would run the object's
+    creating key may still run: permissions can be key-specific, and they can
+    move after the upload. Without this re-check a narrower team key — or the
+    uploading key after its links were revoked — would run the file's
     previously authorised models through the shared provider credential. Both
-    halves are therefore asked again on every provider-backed lifecycle
-    operation (create, poll, cancel, download, delete): the provider the
-    object lives on, and every model recorded *on that provider* for it — a
-    model the key may still run through a different permitted provider does
-    not authorise spending this one's credential on a link the stored
-    provider no longer has.
-
-    ``models_source`` is whichever row carries the recorded ``models`` list
-    for this check — the input file at creation time (before a batch row
-    exists), or the batch/file's own ownership row afterwards (batches and
-    result files carry their own copy since creation/registration time, so
-    this never has to re-resolve the original input file, which may since
-    have been deleted independently). The provider check above does not
-    depend on it and always runs; only the model check, which needs a
-    ``models`` list to check against, is skipped when it is missing (an old
-    row from before this list was recorded) — never when the row itself is
-    absent, which cannot happen here since ``owner`` is required upstream.
+    halves are therefore asked again at creation: the provider the file lives
+    on, and every model the file row recorded *on that provider* — a model the
+    key may still run through a different permitted provider does not authorise
+    spending this one's credential on a link the stored provider no longer has.
     """
     candidates = db.get_batch_provider_candidates(auth.api_key_id)
     if not any(int(row["id"]) == int(provider["id"]) for row in candidates):
         raise_openai_error(
             403,
-            f"This key may no longer use provider {provider.get('name')!r}, which holds this object.",
+            f"This key may no longer use provider {provider.get('name')!r}, which holds this file.",
             code="batch_provider_not_authorized",
         )
-    if models_source is None:
-        return
     permitted = {
         str(row["model_name"]).lower()
         for row in db.get_batch_model_deployments(auth.api_key_id, provider_id=int(provider["id"]))
     }
-    missing = sorted(str(name) for name in (models_source.get("models") or []) if str(name).lower() not in permitted)
+    missing = sorted(str(name) for name in (input_file.get("models") or []) if str(name).lower() not in permitted)
     if missing:
         raise_openai_error(
             403,
-            f"This key may not use {', '.join(repr(name) for name in missing)}: the object asks for "
+            f"This key may not use {', '.join(repr(name) for name in missing)}: the file asks for "
             "models the key no longer may run.",
             code="model_not_permitted",
         )
@@ -1438,15 +1423,7 @@ def _local_batch_contract(content: bytes, json_body: Dict[str, Any]) -> str:
 
 
 async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, db: DBManager):
-    """Authorise a batch and either create it here or hand it to the provider.
-
-    The third return value is the input file's recorded ``models`` list, for
-    the caller to persist onto the new batch row (see
-    _register_upstream_object) — so a later poll/cancel re-checks against the
-    batch's own copy instead of the input file, which may since have been
-    deleted independently of the batch it created (see
-    _assert_still_permitted).
-    """
+    """Authorise a batch and either create it here or hand it to the provider."""
     input_file_id = json_body.get("input_file_id")
     if not isinstance(input_file_id, str) or not input_file_id:
         raise_openai_error(400, "A batch needs an 'input_file_id'.", code="invalid_request_error")
@@ -1461,7 +1438,7 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
         if provider is None:
             raise_openai_error(502, "The provider holding this file is gone.", code="batch_upstream_unreachable")
         _assert_still_permitted(db, auth, provider, input_file)
-        return None, provider, input_file.get("models")
+        return None, provider
 
     content = db.get_local_batch_file_content(int(input_file["id"])) or b""
     endpoint = _local_batch_contract(content, json_body)
@@ -1479,9 +1456,7 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
     )
     created = db.get_local_batch(batch_id)
     _start_local_batch(created)
-    # A locally-run batch never spends a shared provider credential, so it
-    # has no _assert_still_permitted re-check to persist a models list for.
-    return JSONResponse(content=local_batch_object(created)), None, None
+    return JSONResponse(content=local_batch_object(created)), None
 
 
 async def _rerun_refused_creation_locally(
@@ -1581,7 +1556,6 @@ async def handle_batch_api_request(request: Request) -> Response:
     json_body: Optional[Dict[str, Any]] = None
     log_payload: Dict[str, Any] = {}
     response: Optional[Response] = None
-    batch_models: Optional[List[str]] = None
 
     try:
         with DBManager() as db:
@@ -1598,7 +1572,7 @@ async def handle_batch_api_request(request: Request) -> Response:
             elif operation.is_batch_creation:
                 json_body = await _read_json_body(request)
                 log_payload = dict(json_body)
-                response, provider, batch_models = await _handle_batch_creation(json_body, auth, db)
+                response, provider = await _handle_batch_creation(json_body, auth, db)
             elif operation.is_listing:
                 response = _listing_response(db, auth, operation)
             elif owner is not None and owner.get("execution") == "logos":
@@ -1609,15 +1583,6 @@ async def handle_batch_api_request(request: Request) -> Response:
                     raise_openai_error(
                         502, "The provider holding this object is gone.", code="batch_upstream_unreachable"
                     )
-                # Ownership above only says the team minted this object;
-                # permissions can move after that — re-check them too (see
-                # _assert_still_permitted). owner itself carries the models
-                # list (batches and result files are registered with their
-                # own copy — see _register_upstream_object /
-                # _register_result_files), so this never has to chase the
-                # original input file, which may since have been deleted
-                # independently of the batch/result file that referenced it.
-                _assert_still_permitted(db, auth, provider, owner)
                 # A result file is exposed under Logos's own id; the forward
                 # must address the provider's, which the mapping row keeps.
                 # The path was parsed with the id the client supplied, so it
@@ -1649,13 +1614,7 @@ async def handle_batch_api_request(request: Request) -> Response:
         if response is None:
             response = await forward_batch_operation(provider, operation, upload, json_body)
             response = await _register_upstream_object(
-                response,
-                operation,
-                provider,
-                auth,
-                owner,
-                file_models=log_payload.get("models"),
-                batch_models=batch_models,
+                response, operation, provider, auth, owner, file_models=log_payload.get("models")
             )
             # A mapped result file was addressed upstream by the provider's
             # id; the object answer comes back named by it, so it is
@@ -1757,10 +1716,7 @@ def _register_result_files(
     list for every key that may use the provider — and rewritten to Logos's
     ids before the answer is stored or returned, so the batch row, the
     answer, and the download route all carry the same id. The mapping row
-    keeps the provider's id, which the download forward uses. It also
-    inherits the batch's own ``models`` list, so a later poll/download/delete
-    of the result file re-checks the same models (_assert_still_permitted)
-    instead of a result file silently carrying none of its own.
+    keeps the provider's id, which the download forward uses.
     """
     rewritten = dict(body)
     for field in ("output_file_id", "error_file_id"):
@@ -1775,7 +1731,6 @@ def _register_result_files(
                 team_id=owner.get("team_id"),
                 user_id=owner.get("user_id"),
                 provider_object_id=provider_file_id,
-                models=owner.get("models"),
             )
             rewritten[field] = logos_id
     return rewritten
@@ -1870,7 +1825,6 @@ async def _register_upstream_object(
     auth: AuthContext,
     owner: Optional[Dict[str, Any]],
     file_models: Optional[List[str]] = None,
-    batch_models: Optional[List[str]] = None,
 ) -> Response:
     """Record what the provider just minted, and settle a batch that finished.
 
@@ -1922,10 +1876,6 @@ async def _register_upstream_object(
             user_id=auth.user_id,
             input_file_id=payload.get("input_file_id"),
             status=payload.get("status"),
-            # So a later poll/cancel (_assert_still_permitted) re-checks
-            # against the batch's own copy instead of chasing the input
-            # file, which may since have been deleted independently.
-            models=batch_models,
         )
         try:
             with DBManager() as db:

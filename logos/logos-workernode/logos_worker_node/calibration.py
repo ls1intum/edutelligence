@@ -1390,13 +1390,19 @@ def _read_log_since(log_path: Path, offset: int, max_lines: int | None = None) -
     return "\n".join(tail)
 
 
-def stop_vllm(proc: subprocess.Popen[str]) -> None:
+def stop_vllm(proc: subprocess.Popen[str] | None) -> None:
     """Stop a vLLM process and all its child workers.
 
     Uses process-group kill (enabled by ``start_new_session=True`` in
     ``spawn_vllm``) so orphaned ``VLLM::Worker`` subprocesses are
-    cleaned up even when the parent has already crashed.
+    cleaned up even when the parent has already crashed. ``proc`` is
+    None when a probe never got far enough to spawn one (e.g. a
+    _try_start short-circuit) — callers' finally blocks call this
+    unconditionally, so that must be a no-op rather than an
+    AttributeError on ``proc.pid``.
     """
+    if proc is None:
+        return
     pgid: int | None = None
     try:
         pgid = os.getpgid(proc.pid)
