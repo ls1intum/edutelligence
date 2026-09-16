@@ -15,6 +15,8 @@ import org.springframework.web.client.RestClientResponseException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.IpRateLimiterService;
+import de.tum.cit.aet.logos.logoswebservice.common.RateLimitExceededException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCalibrationLogRequestDTO;
@@ -41,19 +43,22 @@ public class ModelController {
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
     private final ObjectMapper objectMapper;
+    private final IpRateLimiterService rateLimiter;
 
     public ModelController(ModelService modelService,
                            ModelPriceService modelPriceService,
                            PriceUpdaterService priceUpdaterService,
                            ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
                            OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           IpRateLimiterService rateLimiter) {
         this.modelService = modelService;
         this.modelPriceService = modelPriceService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
         this.objectMapper = objectMapper;
+        this.rateLimiter = rateLimiter;
     }
 
     @PostMapping("/get_models")
@@ -66,16 +71,30 @@ public class ModelController {
      * (logos_key / logos-key header or Authorization: Bearer) — not a JWT —
      * because the callers are the applications that send inference traffic,
      * which hold API keys. Only models the key may access are reported.
+     *
+     * <p>
+     * A 401 here is exactly what lets a caller test a leaked key for validity, so repeated 401s from one address
+     * are rate limited (see {@link IpRateLimiterService#hasAuthFailureBudget}); a successful call never spends
+     * that budget, so real traffic stays governed by the key's own limits.
      */
     @PostMapping("/get_model_health")
     public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
+        String clientIp = IpRateLimiterService.clientIp(request);
+        if (!rateLimiter.hasAuthFailureBudget(clientIp)) {
+            throw new RateLimitExceededException(60);
+        }
+
         String apiKey = extractApiKey(request);
         if (apiKey == null) {
+            rateLimiter.consumeAuthFailure(clientIp);
             return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
         }
         return modelService.getModelHealth(apiKey)
             .map(ResponseEntity::ok)
-            .orElseGet(() -> ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key")));
+            .orElseGet(() -> {
+                rateLimiter.consumeAuthFailure(clientIp);
+                return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+            });
     }
 
     static String extractApiKey(HttpServletRequest request) {

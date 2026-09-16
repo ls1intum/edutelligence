@@ -8,6 +8,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import de.tum.cit.aet.logos.logoswebservice.common.IpRateLimiterService;
+
+import jakarta.servlet.http.HttpServletRequest;
+
 /**
  * Public, unauthenticated endpoint serving runtime configuration the UI needs
  * before it can initiate login (Keycloak issuer URL and client id). Centralises
@@ -21,20 +25,29 @@ public class PublicConfigController {
     private final String passkeyRpId;
     private final String passkeyRpName;
     private final KeycloakProperties props;
+    private final IpRateLimiterService rateLimiter;
 
     public PublicConfigController(
             @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String issuer,
             @Value("${logos.auth.passkey.rp-id:}") String passkeyRpId,
             @Value("${logos.auth.passkey.rp-name:Logos}") String passkeyRpName,
-            KeycloakProperties props) {
+            KeycloakProperties props,
+            IpRateLimiterService rateLimiter) {
         this.issuer = issuer;
         this.passkeyRpId = passkeyRpId;
         this.passkeyRpName = passkeyRpName;
         this.props = props;
+        this.rateLimiter = rateLimiter;
     }
 
+    /**
+     * Reachable without any credential, so it is rate limited per source IP —
+     * generous enough for monitoring probes, bounded against anyone else.
+     */
     @GetMapping("/info")
-    public ResponseEntity<Map<String, Object>> info() {
+    public ResponseEntity<Map<String, Object>> info(HttpServletRequest request) {
+        rateLimiter.enforcePublicEndpoint(IpRateLimiterService.clientIp(request), "info");
+
         Map<String, Object> keycloak = new LinkedHashMap<>();
         keycloak.put("issuer", issuer);
         keycloak.put("client_id", props.clientId());

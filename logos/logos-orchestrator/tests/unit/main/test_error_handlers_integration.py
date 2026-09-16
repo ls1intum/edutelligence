@@ -40,7 +40,7 @@ def _stub_auth(monkeypatch):
         default_priority=5,
     )
 
-    def fake_authenticate(headers):
+    def fake_authenticate(headers, client_ip=None):
         return fake_auth
 
     monkeypatch.setattr("logos.auth.authenticate_api_key", fake_authenticate)
