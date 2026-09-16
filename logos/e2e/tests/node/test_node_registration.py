@@ -50,11 +50,74 @@ def test_orchestrator_sees_the_real_hardware_of_each_node(nodes):
 
 
 def test_node_devices_are_queryable_through_the_admin_endpoint(admin, nodes):
-    """The operator-facing view must agree with the scheduler's."""
+    """The operator-facing view must agree with the status payload."""
     for node in nodes:
         devices = admin.node_devices(node.provider_id)
         assert devices, f"node {node.name} reports no devices to the admin endpoint"
         assert len(devices) == len(node.devices)
+
+
+def test_gpu_telemetry_survives_the_whole_path(nodes):
+    """Per-card telemetry must arrive intact, not collapsed into a total.
+
+    This is the longest path in the suite: the GPU simulator answers
+    `nvidia-smi`, the real worker parses it, the bridge ships it over the
+    WebSocket, and the orchestrator stores it. Every field asserted here is one
+    a UI panel or the capacity planner reads.
+    """
+    for node in nodes:
+        assert node.telemetry_available, f"{node.name} reports no usable GPU telemetry"
+        assert node.degraded_reason == "", f"{node.name} is degraded: {node.degraded_reason}"
+
+        for device in node.devices:
+            assert device["kind"] == "nvidia"
+            assert device["memory_total_mb"] > 0
+            # Idle simulated cards hold nothing, so free must equal total —
+            # a mismatch means the ledger and the totals disagree.
+            assert device["memory_free_mb"] == device["memory_total_mb"]
+            assert device["temperature_celsius"] is not None, "temperature was dropped in transit"
+            assert device["device_id"], "device identity was lost in transit"
+
+
+def test_node_health_is_reported_for_scheduling_decisions(nodes):
+    """A node the scheduler can route to must say so, per sensor.
+
+    The aggregate flag alone is not enough: the watchdog escalates on the GPU
+    sensor specifically, so that sensor has to reach the orchestrator by name.
+    """
+    for node in nodes:
+        health = node.node_health
+        assert health, f"{node.name} reported no health block"
+        assert health.get("healthy") is True, f"{node.name} is unhealthy: {health.get('reason_detail')}"
+        assert health.get("sensors", {}).get("gpu", {}).get("state") == "ok"
+
+
+def test_each_node_reports_a_lane_capacity_view(nodes):
+    """Capacity has to arrive even with no lanes running.
+
+    An idle node that reports nothing is indistinguishable from one the planner
+    cannot use, and the planner would simply never place work on it.
+    """
+    for node in nodes:
+        assert node.lanes == [], "no lanes were requested, so none should be running"
+        assert node.free_vram_mb > 0, f"{node.name} reports no free VRAM while idle"
+        assert node.free_vram_mb == node.total_vram_mb
+
+
+def test_registration_mints_a_usable_provider(admin):
+    """The bootstrap endpoint must actually create a provider.
+
+    This is the regression this suite found on its first stack run: the endpoint
+    called ``add_provider`` without ``privacy_level``, which that function
+    rejects outright, so every registration returned 400 and no worker node
+    could join. Nothing else covered it — the unit tests mock DBManager, and a
+    node registered by hand through the UI takes a different path entirely.
+    """
+    registration = admin.register_node("registration-contract-probe")
+
+    assert registration["provider_id"], registration
+    assert registration["provider_type"] == "logosnode"
+    assert registration["shared_key"], "no shared key was minted"
 
 
 def test_registration_requires_an_admin_key(orchestrator_url):

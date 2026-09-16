@@ -32,34 +32,54 @@ PROJECT = "logos-e2e"
 ORCHESTRATOR_PORT = int(os.environ.get("E2E_ORCHESTRATOR_PORT", "18090"))
 ORCHESTRATOR_URL = f"http://localhost:{ORCHESTRATOR_PORT}"
 
+#: Traefik's port when the `ui` profile is up. The browser tier must go through
+#: it rather than straight to the UI container: the UI and the API share an
+#: origin in production, and testing them on separate origins would miss every
+#: CORS and cookie problem that shape causes.
+UI_PORT = int(os.environ.get("E2E_UI_PORT", "18091"))
+UI_URL = f"http://localhost:{UI_PORT}"
+
+KEYCLOAK_PORT = int(os.environ.get("E2E_KEYCLOAK_PORT", "18095"))
+KEYCLOAK_URL = f"http://localhost:{KEYCLOAK_PORT}"
+
 ADMIN_KEY = "lg-e2e-admin-key"
 DEVELOPER_KEY = "lg-e2e-developer-key"
 
 NODE_SERVICES = ("node-l40s", "node-2080ti")
 
 
-def _compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
-    cmd = ["docker", "compose", "-f", str(COMPOSE_FILE), "-p", PROJECT, *args]
+def _compose(*args: str, check: bool = True, capture: bool = False, ui: bool = False) -> subprocess.CompletedProcess:
+    profile = ["--profile", "ui"] if ui else []
+    cmd = ["docker", "compose", "-f", str(COMPOSE_FILE), "-p", PROJECT, *profile, *args]
     return subprocess.run(cmd, check=check, text=True, capture_output=capture)
 
 
-def up(*, timeout_s: float = 600.0) -> None:
-    _compose("up", "-d", "--build", "--wait", "--wait-timeout", str(int(timeout_s)))
+def up(*, timeout_s: float = 900.0, ui: bool = False) -> None:
+    """Bring the stack up. *ui* adds Keycloak, the webservice and the UI.
+
+    Those three roughly triple the startup cost, so the inter-node and SDK tiers
+    deliberately run without them.
+    """
+    _compose("up", "-d", "--build", "--wait", "--wait-timeout", str(int(timeout_s)), ui=ui)
     wait_for_orchestrator()
+    if ui:
+        wait_for_ui()
 
 
 def down(*, volumes: bool = True) -> None:
     args = ["down", "--remove-orphans"]
     if volumes:
         args.append("--volumes")
-    _compose(*args, check=False)
+    # Always with the profile, so a `down` after a UI run removes those
+    # containers too instead of orphaning them.
+    _compose(*args, check=False, ui=True)
 
 
 def logs(service: str | None = None, tail: int = 200) -> str:
     args = ["logs", f"--tail={tail}"]
     if service:
         args.append(service)
-    result = _compose(*args, check=False, capture=True)
+    result = _compose(*args, check=False, capture=True, ui=True)
     return (result.stdout or "") + (result.stderr or "")
 
 
@@ -91,6 +111,22 @@ def wait_for_orchestrator(timeout_s: float = 120.0) -> None:
     raise TimeoutError(f"orchestrator did not answer at {ORCHESTRATOR_URL} within {timeout_s:.0f}s")
 
 
+def ui_is_up() -> bool:
+    try:
+        return httpx.get(UI_URL, timeout=2.0, follow_redirects=True).status_code < 500
+    except httpx.HTTPError:
+        return False
+
+
+def wait_for_ui(timeout_s: float = 180.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if ui_is_up():
+            return
+        time.sleep(2.0)
+    raise TimeoutError(f"UI did not answer at {UI_URL} within {timeout_s:.0f}s")
+
+
 def wait_for_nodes(expected: int = len(NODE_SERVICES), timeout_s: float = 180.0) -> list[dict]:
     """Block until *expected* worker nodes have completed their WS handshake.
 
@@ -117,18 +153,26 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Logos E2E stack")
     parser.add_argument("action", choices=["up", "down", "logs", "status"])
     parser.add_argument("service", nargs="?")
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="also start Keycloak, the webservice and the UI (needed for the Playwright tier)",
+    )
     args = parser.parse_args()
 
     if args.action == "up":
-        up()
+        up(ui=args.ui)
         nodes = wait_for_nodes()
         print(f"stack ready at {ORCHESTRATOR_URL} with {len(nodes)} worker node(s)")
+        if args.ui:
+            print(f"UI ready at {UI_URL} (Keycloak at {KEYCLOAK_URL})")
     elif args.action == "down":
         down()
     elif args.action == "logs":
         print(logs(args.service))
     else:
         print(f"orchestrator reachable: {is_up()}")
+        print(f"UI reachable: {ui_is_up()}")
     return 0
 
 
