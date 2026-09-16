@@ -170,7 +170,7 @@ class MockWeaviateQuery:
 
 class MockDeleteResult:
     """Mock delete operation result."""
-    
+
     def __init__(self, successful_count: int):
         self.successful = successful_count
 
@@ -477,7 +477,9 @@ class MockWeaviateClient:
         # Do nothing - collections are already set up in MockWeaviateCollections
         pass
 
-    def delete_by_property(self, collection_name: str, property_name: str, property_value):
+    def delete_by_property(
+        self, collection_name: str, property_name: str, property_value
+    ):
         """Mock delete_by_property method."""
         collection = self.collections.get(collection_name)
         if collection:
@@ -496,7 +498,9 @@ def mock_weaviate_client():
     with patch("weaviate.connect_to_local", return_value=mock_client):
         with patch("weaviate.connect_to_custom", return_value=mock_client):
             # Also patch the singleton to ensure fresh instances in tests
-            with patch("atlasml.clients.weaviate.WeaviateClientSingleton._instance", None):
+            with patch(
+                "atlasml.clients.weaviate.WeaviateClientSingleton._instance", None
+            ):
                 # Patch get_weaviate_client to return our mock
                 with patch(
                     "atlasml.ml.pipeline_workflows.get_weaviate_client",
@@ -589,9 +593,4 @@ def mock_weaviate_settings():
     """Fixture providing mock Weaviate settings."""
     from atlasml.config import WeaviateSettings
 
-    return WeaviateSettings(
-        host="localhost",
-        port=8080,
-        api_key=None,
-        scheme="http"
-    )
+    return WeaviateSettings(host="localhost", port=8080, api_key=None, scheme="http")
