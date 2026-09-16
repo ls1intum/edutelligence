@@ -6,40 +6,7 @@
   box-sizing: border-box;
 }
 
-// ── Model facts ────────────────────────────────────────────────────────────
-.facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-  margin-bottom: 28px;
-}
-
-.fact {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
-  min-width: 0;
-}
-
-.fact-label {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
-  letter-spacing: var(--letter-spacing-wider);
-  text-transform: uppercase;
-  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
-}
-
-.fact-value {
-  font-size: var(--font-size-md);
-  color: rgb(var(--nav-active-text));
-  overflow-wrap: anywhere;
-}
-
-// ── Notice (model without host provider) ───────────────────────────────────
+// ── Notice (model without host provider / failed grant) ───────────────────
 .notice {
   display: flex;
   align-items: center;
@@ -97,6 +64,12 @@
 }
 
 // ── Matrix cells ───────────────────────────────────────────────────────────
+// Long values (e.g. privacy-level enums) must wrap inside their cell instead
+// of spilling over the neighbouring column.
+.table-row > div {
+  overflow-wrap: anywhere;
+}
+
 .cell-strong {
   font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
@@ -119,6 +92,32 @@
 
   &--yes { color: rgb(var(--color-success)); }
   &--no { color: rgb(var(--color-typography-700)); opacity: 0.55; }
+}
+
+// One-click "grant this provider to the team" in the matrix.
+.grant-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid rgb(var(--color-text-accent) / 0.45);
+  border-radius: 999px;
+  background: rgb(var(--color-text-accent) / 0.08);
+  color: rgb(var(--color-text-accent));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: background 0.15s ease;
+
+  &:hover:not(:disabled),
+  &:focus-visible {
+    background: rgb(var(--color-text-accent) / 0.16);
+  }
+
+  &:disabled {
+    cursor: wait;
+    opacity: 0.7;
+  }
 }
 
 .status-badge {
@@ -185,8 +184,4 @@
   font-size: var(--font-size-md);
 
   i { font-size: var(--font-size-xl); }
-}
-
-@media (max-width: 768px) {
-  .facts { grid-template-columns: 1fr 1fr; }
 }

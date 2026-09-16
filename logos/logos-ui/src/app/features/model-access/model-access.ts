@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, RouterModule } from '@angular/router';
 import { ModelManagementService } from '../../core/services/model-management.service';
+import { TeamManagementService } from '../../core/services/team-management.service';
 import {
   ModelAccessResponse,
   TeamAccess,
@@ -18,11 +19,11 @@ import { ErrorMessageComponent } from '../../shared/components/error-message/err
 import { formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 
 /**
- * Read-only admin view for a single model: where it is hosted, and which
- * teams / custom-permission keys actually have both the model grant and a
- * grant for a hosting provider. Orphaned grants (model grant without any
- * reachable provider) are highlighted — granting itself stays on the team
- * detail pages.
+ * Admin view for a single model: where it is hosted, and which teams /
+ * custom-permission keys actually have both the model grant and a grant for
+ * a hosting provider. Orphaned grants (model grant without any reachable
+ * provider) are highlighted, and a missing team-provider grant can be
+ * repaired right here with one click (the team's other grants are kept).
  */
 @Component({
   selector: 'app-model-access',
@@ -35,10 +36,14 @@ import { formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 export class ModelAccess implements OnInit {
   private route = inject(ActivatedRoute);
   private modelService = inject(ModelManagementService);
+  private teamService = inject(TeamManagementService);
 
   access = signal<ModelAccessResponse | null>(null);
   loading = signal(true);
   loadError = signal(false);
+  /** One grant action in flight; all grant buttons stay disabled meanwhile. */
+  granting = signal(false);
+  grantError = signal<string | null>(null);
 
   /** Provider columns of the matrix, e.g. "Logos Mac1". */
   readonly providerColumns = computed(() =>
@@ -87,6 +92,29 @@ export class ModelAccess implements OnInit {
     }
   }
 
+  /**
+   * One-click repair: adds the hosting provider to the team's provider
+   * grants. The team's complete existing set is re-read and preserved —
+   * only the missing provider is appended — and the matrix is reloaded
+   * with the usual loading/error feedback.
+   */
+  async grantProviderToTeam(teamId: number, providerId: number): Promise<void> {
+    if (this.granting()) return;
+    this.granting.set(true);
+    this.grantError.set(null);
+    try {
+      const current = await this.teamService.getTeamProviderPermissions(teamId);
+      const next = [...new Set([...current, providerId])];
+      await this.teamService.setTeamProviderPermissions(teamId, next);
+      const id = Number(this.route.snapshot.paramMap.get('id'));
+      await this.load(id);
+    } catch {
+      this.grantError.set('Failed to grant the provider to the team, please try again.');
+    } finally {
+      this.granting.set(false);
+    }
+  }
+
   // ── Matrix helpers ───────────────────────────────────────────────────────
   /**
    * Model grant without any host-provider grant: can never route. Derived
@@ -110,13 +138,5 @@ export class ModelAccess implements OnInit {
   // ── Formatting ───────────────────────────────────────────────────────────
   formatLastUsed(iso: string | null | undefined): string {
     return formatLastUsedLabel(iso);
-  }
-
-  formatPrice(usdPerMillion: number | null): string {
-    return usdPerMillion != null ? `$${usdPerMillion.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}` : '–';
-  }
-
-  formatTokens(tokens: number | null): string {
-    return tokens != null ? `${tokens.toLocaleString()} tokens` : '–';
   }
 }
