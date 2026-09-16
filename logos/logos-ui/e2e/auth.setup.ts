@@ -18,11 +18,15 @@ import { ADMIN_USER, STORAGE_STATE } from './fixtures';
 setup('authenticate as a Logos admin', async ({ page }) => {
   await page.goto('/');
 
-  // This is the first page load of the run, moments after the stack came up, so
-  // it pays for the Angular bundle and the app's first paint. The default
-  // 15s action timeout was not always enough — the first CI attempt timed out
-  // here and only the retry passed — so wait explicitly rather than let a slow
-  // cold start read as a broken login page.
+  // This is the first page load of the run, so it pays for the Angular bundle
+  // and first paint; wait explicitly rather than let that read as a broken
+  // login page.
+  //
+  // A generous timeout is not the reason this button was once missing for a
+  // full 60s, though — that was the stack being declared ready before the
+  // webservice could serve `/api/info`, which the app's initializer blocks on,
+  // so Angular never bootstrapped and no button was ever going to appear. That
+  // is fixed where it belongs, in `compose.ui_is_up()`.
   const signIn = page.getByRole('button', { name: /sign in with tum/i });
   await expect(signIn).toBeVisible({ timeout: 60_000 });
   await signIn.click();

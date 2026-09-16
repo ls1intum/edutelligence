@@ -137,19 +137,46 @@ def wait_for_orchestrator(timeout_s: float = 120.0) -> None:
 
 
 def ui_is_up() -> bool:
+    """True once the UI can actually *bootstrap*, not merely serve its index.
+
+    nginx answers 200 for `/` the moment the UI container starts, but the
+    Angular app blocks its own bootstrap on an app initializer that fetches
+    `/api/info` and throws unless the response carries `keycloak.issuer` and
+    `keycloak.client_id` (see logos-ui/src/app/core/auth/keycloak.ts). That
+    endpoint is served by the webservice — a Spring app with no healthcheck,
+    which the UI only `depends_on: service_started`.
+
+    Probing the static root therefore declared the stack ready while the app
+    would still fail to start. That is not hypothetical: it is why a Playwright
+    run timed out looking for the sign-in button, a symptom first papered over
+    by raising the timeout. Readiness now means the same call the app makes
+    succeeds with the config it requires.
+    """
     try:
-        return httpx.get(UI_URL, timeout=2.0, follow_redirects=True).status_code < 500
+        if httpx.get(UI_URL, timeout=2.0, follow_redirects=True).status_code >= 500:
+            return False
+        response = httpx.get(f"{UI_URL}/api/info", timeout=5.0, follow_redirects=True)
     except httpx.HTTPError:
         return False
+    if response.status_code != 200:
+        return False
+    try:
+        keycloak = (response.json() or {}).get("keycloak") or {}
+    except ValueError:
+        return False
+    return bool(keycloak.get("issuer") and keycloak.get("client_id"))
 
 
-def wait_for_ui(timeout_s: float = 180.0) -> None:
+def wait_for_ui(timeout_s: float = 240.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if ui_is_up():
             return
         time.sleep(2.0)
-    raise TimeoutError(f"UI did not answer at {UI_URL} within {timeout_s:.0f}s")
+    raise TimeoutError(
+        f"the UI could not bootstrap within {timeout_s:.0f}s: {UI_URL}/api/info never returned "
+        f"a keycloak issuer and client_id. Webservice logs:\n{logs('logos-webservice', tail=40)}"
+    )
 
 
 def wait_for_nodes(expected: int = len(NODE_SERVICES), timeout_s: float = 180.0) -> list[dict]:
