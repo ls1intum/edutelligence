@@ -76,6 +76,14 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
+# Declare the `shared` path dependency to uv directly. It is already declared
+# in [tool.poetry.dependencies], but uv only sees that through poetry-core's
+# built metadata, which hands back an absolute directory -- so uv.lock ended up
+# recording whoever last ran `uv lock` (e.g.
+# /Users/<name>/.../logos/logos-orchestrator/shared). That made the lock
+# machine-specific: it churned on every developer and could never be used to
+# install from. Declared here, uv records the relative "../../shared" instead.
+shared = { path = "../../shared" }
 torch = { index = "pytorch-cpu" }
 
 # ---------------------------------------------------------------------------
