@@ -292,6 +292,10 @@ class LogosBridgeClient:
         if "worker_id" in data:
             self._resolved_worker_id = str(data["worker_id"])
 
+        central_hf_token = str(data.get("hf_token", "")).strip()
+        if central_hf_token:
+            os.environ["HF_TOKEN"] = central_hf_token
+
         ws_url = str(data.get("ws_url", "")).strip()
         if not ws_url:
             token = str(data.get("session_token", "")).strip()

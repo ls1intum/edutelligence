@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -119,6 +120,78 @@ async def test_authenticate_accepts_explicit_ws_url(monkeypatch):
     )
     auth = await client._authenticate()  # noqa: SLF001
     assert auth["ws_url"] == "wss://logos.example/ws"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_applies_central_hf_token(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_keeps_local_hf_token_when_server_sends_none(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "local-token")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": ""}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "local-token"
 
 
 @pytest.mark.asyncio
