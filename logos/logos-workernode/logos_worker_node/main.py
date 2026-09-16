@@ -1135,6 +1135,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _log_storage_layout(cfg)
 
+    logos_bridge = LogosBridgeClient(app, cfg.logos)
+    await logos_bridge.bootstrap_hf_token()
+
     # Device telemetry. Both collectors expose the same surface, so everything
     # downstream (LaneManager, runtime status) is backend-agnostic.
     if is_metal_backend():
@@ -1459,7 +1462,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 cfg.logos.capabilities_models = ready_caps
 
     app.state.gpu_collector = gpu_collector
-    logos_bridge = LogosBridgeClient(app, cfg.logos)
     app.state.logos_bridge = logos_bridge
     await logos_bridge.start()
 
