@@ -704,6 +704,41 @@ def test_build_env_uses_writable_hf_cache_fallback(monkeypatch, tmp_path: Path) 
     assert env["HF_HOME"].endswith(".cache/huggingface")
 
 
+def test_build_env_blank_hf_home_resolves_like_the_gguf_resolver(monkeypatch, tmp_path: Path) -> None:
+    """A blank inherited HF_HOME must give the child the same root the resolver used.
+
+    effective_hf_home treats a blank/whitespace HF_HOME as unset, so the GGUF
+    resolution consults the worker's <cache_root>/.hf_cache. _build_env must
+    apply the same rule: with the RAM cache disabled a blank value otherwise
+    reaches the child, which would resolve a different cache location and
+    redownload — or fail offline — the weights the resolution just found.
+    """
+    from logos_worker_node import gguf
+
+    monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(models_path=str(tmp_path), gpu_devices="all"))
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+
+    for blank in ("", "   "):
+        monkeypatch.setenv("HF_HOME", blank)
+        env = handle._build_env(lane)
+        # The exact root _resolve_gguf_spec computes for this lane (no
+        # override, blank inherited env).
+        expected = gguf.effective_hf_home(None) or handle._resolve_hf_home(
+            handle._resolve_persistent_cache_root(handle._global_config)
+        )
+        assert env["HF_HOME"] == expected
+
+    # A non-blank inherited HF_HOME is still honoured.
+    inherited = str(tmp_path / "inherited-hf")
+    monkeypatch.setenv("HF_HOME", inherited)
+    assert handle._build_env(lane)["HF_HOME"] == inherited
+
+
 def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
     # nccl_p2p_available=False (default) → NCCL_P2P_DISABLE=1 globally
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(gpu_devices="all"))
@@ -2727,6 +2762,245 @@ async def test_sharded_checkpoint_skipped_for_speculative_lane(monkeypatch, tmp_
     assert handle._sharded_model_dir is not None
 
 
+# ---------------------------------------------------------------------------
+# GGUF serve reference (issue #584)
+# ---------------------------------------------------------------------------
+
+
+def test_build_cmd_serves_gguf_spec(monkeypatch) -> None:
+    """A GGUF lane serves the resolved reference, aliased back to the lane model."""
+    from logos_worker_node.gguf import GgufServeSpec
+
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+    handle._gguf_spec = GgufServeSpec(
+        model="unsloth/Qwen3-8B-GGUF",
+        serve_ref="unsloth/Qwen3-8B-GGUF:Q4_K_M",
+        quant="Q4_K_M",
+        tokenizer="Qwen/Qwen3-8B",
+    )
+
+    lane = LaneConfig(
+        model="unsloth/Qwen3-8B-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(),
+    )
+    cmd = handle._build_cmd(lane)
+    # vLLM loads the quantized reference …
+    assert cmd[0] == "/tmp/vllm" and cmd[1] == "serve"
+    assert cmd[2] == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    # … but answers under the model name the orchestrator registered.
+    idx = cmd.index("--served-model-name")
+    assert cmd[idx + 1] == "unsloth/Qwen3-8B-GGUF"
+    # The base model's tokenizer doubles as the HF config source.
+    tidx = cmd.index("--tokenizer")
+    assert cmd[tidx + 1] == "Qwen/Qwen3-8B"
+    # No sharded-checkpoint machinery for GGUF lanes.
+    assert "--load-format" not in cmd
+
+
+def test_build_cmd_gguf_without_tokenizer_omits_flag(monkeypatch) -> None:
+    from logos_worker_node.gguf import GgufServeSpec
+
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+    handle._gguf_spec = GgufServeSpec(
+        model="unsloth/Qwen3-8B-GGUF",
+        serve_ref="unsloth/Qwen3-8B-GGUF:Q4_K_M",
+        quant="Q4_K_M",
+    )
+
+    lane = LaneConfig(model="unsloth/Qwen3-8B-GGUF", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lane)
+    assert cmd[2] == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert "--tokenizer" not in cmd
+    # The name alias is still required — the served reference differs from the
+    # registered model id.
+    assert cmd.count("--served-model-name") == 1
+
+
+def test_build_cmd_non_gguf_lane_unchanged(monkeypatch) -> None:
+    """Without a GGUF spec nothing GGUF-specific may leak into the command."""
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _configured: ["/tmp/vllm"])
+
+    lane = LaneConfig(model="Qwen/Qwen3-8B", vllm=True, vllm_config=VllmConfig())
+    cmd = handle._build_cmd(lane)
+    assert cmd[2] == "Qwen/Qwen3-8B"
+    assert "--served-model-name" not in cmd
+    assert "--tokenizer" not in cmd
+
+
+def _hf_cache_with_gguf(hf_home, model: str, filenames: list[str]) -> None:
+    repo_dir = Path(hf_home) / "hub" / ("models--" + model.replace("/", "--"))
+    snapshot = repo_dir / "snapshots" / "rev"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    # refs/main points at the active revision — without it the local listing
+    # is "unavailable" and resolution would fall back to a Hub fetch, which is
+    # not what these local-cache tests exercise.
+    (repo_dir / "refs").mkdir(parents=True, exist_ok=True)
+    (repo_dir / "refs" / "main").write_text("rev")
+    for name in filenames:
+        (snapshot / name).write_bytes(b"\x00")
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_from_local_hf_cache(monkeypatch, tmp_path: Path) -> None:
+    """A bare -GGUF repo cached locally resolves to its best quant, offline."""
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle.hf_home_override = str(tmp_path)
+    _hf_cache_with_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_S.gguf", "Qwen3-8B-Q4_K_M-00001-of-00002.gguf"],
+    )
+
+    lane = LaneConfig(model="unsloth/Qwen3-8B-GGUF", vllm=True, vllm_config=VllmConfig())
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_honors_operator_pin(monkeypatch, tmp_path: Path) -> None:
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle.hf_home_override = str(tmp_path)
+    _hf_cache_with_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_S.gguf", "Qwen3-8B-Q4_K_M.gguf"],
+    )
+
+    lane = LaneConfig(
+        model="unsloth/Qwen3-8B-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_quant="q4_k_s", gguf_tokenizer="Qwen/Qwen3-8B"),
+    )
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_S"
+    assert handle._gguf_spec.tokenizer == "Qwen/Qwen3-8B"
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_falls_back_to_hub_listing(monkeypatch, tmp_path: Path) -> None:
+    """No local cache → the HuggingFace Hub listing supplies the quants."""
+    from logos_worker_node import gguf as gguf_module
+
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle.hf_home_override = str(tmp_path)
+    # (name, size) pairs — the tree listing shape fetch_repo_gguf_files returns.
+    monkeypatch.setattr(
+        gguf_module,
+        "fetch_repo_gguf_files",
+        lambda _repo: (("Qwen3-8B-Q8_0.gguf", 4096), ("Qwen3-8B-Q4_K_M.gguf", 2048)),
+    )
+
+    lane = LaneConfig(model="unsloth/Qwen3-8B-GGUF", vllm=True, vllm_config=VllmConfig())
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_unresolvable_bare_repo_raises(monkeypatch, tmp_path: Path) -> None:
+    """Listing unavailable and no pin → actionable error, not a vLLM crash."""
+    from logos_worker_node import gguf as gguf_module
+
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle.hf_home_override = str(tmp_path)
+
+    def _no_network(_repo: str):
+        raise RuntimeError("no hub access")
+
+    monkeypatch.setattr(gguf_module, "fetch_repo_gguf_files", _no_network)
+
+    lane = LaneConfig(model="unsloth/Qwen3-8B-GGUF", vllm=True, vllm_config=VllmConfig())
+    with pytest.raises(RuntimeError, match="gguf_quant"):
+        await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_local_dir_quant_ref_resolves_offline(monkeypatch, tmp_path: Path) -> None:
+    """Regression: /path/model-GGUF:Q4_K_M is an explicit local GGUF reference.
+
+    It was read as a bare -GGUF repository — resolution chased a Hub listing
+    for a path and raised "no quant discovered". The quant is embedded in the
+    reference: no Hub call, and the resolved spec triggers the
+    safetensors-sharding bypass.
+    """
+    from logos_worker_node import gguf as gguf_module
+
+    def _no_hub(_repo: str):
+        raise AssertionError("Hub listing must not be fetched for a local reference")
+
+    monkeypatch.setattr(gguf_module, "fetch_repo_gguf_files", _no_hub)
+
+    local_dir = tmp_path / "qwen-GGUF"
+    local_dir.mkdir()
+
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle.hf_home_override = str(tmp_path)
+
+    lane = LaneConfig(
+        model=f"{local_dir}:Q4_K_M",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_tokenizer="Qwen/Qwen3-8B"),
+    )
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == f"{local_dir}:Q4_K_M"
+    assert handle._gguf_spec.quant == "Q4_K_M"
+    assert handle._gguf_spec.tokenizer == "Qwen/Qwen3-8B"
+    # A resolved spec is what gates the sharded-checkpoint bypass.
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_bare_local_gguf_dir_is_explicit(monkeypatch, tmp_path: Path) -> None:
+    """A bare local …-GGUF directory resolves without any listing at all."""
+    from logos_worker_node import gguf as gguf_module
+
+    def _no_hub(_repo: str):
+        raise AssertionError("Hub listing must not be fetched for a local reference")
+
+    monkeypatch.setattr(gguf_module, "fetch_repo_gguf_files", _no_hub)
+
+    local_dir = tmp_path / "qwen-GGUF"
+    local_dir.mkdir()
+
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle.hf_home_override = str(tmp_path)
+
+    lane = LaneConfig(model=str(local_dir), vllm=True, vllm_config=VllmConfig())
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == str(local_dir)
+    assert handle._gguf_spec.quant is None
+    # Tokenizer handling + sharded-checkpoint bypass apply to it as well.
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+    assert handle._sharded_model_dir is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_gguf_spec_mixed_format_plain_repo_served_plain(tmp_path: Path) -> None:
+    """A plain-named repo holding backbone weights AND GGUF files is not GGUF.
+
+    Regression: the GGUF file in the listing forced the lane onto the GGUF
+    path and the configured safetensors model was never served. The backbone
+    weight in the same snapshot disqualifies the GGUF classification.
+    """
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle.hf_home_override = str(tmp_path)
+    _hf_cache_with_gguf(tmp_path, "org/some-model", ["model.safetensors", "config.json", "some-model-Q4_K_M.gguf"])
+
+    lane = LaneConfig(model="org/some-model", vllm=True, vllm_config=VllmConfig())
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is None
+
+
 @pytest.mark.asyncio
 async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeypatch, tmp_path) -> None:
     """A rejection recorded for the current vLLM sends the lane straight to the
@@ -2770,6 +3044,43 @@ async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeyp
     assert handle._sharded_model_dir is None, "the lane must serve the full checkpoint"
     # The record is still on disk — it was not consumed into the handle.
     assert sc.rejection_state(target, current_version="0.8.0") == "skip"
+
+
+@pytest.mark.asyncio
+async def test_sharded_conversion_targets_the_childs_hf_home(monkeypatch, tmp_path) -> None:
+    """The conversion must write where the spawned lane reads from.
+
+    The child's HF_HOME is the override, else the inherited value (blank
+    counting as unset), else the resolved root — the conversion's target has
+    to be that exact root, or the child would look for the checkpoint in a
+    different cache than the one it was written into.
+    """
+    from logos_worker_node import sharded_checkpoint as sc
+
+    handle = VllmProcessHandle(
+        "lane-test",
+        19000,
+        WorkerConfig(),
+        vllm_engine_config=VllmEngineConfig(sharded_checkpoint_enabled=True),
+    )
+    monkeypatch.setattr(handle, "_resolve_persistent_cache_root", lambda _cfg: str(tmp_path))
+    inherited = str(tmp_path / "inherited-hf")
+    monkeypatch.setenv("HF_HOME", inherited)
+    captured: dict = {}
+
+    def fake_ensure(**kwargs):
+        captured.update(kwargs)
+        return str(tmp_path / "sharded")
+
+    monkeypatch.setattr(sc, "is_sharded_checkpoint_ready", lambda _target: False)
+    monkeypatch.setattr(sc, "rejection_state", lambda _target, **_kw: None)
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", fake_ensure)
+
+    lane = LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+    await handle._maybe_prepare_sharded_checkpoint(lane)
+
+    assert captured["hf_home"] == inherited
+    assert handle._build_env(lane)["HF_HOME"] == captured["hf_home"]
 
 
 async def test_maybe_prepare_runs_the_rejection_probe_off_the_event_loop(monkeypatch, tmp_path) -> None:
