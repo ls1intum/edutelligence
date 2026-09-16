@@ -89,6 +89,28 @@ def _current_umask() -> int:
     return mask
 
 
+def reconfigured_vram_mb(profile: Any, measured_mb: float, gpu_count: int, cache_per_gpu_mb: float) -> float:
+    """Adjust a calibrated total for a different number/size of per-rank KV caches.
+
+    Keep measured weights and overhead; replace only the known KV allocation.
+    Unknown or inconsistent metadata retains the conservative measured total.
+    """
+    old_count = getattr(profile, "tensor_parallel_size", None)
+    old_cache = getattr(profile, "kv_budget_mb", None)
+    if (
+        getattr(profile, "residency_source", None) != "calibrated"
+        or not old_count
+        or old_count <= 0
+        or not old_cache
+        or old_cache <= 0
+        or cache_per_gpu_mb <= 0
+        or gpu_count <= 0
+        or measured_mb <= old_count * old_cache
+    ):
+        return measured_mb
+    return measured_mb - old_count * old_cache + gpu_count * cache_per_gpu_mb
+
+
 def _ema(previous: float | None, current: float) -> float:
     if previous is None:
         return current

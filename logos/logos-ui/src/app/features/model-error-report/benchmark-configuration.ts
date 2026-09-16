@@ -29,6 +29,9 @@ export function benchmarkConfigurationItems(
     item('split', 'Split', first(configuration, [
       ['scenario', 'spec', 'data', 0, 'load_kwargs', 'split'],
     ])),
+    item('text_column', 'Prompt column', first(configuration, [
+      ['scenario', 'spec', 'data_column_mapper', 'column_mappings', 'text_column'],
+    ])),
     item('sample_size', 'Sample size', benchmark.sample_size),
     item('profile', 'Profile', first(configuration, [
       ['benchmark', 'profile', 'kind'],

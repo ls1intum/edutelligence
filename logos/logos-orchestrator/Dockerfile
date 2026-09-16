@@ -54,7 +54,9 @@ RUN mkdir -p src/logos && echo '__version__ = "0.1.0"' > src/logos/__init__.py \
 # resolution and the cached registry wheels stay untouched, so two builds
 # of the same commit keep resolving to the same dependency versions.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --refresh-package shared .
+    # Local uv development uses an editable shared dependency. The runtime
+    # image only receives /opt/venv, so it needs a self-contained installation.
+    uv pip install --no-editable --refresh-package shared .
 
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime – slim image without compilers or build tools

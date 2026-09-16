@@ -40,7 +40,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Link shared dependency
-        run: ln -s ../../shared logos/logos-orchestrator/shared
+        run: ln -sfn ../../shared logos/logos-orchestrator/shared
 
       - name: Install Dependencies
         # Install the master logos package plus pytest-timeout, which the

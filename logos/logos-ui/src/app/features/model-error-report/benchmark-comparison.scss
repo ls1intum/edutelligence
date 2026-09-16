@@ -1,0 +1,72 @@
+:host { display: block; min-width: 0; margin-bottom: 28px; }
+.comparison { --plot-height: clamp(160px, 25vh, 260px); padding: 20px; border: 1px solid rgb(var(--color-outline-200)); border-radius: 12px; background: rgb(var(--color-surface-0)); color: rgb(var(--color-typography-100)); font-size: 14px; line-height: 1.4; }
+header, figcaption { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
+h3 { margin: 0; font-size: 24px; font-weight: 650; }
+p { margin: 0; font-size: inherit; }
+label { position: relative; display: grid; gap: 8px; font-weight: 500; }
+select { width: 100%; min-height: 40px; appearance: none; padding: 8px 40px 8px 12px; border: 1px solid rgb(var(--color-outline-200)); border-radius: 8px; background: rgb(var(--color-surface-0)); color: inherit; font: inherit; }
+label::after { content: ''; position: absolute; right: 18px; bottom: 20px; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); pointer-events: none; }
+select:focus-visible, button:focus-visible, summary:focus-visible, .plot-scroll:focus-visible, .table-scroll:focus-visible { outline: 2px solid rgb(var(--color-primary-500)); outline-offset: 3px; }
+.metric-picker { display: flex; align-items: center; gap: 10px; }
+.metric-picker select { width: auto; }
+.baseline-picker { margin-top: 12px; }
+.baseline-picker select { min-width: 0; text-overflow: ellipsis; }
+.comparison-context { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; color: rgb(var(--color-typography-500)); overflow-wrap: anywhere; }
+.comparison-details { margin-top: 0; }
+.comparison-details[open] { flex-basis: 100%; }
+summary { cursor: pointer; width: fit-content; }
+.comparison-details p { margin-top: 12px; max-width: 90ch; }
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+figure { min-width: 0; margin: 0; padding: 16px; border: 1px solid rgb(var(--color-outline-200)); border-radius: 10px; }
+figcaption strong { font-size: 18px; font-weight: 600; }
+figcaption span { color: rgb(var(--color-typography-500)); }
+.axis-title { margin-top: 16px; color: rgb(var(--color-typography-500)); }
+.plot-scroll { overflow-x: auto; padding-top: 20px; }
+.plot { display: flex; width: 100%; margin: 0 auto; }
+.y-axis { position: relative; width: 72px; flex-shrink: 0; height: var(--plot-height); color: rgb(var(--color-typography-500)); font-size: 15px; font-variant-numeric: tabular-nums; }
+.y-axis span { position: absolute; right: 12px; transform: translateY(-50%); }
+.plot-groups { position: relative; display: grid; flex: 1; }
+.plot-groups::before { content: ''; pointer-events: none; position: absolute; left: 0; right: 0; top: 0; height: var(--plot-height); border-left: 1px solid rgb(var(--color-outline-300)); border-bottom: 1px solid rgb(var(--color-outline-300)); }
+.parameter-group { min-width: 0; text-align: center; }
+.box-track { height: var(--plot-height); position: relative; width: min(48px, 65%); margin: auto; color: rgb(var(--color-primary-500)); }
+.box-track:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.whisker { position: absolute; left: 50%; border-left: 2px solid currentColor; }
+.whisker-cap { position: absolute; left: 25%; width: 50%; border-top: 2px solid currentColor; transform: translateY(50%); }
+.quartile-box { position: absolute; left: 0; width: 100%; min-height: 2px; border: 2px solid currentColor; background: rgb(var(--color-primary-500) / .2); box-sizing: border-box; }
+.median { position: absolute; left: 0; width: 100%; border-top: 3px solid currentColor; transform: translateY(50%); }
+.outlier { position: absolute; left: 50%; width: 6px; height: 6px; border: 1px solid currentColor; border-radius: 50%; transform: translate(-50%, 50%); background: rgb(var(--color-surface-0)); }
+.missing { display: grid; align-items: center; }
+.run-count { display: block; margin-top: 10px; color: rgb(var(--color-typography-500)); }
+.box-legend { margin-top: 12px; color: rgb(var(--color-typography-500)); }
+.run-details { margin-top: 16px; }
+.parameter-label { display: block; margin-top: 10px; font-size: 18px; }
+.x-axis-title { text-align: center; margin-top: 16px; font-size: 17px; }
+.comparison-note { margin-top: 16px; color: rgb(var(--color-typography-500)); }
+.numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.table-scroll { overflow-x: auto; margin-top: 16px; max-height: 480px; }
+table { width: 100%; min-width: 940px; border-collapse: collapse; text-align: left; }
+caption { text-align: left; padding-bottom: 16px; font-size: 22px; font-weight: 600; }
+caption span { margin-left: 8px; color: rgb(var(--color-typography-500)); font-size: 16px; font-weight: 400; }
+th, td { padding: 16px 12px; border-bottom: 1px solid rgb(var(--color-outline-200)); vertical-align: middle; }
+thead th { padding: 0; font-weight: 600; }
+thead button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 54px; padding: 16px 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; white-space: nowrap; cursor: pointer; }
+thead button:hover { background: rgb(var(--color-primary-500) / .08); }
+thead .numeric button { justify-content: flex-end; }
+.sort-indicator { color: rgb(var(--color-typography-500)); }
+[aria-sort='ascending'] .sort-indicator, [aria-sort='descending'] .sort-indicator { color: rgb(var(--color-primary-500)); }
+.unit { color: rgb(var(--color-typography-500)); font-weight: 400; }
+tbody th { font-weight: 600; }
+tbody tr:hover { background: rgb(var(--color-surface-50)); }
+.date { white-space: nowrap; }
+.date time { display: block; color: rgb(var(--color-typography-500)); }
+.active-metric { background: rgb(var(--color-primary-500) / .06); }
+.empty { padding: 24px 0; }
+@media (max-width: 760px) {
+  .charts { grid-template-columns: 1fr; }
+  .comparison { --plot-height: 180px; padding: 16px; }
+  h3 { font-size: 22px; }
+  .metric-picker { width: 100%; }
+  figure { padding: 16px 12px; }
+  figcaption { gap: 8px; }
+  figcaption strong { font-size: 20px; }
+}
