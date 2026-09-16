@@ -39,7 +39,6 @@ from atlasml.config import WeaviateSettings, get_settings
 # automatically when you run the project.
 class CollectionNames(str, Enum):
     """Canonical collection names used by AtlasML in Weaviate."""
-
     EXERCISE = "Exercise"
     COMPETENCY = "Competency"
     SEMANTIC_CLUSTER = "SemanticCluster"
@@ -60,11 +59,7 @@ COLLECTION_SCHEMAS = {
                 "data_type": DataType.NUMBER_ARRAY,
                 "indexFilterable": True,
             },
-            {
-                "name": "course_id",
-                "data_type": DataType.NUMBER,
-                "indexFilterable": True,
-            },
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
     CollectionNames.COMPETENCY.value: {
@@ -78,22 +73,14 @@ COLLECTION_SCHEMAS = {
             {"name": "description", "data_type": DataType.TEXT},
             {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "cluster_similarity_score", "data_type": DataType.NUMBER},
-            {
-                "name": "course_id",
-                "data_type": DataType.NUMBER,
-                "indexFilterable": True,
-            },
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
     CollectionNames.SEMANTIC_CLUSTER.value: {
         "properties": [
             {"name": "cluster_id", "data_type": DataType.TEXT, "indexFilterable": True},
             {"name": "label_id", "data_type": DataType.TEXT, "indexFilterable": True},
-            {
-                "name": "course_id",
-                "data_type": DataType.NUMBER,
-                "indexFilterable": True,
-            },
+            {"name": "course_id", "data_type": DataType.NUMBER, "indexFilterable": True},
         ]
     },
 }
@@ -121,7 +108,6 @@ class WeaviateClient:
     exist with the configured schema. Access the underlying SDK via
     `self.client` if you need advanced operations not covered here.
     """
-
     def __init__(self, weaviate_settings: WeaviateSettings = None):
         if weaviate_settings is None:
             weaviate_settings = get_settings().weaviate
@@ -680,7 +666,9 @@ class WeaviateClient:
             raise WeaviateOperationError(f"Failed to delete by property: {e}")
         except Exception as e:
             logger.error(f"❌ Unexpected error deleting by property: {e}")
-            raise WeaviateOperationError(f"Unexpected error deleting by property: {e}")
+            raise WeaviateOperationError(
+                f"Unexpected error deleting by property: {e}"
+            )
 
 
 class WeaviateClientSingleton:

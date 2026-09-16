@@ -160,9 +160,7 @@ async def save_competencies(request: SaveCompetencyRequest):
     response_model=CompetencyRelationSuggestionResponse,
     dependencies=[Depends(TokenValidator())],
 )
-async def suggest_competency_relations(
-    course_id: int,
-) -> CompetencyRelationSuggestionResponse:
+async def suggest_competency_relations(course_id: int) -> CompetencyRelationSuggestionResponse:
     """
     Suggest directed relations between competencies for a course.
 

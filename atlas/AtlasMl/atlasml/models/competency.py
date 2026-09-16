@@ -22,12 +22,10 @@ class ExerciseWithCompetencies(BaseModel):
     competencies: Optional[list[int]] = None
     course_id: int
 
-
 class SemanticCluster(BaseModel):
     cluster_id: str
     course_id: int
     vector_embedding: list[float]
-
 
 class GenerateCompetencyRequest(BaseModel):
     id: int
@@ -60,12 +58,10 @@ class SaveCompetencyRequest(BaseModel):
     exercise: Optional[ExerciseWithCompetencies] = None
     operation_type: OperationType
 
-
 class RelationType(str, Enum):
     MATCH = "MATCHES"
     EXTEND = "EXTENDS"
     REQUIRES = "REQUIRES"
-
 
 class CompetencyRelation(BaseModel):
     tail_id: int

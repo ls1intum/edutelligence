@@ -5,7 +5,6 @@ import numpy as np
 
 # Must reset settings before importing app
 from atlasml.config import reset_settings
-
 reset_settings()
 
 from atlasml.app import app
@@ -68,16 +67,14 @@ def test_suggest_competencies(
 
 def test_save_competencies(test_env, mock_weaviate_client):
     # Test data with proper structure matching SaveCompetencyRequest model
-    # Use a new competency ID that doesn't exist to avoid complex clustering
+    # Use a new competency ID that doesn't exist to avoid complex clustering 
     request_data = {
-        "competencies": [
-            {
-                "id": 999,  # Non-existing ID to trigger new competency creation
-                "title": "Test Competency 999",
-                "description": "Test competency description 999",
-                "course_id": 1,
-            }
-        ],
+        "competencies": [{
+            "id": 999,  # Non-existing ID to trigger new competency creation
+            "title": "Test Competency 999",
+            "description": "Test competency description 999",
+            "course_id": 1,
+        }],
         "operation_type": "UPDATE",
     }
 
@@ -125,14 +122,12 @@ def test_save_competencies_with_relations(test_env, mock_weaviate_client):
 def test_save_competencies_invalid_operation(test_env, mock_weaviate_client):
     """Test that invalid operation_type values are rejected."""
     request_data = {
-        "competencies": [
-            {
-                "id": 5,
-                "title": "Test Competency",
-                "description": "Test competency description",
-                "course_id": 1,
-            }
-        ],
+        "competencies": [{
+            "id": 5,
+            "title": "Test Competency",
+            "description": "Test competency description",
+            "course_id": 1,
+        }],
         "operation_type": "INVALID",  # This should cause a validation error
     }
 
@@ -149,14 +144,12 @@ def test_save_competencies_invalid_operation(test_env, mock_weaviate_client):
 def test_save_competencies_missing_required_fields(test_env, mock_weaviate_client):
     """Test that missing required fields are rejected."""
     request_data = {
-        "competencies": [
-            {
-                # Missing "id" field - should cause validation error
-                "title": "Missing ID Competency",
-                "description": "Test competency missing id field",
-                "course_id": 1,
-            }
-        ],
+        "competencies": [{
+            # Missing "id" field - should cause validation error
+            "title": "Missing ID Competency",
+            "description": "Test competency missing id field",
+            "course_id": 1,
+        }],
         "operation_type": "UPDATE",
     }
 
@@ -178,9 +171,9 @@ def test_suggest_competency_relations_valid_input(test_env, mock_weaviate_client
         f"/api/v1/competency/relations/suggest/{course_id}",
         headers=AUTH_HEADERS,
     )
-
+    
     assert response.status_code == 200
-
+    
     # Validate response structure matches CompetencyRelationSuggestionResponse
     response_data = response.json()
     assert "relations" in response_data
@@ -195,15 +188,15 @@ def test_suggest_competency_relations_output_structure(test_env, mock_weaviate_c
         f"/api/v1/competency/relations/suggest/{course_id}",
         headers=AUTH_HEADERS,
     )
-
+    
     assert response.status_code == 200
     response_data = response.json()
-
+    
     # Validate CompetencyRelationSuggestionResponse structure
     assert "relations" in response_data
     relations = response_data["relations"]
     assert isinstance(relations, list)
-
+    
     # If relations exist, validate CompetencyRelation structure
     if relations:
         relation = relations[0]
@@ -218,18 +211,16 @@ def test_suggest_competency_relations_output_structure(test_env, mock_weaviate_c
 def test_suggest_competency_relations_empty_course_id(test_env, mock_weaviate_client):
     """Test suggest_competency_relations with empty course_id."""
     course_id = ""
-
+    
     response = client.get(
         f"/api/v1/competency/relations/suggest/{course_id}",
     )
-
+    
     # Should handle empty course_id (likely 404 or validation error)
     assert response.status_code in [404, 422]
 
 
-def test_suggest_competency_relations_special_characters(
-    test_env, mock_weaviate_client
-):
+def test_suggest_competency_relations_special_characters(test_env, mock_weaviate_client):
     """Test suggest_competency_relations with course_id containing special characters."""
     course_id = "1"  # Use existing course_id from mock data
 
@@ -237,7 +228,7 @@ def test_suggest_competency_relations_special_characters(
         f"/api/v1/competency/relations/suggest/{course_id}",
         headers=AUTH_HEADERS,
     )
-
+    
     # Should handle special characters in path parameter
     assert response.status_code == 200
     response_data = response.json()

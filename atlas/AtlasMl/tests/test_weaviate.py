@@ -190,7 +190,7 @@ def test_exercise_collection_data(mock_weaviate_client):
     assert results[0]["id"] == "exercise-uuid-1"
     assert results[0]["properties"]["exercise_id"] == 1
     assert results[0]["properties"]["description"] == "Solve linear equations"
-    assert results[0]["properties"]["competency_ids"] == ["1", "2"]
+    assert results[0]["properties"]["competency_ids"] == ['1', '2']
 
 
 def test_cluster_center_collection_data(mock_weaviate_client):

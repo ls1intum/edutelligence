@@ -1,8 +1,9 @@
 import numpy as np
 
-
 def update_cluster_centroid_on_addition(
-    old_centroid: np.ndarray, cluster_size: int, new_point: np.ndarray
+        old_centroid: np.ndarray,
+        cluster_size: int,
+        new_point: np.ndarray
 ) -> np.ndarray:
     """
     Incrementally updates a cluster centroid using the running-mean formula.
@@ -17,12 +18,13 @@ def update_cluster_centroid_on_addition(
           which exactly maintains the arithmetic mean of all members
         - As cluster_size grows, the implicit α = 1/(N+1) decays, so new points have a diminishing impact
     """
-    alpha = 1.0 / (float(cluster_size) + 1.0)
+    alpha = 1.0 / ( float(cluster_size) + 1.0)
     return old_centroid + alpha * (new_point - old_centroid)
 
-
 def update_cluster_centroid_on_removal(
-    old_centroid: np.ndarray, cluster_size: int, removed_point: np.ndarray
+    old_centroid: np.ndarray,
+    cluster_size: int,
+    removed_point: np.ndarray
 ) -> np.ndarray:
     """
     Updates a cluster centroid when a point is removed.
@@ -46,17 +48,13 @@ def update_cluster_centroid_on_removal(
           so the centroid is undefined (raise ValueError).
     """
     if cluster_size <= 1:
-        raise ValueError(
-            "Cannot update centroid on removal when cluster_size <= 1 (centroid undefined)."
-        )
+        raise ValueError("Cannot update centroid on removal when cluster_size <= 1 (centroid undefined).")
 
     old_centroid = np.asarray(old_centroid)
     removed_point = np.asarray(removed_point)
 
     if old_centroid.shape != removed_point.shape:
-        raise ValueError(
-            f"Vector dimensions must match: {old_centroid.shape} vs {removed_point.shape}"
-        )
+        raise ValueError(f"Vector dimensions must match: {old_centroid.shape} vs {removed_point.shape}")
 
     n = float(cluster_size)
     return (n * old_centroid - removed_point) / (n - 1.0)

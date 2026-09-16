@@ -6,6 +6,7 @@ from sklearn.cluster import HDBSCAN, KMeans
 from sklearn.manifold import TSNE
 
 
+
 class SimilarityMetric(Enum):
     euclidean = "euclidean"
     cosine = "cosine"
@@ -89,7 +90,10 @@ def apply_kmeans(
         tuple: The cluster labels and centroids assigned to each data point.
     """
     clusterer = KMeans(
-        n_clusters=n_clusters, random_state=random_state, max_iter=max_iter, init=init
+        n_clusters=n_clusters,
+        random_state=random_state,
+        max_iter=max_iter,
+        init=init
     )
     clusterer.fit(matrix)
     return clusterer.labels_, clusterer.cluster_centers_

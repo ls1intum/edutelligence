@@ -52,8 +52,12 @@ def test_initial_texts_calls_add_embeddings(workflows):
 
 def test_initial_competencies_calls_add_embeddings(workflows):
     competencies = [
-        Competency(id=3, title="T1", description="Desc1", course_id=1),
-        Competency(id=4, title="T2", description="Desc2", course_id=1),
+        Competency(
+            id=3, title="T1", description="Desc1", course_id=1
+        ),
+        Competency(
+            id=4, title="T2", description="Desc2", course_id=1
+        ),
     ]
     workflows.weaviate_client.add_embeddings = MagicMock()
     with patch(
@@ -67,6 +71,7 @@ def test_initial_competencies_calls_add_embeddings(workflows):
         assert c[0][0] == "Competency"
         assert c[0][2]["title"] == comp.title
         assert c[0][2]["description"] == comp.description
+
 
 
 def test_newTextPipeline(workflows):

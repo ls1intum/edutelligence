@@ -85,9 +85,9 @@ def health():
             )
             health_status["status"] = "error"
             health_status["components"]["weaviate"]["status"] = "error"
-            health_status["components"]["weaviate"][
-                "message"
-            ] = f"Failed to check required collection {collection_name}"
+            health_status["components"]["weaviate"]["message"] = (
+                f"Failed to check required collection {collection_name}"
+            )
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 content=health_status,
@@ -115,9 +115,9 @@ def health():
         logger.exception("Competency collection readability check failed", exc_info=exc)
         health_status["status"] = "error"
         health_status["components"]["weaviate"]["status"] = "error"
-        health_status["components"]["weaviate"][
-            "message"
-        ] = "Competency collection is not readable"
+        health_status["components"]["weaviate"]["message"] = (
+            "Competency collection is not readable"
+        )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content=health_status,
