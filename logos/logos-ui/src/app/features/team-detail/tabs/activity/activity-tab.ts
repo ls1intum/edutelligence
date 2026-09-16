@@ -16,6 +16,7 @@ import { RequestItem } from '../../../statistics/statistics.models';
 import { deriveStage, formatTimeAgo, formatTokenCount } from '../../../statistics/statistics.utils';
 import { TeamActivityService } from './activity-tab.service';
 import { RequestCursor, TeamActivityPayload, TraceExport, TraceExportItem } from './activity-tab.models';
+import { MostAskedQuestions } from './most-asked-questions';
 
 /** How often the live counts are refreshed while the tab is open. */
 const REFRESH_MS = 5_000;
@@ -40,7 +41,7 @@ const DAY_OPTIONS: AppSelectOption[] = [
 @Component({
   selector: 'app-activity-tab',
   standalone: true,
-  imports: [CommonModule, SelectComponent],
+  imports: [CommonModule, SelectComponent, MostAskedQuestions],
   templateUrl: './activity-tab.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './activity-tab.scss',

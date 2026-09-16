@@ -885,4 +885,45 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("end") Timestamp end,
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT q.content AS question,
+            COUNT(*) AS askCount
+        FROM log_entry le
+        CROSS JOIN LATERAL (
+            SELECT CASE jsonb_typeof(elem -> 'content')
+                       WHEN 'string' THEN elem ->> 'content'
+                       WHEN 'array' THEN (
+                           SELECT string_agg(part ->> 'text', E'\n')
+                           FROM jsonb_array_elements(elem -> 'content') AS part
+                           WHERE part ->> 'type' IN ('text', 'input_text', 'output_text')
+                       )
+                       ELSE NULL
+                   END AS content
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(le.input_payload -> 'messages') = 'array'
+                     THEN le.input_payload -> 'messages'
+                     WHEN jsonb_typeof(le.input_payload -> 'input') = 'array'
+                     THEN le.input_payload -> 'input'
+                     ELSE '[]'::jsonb
+                END
+            ) WITH ORDINALITY AS t(elem, ord)
+            WHERE elem ->> 'role' = 'user'
+            ORDER BY ord DESC
+            LIMIT 1
+        ) q
+        WHERE le.privacy_level = 'FULL'
+        AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+        AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+        AND q.content IS NOT NULL
+        GROUP BY q.content
+        ORDER BY askCount DESC, q.content ASC
+        LIMIT :limitN
+        """, nativeQuery = true)
+    List<MostAskedQuestionProjection> findMostAskedQuestions(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("teamId") Integer teamId,
+        @Param("limitN") int limitN);
 }

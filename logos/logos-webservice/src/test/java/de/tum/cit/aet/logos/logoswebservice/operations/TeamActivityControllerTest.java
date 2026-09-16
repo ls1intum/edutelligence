@@ -198,6 +198,40 @@ class TeamActivityControllerTest {
            .andExpect(jsonPath("$.requests").isEmpty());
     }
 
+    // ── Most Asked Questions ────────────────────────────────────────────────
+    // Counts alone answer "is anything happening"; this answers "what".
+
+    @Test
+    @Sql(scripts = "/sql/seed-operations-most-asked-questions.sql",
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void itGroupsAndCountsTheTeamsQuestions() throws Exception {
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           // 9020 and 9021 ask the same question under FULL logging: one
+           // entry, counted twice. 9022 asks a different question but is
+           // BILLING-only, so it must not surface at all.
+           .andExpect(jsonPath("$.most_asked_questions.length()").value(1))
+           .andExpect(jsonPath("$.most_asked_questions[0].question")
+               .value("What is the capital of France?"))
+           .andExpect(jsonPath("$.most_asked_questions[0].count").value(2));
+    }
+
+    @Test
+    void aTeamWithNoFullLoggingTrafficHasNoQuestions() throws Exception {
+        // 9001 and 9002 (the base seed) carry no privacy_level of FULL, so
+        // nothing was ever consented to be stored — an empty list is the
+        // honest answer, not an error.
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.most_asked_questions").isEmpty());
+    }
+
     // ── Window ───────────────────────────────────────────────────────────────
 
     @Test

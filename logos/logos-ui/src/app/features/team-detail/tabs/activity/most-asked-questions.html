@@ -1,0 +1,14 @@
+<div class="most-asked-questions">
+    @if (questions.length === 0) {
+        <p class="ac-note ac-note--quiet">No questions recorded for this team in the selected period.</p>
+    } @else {
+        <ol>
+            @for (q of questions; track trackByQuestion($index, q)) {
+                <li>
+                    <span class="most-asked-questions__text">{{ q.question }}</span>
+                    <span class="most-asked-questions__count">{{ q.count }}</span>
+                </li>
+            }
+        </ol>
+    }
+</div>
