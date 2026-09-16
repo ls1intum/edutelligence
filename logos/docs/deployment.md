@@ -112,9 +112,14 @@ service unthrottled:
 
 | Middleware | Routers | Default (avg rps / burst) |
 |---|---|---|
-| `rl-model` | `/v1`, `/openai`, and the orchestrator's `/api` fallback | 100 / 200 |
+| `rl-model` | `/v1`, `/openai` | 100 / 200 |
 | `rl-jobs` | `/jobs` | 50 / 100 |
-| `rl-admin` | `/health`, `/docs`, `/metrics`, `/logosdb/providers/logosnode`, and the higher-priority `/api/*` routers (webservice identity/config/admin/WebSocket, logosnode operator actions, agent) | 20 / 40 |
+| `rl-admin` | `/health`, `/docs`, `/metrics`, `/logosdb/providers/logosnode`, the orchestrator's `/api` fallback, and the higher-priority `/api/*` routers (webservice identity/config/admin/WebSocket, logosnode operator actions, agent) | 20 / 40 |
+
+The limiters are defined on the Traefik container itself, not on one of
+the services: every app container references at least one of them, so
+they must survive any single service's restarts (the same reason
+`strip-api` lives there).
 
 Tune per deployment via `.env`: `LOGOS_RATE_LIMIT_MODEL_AVG`,
 `LOGOS_RATE_LIMIT_MODEL_BURST`, `LOGOS_RATE_LIMIT_JOBS_AVG`,

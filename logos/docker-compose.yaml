@@ -33,6 +33,13 @@ services:
       # deployment fronted by an outer reverse proxy (the chair's nginx)
       # adds that proxy's CIDR here — otherwise every client counts as
       # that one proxy IP and the per-IP isolation is lost.
+      # One list is shared with internal8090 and the gateway's real-IP
+      # configuration on purpose: the only source on internal8090 is the
+      # gateway itself (its peer list is this network and Traefik), so an
+      # outer-proxy entry there matches no reachable source; and in the
+      # gateway, real_ip_recursive resolves the client as the rightmost
+      # UNtrusted address in the chain, which is always the real client —
+      # a forged entry sits to its left and is never reached.
       - "--entrypoints.websecure.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--entrypoints.secure8080.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
@@ -63,6 +70,22 @@ services:
       # of strips — a "/api,/agent" list strips only the first match (/api)
       # and hands FastAPI /agent/... paths, which 404.
       - "traefik.http.middlewares.strip-api-agent.stripprefix.prefixes=/api/agent"
+      # Same lifecycle reason as strip-api above: the rl-* limiters are
+      # referenced by routers on THREE containers (orchestrator, webservice,
+      # agent), so they must not be owned by any one of them. When the
+      # orchestrator restarts, Traefik drops its dynamic configuration for a
+      # moment — limiters defined here stay up throughout, so the
+      # webservice/agent routes never reference a missing middleware.
+      #
+      # Per-service request limits (second layer; the first is the per-IP
+      # budget in logos-rate-gateway, see docs/deployment.md). Generous on
+      # purpose — raise via .env when a deployment needs more headroom.
+      - "traefik.http.middlewares.rl-model.ratelimit.average=${LOGOS_RATE_LIMIT_MODEL_AVG:-100}"
+      - "traefik.http.middlewares.rl-model.ratelimit.burst=${LOGOS_RATE_LIMIT_MODEL_BURST:-200}"
+      - "traefik.http.middlewares.rl-jobs.ratelimit.average=${LOGOS_RATE_LIMIT_JOBS_AVG:-50}"
+      - "traefik.http.middlewares.rl-jobs.ratelimit.burst=${LOGOS_RATE_LIMIT_JOBS_BURST:-100}"
+      - "traefik.http.middlewares.rl-admin.ratelimit.average=${LOGOS_RATE_LIMIT_ADMIN_AVG:-20}"
+      - "traefik.http.middlewares.rl-admin.ratelimit.burst=${LOGOS_RATE_LIMIT_ADMIN_BURST:-40}"
     networks:
       - internal
       # Second hop of the per-IP rate limiting: the gateway's only peer on
@@ -190,19 +213,9 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # ── Rate limits (second layer) ──
-      # Generous per-service request limits: Traefik counts per router,
-      # not per client, so they cap one service even when many IPs share
-      # the same key. The first layer — per-IP budgeting with an optional
-      # whitelist — is the logos-rate-gateway service in front of these
-      # routers (see docs/deployment.md).
-      # Raise via .env when a deployment needs more headroom.
-      - "traefik.http.middlewares.rl-model.ratelimit.average=${LOGOS_RATE_LIMIT_MODEL_AVG:-100}"
-      - "traefik.http.middlewares.rl-model.ratelimit.burst=${LOGOS_RATE_LIMIT_MODEL_BURST:-200}"
-      - "traefik.http.middlewares.rl-jobs.ratelimit.average=${LOGOS_RATE_LIMIT_JOBS_AVG:-50}"
-      - "traefik.http.middlewares.rl-jobs.ratelimit.burst=${LOGOS_RATE_LIMIT_JOBS_BURST:-100}"
-      - "traefik.http.middlewares.rl-admin.ratelimit.average=${LOGOS_RATE_LIMIT_ADMIN_AVG:-20}"
-      - "traefik.http.middlewares.rl-admin.ratelimit.burst=${LOGOS_RATE_LIMIT_ADMIN_BURST:-40}"
+      # The rl-* limiters these routers reference are defined on the
+      # Traefik container (see there) so they outlive any single service's
+      # restarts.
 
       # ── User-facing routes (ports 443 + 8080) ──
 
@@ -242,10 +255,14 @@ services:
       # === Routing: /api (all UI-internal endpoints) ===
       # Backend strips the `/api` prefix, so adding a new admin endpoint
       # requires no change here — just a new FastAPI route under any path.
+      # rl-admin, not rl-model: the gateway classifies /api as control-plane
+      # traffic, so the second layer must carry the control-plane budget
+      # too — otherwise the aggregate /api cap here (100 rps) would far
+      # exceed the one every other /api router applies (20 rps).
       - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
       - "traefik.http.routers.logos-orchestrator-api.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-api.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-api.middlewares=rl-model"
+      - "traefik.http.routers.logos-orchestrator-api.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-api.priority=100"
 
       # === Routing: /logosdb/providers/logosnode (workernode protocol) ===
@@ -258,7 +275,7 @@ services:
 
       # === Routing: /docs ===
       - "traefik.http.routers.logos-orchestrator-docs.rule=PathPrefix(`/docs`) ||
-        PathPrefix(`/openapi.json`)"
+        PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`)"
       - "traefik.http.routers.logos-orchestrator-docs.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-docs.service=logos-orchestrator"
       - "traefik.http.routers.logos-orchestrator-docs.middlewares=rl-admin"
