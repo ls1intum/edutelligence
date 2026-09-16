@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 import logos as main
@@ -778,7 +779,7 @@ def test_batch_routes_are_registered_before_the_catch_alls():
         "batches/{batch_id}",
         "batches/{batch_id}/cancel",
     )
-    paths = [route.path for route in main.app.routes]
+    paths = [route.path for route in iter_route_contexts(main.app.routes)]
     for prefix in ("v1", "openai", "jobs/v1", "jobs/openai"):
         for operation in operations:
             assert f"/{prefix}/{operation}" in paths, f"missing route /{prefix}/{operation}"

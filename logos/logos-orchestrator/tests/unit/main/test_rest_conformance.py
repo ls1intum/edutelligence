@@ -7,6 +7,7 @@ proxied upstream operation is a POST. Other methods must yield a proper
 """
 
 from fastapi import HTTPException
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 import logos as main
@@ -39,7 +40,11 @@ def test_models_listing_still_get():
 def test_openai_models_alias_registered():
     # The /openai prefix mirrors /v1; model listing/retrieval must exist there
     # too (previously the catch-all answered these GETs with 400).
-    routes = {(route.path, method) for route in main.app.routes for method in getattr(route, "methods", None) or ()}
+    routes = {
+        (route.path, method)
+        for route in iter_route_contexts(main.app.routes)
+        for method in getattr(route, "methods", None) or ()
+    }
     assert ("/openai/models", "GET") in routes
     assert ("/openai/models/{model_id:path}", "GET") in routes
 
