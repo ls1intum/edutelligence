@@ -42,12 +42,16 @@ class GitHubError(RuntimeError):
     The status is part of the failure, not decoration: "this account is not
     in that team" and "this token may not ask" both arrive as an exception,
     and only the code tells them apart. Losing it made every non-member look
-    like an unanswerable question.
+    like an unanswerable question. A GraphQL call that HTTP-delivered adds
+    its error type on top — the same split, one level down: "thread is
+    gone" and "rate limited" both arrive as an exception with no status,
+    and only the type tells them apart.
     """
 
-    def __init__(self, message: str, *, status: int | None = None) -> None:
+    def __init__(self, message: str, *, status: int | None = None, graphql_type: str | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.graphql_type = graphql_type
 
 
 class IdentityError(RuntimeError):
@@ -81,6 +85,16 @@ async def token_login(token: str, *, timeout_s: float = 15.0) -> str:
     return login
 
 
+# The account's login exactly as the GitHub API spells it, remembered when
+# :func:`verify_identities` confirms a token belongs to the configured
+# account. Marker lookups compare against this spelling — not against the
+# operator's configuration — because the API hands the same spelling back
+# on the author of every comment the account posts. When the identity could
+# not be verified, the lookups fall back to the configured name,
+# case-normalized (the same acceptance startup uses for it).
+_verified_login: str | None = None
+
+
 async def verify_identities() -> list[str]:
     """Check every configured token belongs to the agent account.
 
@@ -95,7 +109,13 @@ async def verify_identities() -> list[str]:
     finalizer verifies the same thing inside the container before it pushes,
     so a network blip at startup cannot smuggle work out under a wrong
     identity.
+
+    When a token resolves to the expected account, the login the API spelled
+    it with is remembered (see :data:`_verified_login`): the configured
+    identity may carry any casing, and that spelling is what later marker
+    lookups recognize their own comments by.
     """
+    global _verified_login
     expected = settings.github_login.strip().lower()
     notes: list[str] = []
     for label, token in (
@@ -117,6 +137,7 @@ async def verify_identities() -> list[str]:
                 f"account only — issue the token from it, or set "
                 f"LOGOS_AGENT_GITHUB_LOGIN to the account it belongs to."
             )
+        _verified_login = login
         notes.append(f"{label} authenticates as {login}")
     return notes
 
@@ -422,6 +443,38 @@ async def _get_all_bounded(path: str, params: dict[str, Any] | None = None) -> t
     return collected, True
 
 
+# The REST API can post an answer into a review thread, but it cannot resolve
+# one: resolution is a GraphQL mutation, and it takes the thread's own node
+# id, which no REST listing of the pull request's comments carries. A call to
+# the same token as every REST call here — no second credential.
+_GRAPHQL = "https://api.github.com/graphql"
+
+
+async def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    """One call to the GraphQL surface. Raises on anything but usable data.
+
+    GitHub answers a bad call two ways: an HTTP error, or a 200 that carries
+    an ``errors`` list beside whatever data it did manage to return. Both are
+    failures — a mutation that reported an error changed nothing, and
+    treating its 200 as success would move on as if it had.
+    """
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(_GRAPHQL, headers=_headers(), json={"query": query, "variables": variables})
+    if response.status_code != 200:
+        raise GitHubError(
+            f"GraphQL failed ({response.status_code}): {response.text[:200]}", status=response.status_code
+        )
+    payload = response.json()
+    errors = payload.get("errors")
+    if errors:
+        # The call was delivered and refused, so no status carries the
+        # reason — the error's type does, and a caller that decides between
+        # retrying and giving up needs it.
+        gtype = next((e.get("type") for e in errors if isinstance(e, dict) and e.get("type")), None)
+        raise GitHubError(f"GraphQL failed: {str(errors)[:200]}", graphql_type=gtype)
+    return payload.get("data") or {}
+
+
 async def _assigned(login: str) -> list[dict[str, Any]]:
     """Every open issue and pull request assigned to an account.
 
@@ -589,6 +642,20 @@ async def latest_changes_requested_review(number: int) -> dict[str, Any] | None:
     return outstanding[-1][1]
 
 
+async def review(number: int, review_id: int) -> dict[str, Any]:
+    """One submitted review, by its own id.
+
+    The review a session answered is read again when the answer is posted:
+    the pull request is re-requested of the reviewer whose name is on *that*
+    review — not whoever happens to hold the newest objection by then, and
+    not a name parsed out of a task that was written hours earlier.
+    """
+    payload = await _get(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}")
+    if not isinstance(payload, dict):
+        raise GitHubError(f"review {review_id} of #{number} answered with {type(payload).__name__}, not a review")
+    return payload
+
+
 async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     """The inline comments belonging to one submitted review.
 
@@ -600,6 +667,229 @@ async def review_comments(number: int, review_id: int) -> list[dict[str, Any]]:
     """
     payload = await _get_all(f"/repos/{settings.repo_slug}/pulls/{number}/reviews/{review_id}/comments")
     return [comment for comment in payload if isinstance(comment, dict)]
+
+
+def _next_page(after: str | None, page: dict[str, Any], what: str) -> str:
+    """The cursor for the next page — or the error that pagination stopped.
+
+    A page that claims there is more and hands back the cursor it was asked
+    with (or none at all) is not a page: following it would read the same
+    page again until the ceiling, spending the rate budget on nothing.
+    """
+    next_after = str(page.get("endCursor") or "")
+    if not next_after or next_after == after:
+        raise GitHubError(f"GitHub stopped paginating {what}: the cursor did not advance")
+    return next_after
+
+
+def _is_our_marker(comment: Any, marker: str) -> bool:
+    """Whether the comment carries the marker — and is the runner's own.
+
+    The session id of a posted marker is visible in the thread, so a
+    participant can write the expected marker into an unanswered thread
+    and suppress the answer that is still owed. A marker counts only when
+    the account it was posted by is the account the runner posts with.
+
+    The comparison is exact, against the login :func:`verify_identities`
+    remembered from the API: the API spells the account's name the same way
+    on every comment it posts, so a differently cased login that merely
+    matches the configured name apart from case is not the account, and
+    must not make the retry skip an answer the session still owes.
+
+    Only when the identity could not be verified (the supported degraded
+    startup, where the API was unreachable at startup and the service
+    continues) is the configured name the only reference — and startup
+    accepts it in any casing, so the fallback normalizes both sides.
+    Without that, a supported differently cased configuration would miss
+    its own remotely accepted markers and the retry would duplicate the
+    answer.
+    """
+    if not isinstance(comment, dict):
+        return False
+    if marker not in str(comment.get("body") or ""):
+        return False
+    author = comment.get("author") or comment.get("user") or {}
+    login = author.get("login") if isinstance(author, dict) else None
+    if not isinstance(login, str):
+        return False
+    if _verified_login is not None:
+        return login == _verified_login
+    return login.strip().lower() == settings.github_login.strip().lower()
+
+
+# A pull request's review threads, paged. Each inline comment starts its own
+# thread — or sits inside the thread of the comment it replies to — and it
+# is the thread, not the comment, that resolution acts on.
+_THREADS_QUERY = """
+query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        nodes {
+          id
+          isResolved
+          comments(first: 100) {
+            nodes { databaseId }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+# The rest of one thread's comments, paged: the first page travels with the
+# thread listing, and a thread that holds more comments than that is read
+# out of the thread itself while the map is built.
+_THREAD_COMMENT_IDS_QUERY = """
+query ReviewThreadCommentIds($threadId: ID!, $after: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) {
+        nodes { databaseId }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+async def review_thread_map(number: int) -> dict[int, dict[str, Any]]:
+    """The pull request's review threads, keyed by the ids of their comments.
+
+    ``{comment id: {"thread": node id, "resolved": bool}}`` — the comment
+    that started a thread and the replies inside it alike, read to the end
+    of every thread, so the id an answer is named after always finds the
+    thread it belongs to, however deep in the thread it sits. A map that
+    cannot be completed raises: a partial one would silently drop a target,
+    and a dropped target is a duplicated answer.
+    """
+    owner, name = settings.repo_slug.split("/", 1)
+    mapped: dict[int, dict[str, Any]] = {}
+    after: str | None = None
+    for _ in range(_MAX_PAGES):
+        data = await _graphql(_THREADS_QUERY, {"owner": owner, "name": name, "number": number, "after": after})
+        connection = (data.get("repository") or {}).get("pullRequest", {}).get("reviewThreads") or {}
+        for node in connection.get("nodes") or []:
+            thread_id = node.get("id")
+            comments = node.get("comments") or {}
+            nested_after: str | None = None
+            for _ in range(_MAX_PAGES):
+                for comment in comments.get("nodes") or []:
+                    comment_id = comment.get("databaseId") if isinstance(comment, dict) else None
+                    if isinstance(comment_id, int) and comment_id not in mapped:
+                        mapped[comment_id] = {"thread": thread_id, "resolved": bool(node.get("isResolved"))}
+                page = comments.get("pageInfo") or {}
+                if not page.get("hasNextPage"):
+                    break
+                nested_after = _next_page(nested_after, page, f"the comments of thread {thread_id} on #{number}")
+                more = await _graphql(_THREAD_COMMENT_IDS_QUERY, {"threadId": thread_id, "after": nested_after})
+                comments = (more.get("node") or {}).get("comments") or {}
+            else:
+                raise GitHubError(
+                    f"could not map all comments of thread {thread_id} on #{number}: more than {_MAX_PAGES} pages"
+                )
+        page = connection.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return mapped
+        after = _next_page(after, page, f"the review threads of #{number}")
+    # An incomplete map would leave a resolved-and-answered thread
+    # unresolved while the delivery claims success: raising hands the
+    # sweep back to the retry instead.
+    raise GitHubError(f"could not map all review threads of #{number}: more than {_MAX_PAGES} pages")
+
+
+# The comments of one review thread, paged. A reply that a lost POST
+# confirmation left behind is one of the thread's comments, and only the
+# bodies can say whether it is there — and only the runner's own: a marker
+# in somebody else's comment is a comment about the marker, not delivery.
+_THREAD_COMMENTS_QUERY = """
+query ReviewThreadComments($threadId: ID!, $after: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) {
+        nodes { body author { login } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+async def review_reply_is_in_thread(
+    number: int, comment_id: int, marker: str, threads: dict[int, dict[str, Any]] | None = None
+) -> bool:
+    """Whether the marked answer is already in the thread of its comment.
+
+    A POST that GitHub accepted but whose confirmation never arrived left
+    the reply in the thread without the delivery state ever learning of
+    it. Before the same answer is posted again, the thread it went into is
+    asked for the marker that ties a posted answer to the session that
+    wrote it — through every page of the thread's comments, because the
+    reply can sit anywhere in them. A look-up that cannot be completed
+    raises rather than risking the duplicate.
+
+    ``threads`` is the map of the delivery (see :func:`review_thread_map`):
+    a delivery asks about many comments, and the map — with all of its
+    pages — is built once for all of them. Without it, the map is built
+    here on the spot.
+    """
+    # The reply went into the thread the map names for the comment — the
+    # one it starts, or the one of the comment it replies to. A comment
+    # the map does not name at all cannot be looked for, and the POST goes
+    # ahead as before.
+    if threads is None:
+        threads = await review_thread_map(number)
+    thread_id = str((threads.get(comment_id) or {}).get("thread") or "")
+    if not thread_id:
+        logger.warning(
+            "comment %s on #%s is in no review thread; its posted answer cannot be looked for",
+            comment_id,
+            number,
+        )
+        return False
+    after: str | None = None
+    for _ in range(_MAX_PAGES):
+        data = await _graphql(_THREAD_COMMENTS_QUERY, {"threadId": thread_id, "after": after})
+        connection = (data.get("node") or {}).get("comments") or {}
+        if any(_is_our_marker(c, marker) for c in connection.get("nodes") or []):
+            return True
+        page = connection.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return False
+        after = _next_page(after, page, f"the thread of comment {comment_id} on #{number}")
+    raise GitHubError(
+        f"could not finish looking through the thread of comment {comment_id} on #{number}: "
+        f"more than {_MAX_PAGES} pages of comments"
+    )
+
+
+async def resolve_review_threads(thread_ids: list[str]) -> None:
+    """Mark review threads as resolved, one at a time.
+
+    The gesture a person makes once a point is dealt with: the thread leaves
+    the pull request's active list. ``resolveReviewThread`` answers a null
+    when it could not resolve what it was given — the thread moved, or the
+    token may not act on it; that is logged and the rest still goes on. A
+    call that reports an error raises instead, and the caller retries the
+    whole sweep rather than claiming a resolution that did not happen.
+    """
+    for thread_id in thread_ids:
+        if not thread_id:
+            continue
+        # The mutation takes its id wrapped — `input: {threadId}` — and
+        # answers with the thread it resolved, not the id it was given.
+        data = await _graphql(
+            "mutation ResolveReviewThread($threadId: ID!) "
+            "{ resolveReviewThread(input: {threadId: $threadId}) { thread { id } } }",
+            {"threadId": thread_id},
+        )
+        if data.get("resolveReviewThread") is None:
+            logger.warning("could not resolve review thread %s: GitHub declined without an error", thread_id)
 
 
 async def pull_inline_comments(number: int) -> list[dict[str, Any]]:
@@ -987,6 +1277,23 @@ async def post_issue_comment(number: int, body: str) -> str:
     return str(response.json().get("html_url") or "")
 
 
+async def issue_comment_contains(number: int, marker: str) -> bool:
+    """Whether the pull request's comments already carry the marked answer.
+
+    A comment POST is not idempotent, and a confirmation that never
+    arrived leaves the posted comment behind without the delivery state
+    ever learning of it — this is how the next pass finds it instead of
+    posting the same answer twice. A listing that could not be read in
+    full cannot rule the marker out, so it raises rather than answer no;
+    and a marker in somebody else's comment is not delivery, whatever it
+    says.
+    """
+    comments, incomplete = await _get_all_bounded(f"/repos/{settings.repo_slug}/issues/{number}/comments")
+    if incomplete:
+        raise GitHubError(f"could not finish reading the comments of #{number}: the listing is incomplete")
+    return any(_is_our_marker(c, marker) for c in comments)
+
+
 async def reply_to_review_comment(number: int, comment_id: int, body: str) -> str:
     """Answer inside an inline review thread. Returns the comment url.
 
@@ -1005,6 +1312,32 @@ async def reply_to_review_comment(number: int, comment_id: int, body: str) -> st
             f"reply to comment {comment_id} on #{number} failed ({response.status_code}): {response.text[:200]}"
         )
     return str(response.json().get("html_url") or "")
+
+
+async def request_pull_review(number: int, logins: list[str]) -> None:
+    """Ask the named people to review the pull request again.
+
+    A reviewer who asked for changes keeps the pull request in "changes
+    requested" until they look at it again — and nothing puts it back in
+    front of them: the state stands until the reviewer submits a new review.
+    This is the re-request: the answers are in the threads, the checks have
+    had their turn, and the ball is theirs. Asking someone who is already
+    requested is a no-op GitHub answers the same way, which is what makes
+    the call safe to retry.
+    """
+    if not logins:
+        return
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{_API}/repos/{settings.repo_slug}/pulls/{number}/requested_reviewers",
+            headers=_headers(),
+            json={"reviewers": list(logins)},
+        )
+    if response.status_code not in (200, 201, 204):
+        raise GitHubError(
+            f"review request on #{number} failed ({response.status_code}): {response.text[:200]}",
+            status=response.status_code,
+        )
 
 
 def head_of(pull: dict[str, Any]) -> tuple[str, str]:
