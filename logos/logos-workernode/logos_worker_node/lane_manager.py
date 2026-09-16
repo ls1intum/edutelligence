@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import socket
+import time
 from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Awaitable, Callable, Iterable
@@ -350,6 +351,20 @@ class LaneManager:
         self._starting_deadlines: dict[str, float] = {}
         self._status_revision = 0
         self._status_event = asyncio.Event()
+        # Per-lane status TTL cache for the request hot path (acquire_lane_
+        # for_infer). A status build costs three HTTP probes against the lane
+        # (loaded models, metrics, sleep state); before this, EVERY request
+        # paid that. Entries expire after _lane_status_ttl_seconds and any
+        # lifecycle event clears the whole cache via _mark_status_dirty, so
+        # only steady-state re-acquires of an unchanged lane are served from
+        # cache. 0 disables the cache (legacy per-call build).
+        try:
+            _lane_status_ttl = float(os.getenv("LOGOS_LANE_STATUS_TTL_S") or 1.0)
+        except (TypeError, ValueError):
+            _lane_status_ttl = 1.0
+        self._lane_status_ttl_seconds = _lane_status_ttl if _lane_status_ttl > 0 else 0.0
+        # lane_id -> (built_at monotonic, LaneStatus)
+        self._lane_status_cache: dict[str, tuple[float, LaneStatus]] = {}
         self._model_profiles = model_profiles
         self._last_profile_state: dict[str, str] = {}
         # Stuck-inference detection: track BOTH prompt_tokens_total and
@@ -1520,7 +1535,11 @@ class LaneManager:
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
-            self._mark_status_dirty()
+            # No _mark_status_dirty() here: counting a request is not a
+            # lifecycle change. Waking the refresh loop per request triggered
+            # a full-node status build (all lanes, all probes) next to the
+            # relay — the worker's biggest per-request cost (#980 W3). The
+            # bridge loop reports count changes within ~1s on its own tick.
 
     async def acquire_lane_for_infer(self, lane_id: str) -> LaneStatus:
         """Atomically verify the lane is routable AND count the request under a
@@ -1554,7 +1573,7 @@ class LaneManager:
                     f"(runtime_state={status.runtime_state}, sleep_state={status.sleep_state})"
                 )
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
-            self._mark_status_dirty()
+            # See increment_active_requests: no dirty mark on the hot path.
             return status
 
     async def decrement_active_requests(self, lane_id: str) -> None:
@@ -1563,7 +1582,20 @@ class LaneManager:
                 return
             current = self._active_requests.get(lane_id, 0)
             self._active_requests[lane_id] = max(0, current - 1)
-            self._mark_status_dirty()
+            # See increment_active_requests: no dirty mark on the hot path.
+
+    async def total_active_requests(self) -> int:
+        """Total in-flight requests across all lanes (lock-protected).
+
+        The bridge refresh loop polls this once per tick and compares it with
+        the total in the last runtime payload it pushed: while per-request
+        counting no longer wakes the loop (no dirty marks), a count change
+        that lands between two ticks is still reported on the next one, so
+        active_requests stays at most ~1 tick stale instead of up to a full
+        status_refresh_interval_seconds.
+        """
+        async with self._lock:
+            return sum(self._active_requests.values())
 
     @property
     def lane_ids(self) -> list[str]:
@@ -2816,16 +2848,36 @@ class LaneManager:
     def _mark_status_dirty(self) -> None:
         self._status_revision += 1
         self._status_event.set()
+        # A dirty mark is a lifecycle signal (lane added/removed/slept/woken/
+        # reconfigured/crashed): whatever a cached status said about any lane
+        # may now be wrong, so drop the whole cache. The per-request hot path
+        # (increment/acquire/decrement) deliberately does NOT mark dirty —
+        # that is what keeps the TTL cache warm (#980 W3); active-request
+        # counts are reported by the bridge refresh loop instead.
+        self._lane_status_cache.clear()
 
     async def _get_status_unlocked(self, lane_id: str) -> LaneStatus:
         handle = self._handles.get(lane_id)
         if handle is None:
             raise KeyError(f"Lane '{lane_id}' not found")
         ps = handle.status()
+        if self._lane_status_ttl_seconds > 0:
+            cached = self._lane_status_cache.get(lane_id)
+            # The cheap synchronous process check is ALWAYS consulted fresh:
+            # a dead process must never be masked by a cached status. While
+            # the process is alive, a steady-state re-acquire within the TTL
+            # is served from the cache instead of three HTTP probes.
+            if cached is not None and ps.state == ProcessState.RUNNING:
+                built_at, status = cached
+                if time.monotonic() - built_at < self._lane_status_ttl_seconds:
+                    return status
         pid_vram_map = await self._query_process_vram_map(
             [ps.pid] if ps.state == ProcessState.RUNNING and ps.pid is not None else []
         )
-        return await self._build_lane_status(handle, pid_vram_map)
+        status = await self._build_lane_status(handle, pid_vram_map)
+        if self._lane_status_ttl_seconds > 0:
+            self._lane_status_cache[lane_id] = (time.monotonic(), status)
+        return status
 
     async def _collect_statuses_unlocked(self) -> list[LaneStatus]:
         handles = list(self._handles.values())

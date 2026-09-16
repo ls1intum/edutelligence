@@ -111,6 +111,11 @@ class LogosBridgeClient:
         self._command_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
+        # One pooled relay client shared by every infer/stream command instead
+        # of a fresh AsyncClient (and a fresh TCP connection to the lane) per
+        # request. It outlives individual commands, so command finally-blocks
+        # must NOT close it — stop() does.
+        self._relay_client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         self._connected = False
         self._last_connected_at: datetime | None = None
         self._last_status_sent_at: datetime | None = None
@@ -168,14 +173,15 @@ class LogosBridgeClient:
 
     async def stop(self) -> None:
         self._stopping.set()
-        if self._task is None:
-            return
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
+        task = self._task
         self._task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._relay_client.aclose()
         self._connected = False
         logger.info("Logos bridge stopped")
 
@@ -359,7 +365,17 @@ class LogosBridgeClient:
             # bumps). The signature dedupe inside _send_runtime_status keeps
             # this cheap when nothing actually changed.
             interval_elapsed = (now - last_refresh) >= refresh_interval
-            if changed or self._runtime_has_transient_lanes() or interval_elapsed:
+            # Per-request counting no longer bumps the status revision (#980
+            # W3: the dirty marks triggered a full-node status build on every
+            # request), so the loop watches the in-flight total itself. A
+            # count that differs from the last pushed payload is reported on
+            # this tick — active_requests stays at most ~1 tick stale instead
+            # of up to a full refresh interval.
+            count_changed = (
+                await lane_manager.total_active_requests()
+                != int(self._last_runtime_payload.get("active_requests", 0))
+            )
+            if changed or self._runtime_has_transient_lanes() or interval_elapsed or count_changed:
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
 
@@ -2138,13 +2154,12 @@ class LogosBridgeClient:
                 request_path = params.get("request_path")
                 target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
                 request_kwargs, request_headers = httpx_request_parts(payload)
-            async with httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT) as client:
-                with _perf_phase(tracer, "relay.post"):
-                    upstream = await client.post(
-                        target_url,
-                        headers=request_headers,
-                        **request_kwargs,
-                    )
+            with _perf_phase(tracer, "relay.post"):
+                upstream = await self._relay_client.post(
+                    target_url,
+                    headers=request_headers,
+                    **request_kwargs,
+                )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
         finally:
@@ -2227,7 +2242,10 @@ class LogosBridgeClient:
             )
             return
 
-        client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
+        # Shared pooled client (see __init__): the finally below must NOT
+        # close it — only the streamed response, which is what makes vLLM
+        # abort the sequence. stop() closes the client itself.
+        client = self._relay_client
         upstream = None
         try:
             request_path = params.get("request_path")
@@ -2339,13 +2357,16 @@ class LogosBridgeClient:
                 },
             )
         finally:
-            # Decrement before aclose() so that a client-side disconnect that
-            # leaves httpx draining the upstream stream does not keep
-            # worker_active > 0 and falsely trigger proxy_stuck detection.
+            # Decrement before the response is closed so that a client-side
+            # disconnect that leaves httpx draining the upstream stream does
+            # not keep worker_active > 0 and falsely trigger proxy_stuck
+            # detection.
             #
-            # Guarded so a lane-manager failure cannot skip the aclose below:
+            # Guarded so a lane-manager failure cannot skip the close below:
             # on the cancellation path that close is the whole point — it is
             # what makes vLLM abort the sequence and release its KV blocks.
+            # Only the streamed response is closed; the pooled client is
+            # shared with every other command and outlives this one.
             try:
                 await lane_manager.decrement_active_requests(lane_id)
             except Exception:  # noqa: BLE001
@@ -2360,7 +2381,3 @@ class LogosBridgeClient:
                     await asyncio.wait_for(upstream.aclose(), timeout=5.0)
                 except Exception:  # noqa: BLE001
                     pass
-            try:
-                await asyncio.wait_for(client.aclose(), timeout=5.0)
-            except Exception:  # noqa: BLE001
-                pass

@@ -575,7 +575,12 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_status_revision_advances_on_active_request_change() -> None:
+async def test_status_revision_no_longer_advances_on_active_request_change() -> None:
+    """#980 W3: counting a request is not a lifecycle change. Bumping the
+    revision per request woke the bridge refresh loop into a full-node status
+    build (all lanes, all probes) next to the relay — the worker's biggest
+    per-request cost. The loop now reports count changes on its own ~1s tick
+    by polling total_active_requests instead."""
     manager = LaneManager(WorkerConfig(), lane_port_start=15060, lane_port_end=15070)
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
@@ -590,12 +595,14 @@ async def test_status_revision_advances_on_active_request_change() -> None:
 
     initial = manager.status_revision
     await manager.increment_active_requests(lane_id)
-    after_inc = await manager.wait_for_status_revision(initial, timeout=0.01)
-    assert after_inc > initial
+    # No revision change: wait_for_status_revision times out on the same
+    # revision instead of returning a newer one.
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    assert await manager.total_active_requests() == 1
 
     await manager.decrement_active_requests(lane_id)
-    after_dec = await manager.wait_for_status_revision(after_inc, timeout=0.01)
-    assert after_dec > after_inc
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    assert await manager.total_active_requests() == 0
 
 
 def test_auto_tp_keeps_tp1_when_model_fits() -> None:
