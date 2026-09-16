@@ -88,9 +88,14 @@ export class ModelAccess implements OnInit {
   }
 
   // ── Matrix helpers ───────────────────────────────────────────────────────
-  /** Model grant without any host-provider grant: can never route. */
+  /**
+   * Model grant without any host-provider grant: can never route. Derived
+   * from the grants themselves, NOT from effective_access — an inactive key
+   * holds both grants (so it is not orphaned, just inactive), while
+   * effective_access is false for it as well.
+   */
   isOrphaned(entry: TeamAccess | KeyAccess): boolean {
-    return entry.model_grant && !entry.effective_access;
+    return entry.model_grant && !entry.provider_grants.some((g) => g.granted);
   }
 
   /** Host-provider grant without the model grant: secondary signal. */
