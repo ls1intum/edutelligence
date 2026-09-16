@@ -1,6 +1,6 @@
 """Azure deployment auto-sync.
 
-Discovers the deployments live on each Azure OpenAI resource and upserts them
+Discovers the deployments live on each Azure resource and upserts them
 into the Logos database (``models`` + ``model_provider``) so the catalogue
 mirrors what is actually deployed. Runs once on startup and then every 24h.
 
@@ -12,7 +12,8 @@ Azure quirks this handles:
     ``model`` it serves (e.g. id ``gpt-4o`` serving model ``gpt-5.1``). Models
     are named by the served ``model``; the URL uses the deployment ``id``.
   * Different model families need different operation paths / api-versions
-    (chat completions, the Responses API, embeddings, audio, images).
+    (chat completions, the Responses API, embeddings, audio, images, and
+    native Anthropic Messages).
 """
 
 import asyncio
@@ -73,8 +74,8 @@ def classify_azure_operation(model_name: str) -> AzureOperation:
     """Map a served Azure model name to its operation path + api-version.
 
     Best-effort by family. Chat completions is the default; the special cases
-    cover embeddings, audio (whisper/tts), images, and the Responses API used
-    by the gpt-5.x reasoning models (gpt-5-chat stays on chat/completions).
+    cover embeddings, audio (whisper/tts), images, and the     Responses API used by the gpt-5.x reasoning models (gpt-5-chat stays on
+    chat/completions), and native Anthropic Messages for Claude deployments.
     """
     m = model_name.lower()
 
@@ -90,6 +91,8 @@ def classify_azure_operation(model_name: str) -> AzureOperation:
     # config for the gpt-5.4 family); gpt-5-chat is a normal chat model.
     if re.match(r"^gpt-5", m) and "chat" not in m:
         return AzureOperation("responses", _RESPONSES_API_VERSION)
+    if m.startswith("claude-"):
+        return AzureOperation("anthropic/v1/messages", "")
     return AzureOperation("chat/completions", _CHAT_API_VERSION)
 
 
@@ -159,6 +162,8 @@ def build_azure_endpoint(host: str, deployment_id: str, op: AzureOperation) -> s
     rewrites the body ``model`` to ``<id>`` at forward time.
     """
     host = host.rstrip("/")
+    if op.suffix == "anthropic/v1/messages":
+        return f"{host}/{op.suffix}"
     return f"{host}/openai/deployments/{deployment_id}/{op.suffix}?api-version={op.api_version}"
 
 
@@ -225,6 +230,9 @@ class AzureDeploymentSyncService:
         self._enabled = enabled
         self._on_models_changed = on_models_changed
         self._task: Optional[asyncio.Task] = None
+        self._refresh_task: Optional[asyncio.Task] = None
+        self._refresh_pending = False
+        self._pass_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if not self._enabled:
@@ -235,14 +243,36 @@ class AzureDeploymentSyncService:
         await self.run_once()
         self._task = asyncio.create_task(self._loop())
 
-    async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
+    def request_refresh(self) -> None:
+        """Sync Azure providers immediately after a provider change."""
+        if not self._enabled:
+            return
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_pending = True
+            return
+        self._refresh_task = asyncio.create_task(self._refresh_loop())
+
+    async def _refresh_loop(self) -> None:
+        while True:
+            self._refresh_pending = False
             try:
-                await self._task
+                await self.run_once()
+            except Exception:  # noqa: BLE001
+                logger.exception("Azure deployment sync: out-of-band refresh failed")
+            if not self._refresh_pending:
+                return
+
+    async def stop(self) -> None:
+        for attr in ("_task", "_refresh_task"):
+            task = getattr(self, attr)
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
             except asyncio.CancelledError:
                 pass
-            self._task = None
+            setattr(self, attr, None)
 
     async def _loop(self) -> None:
         while True:
@@ -254,6 +284,10 @@ class AzureDeploymentSyncService:
 
     async def run_once(self) -> None:
         """Sync every Azure provider once. Never raises."""
+        async with self._pass_lock:
+            await self._run_pass()
+
+    async def _run_pass(self) -> None:
         try:
             with DBManager() as db:
                 providers = db.get_azure_providers()

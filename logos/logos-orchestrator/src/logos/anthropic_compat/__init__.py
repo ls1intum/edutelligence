@@ -74,6 +74,8 @@ def dialect_for(
         return UpstreamDialect.RESPONSES
     if path.endswith("/chat/completions"):
         return UpstreamDialect.CHAT_COMPLETIONS
+    if path.endswith("/messages"):
+        return UpstreamDialect.NATIVE
     if (provider_type or "").lower() == "logosnode":
         return UpstreamDialect.NATIVE
     if (cloud_provider_type or "").lower() in _NATIVE_CLOUD_PROVIDERS:

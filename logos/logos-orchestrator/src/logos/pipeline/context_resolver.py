@@ -120,6 +120,10 @@ class ContextResolver:
             auth_name = (auth_info.get("auth_name") or "").strip()
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
+            endpoint = auth_info.get("endpoint") or ""
+            endpoint_cloud_type = (
+                "anthropic" if endpoint.split("?", 1)[0].rstrip("/").endswith("/messages") else cloud_type
+            )
 
             # Cloud credentials get the convention the provider form advertises
             # filled in — see ``cloud_auth_header``, which the model sync uses
@@ -128,7 +132,7 @@ class ContextResolver:
             # rather than an unauthenticated request.
             auth_value = auth_format.format(api_key or "")
             if provider_type != "logosnode":
-                header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
+                header = cloud_auth_header(auth_name, auth_format, api_key, endpoint_cloud_type)
                 if header is None:
                     if auth_name or auth_format:
                         logger.error(
@@ -249,7 +253,7 @@ class ContextResolver:
         anthropic_dialect = (
             dialect_for(
                 provider_type=provider_type,
-                cloud_provider_type=cloud_type,
+                cloud_provider_type=endpoint_cloud_type,
                 forward_url=forward_url,
             )
             if is_messages_path(request_path)
@@ -268,7 +272,7 @@ class ContextResolver:
             lane_id=lane_id,
             azure_responses_deployment=azure_responses_deployment,
             anthropic_dialect=anthropic_dialect,
-            protocol_headers=cloud_protocol_headers(cloud_type) if provider_type == "cloud" else {},
+            protocol_headers=cloud_protocol_headers(endpoint_cloud_type) if provider_type == "cloud" else {},
         )
 
     @staticmethod

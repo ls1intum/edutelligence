@@ -178,6 +178,8 @@ async def internal_refresh_pipeline(data: RefreshPipelineRequest, request: Reque
         # timeout. The pass refreshes runtime state itself once it finds
         # something, so nothing is lost by returning first.
         _main._cloud_model_sync.request_refresh()
+    if data.sync_cloud_models and _main._azure_deployment_sync is not None:
+        _main._azure_deployment_sync.request_refresh()
     return {"status": "ok"}
 
 

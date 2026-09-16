@@ -1,6 +1,7 @@
 """Pure-function tests for Azure deployment auto-sync planning."""
 
 from logos.pipeline.ettft_estimator import ReadinessTier, estimate_ettft_azure
+from logos.anthropic_compat import UpstreamDialect, dialect_for
 from logos.sdi.azure_deployment_sync import (
     _warn_if_not_an_azure_endpoint,
     azure_host_from_base_url,
@@ -19,6 +20,12 @@ def test_host_from_base_url():
 
 def test_classify_chat_default():
     assert classify_azure_operation("gpt-4.1-mini").suffix == "chat/completions"
+
+
+def test_classify_claude_as_native_anthropic_messages():
+    op = classify_azure_operation("claude-opus-5")
+    assert op.suffix == "anthropic/v1/messages"
+    assert op.api_version == ""
 
 
 def test_classify_responses_for_gpt5_reasoning():
@@ -48,6 +55,27 @@ def test_build_endpoint_responses_is_deployment_scoped():
     op = classify_azure_operation("gpt-5.4")
     assert build_azure_endpoint(HOST, "gpt-51", op) == (
         f"{HOST}/openai/deployments/gpt-51/responses?api-version={op.api_version}"
+    )
+
+
+def test_build_endpoint_claude_uses_native_anthropic_route():
+    op = classify_azure_operation("claude-opus-5")
+    assert build_azure_endpoint(HOST, "claude-opus-5", op) == f"{HOST}/anthropic/v1/messages"
+
+
+def test_plan_claude_uses_native_anthropic_route():
+    planned = plan_sync(HOST, [{"id": "claude-opus-5", "model": "claude-opus-5", "status": "succeeded"}])
+    assert planned == [{"model_name": "claude-opus-5", "endpoint": f"{HOST}/anthropic/v1/messages"}]
+
+
+def test_claude_endpoint_is_native_messages_dialect():
+    assert (
+        dialect_for(
+            provider_type="cloud",
+            cloud_provider_type="azure",
+            forward_url=f"{HOST}/anthropic/v1/messages",
+        )
+        is UpstreamDialect.NATIVE
     )
 
 
