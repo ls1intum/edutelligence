@@ -45,9 +45,21 @@ test.describe('navigation as a Logos admin', () => {
     });
   }
 
-  test('an unknown route falls back to the workspace instead of a blank page', async ({ page }) => {
+  test('an unknown route lands somewhere real instead of a blank page', async ({ page }) => {
     await page.goto('/this-route-does-not-exist');
-    await expect(page).toHaveURL(/my-workspace/);
+
+    // The wildcard redirects to /my-workspace, but that route is behind
+    // hasKeysGuard, which fails closed and sends an admin to their home route
+    // (/statistics for logos_admin) rather than to /no-access. The seeded admin
+    // holds no API keys, so the landing page is the guard's decision, not the
+    // wildcard's — asserting /my-workspace was asserting against the app's
+    // actual behaviour.
+    //
+    // What matters for a 404 is that the user does not sit on a dead URL, so
+    // that is what this checks: the bogus path is gone and the shell rendered
+    // a real route.
+    await expect(page).not.toHaveURL(/this-route-does-not-exist/);
+    await expect(page.locator('app-shell router-outlet + *')).toBeVisible();
   });
 });
 

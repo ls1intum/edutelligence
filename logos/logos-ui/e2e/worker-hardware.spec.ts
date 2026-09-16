@@ -9,7 +9,15 @@ import { SIMULATED_FLEET } from './fixtures';
  * reports it over the WebSocket bridge, the orchestrator plans against it, and
  * the browser renders it. A panel that quietly falls back to a placeholder when
  * the shape of that payload changes is invisible to every other tier.
+ *
+ * None of these wait for `networkidle`. These pages poll live worker state and
+ * hold a stats WebSocket open, so the network never goes idle and that wait can
+ * only ever time out — it did, on all three tests here. Web-first assertions
+ * retry on their own, which is both the correct tool and a faster one.
  */
+
+/** The routed page has rendered inside the shell (not merely the shell itself). */
+const routedContent = 'app-shell router-outlet + *';
 
 test.describe('worker hardware', () => {
   test('the statistics page loads without console errors', async ({ page }) => {
@@ -21,9 +29,11 @@ test.describe('worker hardware', () => {
 
     await page.goto('/statistics');
     await expect(page).toHaveTitle(/Statistics/i);
+    await expect(page.locator(routedContent)).toBeVisible();
 
-    // The panels poll live worker state; give the first payload time to land.
-    await page.waitForLoadState('networkidle');
+    // Let the first poll land, so an error thrown while rendering live worker
+    // data is caught rather than raced past.
+    await expect(page.locator('body')).toContainText(SIMULATED_FLEET[0].gpu, { timeout: 30_000 });
 
     // Failed asset requests and auth noise are not what this asserts on —
     // an unhandled exception in a panel is.
@@ -33,7 +43,7 @@ test.describe('worker hardware', () => {
 
   test('every simulated GPU reaches the browser', async ({ page }) => {
     await page.goto('/statistics');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator(routedContent)).toBeVisible();
 
     const body = page.locator('body');
     for (const node of SIMULATED_FLEET) {
@@ -47,7 +57,7 @@ test.describe('worker hardware', () => {
   test('the providers page lists the registered worker nodes', async ({ page }) => {
     await page.goto('/providers');
     await expect(page).toHaveTitle(/Providers/i);
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator(routedContent)).toBeVisible();
 
     // Nodes self-register under their container hostname, so the assertion is on
     // the provider type rather than on a name that changes every run.
