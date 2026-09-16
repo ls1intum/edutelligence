@@ -1014,7 +1014,7 @@ class LogosBridgeClient:
             "fit_tp_current": None,
             "unsupported_reason": None,
             "model_kind": (
-                classify_model_kind(hf_meta.pipeline_tag, hf_meta.architectures)
+                classify_model_kind(hf_meta.pipeline_tag, hf_meta.architectures, hf_meta.model_type)
                 if hf_meta is not None
                 else "generative"
             ),

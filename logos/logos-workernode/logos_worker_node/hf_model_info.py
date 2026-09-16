@@ -38,7 +38,7 @@ _ERROR_CACHE_TTL_S = 3600  # retry failures (network blips, rate limits) sooner
 # no such key at all, and HfModelMetadata(**entry) would otherwise
 # default it to None indistinguishably from a model that genuinely has
 # no pipeline_tag on the Hub, misclassifying it generative.
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 _CACHE_VERSION_KEY = "_cache_schema_version"  # not a real field — see put()/_is_valid_entry
 
 # "can serve at least one short request" bar for the min-KV skip gate.
@@ -88,12 +88,31 @@ _POOLING_ARCH_MARKERS = (
     "RewardModel",
 )
 
+# config.json's own "model_type" field — a third signal, checked only when
+# neither pipeline_tag nor an architecture-name substring decided it. It's
+# present on virtually every HF repo regardless of whether the repo curated
+# a pipeline_tag or named its wrapper class in a way the markers above would
+# catch. Kept narrow (transcription only, no pooling entries): unlike ASR
+# model_types, many pooling-capable model_types (e.g. "bert", "qwen2") are
+# also used by ordinary generative/classification checkpoints, so guessing
+# "pooling" from model_type alone would reintroduce the misclassification
+# risk this module exists to avoid.
+_MODEL_TYPE_KIND: dict[str, str] = {
+    "whisper": "transcription",
+    "wav2vec2": "transcription",
+    "speech_to_text": "transcription",
+    "seamless_m4t": "transcription",
+    "moonshine": "transcription",
+}
 
-def classify_model_kind(pipeline_tag: str | None, architectures: list[str] | None) -> str:
+
+def classify_model_kind(
+    pipeline_tag: str | None, architectures: list[str] | None, model_type: str | None = None
+) -> str:
     """Route calibration's functional probe: "generative" / "pooling" /
     "transcription".
 
-    Deliberately conservative: defaults to "generative" whenever neither
+    Deliberately conservative: defaults to "generative" whenever no
     signal is conclusive, so an unrecognized model gets the safe,
     already-proven probe instead of risking a false-positive calibration
     failure.
@@ -107,6 +126,9 @@ def classify_model_kind(pipeline_tag: str | None, architectures: list[str] | Non
     for arch in architectures or ():
         if any(marker in arch for marker in _POOLING_ARCH_MARKERS):
             return "pooling"
+    kind = _MODEL_TYPE_KIND.get((model_type or "").lower())
+    if kind is not None:
+        return kind
     return "generative"
 
 
@@ -155,6 +177,9 @@ class HfModelMetadata:
     # model class instead of always assuming /v1/completions.
     pipeline_tag: str | None = None
     architectures: list[str] | None = None
+    # config.json's own "model_type" (e.g. "whisper") — a third
+    # classification signal for classify_model_kind, see _MODEL_TYPE_KIND.
+    model_type: str | None = None
     fetched_at: float = 0.0
     source: str = "error:unknown"  # "hf" on success, "error:<reason>" otherwise
     error: str | None = None
@@ -177,6 +202,7 @@ _HF_METADATA_VALUE_TYPES: dict[str, tuple[type, ...]] = {
     "quantization_method": (str,),
     "pipeline_tag": (str,),
     "architectures": (list,),
+    "model_type": (str,),
     "fetched_at": (int, float),
     "source": (str,),
     "error": (str,),
@@ -356,6 +382,7 @@ def _fetch_uncached(
     max_context_length: int | None = None
     quantization_method: str | None = None
     architectures: list[str] | None = None
+    model_type: str | None = None
     try:
         # etag_timeout only bounds the existence check, not the (tiny)
         # config.json transfer itself — hf_hub_download has no knob for that.
@@ -380,6 +407,8 @@ def _fetch_uncached(
         raw_architectures = config.get("architectures")
         if isinstance(raw_architectures, list) and raw_architectures:
             architectures = [str(a) for a in raw_architectures]
+        raw_model_type = config.get("model_type")
+        model_type = str(raw_model_type) if raw_model_type else None
     except GatedRepoError as exc:
         gated = True
         logger.debug("[HF precheck] config.json gated for %s: %s", model_name, exc)
@@ -396,7 +425,22 @@ def _fetch_uncached(
     if gated:
         return HfModelMetadata(source="error:model-gated", error="repository access requires an authorized HF_TOKEN")
 
-    if weight_bytes is None and kv_per_token_bytes is None and max_context_length is None:
+    # weight_bytes/kv_per_token_bytes/max_context_length feed VRAM sizing;
+    # pipeline_tag/architectures/model_type feed classify_model_kind. The two
+    # groups are independent — an architecture whose config.json doesn't fit
+    # the VRAM-sizing fields (e.g. an encoder-decoder ASR model, which has
+    # neither num_hidden_layers/hidden_size nor max_position_embeddings) can
+    # still carry a perfectly good classification signal. Only report
+    # "no-data" when BOTH groups came back empty, so a real fetch failure
+    # isn't confused with "fetched fine, just an unfamiliar config shape".
+    if (
+        weight_bytes is None
+        and kv_per_token_bytes is None
+        and max_context_length is None
+        and pipeline_tag is None
+        and architectures is None
+        and model_type is None
+    ):
         return HfModelMetadata(source="error:no-data", error="neither weights nor config.json were reachable")
 
     return HfModelMetadata(
@@ -410,6 +454,7 @@ def _fetch_uncached(
         quantization_method=quantization_method,
         pipeline_tag=pipeline_tag,
         architectures=architectures,
+        model_type=model_type,
         fetched_at=time.time(),
         source="hf",
     )
