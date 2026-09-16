@@ -962,6 +962,55 @@ def test_a_key_that_lost_the_provider_cannot_run_its_file_at_the_provider(monkey
     assert seen == []
 
 
+def test_a_key_that_lost_the_provider_still_cannot_poll_a_batch_whose_input_file_is_gone(monkeypatch):
+    # CWE-862 regression: the provider re-check must not depend on the input
+    # file row surviving (e.g. deleted via DELETE /v1/files/{id} after the
+    # batch was created) — a key whose provider access was since revoked must
+    # still be refused, not silently forwarded because the file lookup for
+    # the (unrelated) model check came back empty.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("batch", "batch_1"): _remote(77, OWN_TEAM, models=["gpt-4.1"], input_file_id="file-gone")},
+        key_permissions={11: {"providers": [], "deployments": []}},
+    )
+    seen = _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "batch_1"}))
+
+    resp = client.get("/v1/batches/batch_1")
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "batch_provider_not_authorized"
+    assert seen == []
+
+
+def test_a_mapped_result_file_inherits_the_batch_s_models_for_later_checks(monkeypatch):
+    # Result files never went through model authorisation of their own —
+    # they are minted by the provider, not uploaded. Without inheriting the
+    # batch's own models list, a key whose access to one of those models was
+    # revoked after the batch ran could still poll/cancel/download the
+    # mapped result file unchecked (it has no models of its own to compare
+    # against). Registering it with the batch's models closes that gap.
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("batch", "batch_1"): _remote(77, OWN_TEAM, models=["gpt-4.1"])},
+    )
+    _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(
+            200, json={"id": "batch_1", "status": "completed", "output_file_id": "file-out"}
+        ),
+    )
+    monkeypatch.setattr(batch_api, "_schedule_settlement", lambda *args: None)
+
+    poll = client.get("/v1/batches/batch_1")
+    assert poll.status_code == 200
+
+    output_id = batch_api._logos_result_file_id(OPENAI_PROVIDER, "file-out")
+    assert db.owned[("file", output_id)]["models"] == ["gpt-4.1"]
+
+
 def test_a_model_available_only_on_another_provider_does_not_authorise_the_stored_one(monkeypatch):
     # The link on the stored provider was removed; the same model is still
     # permitted through a second provider. That does not authorise spending
