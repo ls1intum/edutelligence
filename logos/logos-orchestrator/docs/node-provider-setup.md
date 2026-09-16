@@ -95,10 +95,13 @@ docker compose up -d
 
 ## 6. Verify the local worker
 
+The worker API only exposes its root (plus FastAPI's `/docs`); it has no
+`/health` or `/admin/*` endpoints. Runtime state is pushed to Logos over the
+outbound session — check it on the server side in step 7:
+
 ```bash
-curl http://localhost:8444/health
-curl http://localhost:8444/admin/runtime
-curl http://localhost:8444/admin/lanes
+# Service info; port is WORKER_PORT (default 80)
+curl http://localhost:80/
 ```
 
 ## 7. Verify the Logos session
@@ -143,7 +146,7 @@ Both are enabled by default. No worker-side configuration needed.
   Check that `LOGOS_URL` is reachable from the worker host and that the URL is `https://`.
 
 - **lane never becomes `loaded`**
-  Call `GET /admin/runtime` and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics`.
+  Call `POST /logosdb/providers/logosnode/status` (step 7) and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics` in the returned snapshot.
 
 - **`IsADirectoryError: /app/config.yml`**
   The `config.yml` file is missing on the host. Ansible must create it before the first deploy.

@@ -19,7 +19,9 @@ WebSocket requests fail while GET requests work, check
 For worker connection failures, confirm that `LOGOS_URL` uses `https://`, the
 shared key matches the registered provider, and the worker can resolve and
 reach the orchestrator. For model failures, check provider permissions,
-available lanes, and the worker's `/admin/runtime` endpoint.
+available lanes, and the worker's runtime status in the Logos UI or via the
+orchestrator's `POST /logosdb/providers/logosnode/status` endpoint (see the
+worker node guide).
 
 Disable the capacity planner only when diagnosing scheduling behavior:
 
