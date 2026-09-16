@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 
 import logos as main_mod
 from logos import ContextResolver, ExecutionContext, LogosNodeOfflineError, LogosNodeRuntimeRegistry
+from logos.dbutils.dbmodules import ThresholdLevel
 from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
 from logos.logosnode_registry import LogosNodeSessionConflictError
 from logos.routers import admin as admin_mod
@@ -485,6 +486,144 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
     assert response["provider_id"] == 41
     assert response["provider_type"] == "logosnode"
     assert response["shared_key"]
+
+
+@pytest.mark.asyncio
+async def test_logosnode_register_passes_a_valid_privacy_level(monkeypatch):
+    """The registration call must satisfy add_provider's own validation.
+
+    Regression test. The endpoint used to omit ``privacy_level``, which
+    ``add_provider`` rejects outright — so it returned 400 for every request and
+    no worker node could bootstrap through it. The test above did not catch that
+    because its fake ``add_provider`` accepts ``**kwargs`` and validates nothing,
+    which is exactly how the bug survived: the mock was more permissive than the
+    function it stood in for.
+
+    So this fake applies the real rule instead of a hand-written copy of it —
+    ``VALID_PRIVACY_LEVELS`` is imported from the module under test, and a level
+    added or renamed there flows straight into this assertion.
+    """
+    from logos.dbutils.dbmanager import VALID_PRIVACY_LEVELS
+
+    captured: dict = {}
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_user_by_api_key(logos_key: str):
+            return {"role": "logos_admin"} if logos_key == "root-key" else None
+
+        @staticmethod
+        def add_provider(**kwargs):
+            captured.update(kwargs)
+            privacy_level = kwargs.get("privacy_level")
+            if not privacy_level or privacy_level not in VALID_PRIVACY_LEVELS:
+                return (
+                    {"error": f"privacy_level is required and must be one of {sorted(VALID_PRIVACY_LEVELS)}"},
+                    400,
+                )
+            return {"provider-id": 42}, 200
+
+        @staticmethod
+        def sync_logosnode_capabilities(provider_id: int, models: list):  # noqa: ARG004
+            return None
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    response = await logosnode_mod.logosnode_register(
+        LogosNodeRegisterRequest(logos_key="root-key", provider_name="gpu-node-2")
+    )
+
+    assert captured.get("privacy_level") in VALID_PRIVACY_LEVELS
+    # A datacentre worker node is LOCAL by default.
+    assert captured["privacy_level"] == ThresholdLevel.LOCAL.value
+    assert response["provider_id"] == 42
+    assert response["shared_key"]
+
+
+@pytest.mark.asyncio
+async def test_logosnode_register_honours_an_explicit_privacy_level(monkeypatch):
+    """A node on hardware outside operator control must not register as LOCAL.
+
+    LOCAL is the *most* trusted tier ("our datacentre"), so defaulting every
+    worker to it would route strictly-private traffic onto machines whose owner
+    can inspect the running processes — a personal Mac running the MLX worker,
+    for instance. The level therefore has to be settable at registration, not
+    only correctable afterwards.
+    """
+    captured: dict = {}
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_user_by_api_key(logos_key: str):
+            return {"role": "logos_admin"} if logos_key == "root-key" else None
+
+        @staticmethod
+        def add_provider(**kwargs):
+            captured.update(kwargs)
+            return {"provider-id": 43}, 200
+
+        @staticmethod
+        def sync_logosnode_capabilities(provider_id: int, models: list):  # noqa: ARG004
+            return None
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    await logosnode_mod.logosnode_register(
+        LogosNodeRegisterRequest(
+            logos_key="root-key",
+            provider_name="someones-macbook",
+            privacy_level=ThresholdLevel.THIRD_PARTY_HARDWARE.value,
+        )
+    )
+
+    assert captured["privacy_level"] == ThresholdLevel.THIRD_PARTY_HARDWARE.value
+
+
+@pytest.mark.asyncio
+async def test_logosnode_register_passes_through_an_invalid_privacy_level_rejection(monkeypatch):
+    """An unknown level is add_provider's call to refuse, and its 400 must survive.
+
+    Swallowing it would create a provider with a privacy level nobody chose.
+    """
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_user_by_api_key(logos_key: str):
+            return {"role": "logos_admin"} if logos_key == "root-key" else None
+
+        @staticmethod
+        def add_provider(**kwargs):  # noqa: ARG004
+            return {"error": "privacy_level is required and must be one of [...]"}, 400
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    response = await logosnode_mod.logosnode_register(
+        LogosNodeRegisterRequest(
+            logos_key="root-key",
+            provider_name="bad-level-node",
+            privacy_level="NOT_A_REAL_LEVEL",
+        )
+    )
+
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

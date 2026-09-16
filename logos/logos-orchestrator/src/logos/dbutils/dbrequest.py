@@ -2,6 +2,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from logos.dbutils.dbmodules import ThresholdLevel
+
 
 class LogosKeyModel(BaseModel):
     logos_key: str
@@ -32,6 +34,13 @@ class LogosNodeAuthRequest(BaseModel):
 class LogosNodeRegisterRequest(LogosKeyModel):
     provider_name: str
     base_url: str = ""
+    # Defaults to LOCAL ("our datacentre"), which is the common case for a
+    # worker node. It is overridable because LOCAL is the *most* trusted tier:
+    # a worker on hardware outside operator control — a personal Mac running
+    # the MLX worker, say — belongs in THIRD_PARTY_HARDWARE, and registering it
+    # as LOCAL would route strictly-private traffic onto a machine whose owner
+    # can inspect the running processes. See ThresholdLevel in dbmodules.
+    privacy_level: str = ThresholdLevel.LOCAL.value
 
 
 class LogosNodeStatusRequest(LogosKeyModel):

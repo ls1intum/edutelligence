@@ -274,6 +274,12 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
             auth_name="",
             auth_format="{}",
             provider_type="logosnode",
+            # add_provider rejects a missing privacy_level outright, so omitting
+            # it made this endpoint return 400 for every request and no worker
+            # node could bootstrap through it. The request defaults this to
+            # LOCAL; add_provider validates whatever arrives and returns its own
+            # 400 for an unknown level, which is passed through below.
+            privacy_level=data.privacy_level,
         )
 
     if code != 200:
