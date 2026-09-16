@@ -20,6 +20,7 @@ from logos_worker_node.calibration import (
     CalibrationResult,
     _read_log_since,
     _reset_calibration_log,
+    _resolve_probed_model_kind,
     stop_vllm,
     wait_ready,
     warmup_inference,
@@ -371,6 +372,13 @@ def calibrate_model_metal(
         if cancel_event is not None and cancel_event.is_set():
             result.error = "cancelled"
             return result
+
+        # Ground-truth check before trusting a fatal probe: does this vLLM
+        # process actually serve model_kind's endpoint at all? Same mismatch
+        # CUDA calibration guards against (see _resolve_probed_model_kind) —
+        # HF's pipeline_tag/architectures can say "reranker" while the
+        # checkpoint is a plain CausalLM vLLM only serves generatively.
+        model_kind = _resolve_probed_model_kind(base_url, model, model_kind)
 
         served = warmup_inference(base_url, model, model_kind=model_kind)
         if not served:

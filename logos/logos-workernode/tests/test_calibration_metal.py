@@ -407,6 +407,45 @@ def test_detected_model_kind_is_forwarded_to_warmup():
     assert mocks["warmup"].call_args.kwargs.get("model_kind") == "transcription"
 
 
+def test_resolve_probed_model_kind_result_reaches_warmup():
+    """Metal must apply the same live-endpoint resolution CUDA calibration
+    does before trusting a fatal probe (see calibration._resolve_probed_
+    model_kind) — this was missing entirely until now, so a Qwen3-Reranker-
+    style mismatch stayed uncalibratable on Metal even after CUDA was
+    fixed."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
+    patches["resolve_kind"] = patch(
+        "logos_worker_node.calibration_metal._resolve_probed_model_kind",
+        return_value="generative",
+    )
+    _result, mocks = _run({"model": "org/reranker-model", "model_kind": "reranking"}, patches)
+
+    mocks["resolve_kind"].assert_called_once()
+    assert mocks["resolve_kind"].call_args.args[-1] == "reranking"
+    # The resolved (downgraded) kind is what actually reaches warmup, not
+    # the plan's original classification.
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "generative"
+
+
+def test_reranking_falls_back_to_generative_when_rerank_route_missing():
+    """End-to-end regression for the Qwen3-Reranker case on Metal: HF
+    classifies the model "reranking", but this vLLM process never
+    registered /rerank (Supported tasks: ['generate']). Must not fail
+    calibration outright — must fall back to the generative probe, same
+    as CUDA."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0], warmup_ok=True)
+    # Leave the real _resolve_probed_model_kind in place; only fake the
+    # live-endpoint check it calls underneath.
+    patches["endpoint_registered"] = patch(
+        "logos_worker_node.calibration._endpoint_registered",
+        return_value=False,
+    )
+    result, mocks = _run({"model": "org/reranker-model", "model_kind": "reranking"}, patches)
+
+    assert result.success
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "generative"
+
+
 def test_fails_cleanly_when_vllm_binary_cannot_be_resolved():
     """No vllm-metal venv, no worker override, no explicit path, and no
     PATH/sibling/module fallback either: must fail with a clear reason
