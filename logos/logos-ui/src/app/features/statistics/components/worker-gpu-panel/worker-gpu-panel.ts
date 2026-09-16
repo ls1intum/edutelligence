@@ -16,7 +16,7 @@ import {
   VramProviderMeta,
   VramV2Sample,
 } from '../../statistics.models';
-import { extractProviderHostRamMb } from '../../statistics.utils';
+import { extractProviderHostRamMb, formatUptime } from '../../statistics.utils';
 import { EmptyState } from '../empty-state/empty-state';
 
 type CalibrateState =
@@ -51,6 +51,7 @@ export class WorkerGpuPanel implements OnChanges {
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
   @Input() lanesByProvider: Record<string, Record<string, LaneSignalData>> = {};
   @Input() activeProvider: string | null = null;
+  @Input() nowMs = Date.now();
 
   private statisticsService = inject(StatisticsService);
 
@@ -109,6 +110,18 @@ export class WorkerGpuPanel implements OnChanges {
     const active = this.resolvedActiveProvider;
     if (!active) return false;
     return !this.isOnline(active);
+  }
+
+  get workerUptimeLabel(): string | null {
+    const active = this.resolvedActiveProvider;
+    if (!active) return null;
+    return formatUptime(this.providerMeta[active]?.worker_started_at, this.nowMs);
+  }
+
+  get wsUptimeLabel(): string | null {
+    const active = this.resolvedActiveProvider;
+    if (!active) return null;
+    return formatUptime(this.providerMeta[active]?.connected_at, this.nowMs);
   }
 
   get latestSample(): VramV2Sample | null {

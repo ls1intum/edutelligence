@@ -915,6 +915,9 @@ class WorkerRuntimeStatus(BaseModel):
     worker_id: str
     service_version: str
     timestamp: datetime
+    # Fixed for the process lifetime — distinct from transport.last_connected_at,
+    # which moves on every bridge reconnect.
+    process_started_at: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
     host_memory: HostMemorySummary | None = None
