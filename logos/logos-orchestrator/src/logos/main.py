@@ -474,6 +474,19 @@ def _record_log_failure(
     classification_stats: Optional[Dict[str, Any]] = None,
     scheduling_stats: Optional[Dict[str, Any]] = None,
 ) -> None:
+    # Drain the recorder's buffered lifecycle fields before the in-flight
+    # settlement below pops the request state: this write is the request's
+    # terminal one, and it must carry the same metric fields the recorder's
+    # sequential writes used to produce (#980).
+    buffered_metrics: Dict[str, Any] = {}
+    if request_id:
+        pipeline = globals().get("_pipeline")
+        if pipeline is not None:
+            try:
+                buffered_metrics = pipeline.take_monitoring_buffer(request_id)
+            except Exception:  # noqa: BLE001 — monitoring must never break a request
+                logger.debug("Failed to drain monitoring buffer for %s", request_id, exc_info=True)
+
     # Close out the in-flight accounting first, and unconditionally: this is
     # the common funnel for terminal failures that write the log row
     # themselves (client disconnect, rate-limit and budget rejects), and
@@ -503,6 +516,12 @@ def _record_log_failure(
                 queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival"),
                 utilization_at_arrival=scheduling_stats.get("utilization_at_arrival"),
             )
+            # The explicit arguments above win over buffered values on a
+            # collision, so the keys this call sets itself are removed from
+            # the buffered side first.
+            metrics_fields = {k: v for k, v in buffered_metrics.items() if v is not None}
+            for key in ("model_id", "provider_id", "result_status", "error_message", "cold_start"):
+                metrics_fields.pop(key, None)
             db.update_log_entry_metrics(
                 log_id=log_id,
                 request_id=request_id,
@@ -511,6 +530,7 @@ def _record_log_failure(
                 result_status=result_status,
                 error_message=error_message,
                 cold_start=scheduling_stats.get("is_cold_start"),
+                **metrics_fields,
             )
     except Exception:
         logger.exception(

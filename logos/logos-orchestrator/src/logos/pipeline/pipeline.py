@@ -638,6 +638,15 @@ class RequestPipeline:
         """Close out a request whose terminal log row was written elsewhere."""
         self._monitoring.discard(request_id, result_status)
 
+    def take_monitoring_buffer(self, request_id: str) -> Dict[str, Any]:
+        """Drain the lifecycle fields buffered for a request (#980).
+
+        Failure paths that persist the log row themselves call this before
+        ``discard_request`` and merge the fields into their own metrics
+        UPDATE, keeping the row identical to the sequential-write era.
+        """
+        return self._monitoring.take_buffer(request_id)
+
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist the limiter's admission decision on the request's log row."""
         self._monitoring.record_rate_limit_admission(request_id, admitted)

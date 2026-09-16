@@ -39,6 +39,16 @@ _STALE_REQUEST_AGE_S = 2 * 60 * 60
 _STALE_SWEEP_INTERVAL_S = 60.0
 _last_stale_sweep = 0.0
 
+# request_id → lifecycle fields recorded since enqueue, flushed in a single
+# UPDATE at completion (or drained via take_buffer by the failure paths that
+# persist the row themselves) instead of one UPDATE per event (#980). Kept
+# separate from _request_states so a field record for a request that never
+# reached record_enqueue (a rate-limit reject) cannot move the in-flight
+# gauge. Every request reaches a terminal write — record_complete or the
+# take_buffer in _record_log_failure — which pops its entry; the sweep below
+# is the backstop for a future path that does neither.
+_field_buffers: Dict[str, Dict[str, Any]] = {}
+
 
 def _publish_in_flight() -> None:
     """Publish the in-flight gauge from the tracked set.
@@ -71,6 +81,7 @@ def _sweep_stale_requests(now: float) -> None:
     stale = [request_id for request_id, (start, _m, _p) in _request_states.items() if start < cutoff]
     for request_id in stale:
         _request_states.pop(request_id, None)
+        _field_buffers.pop(request_id, None)
     if stale:
         logger.warning(
             "Dropped %d request(s) tracked for more than %ds — a terminal path did not finalise them",
@@ -135,7 +146,7 @@ class MonitoringRecorder:
             "queue_depth_at_enqueue": queue_depth,
             "timeout_s": timeout_s,
         }
-        self._write(request_id, **payload)
+        self._buffer(request_id, **payload)
 
     def record_scheduled(
         self,
@@ -184,7 +195,7 @@ class MonitoringRecorder:
                     "azure_rate_remaining_tokens",
                 ]:
                     payload[key] = value
-        self._write(request_id, **payload)
+        self._buffer(request_id, **payload)
 
     def _settle(
         self,
@@ -270,6 +281,10 @@ class MonitoringRecorder:
         the request counted as in-flight forever; production was leaking
         ~470 of them a day, which is what made the gauge climb without ever
         coming back down.
+
+        The request's buffered lifecycle fields are not written here — those
+        paths drain them via ``take_buffer`` first and fold them into their
+        own terminal write.
         """
         self._settle(request_id, result_status)
 
@@ -289,11 +304,13 @@ class MonitoringRecorder:
             "cold_start": cold_start,
             "error_message": error_message,
         }
-        self._write(request_id, **payload)
+        # One UPDATE per request: everything buffered since enqueue is
+        # flushed together with the terminal fields.
+        self._write(request_id, **_field_buffers.pop(request_id, {}), **payload)
 
     def record_provider(self, request_id: str, provider_id: int) -> None:
         """Attach provider_id once it is resolved (after scheduling)."""
-        self._write(request_id, provider_id=provider_id)
+        self._buffer(request_id, provider_id=provider_id)
 
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist whether this key's rate limiter admitted the request.
@@ -307,7 +324,7 @@ class MonitoringRecorder:
         are never checked; their rows keep the column NULL, which the usage
         query treats as "not rejected".
         """
-        self._write(request_id, rate_limit_admitted=admitted)
+        self._buffer(request_id, rate_limit_admitted=admitted)
 
     def record_provider_metrics(self, request_id: str, provider_metrics: Dict[str, Any]) -> None:
         """
@@ -326,7 +343,29 @@ class MonitoringRecorder:
                 payload[key] = value
 
         if payload:
-            self._write(request_id, **payload)
+            self._buffer(request_id, **payload)
+
+    def _buffer(self, request_id: str, **fields: object) -> None:
+        """Collect lifecycle fields until the terminal write flushes them.
+
+        Last write wins on a collision, exactly as the sequential UPDATEs
+        the buffering replaces did — and the DB layer still drops None
+        fields, so a buffered None cannot clear an earlier value.
+        """
+        pending = _field_buffers.get(request_id)
+        if pending is None:
+            pending = _field_buffers[request_id] = {}
+        pending.update(fields)
+
+    def take_buffer(self, request_id: str) -> Dict[str, Any]:
+        """Drain the fields buffered for a request without settling it.
+
+        The failure paths that persist the log row themselves call this
+        before ``discard`` and fold the result into their own metrics
+        UPDATE, so the row keeps exactly the fields the sequential writes
+        used to produce. Unknown requests yield an empty dict.
+        """
+        return _field_buffers.pop(request_id, {})
 
     def _write(self, request_id: str, **fields: object) -> None:
         try:
