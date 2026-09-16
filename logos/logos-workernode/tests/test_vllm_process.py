@@ -137,7 +137,7 @@ def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
 
 
 def test_infer_tool_call_parser() -> None:
-    from logos_worker_node.vllm_process import _infer_tool_call_parser
+    from logos_worker_node.vllm_compat import _infer_tool_call_parser
 
     # Google Gemma
     assert _infer_tool_call_parser("google/gemma-4-26B-A4B-it") == "gemma4"
@@ -314,7 +314,7 @@ def _handle_with_stub_binary(monkeypatch) -> VllmProcessHandle:
 
 
 def test_chat_template_dir_defaults_to_persistent_path(monkeypatch) -> None:
-    from logos_worker_node.vllm_process import _chat_template_dir
+    from logos_worker_node.vllm_compat import _chat_template_dir
 
     monkeypatch.delenv("LOGOS_CHAT_TEMPLATE_DIR", raising=False)
     assert _chat_template_dir() == "/opt/logos-workernode/chat-templates"
@@ -1771,7 +1771,7 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 
 
 def test_infer_reasoning_parser() -> None:
-    from logos_worker_node.vllm_process import _infer_reasoning_parser
+    from logos_worker_node.vllm_compat import _infer_reasoning_parser
 
     # The production rule table registers only parsers shipping in
     # vllm/reasoning/__init__.py: gemma4, openai_gptoss and qwen3. Other model
@@ -1803,7 +1803,7 @@ def test_infer_reasoning_parser() -> None:
 
 
 def test_infer_default_chat_template_kwargs() -> None:
-    from logos_worker_node.vllm_process import _infer_default_chat_template_kwargs
+    from logos_worker_node.vllm_compat import _infer_default_chat_template_kwargs
 
     # Google Gemma 4 → enable_thinking: True. Pattern is the substring
     # "gemma-4" (with dash) — names without the dash do not match.
@@ -2848,3 +2848,28 @@ def test_invalidate_sharded_checkpoint_records_the_version(monkeypatch, tmp_path
     assert rec is not None
     assert rec["vllm_version"] == "0.8.0"
     assert "sharded_state_loader.py" in rec["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Startup-log parsing — max concurrency from the vLLM log stream
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_logs_stores_concurrency_factor_not_token_count(monkeypatch) -> None:
+    """The shared _VLLM_MAX_CONCURRENCY_RE has two capture groups (token count,
+    factor). _stream_logs must read the *factor*: with group 1, float("4,096")
+    would raise inside the broad except and kill the log-stream task, leaving
+    max_concurrency None forever."""
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = self._stdout()
+
+        async def _stdout(self):
+            yield (b"INFO 09-01 12:00:00 core.py:299] Maximum concurrency for " b"4,096 tokens per request: 8.32x\n")
+
+    handle._process = _FakeProcess()
+    await handle._stream_logs()
+
+    assert handle.max_concurrency == 8

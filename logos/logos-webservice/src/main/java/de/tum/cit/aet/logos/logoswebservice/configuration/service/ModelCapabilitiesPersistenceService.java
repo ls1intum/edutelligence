@@ -21,7 +21,8 @@ public class ModelCapabilitiesPersistenceService {
             int modelId,
             boolean supportsFunctionCalling,
             boolean supportsVision,
-            boolean supportsReasoning) {
+            boolean supportsReasoning,
+            Integer maxInputTokens) {
 
         ModelCapabilities capabilities = modelCapabilitiesRepository.findByModelId(modelId)
             .orElseGet(() -> {
@@ -33,6 +34,9 @@ public class ModelCapabilitiesPersistenceService {
         capabilities.setSupportsFunctionCalling(supportsFunctionCalling);
         capabilities.setSupportsVision(supportsVision);
         capabilities.setSupportsReasoning(supportsReasoning);
+        // Set unconditionally, including null: a registry refresh that drops
+        // the model's window must clear a value an older refresh recorded.
+        capabilities.setMaxInputTokens(maxInputTokens);
 
         modelCapabilitiesRepository.save(capabilities);
     }

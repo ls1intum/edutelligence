@@ -28,12 +28,14 @@ def _make_request(headers: dict | None = None):
 class DummyDB:
     """Minimal DBManager stub used via monkeypatch."""
 
-    def __init__(self, models=None, historic=None, cloud=None):
+    def __init__(self, models=None, historic=None, cloud=None, catalog=None):
         self._models = models if models is not None else []
         # Model name -> widest context ever reported (model_profiles high-water mark).
         self._historic = historic if historic is not None else {}
         # Model name -> the windows cloud upstreams report (cloud_model_context).
         self._cloud = cloud if cloud is not None else {}
+        # Model name -> the input context window the model catalog publishes (model_capabilities).
+        self._catalog = catalog if catalog is not None else {}
 
     def __enter__(self):
         return self
@@ -52,6 +54,9 @@ class DummyDB:
 
     def get_cloud_context_by_model(self):
         return self._cloud
+
+    def get_catalog_context_by_model(self):
+        return self._catalog
 
 
 # ---------------------------------------------------------------------------
@@ -275,16 +280,18 @@ def _vllm_lane(model, max_model_len=0, context_length=4096):
     }
 
 
-async def _list_ids_to_entries(monkeypatch, models, registry, historic=None, cloud=None):
+async def _list_ids_to_entries(monkeypatch, models, registry, historic=None, cloud=None, catalog=None):
     import json
 
-    # The handler reads DBManager from its router module; the historic-max
-    # lookup it goes through reads it from main's globals — both need the fake.
-    # The handler reads DBManager from its router module; the historic-max and
-    # cloud-window lookups it goes through read it from main's globals — both
-    # need the fake.
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud))
-    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud))
+    # The handler reads DBManager from its router module; the historic-max,
+    # cloud-window and catalog lookups it goes through read it from main's
+    # globals — both need the fake.
+    monkeypatch.setattr(
+        main, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+    )
+    monkeypatch.setattr(
+        user_facing_mod, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+    )
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
@@ -548,3 +555,74 @@ async def test_list_models_cloud_model_without_a_reported_window_stays_bare(monk
     entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), cloud={})
 
     assert "max_model_len" not in entries["gpt-4.1-nano"]
+
+
+# ---------------------------------------------------------------------------
+# Catalog windows — the last resort for models no source has measured
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_the_catalog_window_for_a_cloud_model(monkeypatch):
+    """A cloud model whose upstream publishes no window of its own used to reach
+    /v1/models without a size, and a wrapper sizing a session from the listing
+    fell back to a blind constant. The window the model catalog records for the
+    model is the best knowledge there is: a provider serves a catalog model at
+    its full published size, so the single number is the minimum, the maximum
+    and the ceiling alike."""
+    models = [{"id": 1, "name": "gpt-5.6-luna", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), catalog={"gpt-5.6-luna": 1050000})
+
+    assert entries["gpt-5.6-luna"]["max_model_len"] == 1050000
+    assert entries["gpt-5.6-luna"]["max_model_len_current_min"] == 1050000
+    assert entries["gpt-5.6-luna"]["max_model_len_current_max"] == 1050000
+    assert entries["gpt-5.6-luna"]["max_model_len_overall"] == 1050000
+
+
+@pytest.mark.asyncio
+async def test_list_models_measured_window_wins_over_the_catalog(monkeypatch):
+    """A lane running the model narrower than the published size is the truth
+    for what Logos serves: the catalog must not widen any figure a source
+    measured, whichever of the three fields it would reach."""
+    models = [{"id": 1, "name": "gpt-oss-120b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot(
+                [_vllm_lane("gpt-oss-120b", max_model_len=33000)],
+                model_profiles={"gpt-oss-120b": {"max_context_length": 33000}},
+            )
+        }
+    )
+    entries = await _list_ids_to_entries(monkeypatch, models, registry, catalog={"gpt-oss-120b": 131072})
+
+    assert entries["gpt-oss-120b"]["max_model_len"] == 33000
+    assert entries["gpt-oss-120b"]["max_model_len_current_max"] == 33000
+    assert entries["gpt-oss-120b"]["max_model_len_overall"] == 33000
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_self_report_wins_over_the_catalog(monkeypatch):
+    """What an upstream publishes about itself is a measurement and beats the
+    catalog's published limit, narrow or wide."""
+    models = [{"id": 1, "name": "some-cloud-model", "description": None}]
+    entries = await _list_ids_to_entries(
+        monkeypatch,
+        models,
+        DummyRegistry({}),
+        cloud={"some-cloud-model": {"current_min": 65536, "current_max": 65536, "overall": 65536}},
+        catalog={"some-cloud-model": 131072},
+    )
+
+    assert entries["some-cloud-model"]["max_model_len"] == 65536
+    assert entries["some-cloud-model"]["max_model_len_overall"] == 65536
+
+
+@pytest.mark.asyncio
+async def test_list_models_catalog_window_never_added_for_an_unlisted_model(monkeypatch):
+    """The catalog only sizes models this key may actually use: a catalog
+    entry for a model outside the listing must not surface in /v1/models."""
+    models = [{"id": 1, "name": "qwen-14b", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), catalog={"other-model": 131072})
+
+    assert set(entries) == {"qwen-14b"}
+    assert "max_model_len" not in entries["qwen-14b"]
