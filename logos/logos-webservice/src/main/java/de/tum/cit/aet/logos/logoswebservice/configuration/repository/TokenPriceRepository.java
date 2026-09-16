@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -12,4 +13,6 @@ public interface TokenPriceRepository extends JpaRepository<TokenPrice, Integer>
     findTopByModelIdAndTypeIdAndProviderIdAndUnitAndMinContextTokensAndServiceTierOrderByValidFromDesc(
             Integer modelId, Integer typeId, Integer providerId,
             String unit, Long minContextTokens, String serviceTier);
+
+    List<TokenPrice> findByModelId(Integer modelId);
 }
