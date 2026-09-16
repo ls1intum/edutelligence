@@ -3580,6 +3580,89 @@ def test_calibrate_reranking_model_succeeds_via_the_right_endpoint():
     assert any(u.endswith("/rerank") for u in urls)
 
 
+def test_endpoint_registered_true_when_path_in_openapi_paths():
+    from logos_worker_node.calibration import _endpoint_registered
+
+    openapi = {"paths": {"/rerank": {}, "/v1/completions": {}}}
+    with patch("logos_worker_node.calibration._get", return_value=(200, openapi)):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is True
+
+
+def test_endpoint_registered_false_when_path_missing_from_openapi_paths():
+    """The Qwen3-Reranker case: vLLM is up and answers /openapi.json fine,
+    it just never registered /rerank for this checkpoint (Supported tasks:
+    ['generate'])."""
+    from logos_worker_node.calibration import _endpoint_registered
+
+    openapi = {"paths": {"/v1/completions": {}, "/v1/chat/completions": {}}}
+    with patch("logos_worker_node.calibration._get", return_value=(200, openapi)):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is False
+
+
+def test_endpoint_registered_none_when_check_is_inconclusive():
+    """A non-200/unparseable /openapi.json must read as "unknown", never
+    as "confirmed missing" — an inconclusive check must not silently
+    downgrade a genuinely broken lane's fatal probe."""
+    from logos_worker_node.calibration import _endpoint_registered
+
+    with patch("logos_worker_node.calibration._get", return_value=(500, {})):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is None
+    with patch("logos_worker_node.calibration._get", return_value=(200, {"paths": "not-a-dict"})):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is None
+
+
+def test_resolve_probed_model_kind_falls_back_to_generative_when_endpoint_missing():
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._endpoint_registered", return_value=False):
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "reranking") == "generative"
+
+
+def test_resolve_probed_model_kind_keeps_kind_when_endpoint_exists():
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._endpoint_registered", return_value=True):
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "reranking") == "reranking"
+
+
+def test_resolve_probed_model_kind_keeps_kind_when_check_inconclusive():
+    """An inconclusive registration check must never mask a real serving
+    bug — same fatal path as before this existed."""
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._endpoint_registered", return_value=None):
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "reranking") == "reranking"
+
+
+def test_resolve_probed_model_kind_never_checks_non_fatal_kinds():
+    """ "generative" has no _ENDPOINT_BY_MODEL_KIND entry and must never
+    trigger an /openapi.json round trip — it was already lenient."""
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._get") as mock_get:
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "generative") == "generative"
+    mock_get.assert_not_called()
+
+
+def test_calibrate_reranking_model_falls_back_to_generative_when_rerank_route_missing():
+    """The Qwen3-Reranker case end-to-end: HF classifies it "reranking",
+    but vLLM only ever registered the generative routes. Must not fail
+    calibration outright — falls back to the generative probe, which this
+    model answers fine."""
+    openapi = {"paths": {"/v1/completions": {}}}
+    post, urls = _capturing_post(**{"/rerank": (404, {}), "/v1/completions": (200, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+    patches["get"] = patch("logos_worker_node.calibration._get", return_value=(200, openapi))
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="reranking"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/v1/completions") for u in urls)
+    # /rerank was never even attempted once the registration check ruled it out.
+    assert not any(u.endswith("/rerank") for u in urls)
+
+
 def test_calibrate_transcription_model_fails_fast_when_audio_probe_fails():
     """The openai/whisper-large-v3 production incident — a lane-killing
     flag combination must surface here, not first in prod."""

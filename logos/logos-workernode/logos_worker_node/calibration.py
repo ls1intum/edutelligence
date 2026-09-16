@@ -1112,6 +1112,66 @@ _PROBE_BY_MODEL_KIND: dict[str, Callable[[str, str, float], bool]] = {
 # with a real, working functional probe are fatal.
 _FATAL_PROBE_MODEL_KINDS = frozenset({"pooling", "classification", "reranking", "transcription"})
 
+# The endpoint each fatal kind's probe targets — used only to check the
+# route actually exists before trusting a probe failure there (see
+# _resolve_probed_model_kind below).
+_ENDPOINT_BY_MODEL_KIND: dict[str, str] = {
+    "pooling": "/v1/embeddings",
+    "classification": "/classify",
+    "reranking": "/rerank",
+    "transcription": "/v1/audio/transcriptions",
+}
+
+
+def _endpoint_registered(base_url: str, path: str, timeout_s: float) -> bool | None:
+    """Whether vLLM actually registered *path* for the loaded checkpoint,
+    read from its own ``/openapi.json`` — ground truth from the live
+    process, not a guess from HF metadata. HF's pipeline_tag/architectures
+    can say "this model is a reranker" while the checkpoint itself is a
+    plain CausalLM vLLM only ever serves generatively (e.g. Qwen3-Reranker:
+    ``pipeline_tag="text-ranking"``, but vLLM logs ``Supported tasks:
+    ['generate']`` and never registers ``/rerank`` at all).
+
+    Returns None — "unknown" — when the check itself didn't complete
+    (network hiccup, non-200, unparseable body). Callers must never read
+    None as "confirmed missing": that would turn a transient glitch into
+    a silent kind downgrade.
+    """
+    status, payload = _get(f"{base_url}/openapi.json", timeout_s=timeout_s)
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    paths = payload.get("paths")
+    if not isinstance(paths, dict):
+        return None
+    return path in paths
+
+
+def _resolve_probed_model_kind(base_url: str, model: str, model_kind: str, timeout_s: float = 10.0) -> str:
+    """Downgrade *model_kind* to "generative" when vLLM never registered
+    its fatal probe's endpoint — a classification mismatch, not a broken
+    lane, so it must not fail calibration the way a real serving bug does
+    (see the Qwen3-Reranker case in _FATAL_PROBE_MODEL_KINDS' own comment).
+    Leaves model_kind untouched when the endpoint exists, or when the
+    registration check itself is inconclusive — an actually-broken lane
+    must still be caught fatally, same as before this existed.
+    """
+    if model_kind not in _FATAL_PROBE_MODEL_KINDS:
+        return model_kind
+    expected_path = _ENDPOINT_BY_MODEL_KIND.get(model_kind)
+    if expected_path is None:
+        return model_kind
+    if _endpoint_registered(base_url, expected_path, timeout_s) is False:
+        logger.warning(
+            "  %s classified as %r, but vLLM never registered %s for this "
+            "checkpoint (Supported tasks mismatch) — falling back to the "
+            "generative probe instead of failing calibration outright",
+            model,
+            model_kind,
+            expected_path,
+        )
+        return "generative"
+    return model_kind
+
 
 def warmup_inference(
     base_url: str,
@@ -2702,6 +2762,12 @@ def _calibrate_model_probe(
     if cancel_event is not None and cancel_event.is_set():
         partial.error = "cancelled"
         return partial
+
+    # Ground-truth check before trusting a fatal probe: does this vLLM
+    # process actually serve model_kind's endpoint at all? See
+    # _resolve_probed_model_kind — downgrades to "generative" on a
+    # confirmed mismatch, leaves model_kind alone otherwise.
+    model_kind = _resolve_probed_model_kind(base_url, model, model_kind)
 
     try:
         # Phase 2.5 — Warmup with a 1-token completion. Forces:

@@ -44,6 +44,15 @@ def test_openai_models_alias_registered():
     assert ("/openai/models/{model_id:path}", "GET") in routes
 
 
+def test_classify_registered_as_vllm_native_route():
+    # /classify is vLLM's own classification endpoint (bare path, not under
+    # /v1) — without this registration a calibrated classification model
+    # is unreachable from clients even though calibration itself talks to
+    # vLLM directly and never goes through this router.
+    routes = {(route.path, method) for route in main.app.routes for method in getattr(route, "methods", None) or ()}
+    assert ("/classify", "POST") in routes
+
+
 async def test_http_exception_handler_preserves_headers():
     # Protocol-mandated headers (Allow on 405, Retry-After on 429) must
     # survive the conversion to the OpenAI error shape.
