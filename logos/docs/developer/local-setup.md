@@ -10,9 +10,11 @@ Run the development stack from `logos/`:
 docker compose -f docker-compose.dev.yaml up --build
 ```
 
-For Python services, use Python 3.13 and `uv`:
+For the orchestrator (the main Python service, an installable package under
+`logos-orchestrator/`), use Python 3.13 and `uv`:
 
 ```bash
+cd logos-orchestrator
 uv venv .venv --python 3.13
 source .venv/bin/activate
 uv pip install .

@@ -5,8 +5,10 @@ title: Self-hosted Installation
 # Self-hosted installation
 
 This guide deploys the complete Logos stack with Docker Compose. The stack
-contains the web UI, API service, orchestrator, PostgreSQL, Keycloak, and
-Traefik.
+contains the web UI, API service, orchestrator, PostgreSQL, and Traefik.
+The development stack additionally runs a local Keycloak; production expects
+an external identity provider configured via the `KEYCLOAK_*` variables in
+`.env`.
 
 ## Prerequisites
 
@@ -32,8 +34,17 @@ development Keycloak realm:
 docker compose -f docker-compose.dev.yaml up --build
 ```
 
-Open `http://localhost:4200/` and sign in with one of the seeded development
-accounts. These accounts and their roles are defined in
+The compose stack serves the API (Traefik at `http://localhost:18081`) but
+not the web UI. Start the Angular dev server on the host as well:
+
+```bash
+cd logos-ui
+npm ci
+npm start
+```
+
+Then open `http://localhost:4200/` and sign in with one of the seeded
+development accounts. These accounts and their roles are defined in
 `keycloak/tum-realm.json`; never use them in a production deployment.
 
 ## Production deployment
@@ -55,9 +66,21 @@ documentation at `https://<your-domain>/docs`.
 
 ## Persistent data and upgrades
 
-PostgreSQL, Keycloak, and Traefik data are stored in Docker volumes. Back up
-these volumes before upgrades. Pull the desired image tag and recreate the
-stack:
+The production stack persists the following:
+
+| Storage | Type | Contents |
+| --- | --- | --- |
+| `postgres_data` | named volume | PostgreSQL data |
+| `data_volume` | named volume | orchestrator working data (`/src/logos`) |
+| `agent_artifacts` | named volume | agent session artifacts |
+| `agent_state` (literal name `logos_agent_state`) | named volume | agent session state |
+| `./letsencrypt` | bind mount | Traefik Let's Encrypt certificate state |
+
+Back up these volumes and the `./letsencrypt` directory before upgrades.
+Keycloak is external to the stack, so back up its realm export (see
+`keycloak/tum-realm.json` in this repository for the realm format) together
+with your identity provider; in the development stack Keycloak state is
+ephemeral. Pull the desired image tag and recreate the stack:
 
 ```bash
 docker compose --env-file .env pull

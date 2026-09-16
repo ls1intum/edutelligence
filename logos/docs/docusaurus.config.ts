@@ -31,6 +31,10 @@ const config: Config = {
   themeConfig: {
     colorMode: { respectPrefersColorScheme: true },
     navbar: {
+      logo: {
+        alt: "Logos",
+        src: "img/logos-logo.svg",
+      },
       title: "Logos Documentation",
       items: [
         { type: "docSidebar", sidebarId: "userSidebar", label: "User Guide", position: "left" },
