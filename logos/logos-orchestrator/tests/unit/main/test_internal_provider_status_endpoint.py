@@ -77,6 +77,42 @@ async def test_reports_connected_and_offline_providers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reports_connected_at_and_worker_started_at(monkeypatch):
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    _FakeDBManager.providers = [
+        {"provider_id": 1, "name": "node-a", "provider_type": "logosnode"},
+        {"provider_id": 2, "name": "node-b", "provider_type": "logosnode"},
+    ]
+
+    fresh_heartbeat = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    connected_at = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+    ).isoformat()
+    worker_started_at = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+    ).isoformat()
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = lambda pid: (
+        {
+            "last_heartbeat": fresh_heartbeat,
+            "connected_at": connected_at,
+            "runtime": {"process_started_at": worker_started_at},
+        }
+        if pid == 1
+        else None
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+
+    result = await main_mod.internal_provider_status(_make_request("Bearer correct-secret"))
+
+    by_id = {p["provider_id"]: p for p in result["providers"]}
+    assert by_id[1]["connected_at"] == connected_at
+    assert by_id[1]["worker_started_at"] == worker_started_at
+    assert by_id[2]["connected_at"] is None
+    assert by_id[2]["worker_started_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_stale_heartbeat_counts_as_offline(monkeypatch):
     monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
     _FakeDBManager.providers = [
