@@ -45,10 +45,15 @@ describe('ApiKeyModalComponent', () => {
     component.key = key;
     component.canEdit = true;
     fixture.detectChanges();
+    // The dialog opens via a CDK Dialog signal effect and renders its content
+    // into an overlay appended to document.body, not the fixture's own DOM
+    // subtree; whenStable() flushes that effect before tests query the DOM.
+    await fixture.whenStable();
   });
 
   it('allows an editor to enable custom permissions', () => {
-    const toggle: HTMLButtonElement = fixture.nativeElement.querySelector('.toggle-btn');
+    const toggle: HTMLButtonElement | null = document.querySelector('.toggle-btn');
+    if (!toggle) throw new Error('toggle button not found');
 
     expect(toggle.disabled).toBe(false);
     toggle.click();
