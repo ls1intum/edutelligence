@@ -21,6 +21,19 @@ sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
 markdown = "^3.8.2"
 bs4 = "^0.0.2"
 
+# Security floors for packages that are otherwise transitive only. Without
+# these, regenerating poetry.lock can resolve back onto a vulnerable release.
+aiohttp = ">=3.14.3"
+pillow = ">=12.3.0"
+protobuf = ">=5.29.6"
+soupsieve = ">=2.8.4"
+urllib3 = ">=2.7.0"
+# weaviate-client enforces a protobuf/grpcio pairing at import time
+# (weaviate/proto/v1/__init__.py): protobuf >= 6.30.0 requires grpcio
+# >= 1.72.0. Keep grpcio above that line so a protobuf 6 resolution cannot
+# land next to a grpcio that rejects it.
+grpcio = ">=1.72.0"
+
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
