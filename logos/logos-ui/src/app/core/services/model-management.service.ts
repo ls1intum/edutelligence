@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { ModelBenchmarkResponse, StartModelBenchmarkResponse } from '../../shared/models/provider.model';
 import { ModelAccessResponse } from '../../shared/models/model-access.model';
+import { ModelPriceResponse } from '../../shared/models/model-price.model';
 
 @Injectable({ providedIn: 'root' })
 export class ModelManagementService {
@@ -11,6 +12,19 @@ export class ModelManagementService {
 
   getModels(): Promise<Model[]> {
     return firstValueFrom(this.http.post<Model[]>('/api/logosdb/get_models', {}));
+  }
+
+  /**
+   * Current and historic catalogue prices for one model, grouped per
+   * linked provider. Only logos admins may read it (model details page).
+   */
+  getModelPrices(modelId: number): Promise<ModelPriceResponse> {
+    return firstValueFrom(
+      this.http.post<ModelPriceResponse>(
+        '/api/logosdb/get_model_prices',
+        { id: modelId },
+      ),
+    );
   }
 
   getBenchmarks(modelId: number): Promise<ModelBenchmarkResponse> {
