@@ -1,12 +1,13 @@
 # Logos E2E
 
-An end-to-end suite that runs without GPUs, in three tiers.
+An end-to-end suite that runs without GPUs, in four tiers.
 
 | Tier | What it drives | Needs | Runtime |
 |------|----------------|-------|---------|
 | 1 — `tests/gpu` | The real `logos_worker_node` against simulated GPUs | nothing | ~75 s |
 | 2 — `tests/node` | Orchestrator + database + simulated worker nodes | Docker | minutes |
 | 3 — `tests/client` | The same stack through the real OpenAI/Anthropic SDKs | Docker | minutes |
+| 4 — `../logos-ui/e2e` | The UI in a real browser (Playwright) | Docker + Node | minutes |
 
 Nothing in the worker or the orchestrator is stubbed. Only the layer *below* the
 worker is simulated — `nvidia-smi`, `nvcc`, the `vllm` binary — because that is
@@ -26,12 +27,23 @@ uv pip install --python .venv/bin/python -r ../logos-workernode/requirements.txt
 .venv/bin/python -m harness.stack.compose up
 .venv/bin/python -m pytest tests/node tests/client -v
 .venv/bin/python -m harness.stack.compose down
+
+# Tier 4 — adds Keycloak, the webservice and the UI
+.venv/bin/python -m harness.stack.compose up --ui
+cd ../logos-ui && npm ci && npx playwright install chromium && npm run e2e
 ```
 
 The stack is started separately on purpose. A suite that owns the lifecycle
 rebuilds images on every run and tears down the evidence at the moment a failure
 needs inspecting. With the stack down, the Tier 2/3 tests skip with the command
 to start it.
+
+The `--ui` profile roughly triples startup time (a Keycloak boot and an Angular
+production build), which is why the inter-node and SDK tiers run without it.
+Playwright goes through Traefik rather than straight at the UI container: in
+production the UI and the API share an origin, and testing them on separate
+origins would miss every CORS, cookie and same-origin-WebSocket problem that
+shape causes.
 
 ## Why a GPU-less suite can test GPU compatibility
 
@@ -97,7 +109,18 @@ harness/
   stack/       docker-compose.e2e.yaml, seed.sql, compose.py
   clients/     admin client; SDK-based clients for the client tier
 tests/gpu, tests/node, tests/client
+../logos-ui/e2e/  Playwright config, auth setup, and browser specs
 ```
+
+## What a node's state looks like
+
+Worker liveness comes from `/internal/provider_status` — the orchestrator's
+worker registry, the only place a live WebSocket session is visible. It is
+deliberately *not* read from `scheduler_state`: that facade only lists a
+provider once it has deployments attached, so a connected node with no models
+yet reads as offline there. `AdminClient.connected_nodes()` combines the two
+calls and unwraps the payload (`runtime.devices.devices` holds the per-card
+list; `runtime.devices` itself is the summary with the telemetry flags).
 
 ## Adding a GPU profile
 
