@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
@@ -54,6 +55,7 @@ class ProviderControllerTest {
     // Mocked so the price refresh triggered by connect_model_provider does not
     // reach the live litellm catalog during tests.
     @MockitoBean PriceUpdaterService priceUpdaterService;
+    @MockitoBean ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -274,6 +276,7 @@ class ProviderControllerTest {
         // Without this refresh a freshly linked cloud model kept reporting a
         // cost of zero until the next daily full refresh.
         verify(priceUpdaterService).updatePricesForModelAsync(5002);
+        verify(modelCapabilitiesUpdaterService).updateCapabilitiesForModelAsync(5002, "gpt-3.5");
     }
 
     @Test

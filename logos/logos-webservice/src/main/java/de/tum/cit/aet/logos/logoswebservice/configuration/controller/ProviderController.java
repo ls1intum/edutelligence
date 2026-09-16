@@ -27,7 +27,9 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDT
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
 
@@ -37,12 +39,16 @@ public class ProviderController {
 
     private final ProviderService providerService;
     private final PriceUpdaterService priceUpdaterService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
+    private final ModelRepository modelRepository;
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
         this.priceUpdaterService = priceUpdaterService;
+        this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
+        this.modelRepository = modelRepository;
         this.workerAdminClient = workerAdminClient;
         this.objectMapper = objectMapper;
     }
@@ -97,6 +103,8 @@ public class ProviderController {
         // refresh, so freshly connected cloud models reported a cost of zero.
         if (req.modelId() != null) {
             priceUpdaterService.updatePricesForModelAsync(req.modelId());
+            modelRepository.findById(req.modelId()).ifPresent(model ->
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), model.getName()));
         }
         return response;
     }

@@ -36,6 +36,7 @@ import httpx
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
+from logos.sdi.model_discovery_notifier import notify_models_discovered
 
 logger = logging.getLogger(__name__)
 
@@ -366,6 +367,7 @@ class CloudModelSyncService:
             return False, False
 
         newly = result["new_models"]
+        await notify_models_discovered(result.get("new_model_ids", []))
         logger.info(
             "Cloud model sync: provider %s (%s) — %d model(s), %d new%s%s%s",
             pid,

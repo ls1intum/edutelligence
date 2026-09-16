@@ -96,6 +96,7 @@ services:
       HF_TOKEN: "${HF_TOKEN:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      LOGOS_WEBSERVICE_URL: "http://logos-webservice:8080"
       TZ: "${TZ:-Europe/Berlin}"
     expose:
       - "8080"
