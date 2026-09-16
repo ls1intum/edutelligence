@@ -1,8 +1,6 @@
 name: Logos - Deploy to Prod
 
 on:
-  # Manual deploys only: the workflow_run trigger on "Logos - Build" was
-  # removed so prod no longer auto-deploys on every push to main.
   workflow_dispatch:
     inputs:
       image-tag:
