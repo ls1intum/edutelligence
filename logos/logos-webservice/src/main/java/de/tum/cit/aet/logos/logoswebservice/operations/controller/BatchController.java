@@ -26,6 +26,10 @@ import de.tum.cit.aet.logos.logoswebservice.operations.service.BatchService;
  * these endpoints are for. They are a thin forward to the orchestrator's Batch
  * API, called as the key the user picked, so the permission, ownership and
  * budget rules are the ones that apply to every other batch.
+ *
+ * The page is an admin facility, so only app admins and logos admins may use
+ * it; app developers keep the script path, which talks to the orchestrator's
+ * Batch API directly and does not go through here.
  */
 @RestController
 public class BatchController {
@@ -38,8 +42,7 @@ public class BatchController {
 
     /** The user's keys, for the picker: a batch runs as exactly one of them. */
     @GetMapping("/logosdb/batches/keys")
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "', '"
-        + Role.Names.APP_DEVELOPER + "')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> keys(@RequestAttribute("authContext") AuthContext auth) {
         if (auth.userId() == null) {
             return ResponseEntity.status(403).body(Map.of("detail", "No user context"));
@@ -48,16 +51,14 @@ public class BatchController {
     }
 
     @GetMapping("/logosdb/batches")
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "', '"
-        + Role.Names.APP_DEVELOPER + "')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> list(@RequestParam("apiKeyId") int apiKeyId,
                                   @RequestAttribute("authContext") AuthContext auth) {
         return proxy(() -> batchService.listBatches(requireUser(auth), apiKeyId));
     }
 
     @GetMapping("/logosdb/batches/{batchId}")
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "', '"
-        + Role.Names.APP_DEVELOPER + "')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> get(@PathVariable String batchId,
                                  @RequestParam("apiKeyId") int apiKeyId,
                                  @RequestAttribute("authContext") AuthContext auth) {
@@ -65,8 +66,7 @@ public class BatchController {
     }
 
     @PostMapping("/logosdb/batches/{batchId}/cancel")
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "', '"
-        + Role.Names.APP_DEVELOPER + "')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> cancel(@PathVariable String batchId,
                                     @RequestParam("apiKeyId") int apiKeyId,
                                     @RequestAttribute("authContext") AuthContext auth) {
@@ -81,8 +81,7 @@ public class BatchController {
      * to fish for other teams' output.
      */
     @GetMapping("/logosdb/batches/{batchId}/results")
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "', '"
-        + Role.Names.APP_DEVELOPER + "')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> results(@PathVariable String batchId,
                                      @RequestParam("apiKeyId") int apiKeyId,
                                      @RequestParam("outputFileId") String outputFileId,
@@ -92,8 +91,7 @@ public class BatchController {
     }
 
     @PostMapping(value = "/logosdb/batches", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "', '"
-        + Role.Names.APP_DEVELOPER + "')")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> create(@RequestParam("file") MultipartFile file,
                                     @RequestParam("apiKeyId") int apiKeyId,
                                     @RequestParam(value = "endpoint", required = false) String endpoint,

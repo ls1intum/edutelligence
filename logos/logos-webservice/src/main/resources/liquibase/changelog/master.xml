@@ -37,6 +37,7 @@
     <include file="liquibase/changelog/031_batch_api.xml"/>
     <include file="liquibase/changelog/032_batch_runner.xml"/>
     <include file="liquibase/changelog/033_batch_settlement.xml"/>
-    <include file="liquibase/changelog/034_calibration_probe_logs_observed_reason.xml"/>
+    <include file="liquibase/changelog/034_model_capabilities_max_input_tokens.xml"/>
+    <include file="liquibase/changelog/035_calibration_probe_logs_observed_reason.xml"/>
 
 </databaseChangeLog>

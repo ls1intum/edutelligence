@@ -38,6 +38,7 @@ from logos_worker_node.models import (
 )
 from logos_worker_node.request_content import MULTIPART_PAYLOAD_KEY, httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
+from logos_worker_node.vllm_metrics_export import collect_vllm_metrics_text
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
 
@@ -207,6 +208,9 @@ class LogosBridgeClient:
                     await self._send_runtime_status(ws, force=True)
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws), name="logos-bridge-heartbeat")
                     status_task = asyncio.create_task(self._status_refresh_loop(ws), name="logos-bridge-status")
+                    vllm_metrics_task = asyncio.create_task(
+                        self._vllm_metrics_loop(ws), name="logos-bridge-vllm-metrics"
+                    )
                     event_task = asyncio.create_task(
                         self._event_loop(ws, replay_event_ids=replay_event_ids),
                         name="logos-bridge-events",
@@ -220,8 +224,9 @@ class LogosBridgeClient:
                     finally:
                         heartbeat_task.cancel()
                         status_task.cancel()
+                        vllm_metrics_task.cancel()
                         event_task.cancel()
-                        for task in (heartbeat_task, status_task, event_task):
+                        for task in (heartbeat_task, status_task, vllm_metrics_task, event_task):
                             try:
                                 await task
                             except asyncio.CancelledError:
@@ -345,6 +350,46 @@ class LogosBridgeClient:
             if changed or self._runtime_has_transient_lanes() or interval_elapsed:
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
+
+    async def _vllm_metrics_loop(self, ws) -> None:
+        """Periodically push this worker's merged vLLM ``/metrics`` upstream.
+
+        Runs on its own interval rather than piggybacking on the status
+        refresh loop: vLLM's counters change on every tick, so gating this on
+        the status dedupe signature would send it on every pass instead of a
+        predictable cadence.
+        """
+        interval = max(1, self._cfg.vllm_metrics_interval_seconds)
+        while not self._stopping.is_set():
+            await asyncio.sleep(interval)
+            try:
+                await self._send_vllm_metrics(ws)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to collect/send vLLM metrics", exc_info=True)
+
+    async def _send_vllm_metrics(self, ws) -> None:
+        lane_manager = self._app.state.lane_manager
+        endpoints = lane_manager.running_vllm_endpoints()
+        vllm_engine_cfg = self._app.state.config.engines.vllm
+        metrics_text = await collect_vllm_metrics_text(
+            endpoints,
+            metrics_path=vllm_engine_cfg.metrics_path,
+            timeout_s=vllm_engine_cfg.metrics_timeout_seconds,
+        )
+        # Always send, even when empty: this is what tells the orchestrator
+        # the last lane is gone, so it drops the stale series instead of
+        # keeping the latest non-empty snapshot forever (see
+        # LogosNodeRuntimeRegistry.peek_vllm_metrics).
+        await self._send_json(
+            ws,
+            {
+                "type": "vllm_metrics",
+                "worker_id": self.worker_id,
+                "metrics_text": metrics_text,
+            },
+        )
 
     async def _event_loop(self, ws, replay_event_ids: frozenset[str] = frozenset()) -> None:
         # Events named in *replay_event_ids* were already in the log when this

@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -34,6 +35,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 class RequestLogStatsControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
@@ -120,6 +122,52 @@ class RequestLogStatsControllerTest {
            .andExpect(jsonPath("$.stats.totals.requests").value(2))
            .andExpect(jsonPath("$.stats.totals.coldStarts").value(1))
            .andExpect(jsonPath("$.stats.totals.warmStarts").value(1));
+    }
+
+    // Cold and warm starts are a property of local lanes (issue #928): the KPI
+    // card shows the cold-start share of "local starts", so a cloud request
+    // must not land in either count — not as a warm start, and not even when
+    // its row carries was_cold_start = true. The rows are added through
+    // JdbcTemplate in the test body instead of a method-level @Sql: a method
+    // @Sql would replace the class-level seeds for this method, and the
+    // class-level cleanup still removes what this test adds (9010/9011 are in
+    // cleanup-operations.sql, the provider goes with the table-wide provider
+    // cleanup).
+    @Test
+    void requestLogStats_countsColdAndWarmStartsOnLocalRequestsOnly() throws Exception {
+        jdbc.update("""
+            INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format)
+            VALUES (6002, 'cloud-provider', 'https://api.cloud.example.com', 'cloud',
+                    'CLOUD_IN_EU_BY_EU_PROVIDER', 'Authorization', 'Bearer {}')
+            """);
+        jdbc.update("""
+            INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                                   timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+                                   was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment)
+            VALUES (9010, 'req-ccc-333', 3001, 5001, 6002, 'success',
+                    NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '90 seconds',
+                    NOW() - INTERVAL '80 seconds', NOW() - INTERVAL '70 seconds',
+                    false, 0, NULL, NULL, NULL),
+                   (9011, 'req-ddd-444', 3001, 5001, 6002, 'success',
+                    NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '90 seconds',
+                    NOW() - INTERVAL '80 seconds', NOW() - INTERVAL '70 seconds',
+                    true, 0, NULL, NULL, NULL)
+            """);
+        mvc.perform(post("/logosdb/request_log_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.stats.totals.requests").value(4))
+           .andExpect(jsonPath("$.stats.totals.cloudRequests").value(2))
+           .andExpect(jsonPath("$.stats.totals.localRequests").value(2))
+           // Without the local-only rule this read 2 cold / 3 warm: the cloud
+           // requests padded the "local starts" denominator the card shows.
+           .andExpect(jsonPath("$.stats.totals.coldStarts").value(1))
+           .andExpect(jsonPath("$.stats.totals.warmStarts").value(1))
+           .andExpect(jsonPath("$.stats.modelBreakdown[0].requestCount").value(4))
+           .andExpect(jsonPath("$.stats.modelBreakdown[0].coldStarts").value(1))
+           .andExpect(jsonPath("$.stats.modelBreakdown[0].warmStarts").value(1));
     }
 
     @Test
