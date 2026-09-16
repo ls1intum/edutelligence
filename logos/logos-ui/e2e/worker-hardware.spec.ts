@@ -19,6 +19,16 @@ import { SIMULATED_FLEET } from './fixtures';
 /** The routed page has rendered inside the shell (not merely the shell itself). */
 const routedContent = 'app-shell router-outlet + *';
 
+/**
+ * Any card in the simulated fleet.
+ *
+ * Never assert a *specific* model on the statistics page: the panel shows one
+ * provider at a time and picks it by sorting on the worker name, which is the
+ * container hostname — random hex per run. Naming one card passes or fails
+ * depending on which node happened to sort first.
+ */
+const ANY_FLEET_GPU = new RegExp(SIMULATED_FLEET.map(node => node.gpu).join('|'));
+
 test.describe('worker hardware', () => {
   test('the statistics page loads without console errors', async ({ page }) => {
     const errors: string[] = [];
@@ -32,8 +42,9 @@ test.describe('worker hardware', () => {
     await expect(page.locator(routedContent)).toBeVisible();
 
     // Let the first poll land, so an error thrown while rendering live worker
-    // data is caught rather than raced past.
-    await expect(page.locator('body')).toContainText(SIMULATED_FLEET[0].gpu, { timeout: 30_000 });
+    // data is caught rather than raced past. Matches any fleet card, not a
+    // named one — see ANY_FLEET_GPU.
+    await expect(page.locator('body')).toContainText(ANY_FLEET_GPU, { timeout: 30_000 });
 
     // Failed asset requests and auth noise are not what this asserts on —
     // an unhandled exception in a panel is.
@@ -58,11 +69,10 @@ test.describe('worker hardware', () => {
       /No providers connected/i,
     );
 
-    const anyFleetGpu = new RegExp(SIMULATED_FLEET.map(node => node.gpu).join('|'));
     await expect(
       body,
       `no simulated GPU model reached the browser; expected one of ${SIMULATED_FLEET.map(n => n.gpu).join(', ')}`,
-    ).toContainText(anyFleetGpu, { timeout: 30_000 });
+    ).toContainText(ANY_FLEET_GPU, { timeout: 30_000 });
   });
 
   test('both simulated workers are selectable', async ({ page }) => {
