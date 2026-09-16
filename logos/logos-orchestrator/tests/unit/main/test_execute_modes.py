@@ -4,6 +4,31 @@ import pytest
 
 import logos as main
 from logos import PipelineRequest, RequestPipeline, SchedulingResult
+from logos.logosnode_snapshot import _resolve_requested_model_name
+
+
+def _proxy_model_db(models):
+    """DummyDB for _execute_proxy_mode: resolves names with the same pure
+    resolver that the production DBManager.resolve_proxy_model delegates to,
+    so alias/case semantics under test match production."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def resolve_proxy_model(self, api_key_id, requested_name):
+            resolved = _resolve_requested_model_name(requested_name, models)
+            if resolved is None:
+                return None
+            for model in models:
+                if model["name"] == resolved:
+                    return model["id"], model["name"]
+            return None
+
+    return DummyDB
 
 
 async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
@@ -167,16 +192,7 @@ async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_ali
 async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     """_execute_proxy_mode keeps classification/scheduling but narrows deployments to one model."""
 
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 27, "name": "gemma2:2b"}]
+    monkeypatch.setattr(main, "DBManager", _proxy_model_db([{"id": 27, "name": "gemma2:2b"}]))
 
     called = {}
 
@@ -200,7 +216,6 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         called["request_id"] = request_id
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(
@@ -225,16 +240,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
 async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
     """Planner-safe underscore aliases resolve to canonical DB model names."""
 
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 32, "name": "Qwen/Qwen2.5-0.5B-Instruct"}]
+    monkeypatch.setattr(main, "DBManager", _proxy_model_db([{"id": 32, "name": "Qwen/Qwen2.5-0.5B-Instruct"}]))
 
     called = {}
 
@@ -257,7 +263,6 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         called["allowed_models_override"] = allowed_models_override
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(
@@ -281,16 +286,11 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
 async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
     """A request pinned to an alt tag routes to the model carrying it."""
 
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 32, "name": "llama-3.1-70b", "aliases": ["local-most-powerful"]}]
+    monkeypatch.setattr(
+        main,
+        "DBManager",
+        _proxy_model_db([{"id": 32, "name": "llama-3.1-70b", "aliases": ["local-most-powerful"]}]),
+    )
 
     called = {}
 
@@ -313,7 +313,6 @@ async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
         called["allowed_models_override"] = allowed_models_override
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(
@@ -336,16 +335,7 @@ async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
 
 
 async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeypatch):
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 27, "name": "gemma2:2b", "aliases": []}]
+    monkeypatch.setattr(main, "DBManager", _proxy_model_db([{"id": 27, "name": "gemma2:2b", "aliases": []}]))
 
     called = {}
 
@@ -366,7 +356,6 @@ async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeyp
         called["body"] = body
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(

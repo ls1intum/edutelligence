@@ -2301,7 +2301,9 @@ class DBManager:
                           p.provider_type    as type,
                           p.privacy_level    as privacy_level,
                           p.cloud_provider_type as cloud_provider_type,
-                          p.base_url         as base_url
+                          p.base_url         as base_url,
+                          m.name             as model_name,
+                          p.name             as provider_name
                    FROM models m
                         JOIN model_provider mp ON m.id = mp.model_id
                         JOIN providers p ON mp.provider_id = p.id
@@ -3857,6 +3859,96 @@ class DBManager:
             for r in result
         ]
 
+    def resolve_proxy_model(
+        self,
+        api_key_id: int,
+        requested_name: str,
+    ) -> Optional[tuple[int, str]]:
+        """
+        Resolve a user-supplied model name to (model_id, canonical name) using
+        only the models this key may address.
+
+        Single query, same access semantics as get_models_info: logos_admin /
+        app_admin keys see every model, all other keys see the intersection of
+        their effective model and provider permissions (per-key permissions
+        when the key opts into custom permissions, the team's otherwise). The
+        name matching is delegated to the shared resolver so proxy mode and
+        the user-facing endpoints cannot drift apart.
+        """
+        # Imported here: logosnode_snapshot imports dbmanager at module scope,
+        # so a top-level import would be circular.
+        from logos.logosnode_snapshot import _resolve_requested_model_name
+
+        sql = text(
+            """
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   COALESCE(u.role, '') AS user_role,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                                LEFT JOIN users u ON ak.user_id = u.id
+                            WHERE ak.id = :api_key_id
+                                AND ak.is_active = true
+                        ),
+                        effective_providers AS (
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        ),
+                        effective_models AS (
+                            SELECT akmp.model_id
+                            FROM api_key_model_permissions akmp, key_info ki
+                            WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tmp.model_id
+                            FROM team_model_permissions tmp, key_info ki
+                            WHERE tmp.team_id = ki.tid AND ki.custom = false
+                        )
+                   SELECT m.id,
+                          m.name,
+                          (
+                              SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                              FROM model_aliases a
+                              WHERE a.model_id = m.id
+                          ) AS aliases
+                   FROM models m
+                   WHERE EXISTS (SELECT 1 FROM key_info ki WHERE ki.user_role IN ('logos_admin', 'app_admin'))
+                      OR (
+                          m.id IN (SELECT model_id FROM effective_models)
+                          AND EXISTS (
+                              SELECT 1
+                              FROM model_provider mp
+                                   JOIN effective_providers ep ON ep.provider_id = mp.provider_id
+                              WHERE mp.model_id = m.id
+                          )
+                      )
+                   ORDER BY m.id
+                   """
+        )
+        rows = self.session.execute(sql, {"api_key_id": api_key_id}).fetchall()
+        models = [
+            {
+                "id": r.id,
+                # Same fallback as get_models_info, so the resolver sees the
+                # same names in both paths.
+                "name": r.name or f"Model {r.id}",
+                "aliases": self._split_alias_list(r.aliases),
+            }
+            for r in rows
+        ]
+        model_name = _resolve_requested_model_name(requested_name, models)
+        if model_name is None:
+            return None
+        for model in models:
+            if model["name"] == model_name:
+                return model["id"], model["name"]
+        return None
+
     def get_model(self, model_id: int):
         sql = text(
             """
@@ -4017,6 +4109,7 @@ class DBManager:
         input_payload=None,
         headers=None,
         request_id: Optional[str] = None,
+        timeout_s: Optional[float] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
@@ -4027,9 +4120,10 @@ class DBManager:
                 """
                  INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
                                         environment, client_ip,
-                                        input_payload, headers, privacy_level, request_id)
+                                        input_payload, headers, privacy_level, request_id, timeout_s)
                  VALUES (:ts, :aki, :tid, :uid, :env,
-                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid) RETURNING id
+                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid, :timeout_s)
+                 RETURNING id
                  """
             ),
             {
@@ -4043,6 +4137,7 @@ class DBManager:
                 "headers": headers_str,
                 "privacy": log_level,
                 "rid": request_id,
+                "timeout_s": timeout_s,
             },
         ).fetchone()
         self.session.commit()

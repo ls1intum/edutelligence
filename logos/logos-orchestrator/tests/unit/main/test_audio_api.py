@@ -96,7 +96,7 @@ async def test_audio_job_persists_only_sanitized_request_data(monkeypatch):
 
     async def fake_auth_parse_log(_request, use_profile_auth=False):
         assert use_profile_auth
-        return {"authorization": "Bearer lg-secret"}, auth, payload, "127.0.0.1", None
+        return {"authorization": "Bearer lg-secret"}, auth, payload, "127.0.0.1", None, []
 
     def fake_create_job(submission):
         nonlocal persisted

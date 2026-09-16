@@ -11,7 +11,7 @@ import re
 import secrets
 import threading
 import time
-from contextlib import aclosing, asynccontextmanager, suppress
+from contextlib import aclosing, asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set
 
@@ -64,7 +64,6 @@ from logos.logosnode_snapshot import (
     _logosnode_snapshot_is_connected,
     _merge_provider_samples,
     _profile_native_context_length,
-    _resolve_requested_model_name,
     _safe_float,
     _sample_snapshot_id,
 )
@@ -1077,7 +1076,14 @@ async def _filter_logosnode_deployments(
     filtered: list[Deployment] = []
     _local_name_lookup: dict[int, str] = {}
 
-    with DBManager() as db:
+    # Deployment rows carry the model name (enriched by
+    # get_deployments_for_api_key); only callers that build deployment dicts
+    # by hand (job paths, tests) still need the DB fallback.
+    needs_db = any(
+        _normalize_provider_type(deployment.get("type")) == "logosnode" and not deployment.get("model_name")
+        for deployment in deployments
+    )
+    with (DBManager() if needs_db else nullcontext()) as db:
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
@@ -1086,11 +1092,13 @@ async def _filter_logosnode_deployments(
 
             model_id = int(deployment["model_id"])
             if model_id not in _local_name_lookup:
-                model_info = db.get_model(model_id)
-                name = (model_info or {}).get("name", "")
-                _local_name_lookup[model_id] = name
+                name = deployment.get("model_name")
+                if name is None and db is not None:
+                    model_info = db.get_model(model_id)
+                    name = (model_info or {}).get("name", "")
+                _local_name_lookup[model_id] = name or ""
                 # Prime the module-level cache so log lines resolve without a DB hit.
-                model_name_cache.prime(model_id, name)
+                model_name_cache.prime(model_id, _local_name_lookup[model_id])
 
             model_name = _local_name_lookup[model_id]
             if not model_name:
@@ -2721,21 +2729,13 @@ async def _execute_proxy_mode(
     else:
         with perf_trace.phase(request_id, "mode.resolve_model"):
             with DBManager() as db:
-                models_info = db.get_models_info(auth.key_value)
-
-            model_name = _resolve_requested_model_name(requested_model_name, models_info)
-            if model_name is None:
+                resolved = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
+            if resolved is None:
                 raise HTTPException(
                     status_code=404,
                     detail=f"Model '{requested_model_name}' not available for this key",
                 )
-
-            model_id = None
-            for row in models_info:
-                mid, name = row["id"], row["name"]
-                if name == model_name:
-                    model_id = mid
-                    break
+            model_id, model_name = resolved
 
     if model_id is None:
         raise HTTPException(
@@ -3420,35 +3420,29 @@ async def handle_sync_request(path: str, request: Request):
         return await handle_batch_api_request(request)
 
     # The request id is minted before authentication so perf tracing can cover
-    # the auth phases as well; it lands in the DB with the log metrics update
-    # below either way.
+    # the auth phases as well; the log insert inside auth_parse_log stores it
+    # together with the timeout, so no follow-up metrics UPDATE is needed.
     request_id = secrets.token_urlsafe(16)
     perf_trace.begin(request_id)
 
-    # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
-    with perf_trace.phase(request_id, "auth.parse_log"):
-        headers, auth, body, client_ip, log_id = await auth_parse_log(
-            request, use_profile_auth=True, request_id=request_id
-        )
-
-    # Publish the request to the live view from the moment it is known, so the
-    # statistics feed shows its (estimated) prompt size while it waits for a
-    # deployment or a reconnecting worker instead of sitting as a blank row.
-    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
-
+    log_id: Optional[int] = None
     response = None
     try:
         try:
-            with DBManager() as db:
-                if log_id:
-                    with perf_trace.phase(request_id, "setup.update_metrics"):
-                        db.update_log_entry_metrics(
-                            log_id=log_id,
-                            request_id=request_id,
-                            timeout_s=body.get("timeout_s"),
-                        )
-                with perf_trace.phase(request_id, "setup.deployments"):
-                    raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs
+            # endpoints). Inside the try: a failure after the log insert (for
+            # example in the deployment lookup) must reach the same failure
+            # recording as failures later in the setup.
+            with perf_trace.phase(request_id, "auth.parse_log"):
+                headers, auth, body, client_ip, log_id, raw_deployments = await auth_parse_log(
+                    request, use_profile_auth=True, request_id=request_id
+                )
+
+            # Publish the request to the live view from the moment it is known, so the
+            # statistics feed shows its (estimated) prompt size while it waits for a
+            # deployment or a reconnecting worker instead of sitting as a blank row.
+            _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
+
             required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
             if required_provider_id is not None:
                 raw_deployments = [
@@ -3521,9 +3515,14 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
 
     Returns:
         If use_profile_auth=False (default):
-            (headers, logos_key, process_id, body, client_ip, log_id)
+            (headers, None, body, client_ip, None, [])
         If use_profile_auth=True:
-            (headers, auth_context, body, client_ip, log_id)
+            (headers, auth_context, body, client_ip, log_id, raw_deployments)
+
+        The deployment lookup runs in the same DB session as the log insert
+        (one pool checkout instead of two), so the log row already carries
+        request_id and timeout_s when this returns — no follow-up metrics
+        UPDATE is needed.
 
     Raises:
         HTTPException(400): Invalid JSON body
@@ -3552,6 +3551,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
 
     if use_profile_auth:
+        log_id: Optional[int] = None
         with DBManager() as db:
 
             # Rate limits apply to every key, including those owned by
@@ -3593,13 +3593,18 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
                     client_ip=client_ip,
                     input_payload=sanitized_payload_for_logging(body),
                     headers=sanitized_headers_for_persistence(headers),
+                    request_id=request_id,
+                    timeout_s=body.get("timeout_s"),
                 )
             if c_log == 200:
                 log_id = int(r_log["log-id"])
 
-        return headers, auth, body, client_ip, log_id
+            with perf_trace.phase(request_id, "setup.deployments"):
+                raw_deployments, _ = request_setup(headers, auth.api_key_id, db=db)
 
-    return headers, None, body, client_ip, None
+        return headers, auth, body, client_ip, log_id, raw_deployments
+
+    return headers, None, body, client_ip, None, []
 
 
 # The budget guard lives in logos.billing.budget so the Batch API can apply the
@@ -3629,7 +3634,9 @@ async def submit_job_request(path: str, request: Request) -> Response:
         return await handle_batch_api_request(request)
 
     # Auth with full context + initial logging
-    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+    headers, auth, json_data, client_ip, log_id, _job_deployments = await auth_parse_log(
+        request, use_profile_auth=True
+    )
 
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
