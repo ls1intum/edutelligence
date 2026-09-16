@@ -54,12 +54,37 @@ def _compose(*args: str, check: bool = True, capture: bool = False, ui: bool = F
     return subprocess.run(cmd, check=check, text=True, capture_output=capture)
 
 
-def up(*, timeout_s: float = 900.0, ui: bool = False) -> None:
+def pull(*, attempts: int = 3, ui: bool = False) -> None:
+    """Pre-pull base images, retrying past registry flakes.
+
+    Docker Hub resets connections often enough on shared CI runners that a
+    single ``up`` is a coin flip: one "connection reset by peer" on a postgres
+    manifest fails the whole stack and reads as a broken test suite. Pulling
+    first, with retries, keeps a registry hiccup from being reported as a
+    product regression.
+
+    Never fatal on its own — if the pulls still fail, ``up`` is left to try and
+    to produce the real error.
+    """
+    for attempt in range(1, attempts + 1):
+        result = _compose("pull", "--ignore-buildable", "--policy", "missing", check=False, ui=ui)
+        if result.returncode == 0:
+            return
+        if attempt == attempts:
+            print(f"warning: image pull still failing after {attempts} attempt(s); letting `up` try anyway")
+            return
+        delay = 5 * attempt
+        print(f"image pull failed (attempt {attempt}/{attempts}); retrying in {delay}s")
+        time.sleep(delay)
+
+
+def up(*, timeout_s: float = 900.0, ui: bool = False, pull_attempts: int = 3) -> None:
     """Bring the stack up. *ui* adds Keycloak, the webservice and the UI.
 
     Those three roughly triple the startup cost, so the inter-node and SDK tiers
     deliberately run without them.
     """
+    pull(attempts=pull_attempts, ui=ui)
     _compose("up", "-d", "--build", "--wait", "--wait-timeout", str(int(timeout_s)), ui=ui)
     wait_for_orchestrator()
     if ui:
@@ -161,7 +186,14 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.action == "up":
-        up(ui=args.ui)
+        try:
+            up(ui=args.ui)
+        except (subprocess.CalledProcessError, TimeoutError) as exc:
+            # A failed `up` leaves containers behind with the actual reason in
+            # their logs; a bare traceback here sends the reader hunting for it.
+            print(f"stack failed to start: {exc}\n", file=sys.stderr)
+            print(logs(tail=80), file=sys.stderr)
+            return 1
         nodes = wait_for_nodes()
         print(f"stack ready at {ORCHESTRATOR_URL} with {len(nodes)} worker node(s)")
         if args.ui:
