@@ -187,10 +187,26 @@ class AdminClient:
 
     # -- writes -----------------------------------------------------------
 
-    def register_node(self, provider_name: str, base_url: str = "") -> dict[str, Any]:
+    def register_node(
+        self,
+        provider_name: str,
+        base_url: str = "",
+        privacy_level: str = "LOCAL",
+    ) -> dict[str, Any]:
+        """Register a worker node. The privacy level is required by the endpoint.
+
+        Defaulted here for test convenience only — the API itself has no default,
+        so that a rented or third-party worker cannot be registered as
+        operator-controlled hardware by omission.
+        """
         response = self._client.post(
             "/logosdb/providers/logosnode/register",
-            json={"logos_key": self._admin_key, "provider_name": provider_name, "base_url": base_url},
+            json={
+                "logos_key": self._admin_key,
+                "provider_name": provider_name,
+                "base_url": base_url,
+                "privacy_level": privacy_level,
+            },
         )
         response.raise_for_status()
         return response.json()

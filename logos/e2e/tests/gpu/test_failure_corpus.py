@@ -17,7 +17,6 @@ every model's compile cache on the node.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -261,16 +260,25 @@ async def test_failure_logs_are_persisted_for_postmortem(gpu_sim, lane, monkeypa
     Without this the only record of a startup failure is whatever the worker's
     own stdout buffer still holds by the time someone looks.
     """
-    tmp_path / "vllm-logs"
-    monkeypatch.setattr("logos_worker_node.vllm_process.Path", Path)
+    log_dir = tmp_path / "vllm-logs"
+
+    # The worker hardcodes /tmp/logos-vllm-logs, which is a real directory a
+    # developer's own worker writes postmortems into. Redirect just that one
+    # path so the test cannot read another run's logs — or delete someone's.
+    real_path = Path
+
+    def _redirect_log_dir(*args, **kwargs):
+        if args and str(args[0]) == "/tmp/logos-vllm-logs":
+            return real_path(log_dir)
+        return real_path(*args, **kwargs)
+
+    monkeypatch.setattr("logos_worker_node.vllm_process.Path", _redirect_log_dir)
     gpu_sim(GpuScenario.homogeneous("l40s", 1), VllmScript(emit_log="cuda_devices_busy.log", exit_code=1))
 
     async with lane() as handle:
         await lane_harness.try_spawn(handle, lane_harness.lane_config())
         handle.persist_recent_logs("e2e_corpus")
 
-    written = sorted(Path("/tmp/logos-vllm-logs").glob(f"{handle.lane_id}_*_e2e_corpus.log"))
+    written = sorted(log_dir.glob(f"{handle.lane_id}_*_e2e_corpus.log"))
     assert written, "no failure log was persisted"
     assert "all CUDA-capable devices are busy or unavailable" in written[-1].read_text()
-    for path in written:
-        os.unlink(path)

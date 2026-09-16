@@ -124,10 +124,53 @@ def test_registration_requires_an_admin_key(orchestrator_url):
     """Node registration mints a shared key; a developer key must not reach it."""
     response = httpx.post(
         f"{orchestrator_url}/logosdb/providers/logosnode/register",
-        json={"logos_key": "lg-e2e-developer-key", "provider_name": "rogue-node", "base_url": ""},
+        json={
+            "logos_key": "lg-e2e-developer-key",
+            "provider_name": "rogue-node",
+            "base_url": "",
+            "privacy_level": "LOCAL",
+        },
         timeout=30.0,
     )
     assert response.status_code == 403, f"a non-admin key registered a node (HTTP {response.status_code})"
+
+
+def test_registration_requires_an_explicit_privacy_level(orchestrator_url, admin_key):
+    """Omitting the trust level must be refused, not silently assumed.
+
+    A default would hand the most trusted tier ("our datacentre") to any worker
+    that self-registers — rented GPUs and personal machines included — making it
+    eligible for traffic restricted to operator-controlled hardware before an
+    operator ever sees it.
+    """
+    response = httpx.post(
+        f"{orchestrator_url}/logosdb/providers/logosnode/register",
+        json={"logos_key": admin_key, "provider_name": "no-level-node", "base_url": ""},
+        timeout=30.0,
+    )
+    assert response.status_code == 422, f"a node registered without a privacy level (HTTP {response.status_code})"
+
+
+def test_registration_rejects_an_unknown_privacy_level(orchestrator_url, admin_key):
+    response = httpx.post(
+        f"{orchestrator_url}/logosdb/providers/logosnode/register",
+        json={
+            "logos_key": admin_key,
+            "provider_name": "bad-level-node",
+            "base_url": "",
+            "privacy_level": "TOTALLY_TRUSTED",
+        },
+        timeout=30.0,
+    )
+    assert response.status_code == 422, f"an unknown privacy level was accepted (HTTP {response.status_code})"
+
+
+def test_third_party_hardware_can_register_as_such(admin):
+    """Rented or personal hardware must be registerable at its real trust level."""
+    registration = admin.register_node("mlx-macbook-probe", privacy_level="THIRD_PARTY_HARDWARE")
+
+    assert registration["provider_id"]
+    assert registration["shared_key"]
 
 
 def test_unknown_shared_key_cannot_open_a_session(orchestrator_url):

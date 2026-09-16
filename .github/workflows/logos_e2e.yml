@@ -23,6 +23,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# This workflow builds and executes pull-request code (docker build, pytest,
+# Playwright). No job here writes to the repository, so the token is narrowed to
+# read and the checkouts do not leave credentials on disk for that code to find.
+permissions:
+  contents: read
+
 jobs:
   # Tier 1: the real worker driven against simulated GPUs. No Docker, no
   # network — this is the fast gate, and it is where the GPU-compatibility
@@ -34,6 +40,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -73,6 +81,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -140,6 +150,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5

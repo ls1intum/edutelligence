@@ -132,7 +132,11 @@ services:
       LOGOS_URL: "http://logos-orchestrator:8080"
       LOGOS_ALLOW_INSECURE_HTTP: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health > /dev/null || exit 1"]
+      # The worker exposes `/` and nothing else — every `/health` in
+      # logos_worker_node is it probing *vLLM's* health, not serving its own.
+      # Curling /health here 404s, `curl -f` fails, and the container is marked
+      # unhealthy, which aborts `compose up --wait` before any test runs.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/ > /dev/null || exit 1"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -151,7 +155,11 @@ services:
       LOGOS_URL: "http://logos-orchestrator:8080"
       LOGOS_ALLOW_INSECURE_HTTP: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:80/health > /dev/null || exit 1"]
+      # The worker exposes `/` and nothing else — every `/health` in
+      # logos_worker_node is it probing *vLLM's* health, not serving its own.
+      # Curling /health here 404s, `curl -f` fails, and the container is marked
+      # unhealthy, which aborts `compose up --wait` before any test runs.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/ > /dev/null || exit 1"]
       interval: 2s
       timeout: 5s
       retries: 30

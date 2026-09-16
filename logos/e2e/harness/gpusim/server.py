@@ -325,16 +325,21 @@ def run(model: str, port: int, vram_mb: float, script: VllmScript, device_indice
     lane = Lane(model=model, script=script, vram_mb=vram_mb)
     pid = os.getpid()
 
+    # Bind before claiming VRAM. Binding is the step that can still fail (a port
+    # collision — `lane.free_port()` hands out a port it has already closed), and
+    # an allocation recorded before it would never be released: the simulator
+    # would carry a phantom allocation for a process that never ran, and every
+    # later capacity assertion in that session would be measured against it.
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server.lane = lane  # type: ignore[attr-defined]
+    server.daemon_threads = True
+
     if vram_mb > 0 and device_indices:
         with gpustate.mutate() as sim:
             for index in device_indices:
                 sim.allocate(pid, index, vram_mb)
 
     print(_startup_banner(lane, port), flush=True)
-
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    server.lane = lane  # type: ignore[attr-defined]
-    server.daemon_threads = True
 
     stopping = threading.Event()
 

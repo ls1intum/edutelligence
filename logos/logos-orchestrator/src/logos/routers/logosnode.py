@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 
 import logos.main as _main
 from logos.dbutils.dbmanager import DBManager
-from logos.dbutils.dbmodules import ThresholdLevel
 from logos.dbutils.dbrequest import (
     LogosNodeApplyLanesRequest,
     LogosNodeAuthRequest,
@@ -276,11 +275,11 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
             auth_format="{}",
             provider_type="logosnode",
             # add_provider rejects a missing privacy_level outright, so omitting
-            # it made this endpoint return 400 for every request. A worker node
-            # is self-hosted GPU hardware, which is what LOCAL means; operators
-            # renting third-party GPUs can move it to THIRD_PARTY_HARDWARE
-            # afterwards, the same as for any other provider.
-            privacy_level=ThresholdLevel.LOCAL.value,
+            # it made this endpoint return 400 for every request. The caller
+            # states the level (required and validated on the request model) —
+            # assuming LOCAL here would hand the most trusted tier to any worker
+            # that self-registers, rented hardware included.
+            privacy_level=data.privacy_level,
         )
 
     if code != 200:

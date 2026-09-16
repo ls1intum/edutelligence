@@ -80,15 +80,19 @@ async def lane(
             await handle.close()
 
 
-async def try_spawn(handle: VllmProcessHandle, config: LaneConfig) -> BaseException | None:
+async def try_spawn(handle: VllmProcessHandle, config: LaneConfig) -> Exception | None:
     """Spawn and return the exception instead of raising it.
 
     Startup-failure tests care about *which* failure the worker reached and what
     it did about it, not about the raise itself — this keeps them from being a
     wall of ``pytest.raises`` blocks that hide the interesting assertion.
+
+    Catches ``Exception``, not ``BaseException``: a test timing out cancels this
+    coroutine, and swallowing the ``CancelledError`` would turn the cancellation
+    into an ordinary "startup failed" result the test then asserts against.
     """
     try:
         await handle.spawn(config)
-    except BaseException as exc:  # noqa: BLE001 - the failure is the subject
+    except Exception as exc:  # noqa: BLE001 - the failure is the subject
         return exc
     return None

@@ -69,8 +69,17 @@ def self_register(logos_url: str, provider_name: str, deadline_s: float = 120.0)
     database session pool is warm.
     """
     admin_key = os.environ.get("LOGOS_ADMIN_KEY", DEFAULT_ADMIN_KEY)
+    # Required by the endpoint — there is no default, so every caller states the
+    # trust level explicitly. Overridable so a scenario can register a node as
+    # third-party hardware and assert the routing restrictions that follow.
+    privacy_level = os.environ.get("LOGOS_SIM_PRIVACY_LEVEL", "LOCAL")
     url = logos_url.rstrip("/") + REGISTER_PATH
-    payload = {"logos_key": admin_key, "provider_name": provider_name, "base_url": ""}
+    payload = {
+        "logos_key": admin_key,
+        "provider_name": provider_name,
+        "base_url": "",
+        "privacy_level": privacy_level,
+    }
 
     deadline = time.monotonic() + deadline_s
     last_error: Exception | None = None
