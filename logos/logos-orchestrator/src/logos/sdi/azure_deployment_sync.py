@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from logos.dbutils.dbmanager import DBManager
+from logos.sdi.model_discovery_notifier import notify_models_discovered
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +347,7 @@ class AzureDeploymentSyncService:
             return False, False
 
         newly = result["new_models"]
+        await notify_models_discovered(result.get("new_model_ids", []))
         logger.info(
             "Azure deployment sync: provider %s (%s) — %d deployment(s) → %d model(s), %d new%s%s",
             pid,

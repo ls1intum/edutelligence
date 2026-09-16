@@ -946,6 +946,7 @@ class DBManager:
         announced = set(model_names)
         current = set(existing_by_name.keys())
         newly_inserted: list[str] = []
+        newly_inserted_ids: list[int] = []
 
         # Remove stale links (models no longer announced)
         for stale_name in current - announced:
@@ -979,6 +980,7 @@ class DBManager:
                     .id
                 )
                 newly_inserted.append(model_name)
+                newly_inserted_ids.append(mid)
 
             # Upsert model_provider link
             self.session.execute(
@@ -1025,7 +1027,7 @@ class DBManager:
         permissions are NOT granted automatically — an admin assigns access per
         team via the models tab.
 
-        Returns ``{"new_models": [names of newly inserted model rows],
+        Returns ``{"new_models": [names], "new_model_ids": [ids],
         "changed": bool}``. ``changed`` is True when anything that affects
         routing changed (a link was inserted, an endpoint updated, or a stale
         link pruned) so the caller can refresh runtime state; ``new_models``
@@ -1097,7 +1099,11 @@ class DBManager:
             )
 
         self.session.commit()
-        return {"new_models": newly_inserted, "changed": changed or bool(newly_inserted)}
+        return {
+            "new_models": newly_inserted,
+            "new_model_ids": newly_inserted_ids,
+            "changed": changed or bool(newly_inserted),
+        }
 
     def get_cloud_sync_providers(self) -> list[Dict[str, Any]]:
         """Cloud providers whose model catalogue is discovered over ``/v1/models``.
@@ -1166,7 +1172,7 @@ class DBManager:
         automatically — an admin assigns access per team via the models tab, so
         a discovered model stays invisible to users until then.
 
-        Returns ``{"new_models": [...], "changed": bool}`` with the same
+        Returns ``{"new_models": [...], "new_model_ids": [...], "changed": bool}`` with the same
         meaning as :meth:`sync_azure_deployments`.
         """
         pid = int(provider_id)
@@ -1192,6 +1198,7 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
+        newly_inserted_ids: list[int] = []
         for model_name in sorted(desired):
             if model_name in existing_by_name:
                 continue
@@ -1216,6 +1223,7 @@ class DBManager:
                     .id
                 )
                 newly_inserted.append(model_name)
+                newly_inserted_ids.append(mid)
 
             self.session.execute(
                 text("""
@@ -1228,7 +1236,7 @@ class DBManager:
             changed = True
 
         self.session.commit()
-        return {"new_models": newly_inserted, "changed": changed}
+        return {"new_models": newly_inserted, "new_model_ids": newly_inserted_ids, "changed": changed}
 
     def replace_cloud_model_context(self, provider_id: int, contexts: Dict[str, Dict[str, int]]) -> bool:
         """Store the context windows a cloud upstream reports for its models.

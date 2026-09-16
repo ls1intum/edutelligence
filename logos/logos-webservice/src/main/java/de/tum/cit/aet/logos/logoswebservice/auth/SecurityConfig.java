@@ -52,6 +52,7 @@ public class SecurityConfig {
                 // controller — a key is not a JWT, so the resource-server chain
                 // must not run for this path.
                 .requestMatchers(HttpMethod.POST, "/logosdb/get_model_health").permitAll()
+                .requestMatchers(HttpMethod.POST, "/internal/models_discovered").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(rs -> rs
                 .bearerTokenResolver(new LogosBearerTokenResolver())

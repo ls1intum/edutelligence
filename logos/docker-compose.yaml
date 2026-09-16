@@ -217,6 +217,7 @@ services:
       # auth failures on /v1/models, /v1/chat/completions. See logos.rate_limiter.
       LOGOS_PUBLIC_ENDPOINT_RPM: "${LOGOS_PUBLIC_ENDPOINT_RPM:-60}"
       LOGOS_AUTH_FAILURE_RPM: "${LOGOS_AUTH_FAILURE_RPM:-20}"
+      LOGOS_WEBSERVICE_URL: "http://logos-webservice:8080"
       TZ: "${TZ:-Europe/Berlin}"
     expose:
       - "8080"
