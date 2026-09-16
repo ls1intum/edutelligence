@@ -130,6 +130,7 @@ class LogosBridgeClient:
         # restarts this process anyway, so caching for its lifetime is
         # exact, not an approximation. None means "not fetched yet".
         self._vllm_quant_methods: list[str] | None = None
+        self._local_hf_token: str = os.environ.get("HF_TOKEN", "")
 
     @property
     def worker_id(self) -> str:
@@ -143,6 +144,19 @@ class LogosBridgeClient:
             last_status_sent_at=self._last_status_sent_at,
             consecutive_failures=self._consecutive_failures,
         )
+
+    async def bootstrap_hf_token(self) -> None:
+        if not self._cfg.enabled:
+            return
+        try:
+            await self._authenticate()
+        except Exception:
+            logger.warning(
+                "Could not reach Logos to fetch a centrally configured HF_TOKEN "
+                "before startup model operations; falling back to the locally "
+                "configured HF_TOKEN",
+                exc_info=True,
+            )
 
     async def start(self) -> None:
         if not self._cfg.enabled:
@@ -295,6 +309,10 @@ class LogosBridgeClient:
         central_hf_token = str(data.get("hf_token", "")).strip()
         if central_hf_token:
             os.environ["HF_TOKEN"] = central_hf_token
+        elif self._local_hf_token:
+            os.environ["HF_TOKEN"] = self._local_hf_token
+        else:
+            os.environ.pop("HF_TOKEN", None)
 
         ws_url = str(data.get("ws_url", "")).strip()
         if not ws_url:
