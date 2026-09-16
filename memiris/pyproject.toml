@@ -56,7 +56,13 @@ prettier = "^0.0.7"
 pre-commit = "^4.6.2"
 types-PyYAML = "^6.0.12.20260906"
 types-requests = "^2.33.0.20260906"
-testcontainers = "^4.15.0"
+# testcontainers is held below 4.15.0: that release makes the Weaviate module
+# create its own docker network, which fails with
+# "invalid pool request: Pool overlaps with other one on this address space"
+# and takes the whole weaviate suite down (35 errors). Reproduced on CI and
+# locally; 4.14.2 is the newest release that works. Revisit when upstream fixes
+# it -- 4.15.0 is currently the latest.
+testcontainers = ">=4.14.2,<4.15.0"
 pytest-mock = "^3.15.1"
 
 [tool.isort]
