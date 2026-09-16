@@ -59,8 +59,18 @@ class AuthContext:
     settings: Optional[dict]
     # Queue priority the key owner configured for this key (1/5/10 scale, see
     # queue.models.Priority). 0 means "not set": the request falls back to the
-    # policy-level priority (see pipeline.resolve_queue_priority).
+    # team's priority, then the policy-level one (see
+    # pipeline.resolve_queue_priority).
     default_priority: int = 0
+    # The calling user's platform role ('app_developer' | 'app_admin' |
+    # 'logos_admin'), None for keys without a user (application/service keys
+    # whose owner is a team). Drives the queue role tiebreak — see
+    # pipeline.queue_role_rank.
+    user_role: Optional[str] = None
+    # Queue priority the Logos admin set for the key's team (1/5/10 scale),
+    # 0 = not set. Dominates the policy-level priority; the key's own
+    # default_priority still wins over it.
+    team_priority: int = 0
     cloud_rl: Optional[dict] = None
     local_rl: Optional[dict] = None
 
@@ -102,8 +112,13 @@ def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
         log_level=row.get("log") or "BILLING",
         settings=row.get("settings") if row.get("settings") is not None else {},
         # Preserve 0 (the webservice/UI "not set" sentinel) so the pipeline
-        # can fall back to the policy-level priority.
+        # can fall back to the team's, then the policy-level priority.
         default_priority=row.get("default_priority") or 0,
+        # None for keys without a user row (LEFT JOIN): the role tiebreak
+        # then treats the traffic as plain developer traffic.
+        user_role=row.get("role"),
+        # NULL (admin never set one) or no team both read as 0 = not set.
+        team_priority=row.get("team_priority") or 0,
     )
 
 

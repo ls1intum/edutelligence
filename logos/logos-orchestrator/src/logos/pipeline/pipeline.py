@@ -55,23 +55,30 @@ def _privacy_ok(threshold: str, level: str) -> bool:
     return threshold_idx >= level_idx
 
 
-def resolve_queue_priority(default_priority: Optional[int], policy_priority: Optional[int]) -> int:
+def resolve_queue_priority(
+    default_priority: Optional[int],
+    team_priority: Optional[int],
+    policy_priority: Optional[int],
+) -> int:
     """
     Resolve the effective queue priority for a request.
 
-    The API key's ``default_priority`` (set per key, editable in the admin UI)
-    takes precedence over the policy-level ``priority``: a key that has a
-    priority set (non-zero) queues its requests at that priority regardless of
-    the policy, so a key owner's explicit choice is always honoured. A key
-    without a priority set (0, the default for newly created keys) falls back
-    to the policy's priority, preserving the historical policy-only behaviour.
+    Precedence: the API key's ``default_priority`` (set per key, editable in
+    the admin UI) beats the team's admin-set ``priority``, which beats the
+    policy-level ``priority``. A key owner's explicit choice is always
+    honoured; a key without a priority set (0, the default for newly created
+    keys) falls back to the team's priority; a team without one (0, the
+    default) falls back to the policy, preserving the historical
+    policy-only behaviour for untouched teams.
 
-    Both values use the same 1/5/10 scale consumed by ``Priority.from_int``
+    All values use the same 1/5/10 scale consumed by ``Priority.from_int``
     (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
 
     Args:
         default_priority: The requesting API key's default_priority, or 0/None
             when the key has none set.
+        team_priority: The Logos admin's priority for the key's team, or
+            0/None when unset.
         policy_priority: The policy's ``priority`` value (may be 0/None).
 
     Returns:
@@ -79,8 +86,31 @@ def resolve_queue_priority(default_priority: Optional[int], policy_priority: Opt
     """
     if default_priority:
         return int(default_priority)
+    if team_priority:
+        return int(team_priority)
     if policy_priority:
         return int(policy_priority)
+    return 0
+
+
+def queue_role_rank(key_type: Optional[str], user_role: Optional[str]) -> int:
+    """
+    Queue tiebreak rank of a request's caller, within equal priority.
+
+    The default intra-team ordering is application > app admin > developer:
+    application keys (``key_type == 'application'``) rank highest, keys of
+    users holding an admin platform role rank in the middle, everything else
+    (developer keys, service keys, keys without a user) ranks lowest. Higher
+    rank dequeues first; equal ranks fall back to FIFO.
+
+    Unknown inputs deliberately rank 0 — internal or benchmark traffic that
+    does not carry a caller identity must never jump ahead of interactive
+    developer traffic.
+    """
+    if key_type == "application":
+        return 2
+    if user_role in ("app_admin", "logos_admin"):
+        return 1
     return 0
 
 
@@ -107,8 +137,15 @@ class PipelineRequest:
     required_provider_id: Optional[int] = None
     # The requesting API key's default_priority (see auth.AuthContext). The key
     # owner's queue-priority choice for their traffic. 0 means "not set": the
-    # policy-level priority applies instead (see resolve_queue_priority).
+    # team's, then the policy-level priority applies (see
+    # resolve_queue_priority).
     default_priority: int = 0
+    # The Logos admin's queue priority for the key's team (see
+    # auth.AuthContext). 0 = not set.
+    team_priority: int = 0
+    # Precomputed queue tiebreak rank of the caller (see queue_role_rank):
+    # application=2, app admin/logos admin=1, everyone else=0.
+    role_rank: int = 0
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
@@ -238,6 +275,7 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
+            role_rank=request.role_rank,
         )
 
         # Record enqueue
@@ -542,10 +580,13 @@ class RequestPipeline:
         )
 
         # The classifier bakes the policy's priority into every candidate, but
-        # the key owner's default_priority takes precedence: resolve the
-        # effective priority here so all downstream consumers (schedulers,
-        # queueing, monitoring, log stats) agree on it.
-        effective_priority = resolve_queue_priority(request.default_priority, policy.get("priority"))
+        # the key owner's default_priority — then the team's admin-set
+        # priority — takes precedence: resolve the effective priority here so
+        # all downstream consumers (schedulers, queueing, monitoring, log
+        # stats) agree on it.
+        effective_priority = resolve_queue_priority(
+            request.default_priority, request.team_priority, policy.get("priority")
+        )
         if candidates:
             candidates = [(model_id, weight, effective_priority) for model_id, weight, _ in candidates]
 

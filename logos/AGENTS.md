@@ -146,7 +146,7 @@ Endpoint request models live in `dbutils/dbrequest.py`.
 
 ### Authentication
 Single entry point in `auth.py`:
-- **`authenticate_api_key(headers)`** → `AuthContext` (dataclass: `key_value`, `api_key_id`, `api_key_name`, `key_type`, `team_id`, `user_id`, `environment`, `log_level`, `settings`, `default_priority`, `cloud_rl`, `local_rl`). Looks the key up via `db.get_api_key_by_value`; raises 401 if missing/inactive.
+- **`authenticate_api_key(headers)`** → `AuthContext` (dataclass: `key_value`, `api_key_id`, `api_key_name`, `key_type`, `team_id`, `user_id`, `environment`, `log_level`, `settings`, `default_priority`, `user_role`, `team_priority`, `cloud_rl`, `local_rl`). Looks the key up via `db.get_api_key_by_value` (joins `users` for the caller role and `teams` for the team's admin-set queue priority); raises 401 if missing/inactive.
 
 Role-based authorization lives in `role_auth.py`, checked separately from the above (on `users.role`, not on the API key):
 - **`require_logos_admin(request)`** — role must be `logos_admin`
@@ -183,7 +183,7 @@ Request → Auth → Log
 **Schema ownership**: the schema is defined and migrated by `logos-webservice`
 (Spring Boot) via Liquibase changelogs
 (`logos-webservice/src/main/resources/liquibase/changelog/`, currently
-`000_initial_schema.xml` through `016_...xml`). There is no `db/init.sql`
+`000_initial_schema.xml` through `035_team_priority.xml`). There is no `db/init.sql`
 and no `db/migrations/` in this repo anymore — `logos/db/` only holds the
 plain `postgres:17` Dockerfile. The orchestrator's `dbmanager.py` reads and
 writes these same tables but has no migration tooling of its own (still no
@@ -193,9 +193,9 @@ schema).
 | Table | Purpose |
 |-------|---------|
 | `users` | User accounts; `role` ∈ `app_developer`/`app_admin`/`logos_admin` |
-| `teams` | Teams, with default rate-limit/budget columns |
+| `teams` | Teams, with default rate-limit/budget columns and a nullable `priority` (1..10, set by Logos admins) that shifts the whole team's traffic in the local queue |
 | `team_members` | User ↔ team membership, with an `is_owner` flag |
-| `api_keys` | API keys — `key_value` (unique), `key_type` (`developer`/`application`), owning `team_id`/`user_id`, `settings` (JSONB), `use_custom_permissions` |
+| `api_keys` | API keys — `key_value` (unique), `key_type` (`developer`/`application`/`service`), owning `team_id`/`user_id`, `settings` (JSONB), `default_priority` (1..10, per-key queue priority; 0 = unset), `use_custom_permissions` |
 | `team_model_permissions` / `team_provider_permissions` | Default access, inherited by keys with `use_custom_permissions=false` |
 | `api_key_model_permissions` / `api_key_provider_permissions` | Per-key overrides, used when `use_custom_permissions=true` |
 | `providers` | LLM providers (base_url, provider_type, auth config, SDI fields) |
