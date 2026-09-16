@@ -61,11 +61,13 @@ class AzureOperation:
     """How to address a model family on Azure."""
 
     # Operation suffix appended after the deployment segment, e.g.
-    # "chat/completions". For the Responses API this is "responses": Azure's
-    # real route is /openai/responses (no deployment in the path; the
-    # deployment is named by the request body's "model"), but we still store
-    # the deployment-scoped form so the id is recoverable — see
-    # build_azure_endpoint and ContextResolver._azure_responses_route.
+    # "chat/completions". For the Responses API this is "responses" and for
+    # the Anthropic Messages route "anthropic/v1/messages": both real routes
+    # carry no deployment in the path (the deployment is named by the request
+    # body's "model"), but we still store the deployment-scoped form so the id
+    # is recoverable — see build_azure_endpoint and
+    # ContextResolver._azure_responses_route / _azure_anthropic_route.
+    # api_version is empty where the route takes none.
     suffix: str
     api_version: str
 
@@ -74,8 +76,9 @@ def classify_azure_operation(model_name: str) -> AzureOperation:
     """Map a served Azure model name to its operation path + api-version.
 
     Best-effort by family. Chat completions is the default; the special cases
-    cover embeddings, audio (whisper/tts), images, and the     Responses API used by the gpt-5.x reasoning models (gpt-5-chat stays on
-    chat/completions), and native Anthropic Messages for Claude deployments.
+    cover embeddings, audio (whisper/tts), images, the Responses API used by
+    the gpt-5.x reasoning models (gpt-5-chat stays on chat/completions), and
+    native Anthropic Messages for Claude deployments.
     """
     m = model_name.lower()
 
@@ -155,16 +158,15 @@ def build_azure_endpoint(host: str, deployment_id: str, op: AzureOperation) -> s
     for capacity tracking (``extract_azure_deployment_name``) and the forward
     layer recovers it to address the deployment.
 
-    For the Responses API Azure's real route has no deployment segment — it
-    resolves the deployment from the request body's ``model`` field — so
-    ``ContextResolver._azure_responses_route`` collapses
-    ``.../openai/deployments/<id>/responses`` to ``.../openai/responses`` and
-    rewrites the body ``model`` to ``<id>`` at forward time.
+    For the Responses API and the Anthropic Messages route Azure's real route
+    has no deployment segment — it resolves the deployment from the request
+    body's ``model`` field — so ``ContextResolver._azure_responses_route`` /
+    ``_azure_anthropic_route`` collapse the stored form to the real URL and
+    rewrite the body ``model`` to ``<id>`` at forward time.
     """
     host = host.rstrip("/")
-    if op.suffix == "anthropic/v1/messages":
-        return f"{host}/{op.suffix}"
-    return f"{host}/openai/deployments/{deployment_id}/{op.suffix}?api-version={op.api_version}"
+    url = f"{host}/openai/deployments/{deployment_id}/{op.suffix}"
+    return f"{url}?api-version={op.api_version}" if op.api_version else url
 
 
 def _norm(s: str) -> str:

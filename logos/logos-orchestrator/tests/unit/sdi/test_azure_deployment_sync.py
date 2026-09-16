@@ -1,7 +1,7 @@
 """Pure-function tests for Azure deployment auto-sync planning."""
 
-from logos.pipeline.ettft_estimator import ReadinessTier, estimate_ettft_azure
 from logos.anthropic_compat import UpstreamDialect, dialect_for
+from logos.pipeline.ettft_estimator import ReadinessTier, estimate_ettft_azure
 from logos.sdi.azure_deployment_sync import (
     _warn_if_not_an_azure_endpoint,
     azure_host_from_base_url,
@@ -58,14 +58,33 @@ def test_build_endpoint_responses_is_deployment_scoped():
     )
 
 
-def test_build_endpoint_claude_uses_native_anthropic_route():
+def test_build_endpoint_claude_is_deployment_scoped():
+    # Stored deployment-scoped (not the bare /anthropic/v1/messages) so the id
+    # is recoverable; ContextResolver collapses it to the real route at forward
+    # time. Dropping the segment here made the deployment unrecoverable for the
+    # scheduler and for the body "model" rewrite.
     op = classify_azure_operation("claude-opus-5")
-    assert build_azure_endpoint(HOST, "claude-opus-5", op) == f"{HOST}/anthropic/v1/messages"
+    assert build_azure_endpoint(HOST, "claude-opus-5", op) == (
+        f"{HOST}/openai/deployments/claude-opus-5/anthropic/v1/messages"
+    )
 
 
-def test_plan_claude_uses_native_anthropic_route():
+def test_plan_claude_is_deployment_scoped():
     planned = plan_sync(HOST, [{"id": "claude-opus-5", "model": "claude-opus-5", "status": "succeeded"}])
-    assert planned == [{"model_name": "claude-opus-5", "endpoint": f"{HOST}/anthropic/v1/messages"}]
+    assert planned == [
+        {
+            "model_name": "claude-opus-5",
+            "endpoint": f"{HOST}/openai/deployments/claude-opus-5/anthropic/v1/messages",
+        }
+    ]
+
+
+def test_plan_claude_keeps_renamed_deployment_id():
+    # Deployment 'claude-prod' serves model 'claude-opus-5': the id must
+    # survive in the endpoint so the forward layer can name it in the body.
+    planned = plan_sync(HOST, [{"id": "claude-prod", "model": "claude-opus-5", "status": "succeeded"}])
+    assert planned[0]["model_name"] == "claude-opus-5"
+    assert planned[0]["endpoint"] == f"{HOST}/openai/deployments/claude-prod/anthropic/v1/messages"
 
 
 def test_claude_endpoint_is_native_messages_dialect():
@@ -73,10 +92,26 @@ def test_claude_endpoint_is_native_messages_dialect():
         dialect_for(
             provider_type="cloud",
             cloud_provider_type="azure",
-            forward_url=f"{HOST}/anthropic/v1/messages",
+            forward_url=f"{HOST}/openai/deployments/claude-opus-5/anthropic/v1/messages",
         )
         is UpstreamDialect.NATIVE
     )
+
+
+def test_synced_claude_model_is_schedulable():
+    # Regression for the registration path: a synced Claude deployment must
+    # still register with the Azure facade (deployment name extractable), not
+    # be filtered out while the registry keeps labelling it azure.
+    planned = plan_sync(HOST, [{"id": "claude-prod", "model": "claude-opus-5", "status": "succeeded"}])
+    endpoint = planned[0]["endpoint"]
+
+    deployment_name = extract_azure_deployment_name(endpoint)
+    assert deployment_name == "claude-prod"  # registration would NOT filter this out
+
+    provider = AzureDataProvider(name="azure", provider_id=1)
+    provider.register_model(model_id=43, model_name="claude-opus-5", deployment_name=deployment_name)
+    capacity = provider.get_capacity_info(deployment_name)
+    assert estimate_ettft_azure(capacity).tier == ReadinessTier.WARM
 
 
 def test_plan_prefers_matching_deployment_id():

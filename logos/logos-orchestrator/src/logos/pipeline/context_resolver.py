@@ -37,10 +37,11 @@ class ExecutionContext:
     auth_value: str
     model_name: str
     lane_id: Optional[str] = None
-    # Set for Azure Responses-API routes: the deployment id the request body's
-    # "model" field must be rewritten to (Azure /responses resolves the
-    # deployment from the body, not the URL). See ``_azure_responses_route``.
-    azure_responses_deployment: Optional[str] = None
+    # Set for Azure routes that resolve the deployment from the request body
+    # rather than the URL (the Responses API and the Anthropic Messages
+    # route): the deployment id the body's "model" field must be rewritten to.
+    # See ``_azure_responses_route`` / ``_azure_anthropic_route``.
+    azure_body_deployment: Optional[str] = None
     # Set only for inbound ``POST /v1/messages``: which surface this upstream
     # actually serves, and therefore whether the request and its response have
     # to be translated out of and back into the Anthropic Messages shape.
@@ -121,9 +122,11 @@ class ContextResolver:
             auth_format = auth_info.get("auth_format") or ""
             api_key = auth_info.get("api_key")
             endpoint = auth_info.get("endpoint") or ""
-            endpoint_cloud_type = (
-                "anthropic" if endpoint.split("?", 1)[0].rstrip("/").endswith("/messages") else cloud_type
-            )
+            # Azure Foundry's Anthropic route authenticates Anthropic-style:
+            # it reads x-api-key, not the api-key header an Azure deployment
+            # conventionally carries. Detected on the stored endpoint so the
+            # auth header below is already the right one.
+            azure_anthropic = endpoint.split("?", 1)[0].rstrip("/").endswith("/anthropic/v1/messages")
 
             # Cloud credentials get the convention the provider form advertises
             # filled in — see ``cloud_auth_header``, which the model sync uses
@@ -132,7 +135,10 @@ class ContextResolver:
             # rather than an unauthenticated request.
             auth_value = auth_format.format(api_key or "")
             if provider_type != "logosnode":
-                header = cloud_auth_header(auth_name, auth_format, api_key, endpoint_cloud_type)
+                if azure_anthropic:
+                    header = ("x-api-key", api_key) if api_key else None
+                else:
+                    header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
                 if header is None:
                     if auth_name or auth_format:
                         logger.error(
@@ -148,7 +154,7 @@ class ContextResolver:
         endpoint = auth_info["endpoint"]
         base_url = auth_info["base_url"]
         lane_id: Optional[str] = None
-        azure_responses_deployment: Optional[str] = None
+        azure_body_deployment: Optional[str] = None
 
         if provider_type == "logosnode":
             prepared_lane: Optional[Dict[str, Any]] = None
@@ -225,7 +231,15 @@ class ContextResolver:
             responses_url, responses_deployment = self._azure_responses_route(forward_url)
             if responses_url is not None:
                 forward_url = responses_url
-                azure_responses_deployment = responses_deployment
+                azure_body_deployment = responses_deployment
+            # Claude deployments are stored the same way
+            # (.../deployments/<id>/anthropic/v1/messages); Azure's real route
+            # has no deployment segment and names the deployment by the
+            # body's "model" field.
+            anthropic_url, anthropic_deployment = self._azure_anthropic_route(forward_url)
+            if anthropic_url is not None:
+                forward_url = anthropic_url
+                azure_body_deployment = anthropic_deployment
         else:
             forward_url = self._merge_url(base_url, endpoint)
 
@@ -253,7 +267,7 @@ class ContextResolver:
         anthropic_dialect = (
             dialect_for(
                 provider_type=provider_type,
-                cloud_provider_type=endpoint_cloud_type,
+                cloud_provider_type=cloud_type,
                 forward_url=forward_url,
             )
             if is_messages_path(request_path)
@@ -270,9 +284,13 @@ class ContextResolver:
             auth_value=auth_value,
             model_name=model_name,
             lane_id=lane_id,
-            azure_responses_deployment=azure_responses_deployment,
+            azure_body_deployment=azure_body_deployment,
             anthropic_dialect=anthropic_dialect,
-            protocol_headers=cloud_protocol_headers(endpoint_cloud_type) if provider_type == "cloud" else {},
+            protocol_headers=(
+                cloud_protocol_headers("anthropic" if azure_anthropic else cloud_type)
+                if provider_type == "cloud"
+                else {}
+            ),
         )
 
     @staticmethod
@@ -315,18 +333,24 @@ class ContextResolver:
         # client scale onto the accepted one before forwarding (#749).
         payload = normalize_reasoning_effort(payload, context.model_name)
 
-        # Azure Responses API resolves the deployment from the body's "model"
-        # field (the URL carries no deployment segment). Clients address models
-        # by the catalogued (served) name, which can differ from the Azure
-        # deployment id — rewrite it so Azure can resolve the deployment.
-        if context.azure_responses_deployment:
-            payload = set_payload_field(payload, "model", context.azure_responses_deployment)
+        # Azure routes that resolve the deployment from the body's "model"
+        # field (Responses API, Anthropic Messages) carry no deployment
+        # segment in the URL. Clients address models by the catalogued
+        # (served) name, which can differ from the Azure deployment id —
+        # rewrite it so Azure can resolve the deployment.
+        if context.azure_body_deployment:
+            payload = set_payload_field(payload, "model", context.azure_body_deployment)
 
         return headers, payload
 
     # .../openai/deployments/<deployment-id>/responses[?query]
     _AZURE_RESPONSES_RE = re.compile(
         r"^(?P<host>https?://[^/]+)/openai/deployments/(?P<deployment>[^/?]+)/responses(?P<query>\?.*)?$"
+    )
+
+    # .../openai/deployments/<deployment-id>/anthropic/v1/messages[?query]
+    _AZURE_ANTHROPIC_RE = re.compile(
+        r"^(?P<host>https?://[^/]+)/openai/deployments/(?P<deployment>[^/?]+)/anthropic/v1/messages(?P<query>\?.*)?$"
     )
 
     # .../openai/deployments/<deployment-id>/<operation>[?query]
@@ -420,6 +444,30 @@ class ContextResolver:
         deployment = match.group("deployment")
         query = match.group("query") or ""
         return f"{host}/openai/responses{query}", deployment
+
+    @staticmethod
+    def _azure_anthropic_route(forward_url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Collapse a deployment-scoped Azure Anthropic-Messages URL to its real form.
+
+        The auto-sync stores Claude deployments as
+        ``.../openai/deployments/<id>/anthropic/v1/messages`` so the
+        deployment id is recoverable (the scheduler reads it for capacity
+        tracking, and we need it here to name the deployment in the body).
+        Azure's actual route is ``.../anthropic/v1/messages`` with no
+        deployment segment — it resolves the deployment from the request
+        body's ``model`` field.
+
+        Returns ``(real_url, deployment_id)`` for such URLs so the caller can
+        forward to the collapsed URL and rewrite the body ``model``; returns
+        ``(None, None)`` for any other URL.
+        """
+        match = ContextResolver._AZURE_ANTHROPIC_RE.match(forward_url or "")
+        if not match:
+            return None, None
+        host = match.group("host")
+        deployment = match.group("deployment")
+        query = match.group("query") or ""
+        return f"{host}/anthropic/v1/messages{query}", deployment
 
     @staticmethod
     def _upstream_path(request_path: str, cloud_provider_type: Optional[str]) -> str:
