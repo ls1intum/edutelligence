@@ -171,10 +171,13 @@ else
     # Remote runs hit the public --api-base for /v1. The internal telemetry
     # endpoints (scheduler_state, provider status) are gated on the internal
     # secret and are NOT on the public Traefik routers, so pass --telemetry-base
-    # pointing at a base that reaches the orchestrator internally (and
-    # --internal-secret, or LOGOS_INTERNAL_SECRET in the environment, to supply
-    # the shared secret). Without a reachable telemetry base the run still
-    # completes, but runtime_samples.jsonl is empty and the runner warns.
+    # pointing at a base that reaches the orchestrator internally. That base
+    # carries the shared secret as a Bearer token, so it must be HTTPS or a
+    # local port behind an authenticated tunnel (a plain-HTTP remote host is
+    # refused by the runner). Supply the secret via --internal-secret, or
+    # LOGOS_INTERNAL_SECRET in the environment. Without a reachable telemetry
+    # base the run still completes, but runtime_samples.jsonl is empty and the
+    # runner warns.
     RUNNER_CMD=(
         poetry run python tests/performance/run_api_workload.py
         --logos-key "$LOGOS_KEY"

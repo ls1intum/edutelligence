@@ -109,10 +109,18 @@ docker compose exec logos-orchestrator python /app/tests/performance/run_api_wor
 Remote run against a deployed environment (http-only, from a workstation):
 
 ```bash
+# 1) Authenticated tunnel: local loopback 18443 -> the core node's orchestrator.
+#    The remote side (127.0.0.1:8080) is where /logosdb/scheduler_state is
+#    reachable on the node (its published admin port, or via `docker` on the
+#    host). SSH authenticates the link, so the cleartext hop stays on your
+#    own loopback.
+ssh -N -L 18443:127.0.0.1:8080 "$VM_USERNAME"@"$VM_HOST" &
+
+# 2) Run the benchmark: public API for /v1, tunneled loopback base for telemetry.
 ./tests/performance/test_scheduling_performance.sh \
   --logos-key "<ROOT_LOGOS_KEY>" \
   --api-base "https://logos.example.org" \
-  --telemetry-base "http://<host-that-reaches-the-orchestrator>:8080" \
+  --telemetry-base "http://127.0.0.1:18443" \
   --internal-secret "$LOGOS_INTERNAL_SECRET" \
   --workload tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv
 ```
@@ -121,13 +129,16 @@ The public `--api-base` serves `/v1/chat/completions`. The runtime snapshots
 (`runtime_samples.jsonl`) come from the internal endpoints
 `/logosdb/scheduler_state` and `/logosdb/providers/logosnode/status`, which are
 gated on the shared internal secret and are **not** on the public Traefik
-routers. Point `--telemetry-base` at a base that can reach the orchestrator
-directly (its own service port from a host on the same network, or a
-port-forward), and supply the secret via `--internal-secret` (or
-`LOGOS_INTERNAL_SECRET` in the environment). If the telemetry base is not
-reachable the run still completes, but `runtime_samples.jsonl` is empty and the
-runner prints a warning; `run_meta.json` records `telemetry_base` and
-`telemetry_ok`.
+routers. That secret is sent as a Bearer token, so `--telemetry-base` must keep
+it off any link you don't control: use an **HTTPS** telemetry URL, or an
+**authenticated tunnel/port-forward to a local port** (as above — the cleartext
+hop is then confined to your own loopback). The runner refuses a plain-HTTP
+`--telemetry-base` for a non-local host, because that would put the shared
+secret in cleartext on the workstation-to-deployment link. Supply the secret via
+`--internal-secret` (or `LOGOS_INTERNAL_SECRET` in the environment). If the
+telemetry base is not reachable the run still completes, but
+`runtime_samples.jsonl` is empty and the runner prints a warning;
+`run_meta.json` records `telemetry_base` and `telemetry_ok`.
 
 ## What Gets Saved
 

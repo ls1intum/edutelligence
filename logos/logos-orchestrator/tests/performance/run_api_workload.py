@@ -1526,7 +1526,10 @@ def main() -> None:
             "(/logosdb/scheduler_state, /logosdb/providers/logosnode/status). "
             "Defaults to --api-base. For remote runs point this at a base that "
             "can reach the orchestrator's internal endpoints — they are gated "
-            "on the internal secret and are not on the public Traefik routers."
+            "on the internal secret and are not on the public Traefik routers. "
+            "It carries that secret as a Bearer token, so it must be HTTPS or a "
+            "local port (e.g. behind an authenticated tunnel); a plain-HTTP "
+            "non-local host is refused."
         ),
     )
     parser.add_argument("--output", type=Path, help="Destination CSV file.")
@@ -1551,6 +1554,19 @@ def main() -> None:
     workload = parse_workload(args.workload)
     local_mode = is_local_api_base(args.api_base)
     telemetry_base = (args.telemetry_base or args.api_base).rstrip("/")
+    # The internal secret reaches the telemetry base as a Bearer token. Loopback
+    # and HTTPS keep it off any untrusted link; plain HTTP to a non-local host
+    # would put the shared secret in cleartext on the workstation-to-deployment
+    # path (whoever can read it can call every /internal/* endpoint), so refuse.
+    if urlparse(telemetry_base).scheme.lower() == "http" and not is_local_api_base(telemetry_base):
+        print(
+            "Error: --telemetry-base uses plain HTTP for a non-local host "
+            f"({telemetry_base}). The internal secret would cross that link in "
+            "cleartext. Use an HTTPS telemetry URL, or an authenticated "
+            "tunnel/port-forward to a local port (e.g. http://127.0.0.1:18443).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     process_id = None
     original_log = None
     restore_log = "BILLING"
