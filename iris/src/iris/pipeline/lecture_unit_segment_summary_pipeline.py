@@ -8,6 +8,10 @@ from weaviate.client import WeaviateClient
 from weaviate.exceptions import UnexpectedStatusCodeError
 from weaviate.util import generate_uuid5
 
+from iris.common.ingestion_errors import (
+    NO_INGESTIBLE_CONTENT,
+    IngestionStageError,
+)
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
@@ -239,7 +243,18 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         if transcript_span is not None:
             return transcript_span
 
-        return 0, 0
+        # Neither a page chunk nor a transcript row exists for this unit: there is
+        # nothing to summarize. Silently proceeding used to write one placeholder
+        # segment at page 0 and let the audit reject it with no indication of the
+        # real cause; raising here fails the run explicitly and immediately, at
+        # the same point the true problem (a corrupt or empty attachment, since
+        # Artemis only checks the file extension, not that it has readable pages)
+        # actually was.
+        raise IngestionStageError(
+            NO_INGESTIBLE_CONTENT,
+            f"Lecture unit {self.lecture_unit_dto.lecture_unit_id} has no PDF "
+            f"pages and no transcript; there is no content to summarize",
+        )
 
     @staticmethod
     def _aggregate_page_number_span(collection, unit_filter, page_number_property):

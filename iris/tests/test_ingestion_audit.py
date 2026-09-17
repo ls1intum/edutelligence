@@ -17,7 +17,11 @@ from iris.common.ingestion_errors import (
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from iris.pipeline.ingestion_audit import IngestionAudit, build_manifest
+from iris.pipeline.ingestion_audit import (
+    IngestionAudit,
+    build_manifest,
+    segments_are_complete,
+)
 from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
 )
@@ -89,21 +93,41 @@ def _transcription(slide_numbers: list[int]) -> dict:
     }
 
 
-def _collection(rows: list) -> SimpleNamespace:
+def _collection(rows: list, *, ghost_uuids: frozenset = frozenset()) -> SimpleNamespace:
+    """A collection mock whose fetch_object_by_id confirms every row except the
+    given ghost uuids — the object-store confirmation every audit check now
+    goes through. Defaulting to "everything confirmed" keeps every existing
+    scenario testing the same thing it always did; only ghost-specific tests
+    pass ghost_uuids.
+    """
+    by_uuid = {row.uuid: row for row in rows}
+
+    def fetch_object_by_id(uid):
+        return None if uid in ghost_uuids else by_uuid.get(uid)
+
     return SimpleNamespace(
         query=SimpleNamespace(
-            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows))
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows)),
+            fetch_object_by_id=MagicMock(side_effect=fetch_object_by_id),
         )
     )
 
 
-def _rows(schema_page_property: str, pages: list[int], version: int = None) -> list:
+def _rows(
+    schema_page_property: str,
+    pages: list[int],
+    version: int = None,
+    run_id_property: str = None,
+    run_id: str = "run-1",
+) -> list:
     rows = []
-    for page in pages:
+    for index, page in enumerate(pages):
         properties = {schema_page_property: page}
         if version is not None:
             properties[LectureUnitPageChunkSchema.PAGE_VERSION.value] = version
-        rows.append(SimpleNamespace(properties=properties))
+        if run_id_property is not None:
+            properties[run_id_property] = run_id
+        rows.append(SimpleNamespace(properties=properties, uuid=f"uuid-{index}"))
     return rows
 
 
@@ -130,8 +154,11 @@ def _audit(
         ),
         _collection(
             [
-                SimpleNamespace(properties={LectureUnitSchema.LECTURE_UNIT_ID.value: 3})
-                for _ in range(unit_rows)
+                SimpleNamespace(
+                    properties={LectureUnitSchema.LECTURE_UNIT_ID.value: 3},
+                    uuid=f"unit-row-{index}",
+                )
+                for index in range(unit_rows)
             ]
         ),
     )
@@ -293,3 +320,131 @@ def test_run_fails_with_audit_code_when_the_audit_rejects_the_unit():
     callback.finish.assert_not_called()
     callback.fail.assert_called_once()
     assert callback.fail.call_args.kwargs["code"] == INGESTION_AUDIT_FAILED
+
+
+def test_segments_are_complete_is_true_when_nothing_is_expected():
+    dto = _dto()
+
+    assert segments_are_complete(object(), dto) is True
+
+
+@patch("iris.pipeline.ingestion_audit.IngestionAudit.for_client")
+def test_segments_are_complete_true_when_stored_segments_cover_the_manifest(
+    for_client,
+):
+    dto = _dto(pdf_base64=_pdf_base64(3))
+    for_client.return_value = _audit(segment_pages=[1, 2, 3])
+
+    assert segments_are_complete(object(), dto) is True
+
+
+@patch("iris.pipeline.ingestion_audit.IngestionAudit.for_client")
+def test_segments_are_complete_false_when_a_segment_is_missing(for_client):
+    dto = _dto(pdf_base64=_pdf_base64(3))
+    for_client.return_value = _audit(segment_pages=[1, 3])
+
+    assert segments_are_complete(object(), dto) is False
+
+
+def test_page_chunk_audit_ignores_a_ghost_generation():
+    # A ghost generation (scan-visible, object-store-missing) coexisting with the
+    # real one must not read as "multiple generations coexist" and fail an
+    # otherwise fully-covered unit.
+    dto = _dto(pdf_base64=_pdf_base64(2))
+    real_rows = _rows(
+        LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+        [1, 2],
+        version=2,
+        run_id_property=LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+        run_id="run-real",
+    )
+    ghost_rows = _rows(
+        LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+        [1, 2],
+        version=2,
+        run_id_property=LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+        run_id="run-ghost",
+    )
+    for index, row in enumerate(ghost_rows):
+        row.uuid = f"ghost-uuid-{index}"
+    page_chunk_collection = _collection(
+        real_rows + ghost_rows,
+        ghost_uuids=frozenset(row.uuid for row in ghost_rows),
+    )
+
+    audit = IngestionAudit(
+        page_chunk_collection,
+        _collection([]),
+        _collection(_rows(LectureUnitSegmentSchema.PAGE_NUMBER.value, [1, 2])),
+        _collection(
+            [
+                SimpleNamespace(
+                    properties={LectureUnitSchema.LECTURE_UNIT_ID.value: 3},
+                    uuid="unit-row-0",
+                )
+            ]
+        ),
+    )
+
+    audit.verify(dto)
+
+
+def test_segment_audit_ignores_a_ghost_row_but_still_catches_a_real_gap():
+    # The ghost row stands at the one genuinely missing page; excluding it must
+    # not accidentally count it as coverage and hide the real gap.
+    dto = _dto(pdf_base64=_pdf_base64(2))
+    confirmed_row = _rows(LectureUnitSegmentSchema.PAGE_NUMBER.value, [1])[0]
+    ghost_row = _rows(LectureUnitSegmentSchema.PAGE_NUMBER.value, [2])[0]
+    ghost_row.uuid = "ghost-segment"
+    segment_collection = _collection(
+        [confirmed_row, ghost_row], ghost_uuids=frozenset({"ghost-segment"})
+    )
+
+    audit = IngestionAudit(
+        _collection(
+            _rows(LectureUnitPageChunkSchema.PAGE_NUMBER.value, [1, 2], version=2)
+        ),
+        _collection([]),
+        segment_collection,
+        _collection(
+            [
+                SimpleNamespace(
+                    properties={LectureUnitSchema.LECTURE_UNIT_ID.value: 3},
+                    uuid="unit-row-0",
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        audit.verify(dto)
+
+    assert "slides without segment summaries: [2]" in str(exc_info.value)
+
+
+def test_unit_row_audit_ignores_a_ghost_duplicate():
+    # A scan-visible, object-store-missing duplicate unit row must not read as
+    # a genuine second row and fail an otherwise single-row unit.
+    dto = _dto(pdf_base64=_pdf_base64(1))
+    real_row = SimpleNamespace(
+        properties={LectureUnitSchema.LECTURE_UNIT_ID.value: 3},
+        uuid="unit-row-real",
+    )
+    ghost_row = SimpleNamespace(
+        properties={LectureUnitSchema.LECTURE_UNIT_ID.value: 3},
+        uuid="unit-row-ghost",
+    )
+    unit_collection = _collection(
+        [real_row, ghost_row], ghost_uuids=frozenset({"unit-row-ghost"})
+    )
+
+    audit = IngestionAudit(
+        _collection(
+            _rows(LectureUnitPageChunkSchema.PAGE_NUMBER.value, [1], version=2)
+        ),
+        _collection([]),
+        _collection(_rows(LectureUnitSegmentSchema.PAGE_NUMBER.value, [1])),
+        unit_collection,
+    )
+
+    audit.verify(dto)

@@ -32,3 +32,10 @@ STALE_CONTENT_DELETE_FAILED = "STALE_CONTENT_DELETE_FAILED"
 PAGE_INGESTION_FAILED = "PAGE_INGESTION_FAILED"
 TRANSCRIPT_INGESTION_FAILED = "TRANSCRIPT_INGESTION_FAILED"
 INGESTION_AUDIT_FAILED = "INGESTION_AUDIT_FAILED"
+# Neither a PDF page nor a transcript row exists for the unit: a corrupt or
+# genuinely empty attachment reached ingestion (Artemis only checks the file
+# extension, not that the file has readable pages), and there is nothing to
+# summarize or index. Raised early and explicitly instead of silently writing
+# a placeholder segment that the audit would later reject with no indication
+# of the real cause.
+NO_INGESTIBLE_CONTENT = "NO_INGESTIBLE_CONTENT"

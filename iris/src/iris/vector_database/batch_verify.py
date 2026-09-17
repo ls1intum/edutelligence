@@ -162,7 +162,6 @@ def confirmed_generations(
     run_id_property: str,
     *,
     limit: int,
-    sample_per_generation: int = 3,
     return_properties: Optional[list[str]] = None,
     retry: Optional[WeaviateWriteRetry] = None,
 ) -> tuple[set, list]:
@@ -179,11 +178,15 @@ def confirmed_generations(
 
     This scans the unit, groups the scanned rows by run id, then confirms each
     generation against the object store: a generation is *real* only if at least
-    one of its sampled rows is found by ``fetch_object_by_id``. It returns the set
-    of real run ids and the full scanned object list, so a caller can both count
-    generations and derive a ghost-free row count or page coverage by keeping only
-    the objects whose run id is real. Sampling a few ids per generation tolerates a
-    single flickering row without a per-row confirmation of the whole unit.
+    one of its rows is found by ``fetch_object_by_id``, checked in scan order and
+    stopped at the first confirmation. It returns the set of real run ids and the
+    full scanned object list, so a caller can both count generations and derive a
+    ghost-free row count or page coverage by keeping only the objects whose run id
+    is real. Every scanned id of a generation is a candidate, not just the first
+    few: a real generation confirms on the first id checked in the common case, so
+    this costs the same as a capped sample whenever the generation is genuinely
+    real, and only checks further when the earliest scanned rows happen to be
+    ghosts — exactly the case a capped sample would otherwise misjudge as fake.
     """
     retry = retry or WeaviateWriteRetry.for_request()
     properties = [run_id_property]
@@ -197,15 +200,13 @@ def confirmed_generations(
         ),
         retry=retry,
     ).objects
-    sample_ids_by_generation: dict = {}
+    ids_by_generation: dict = {}
     for stored_object in objects:
         generation = stored_object.properties.get(run_id_property)
-        sample = sample_ids_by_generation.setdefault(generation, [])
-        if len(sample) < sample_per_generation:
-            sample.append(stored_object.uuid)
+        ids_by_generation.setdefault(generation, []).append(stored_object.uuid)
     real_generations: set = set()
-    for generation, sample_ids in sample_ids_by_generation.items():
-        for object_uuid in sample_ids:
+    for generation, candidate_ids in ids_by_generation.items():
+        for object_uuid in candidate_ids:
             found = fetch_with_retry(
                 lambda uid=object_uuid: collection.query.fetch_object_by_id(uid),
                 retry=retry,

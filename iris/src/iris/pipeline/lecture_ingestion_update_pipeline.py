@@ -20,7 +20,7 @@ from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.variant import Dep
 from iris.pipeline import Pipeline
-from iris.pipeline.ingestion_audit import IngestionAudit
+from iris.pipeline.ingestion_audit import IngestionAudit, segments_are_complete
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
 from iris.pipeline.lecture_update_lock import lecture_update_lock
@@ -502,9 +502,21 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
         # Lecture unit summary. When every content sub-pipeline structurally
         # skipped (or kept its previous generation), the stored unit summary
-        # provably still fits the content and may be reused.
-        content_unchanged = (not has_pdf or pdf_skipped or pdf_kept_previous) and (
+        # provably still fits the content and may be reused — but only if the
+        # unit's segments are also already complete. A prior run can have
+        # committed its unit-row fingerprint stamp and then failed the audit on
+        # incomplete segments (the unit row write happens before the audit; see
+        # the audit call below), and skipping structurally, on its own, does not
+        # prove those segments were ever finished: without this check, such a
+        # retry would reuse the same incomplete segments and fail the identical
+        # audit check again, forever, instead of recomputing them once.
+        structurally_unchanged = (not has_pdf or pdf_skipped or pdf_kept_previous) and (
             not has_transcript or transcript_skipped
+        )
+        # `and` short-circuits: the extra read only happens when every content
+        # sub-pipeline already skipped, not on every ordinary run.
+        content_unchanged = structurally_unchanged and segments_are_complete(
+            client, self.dto
         )
         callback.update()
         stage_started_at = time.monotonic()

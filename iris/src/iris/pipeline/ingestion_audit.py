@@ -27,7 +27,7 @@ from iris.common.logging_config import get_logger
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from iris.vector_database.batch_verify import fetch_with_retry
+from iris.vector_database.batch_verify import confirmed_generations, fetch_with_retry
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -108,6 +108,26 @@ def build_manifest(dto: IngestionPipelineExecutionDto) -> IngestionManifest:
     )
 
 
+def segments_are_complete(client, dto: IngestionPipelineExecutionDto) -> bool:
+    """Whether the unit's stored segment rows already cover what its manifest expects.
+
+    Reuses the audit's own segment check (same manifest, same ghost-aware
+    confirmation) as a cheap pre-check for the summary-reuse decision: a run
+    that provably skipped every content sub-pipeline is only safe to reuse when
+    its segments are also already complete, not merely when its fingerprint
+    stamp matches. A prior run whose unit row committed before an audit failure
+    left it (see the terminal-write ordering in ``_run_ingestion``) would
+    otherwise be reused with the same incomplete segments, failing the same
+    audit check again on every subsequent retry.
+    """
+    manifest = build_manifest(dto)
+    if not manifest.expected_segment_pages:
+        return True
+    audit = IngestionAudit.for_client(client)
+    audit._retry = WeaviateWriteRetry.for_request()  # pylint: disable=protected-access
+    return not audit._verify_segments(dto, manifest)  # pylint: disable=protected-access
+
+
 class IngestionAudit:
     """Compare a unit's stored state against its manifest and fail on any gap."""
 
@@ -157,22 +177,49 @@ class IngestionAudit:
             manifest.expects_transcript,
         )
 
+    def _confirmed_rows(self, collection, rows: list) -> list:
+        """Keep only rows the object store confirms, for a collection with no
+        run-id property to group by (segments, the unit row): unlike
+        ``confirmed_generations``, there is no generation to amortize the check
+        over, so each row is checked directly. Row counts here are small (one
+        segment per slide, one row expected per unit), so this stays cheap.
+        """
+        confirmed = []
+        for row in rows:
+            found = fetch_with_retry(
+                lambda uid=row.uuid: collection.query.fetch_object_by_id(uid),
+                retry=self._retry,
+            )
+            if found is not None:
+                confirmed.append(row)
+        return confirmed
+
     def _verify_page_chunks(
         self, dto: IngestionPipelineExecutionDto, manifest: IngestionManifest
     ) -> list[str]:
-        chunks = fetch_with_retry(
-            lambda: self.page_chunk_collection.query.fetch_objects(
-                filters=self._identity_filter(dto, LectureUnitPageChunkSchema),
-                limit=_FETCH_LIMIT,
-                return_properties=[
-                    LectureUnitPageChunkSchema.PAGE_NUMBER.value,
-                    LectureUnitPageChunkSchema.PAGE_VERSION.value,
-                    LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
-                ],
-            ),
+        # confirmed_generations, not a raw scan: a scan-visible-but-object-store-missing
+        # ghost row from an older, already-purged generation can still appear here for a
+        # brief eventual-consistency window right after convergence confirmed the unit
+        # clean, and would otherwise read as "multiple generations coexist" and fail an
+        # otherwise-healthy unit.
+        real_generations, all_chunks = confirmed_generations(
+            self.page_chunk_collection,
+            self._identity_filter(dto, LectureUnitPageChunkSchema),
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+            limit=_FETCH_LIMIT,
+            return_properties=[
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.PAGE_VERSION.value,
+            ],
             retry=self._retry,
-        ).objects
-        if len(chunks) >= _FETCH_LIMIT:
+        )
+        chunks = [
+            chunk
+            for chunk in all_chunks
+            if chunk.properties.get(LectureUnitPageChunkSchema.INGESTION_RUN_ID.value)
+            in real_generations
+        ]
+        if len(all_chunks) >= _FETCH_LIMIT:
             return [
                 f"page chunk read hit the fetch cap of {_FETCH_LIMIT}; "
                 f"refusing to certify a possibly truncated audit"
@@ -240,19 +287,26 @@ class IngestionAudit:
     def _verify_transcriptions(
         self, dto: IngestionPipelineExecutionDto, manifest: IngestionManifest
     ) -> list[str]:
-        rows = fetch_with_retry(
-            lambda: self.transcription_collection.query.fetch_objects(
-                filters=self._identity_filter(dto, LectureTranscriptionSchema),
-                limit=_FETCH_LIMIT,
-                return_properties=[
-                    LectureTranscriptionSchema.PAGE_NUMBER.value,
-                    LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
-                    LectureTranscriptionSchema.INGESTION_RUN_ID.value,
-                ],
-            ),
+        # See _verify_page_chunks for why this confirms generations rather than
+        # trusting a raw scan.
+        real_generations, all_rows = confirmed_generations(
+            self.transcription_collection,
+            self._identity_filter(dto, LectureTranscriptionSchema),
+            LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+            limit=_FETCH_LIMIT,
+            return_properties=[
+                LectureTranscriptionSchema.PAGE_NUMBER.value,
+                LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
+            ],
             retry=self._retry,
-        ).objects
-        if len(rows) >= _FETCH_LIMIT:
+        )
+        rows = [
+            row
+            for row in all_rows
+            if row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
+            in real_generations
+        ]
+        if len(all_rows) >= _FETCH_LIMIT:
             return [
                 f"transcription read hit the fetch cap of {_FETCH_LIMIT}; "
                 f"refusing to certify a possibly truncated audit"
@@ -314,7 +368,7 @@ class IngestionAudit:
         self, dto: IngestionPipelineExecutionDto, manifest: IngestionManifest
     ) -> list[str]:
         expected_pages = manifest.expected_segment_pages
-        rows = fetch_with_retry(
+        all_rows = fetch_with_retry(
             lambda: self.segment_collection.query.fetch_objects(
                 filters=self._identity_filter(dto, LectureUnitSegmentSchema),
                 limit=_FETCH_LIMIT,
@@ -325,11 +379,15 @@ class IngestionAudit:
             ),
             retry=self._retry,
         ).objects
-        if len(rows) >= _FETCH_LIMIT:
+        if len(all_rows) >= _FETCH_LIMIT:
             return [
                 f"segment read hit the fetch cap of {_FETCH_LIMIT}; "
                 f"refusing to certify a possibly truncated audit"
             ]
+        # Segments have no generation property (they upsert in place under a
+        # deterministic id), so a ghost here is checked per row rather than by
+        # confirming a generation.
+        rows = self._confirmed_rows(self.segment_collection, all_rows)
         stored_pages = {
             int(row.properties[LectureUnitSegmentSchema.PAGE_NUMBER.value])
             for row in rows
@@ -363,7 +421,7 @@ class IngestionAudit:
         return problems
 
     def _verify_unit_row(self, dto: IngestionPipelineExecutionDto) -> list[str]:
-        rows = fetch_with_retry(
+        all_rows = fetch_with_retry(
             lambda: self.unit_collection.query.fetch_objects(
                 filters=self._identity_filter(dto, LectureUnitSchema),
                 limit=10,
@@ -374,6 +432,9 @@ class IngestionAudit:
             ),
             retry=self._retry,
         ).objects
+        # A ghost duplicate — scan-visible but not object-store-backed — must not
+        # read as a genuine second unit row and fail an otherwise single-row unit.
+        rows = self._confirmed_rows(self.unit_collection, all_rows)
         if len(rows) != 1:
             return [f"expected exactly one lecture unit row, found {len(rows)}"]
 
