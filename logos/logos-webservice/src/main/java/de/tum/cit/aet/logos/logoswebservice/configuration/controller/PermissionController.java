@@ -130,7 +130,8 @@ public class PermissionController {
 
     /**
      * One-click de-provisioning from the model access page: atomically removes
-     * a single team-provider grant without replacing the team's other grants.
+     * a single team-provider grant without replacing the team's other grants,
+     * and prunes model grants orphaned by the revoke in the same transaction.
      */
     @DeleteMapping("/teams/{teamId}/provider-permissions/{providerId}")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")

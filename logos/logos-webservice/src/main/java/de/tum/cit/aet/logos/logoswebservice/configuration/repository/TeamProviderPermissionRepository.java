@@ -34,8 +34,9 @@ public interface TeamProviderPermissionRepository
     /**
      * Atomic single-grant removal (model access page): deletes exactly this
      * one team-provider row. Like grantIfAbsent it never reads or replaces the
-     * team's other grants and never re-runs the model-grant cascade, so a
-     * concurrent permission edit cannot be undone by a stale client snapshot.
+     * team's other grants, so a concurrent permission edit cannot be undone by
+     * a stale client snapshot. The model-grant cascade is applied by the
+     * caller (PermissionService) in the same transaction.
      */
     @Transactional
     @Modifying

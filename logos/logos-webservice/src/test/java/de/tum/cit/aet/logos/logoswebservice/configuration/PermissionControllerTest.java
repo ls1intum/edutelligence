@@ -267,7 +267,7 @@ class PermissionControllerTest {
            .andExpect(status().isOk());
 
         // Removes exactly the requested grant, keeping the team's other grants...
-        mvc.perform(delete("/admin/teams/2001/provider-permissions/6001")
+        mvc.perform(delete("/admin/teams/2001/provider-permissions/6002")
                 .with(TestJwt.logosAdmin()))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").value("Team provider permission removed"));
@@ -275,10 +275,10 @@ class PermissionControllerTest {
                 .with(TestJwt.logosAdmin()))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1))
-           .andExpect(jsonPath("$[0]").value(6002));
+           .andExpect(jsonPath("$[0]").value(6001));
 
         // ...removing a missing grant is an idempotent no-op...
-        mvc.perform(delete("/admin/teams/2001/provider-permissions/6001")
+        mvc.perform(delete("/admin/teams/2001/provider-permissions/6002")
                 .with(TestJwt.logosAdmin()))
            .andExpect(status().isOk());
         mvc.perform(get("/admin/teams/2001/provider-permissions")
@@ -286,11 +286,48 @@ class PermissionControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1));
 
-        // ...and the remove path never re-runs the model-grant cascade.
+        // ...and the model grant stays: 5001 is still reachable via 6001.
         mvc.perform(get("/admin/teams/2001/model-permissions")
                 .with(TestJwt.logosAdmin()))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1))
            .andExpect(jsonPath("$[0]").value(5001));
+    }
+
+    @Test
+    void removeTeamProviderPermission_prunesOrphanedModelGrants() throws Exception {
+        // Provider 6002 hosts model 5002, so revoking 6001 orphans only 5001.
+        jdbc.update("INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format) "
+            + "VALUES (6002, 'second-provider', 'https://api.second.example', 'cloud', 'LOCAL', 'Authorization', 'Bearer {}')");
+        jdbc.update("INSERT INTO model_provider (id, provider_id, model_id, endpoint, api_key) "
+            + "VALUES (7002, 6002, 5002, NULL, NULL)");
+
+        mvc.perform(put("/admin/teams/2001/model-permissions")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_ids\":[5001,5002]}"))
+           .andExpect(status().isOk());
+        mvc.perform(post("/admin/teams/2001/provider-permissions/6001")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+        mvc.perform(post("/admin/teams/2001/provider-permissions/6002")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+
+        // Revoking the only host of 5001 prunes that model grant in the same
+        // transaction, while 5002 — still reachable via 6002 — is preserved.
+        mvc.perform(delete("/admin/teams/2001/provider-permissions/6001")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+        mvc.perform(get("/admin/teams/2001/provider-permissions")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(1))
+           .andExpect(jsonPath("$[0]").value(6002));
+        mvc.perform(get("/admin/teams/2001/model-permissions")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(1))
+           .andExpect(jsonPath("$[0]").value(5002));
     }
 }

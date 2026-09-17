@@ -95,10 +95,18 @@ public class PermissionService {
     /**
      * Atomic counterpart of {@link #addTeamProviderPermission}: removes a
      * single team-provider grant (one-click de-provisioning from the model
-     * access page) — idempotent, touches nothing else, no cascade.
+     * access page). The targeted delete never reads or replaces the team's
+     * other provider grants, so a concurrent permission edit cannot be
+     * undone by a stale client snapshot. Unlike the add path, it then runs
+     * the model-grant cascade in the same transaction: the revoke itself is
+     * what can orphan model grants (revoking the last host provider of a
+     * model), and the cascade only prunes models no longer reachable through
+     * any of the team's remaining grants — exactly what the full-set PUT
+     * does.
      */
     @Transactional
     public void removeTeamProviderPermission(int teamId, Integer providerId) {
         teamProviderRepo.revoke(teamId, providerId);
+        teamModelRepo.deleteCascadeForTeam(teamId);
     }
 }
