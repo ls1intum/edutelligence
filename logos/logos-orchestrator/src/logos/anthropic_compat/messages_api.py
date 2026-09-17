@@ -121,22 +121,22 @@ def to_messages(payload: Dict[str, Any], *, model_name: Optional[str] = None) ->
     return result
 
 
-def _max_tokens(payload: Dict[str, Any]) -> int:
+def _max_tokens(payload: Dict[str, Any]) -> Any:
     """The output cap for a Messages request, which must always carry one.
 
     Both OpenAI spellings are accepted — ``max_completion_tokens`` is the one
     the reasoning families take, and a client that has been migrated to it
     would otherwise look like a client that named no cap at all.
+
+    A cap the client did state is forwarded as it stands, even an invalid one.
+    Repairing it would be the expensive kind of helpful: ``max_tokens: 0`` is a
+    400 on any OpenAI endpoint, and quietly substituting the default below
+    turns it into a 20k-token generation nobody asked to pay for. Only the
+    genuine absence of a cap is filled in.
     """
     for key in ("max_completion_tokens", "max_tokens"):
-        raw = payload.get(key)
-        if raw is None:
-            continue
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
+        value = payload.get(key)
+        if value is not None:
             return value
     return DEFAULT_OUTPUT_RESERVE_TOKENS
 
@@ -182,6 +182,10 @@ def _translate_message(role: str, message: Dict[str, Any]) -> List[Dict[str, Any
                 "content": [
                     {
                         "type": "tool_result",
+                        # The legacy ``role: "function"`` spelling identifies
+                        # the call by name rather than by id, and the assistant
+                        # turn that made it falls back to the same name — see
+                        # ``_assistant_turn``.
                         "tool_use_id": str(message.get("tool_call_id") or message.get("name") or ""),
                         "content": _flatten_text(message.get("content")),
                     }
@@ -207,7 +211,7 @@ def _assistant_turn(message: Dict[str, Any]) -> List[Dict[str, Any]]:
         # the tool result that answers it.
         legacy = message.get("function_call")
         calls = [{"function": legacy}] if isinstance(legacy, dict) else []
-    for index, call in enumerate(calls):
+    for call in calls:
         if not isinstance(call, dict):
             continue
         function = call.get("function") if isinstance(call.get("function"), dict) else {}
@@ -217,10 +221,13 @@ def _assistant_turn(message: Dict[str, Any]) -> List[Dict[str, Any]]:
         blocks.append(
             {
                 "type": "tool_use",
-                # Anthropic pairs a tool_result to its call by id and rejects an
-                # empty one. The legacy spelling carries none, so the position
-                # stands in — the matching tool message has no id either.
-                "id": str(call.get("id") or f"call_{index}"),
+                # Anthropic pairs a tool_result to its call by id and rejects
+                # both an empty one and one nothing answers. The legacy
+                # spelling carries no id on either side of the exchange, so the
+                # function name stands in for it — the same fallback the tool
+                # result uses in ``_translate_message``, which is what keeps
+                # the pair linked.
+                "id": str(call.get("id") or name),
                 "name": name,
                 "input": parse_arguments(function.get("arguments")),
             }

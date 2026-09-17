@@ -67,6 +67,14 @@ def test_max_completion_tokens_is_accepted_as_the_cap():
     assert result["max_tokens"] == 32
 
 
+def test_an_invalid_cap_is_forwarded_rather_than_repaired():
+    # Substituting the default for a cap the client did state would turn a
+    # request OpenAI answers with a 400 into a 20k-token generation nobody
+    # asked to pay for. The upstream's own validation is the honest answer.
+    assert to_messages({"model": "m", "messages": [], "max_tokens": 0})["max_tokens"] == 0
+    assert to_messages({"model": "m", "messages": [], "max_tokens": -5})["max_tokens"] == -5
+
+
 def test_openai_only_parameters_are_ignored_rather_than_forwarded():
     # Every one of these is an unknown field to the Messages API. The client
     # considers its request valid, so dropping them beats a 400.
@@ -263,20 +271,27 @@ def test_images_map_onto_anthropic_sources():
     ]
 
 
-def test_the_deprecated_function_call_spelling_survives():
+def test_the_deprecated_function_call_spelling_survives_as_a_matched_pair():
     # Clients still sending it would otherwise lose the call, and the
-    # conversation stops making sense at the result that answers it.
+    # conversation stops making sense at the result that answers it. Neither
+    # side of the legacy exchange carries an id, and Anthropic rejects both an
+    # empty tool_use id and a tool_result that answers no call — so the two
+    # synthesised ids have to agree.
     result = to_messages(
         {
             "model": "m",
             "max_tokens": 8,
-            "messages": [{"role": "assistant", "function_call": {"name": "now", "arguments": "{}"}}],
+            "messages": [
+                {"role": "assistant", "function_call": {"name": "now", "arguments": "{}"}},
+                {"role": "function", "name": "now", "content": "12:00"},
+            ],
         }
     )
-    block = result["messages"][0]["content"][0]
-    assert block["type"] == "tool_use" and block["name"] == "now"
-    # Anthropic rejects an empty tool_use id, so one is synthesised.
-    assert block["id"]
+    call = result["messages"][0]["content"][0]
+    answer = result["messages"][1]["content"][0]
+    assert call["type"] == "tool_use" and call["name"] == "now"
+    assert call["id"]
+    assert answer["tool_use_id"] == call["id"]
 
 
 # ── response ────────────────────────────────────────────────────────────────
