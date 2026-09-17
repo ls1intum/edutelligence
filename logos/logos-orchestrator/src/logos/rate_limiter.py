@@ -40,6 +40,7 @@ class InMemoryRateLimiter:
         self._lock = threading.Lock()
         self._request_windows: dict[str, deque] = {}
         self._token_windows: dict[str, deque] = {}
+        self._pending_auth: dict[str, int] = {}
         self._last_sweep = time.monotonic()
 
     def _prune_requests(self, dq: deque, cutoff: float) -> None:
@@ -72,6 +73,39 @@ class InMemoryRateLimiter:
             del self._request_windows[key]
         for key in [k for k, dq in self._token_windows.items() if not dq or dq[-1][0] < cutoff]:
             del self._token_windows[key]
+
+    def reserve_auth_failure(self, key: str) -> None:
+        """Track an authentication lookup that has not produced a result yet."""
+        with self._lock:
+            self._sweep_locked(time.monotonic())
+            self._pending_auth[key] = self._pending_auth.get(key, 0) + 1
+
+    def release_auth_reservation(self, key: str) -> None:
+        """Release a pending authentication lookup after successful auth or an error."""
+        with self._lock:
+            pending = self._pending_auth.get(key, 0)
+            if pending <= 1:
+                self._pending_auth.pop(key, None)
+            else:
+                self._pending_auth[key] = pending - 1
+
+    def record_auth_failure(self, key: str, limit: int, window_seconds: int = 60) -> bool:
+        """Record a completed authentication failure if its window has capacity."""
+        now = time.monotonic()
+        cutoff = now - window_seconds
+        with self._lock:
+            self._sweep_locked(now)
+            dq = self._request_windows.setdefault(key, deque())
+            self._prune_requests(dq, cutoff)
+            admitted = len(dq) < limit
+            if admitted:
+                dq.append(now)
+            pending = self._pending_auth.get(key, 0)
+            if pending <= 1:
+                self._pending_auth.pop(key, None)
+            else:
+                self._pending_auth[key] = pending - 1
+            return admitted
 
     def tracked_key_count(self) -> int:
         """Total keys tracked across both stores. Exposed for tests observing memory bounds."""
@@ -197,24 +231,26 @@ def enforce_ip_rate_limit(client_ip: Optional[str], bucket: str, rpm: int, windo
 
 
 def enforce_auth_failure_budget(client_ip: Optional[str]) -> None:
-    """Raise HTTPException(429) once `client_ip` has exhausted its auth-failure budget.
+    """Reserve an authentication lookup for `client_ip`.
 
-    Call before attempting authentication. Only `record_auth_failure` spends
-    the budget, so a client that keeps authenticating successfully never
-    approaches the limit — only repeated 401s do.
+    The failure budget is checked only after authentication has completed. This
+    keeps valid concurrent requests outside the failure budget while still
+    counting only completed failures.
     """
     if AUTH_FAILURE_RPM <= 0 or not client_ip:
         return
-    if not get_rate_limiter().has_budget(_ip_bucket_key(client_ip, "auth_fail"), AUTH_FAILURE_RPM):
-        raise HTTPException(
-            status_code=429,
-            detail="Too many failed authentication attempts",
-            headers={"Retry-After": "60"},
-        )
+    get_rate_limiter().reserve_auth_failure(_ip_bucket_key(client_ip, "auth_fail"))
 
 
-def record_auth_failure(client_ip: Optional[str]) -> None:
-    """Spend one unit of `client_ip`'s auth-failure budget."""
+def release_auth_failure_reservation(client_ip: Optional[str]) -> None:
+    """Release a reservation after successful authentication or an error."""
     if AUTH_FAILURE_RPM <= 0 or not client_ip:
         return
-    get_rate_limiter().consume(_ip_bucket_key(client_ip, "auth_fail"))
+    get_rate_limiter().release_auth_reservation(_ip_bucket_key(client_ip, "auth_fail"))
+
+
+def record_auth_failure(client_ip: Optional[str]) -> bool:
+    """Record a completed authentication failure and return whether it is allowed."""
+    if AUTH_FAILURE_RPM <= 0 or not client_ip:
+        return True
+    return get_rate_limiter().record_auth_failure(_ip_bucket_key(client_ip, "auth_fail"), AUTH_FAILURE_RPM)

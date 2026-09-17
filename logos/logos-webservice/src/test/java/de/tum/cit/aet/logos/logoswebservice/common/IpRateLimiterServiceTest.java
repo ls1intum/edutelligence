@@ -56,14 +56,22 @@ class IpRateLimiterServiceTest {
     }
 
     @Test
-    void authFailureSlot_reservedOnlyOnceLimitIsReached() {
+    void authFailureSlot_countsCompletedFailuresNotPendingLookups() {
         IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, 2));
 
         assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
         assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
-        assertFalse(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+        assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+        assertTrue(limiter.recordAuthFailureSlot("9.9.9.9"));
+        assertTrue(limiter.recordAuthFailureSlot("9.9.9.9"));
+        assertFalse(limiter.recordAuthFailureSlot("9.9.9.9"));
 
-        // A different source address still has its own budget.
+        // A valid lookup is still admitted even when completed failures fill
+        // the failure window; it gives its pending reservation back.
+        assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+        limiter.releaseAuthFailureSlot("9.9.9.9");
+
+        // A different source address still has its own failure budget.
         assertTrue(limiter.tryReserveAuthFailureSlot("8.8.8.8"));
     }
 
@@ -72,7 +80,7 @@ class IpRateLimiterServiceTest {
         IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, 1));
 
         assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
-        assertFalse(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
+        assertTrue(limiter.tryReserveAuthFailureSlot("9.9.9.9"));
 
         // The caller that reserved the slot authenticated successfully after all.
         limiter.releaseAuthFailureSlot("9.9.9.9");
@@ -92,7 +100,7 @@ class IpRateLimiterServiceTest {
         ExecutorService pool = Executors.newFixedThreadPool(concurrentCallers);
         CountDownLatch ready = new CountDownLatch(concurrentCallers);
         CountDownLatch start = new CountDownLatch(1);
-        AtomicInteger reserved = new AtomicInteger();
+        AtomicInteger recorded = new AtomicInteger();
         try {
             for (int i = 0; i < concurrentCallers; i++) {
                 pool.submit(() -> {
@@ -105,7 +113,9 @@ class IpRateLimiterServiceTest {
                         return;
                     }
                     if (limiter.tryReserveAuthFailureSlot("9.9.9.9")) {
-                        reserved.incrementAndGet();
+                        if (limiter.recordAuthFailureSlot("9.9.9.9")) {
+                            recorded.incrementAndGet();
+                        }
                     }
                 });
             }
@@ -118,7 +128,7 @@ class IpRateLimiterServiceTest {
             pool.shutdownNow();
         }
 
-        assertEquals(limit, reserved.get());
+        assertEquals(limit, recorded.get());
     }
 
     @Test
@@ -200,18 +210,21 @@ class IpRateLimiterServiceTest {
 
     @Test
     void clientIp_prefersFirstHopOfForwardedFor() {
+        IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, 20));
         var request = new org.springframework.mock.web.MockHttpServletRequest();
         request.addHeader("X-Forwarded-For", "203.0.113.5, 10.0.0.1");
-        request.setRemoteAddr("10.0.0.1");
+        request.setRemoteAddr("172.16.0.2");
 
-        assertEquals("203.0.113.5", IpRateLimiterService.clientIp(request));
+        assertEquals("203.0.113.5", limiter.clientIp(request));
     }
 
     @Test
-    void clientIp_fallsBackToRemoteAddr() {
+    void clientIp_ignoresForwardedForFromUntrustedRemote() {
+        IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, 20));
         var request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.addHeader("X-Forwarded-For", "203.0.113.5");
         request.setRemoteAddr("192.0.2.9");
 
-        assertEquals("192.0.2.9", IpRateLimiterService.clientIp(request));
+        assertEquals("192.0.2.9", limiter.clientIp(request));
     }
 }

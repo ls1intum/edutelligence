@@ -54,6 +54,10 @@ class ModelHealthControllerRateLimitTest {
     void repeatedFailedAuthFromOneAddressIsRateLimited() throws Exception {
         for (int i = 0; i < 2; i++) {
             mvc.perform(post("/logosdb/get_model_health")
+                    .with(request -> {
+                        request.setRemoteAddr("192.0.2.10");
+                        return request;
+                    })
                     .header("logos_key", "not-a-real-key")
                     .contentType("application/json")
                     .content("{}"))
@@ -64,6 +68,10 @@ class ModelHealthControllerRateLimitTest {
         // entirely by the failure path — so the third failed attempt is the
         // one that trips the limit.
         mvc.perform(post("/logosdb/get_model_health")
+                .with(request -> {
+                    request.setRemoteAddr("192.0.2.10");
+                    return request;
+                })
                 .header("logos_key", "not-a-real-key")
                 .contentType("application/json")
                 .content("{}"))
@@ -84,6 +92,10 @@ class ModelHealthControllerRateLimitTest {
         // than the configured limit must succeed without ever tripping 429.
         for (int i = 0; i < 5; i++) {
             mvc.perform(post("/logosdb/get_model_health")
+                    .with(request -> {
+                        request.setRemoteAddr("192.0.2.20");
+                        return request;
+                    })
                     .header("logos_key", "dev-key-1")
                     .contentType("application/json")
                     .content("{}"))

@@ -86,21 +86,29 @@ public class ModelController {
      */
     @PostMapping("/get_model_health")
     public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
-        String clientIp = IpRateLimiterService.clientIp(request);
+        String clientIp = rateLimiter.clientIp(request);
         if (!rateLimiter.tryReserveAuthFailureSlot(clientIp)) {
             throw new RateLimitExceededException(60);
         }
 
-        String apiKey = extractApiKey(request);
-        Optional<Set<String>> accessibleModels = apiKey == null
-            ? Optional.empty()
-            : modelService.resolveAccessibleModelsForApiKey(apiKey);
-        if (accessibleModels.isEmpty()) {
-            return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
-        }
+        try {
+            String apiKey = extractApiKey(request);
+            Optional<Set<String>> accessibleModels = apiKey == null
+                ? Optional.empty()
+                : modelService.resolveAccessibleModelsForApiKey(apiKey);
+            if (accessibleModels.isEmpty()) {
+                if (!rateLimiter.recordAuthFailureSlot(clientIp)) {
+                    throw new RateLimitExceededException(60);
+                }
+                return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+            }
 
-        rateLimiter.releaseAuthFailureSlot(clientIp);
-        return ResponseEntity.ok(modelService.getModelHealthForAccessibleModels(accessibleModels.get()));
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            return ResponseEntity.ok(modelService.getModelHealthForAccessibleModels(accessibleModels.get()));
+        } catch (RuntimeException e) {
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            throw e;
+        }
     }
 
     static String extractApiKey(HttpServletRequest request) {

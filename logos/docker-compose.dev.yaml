@@ -278,6 +278,7 @@ services:
       LOGOS_RATE_LIMITING_ENABLED: "${LOGOS_RATE_LIMITING_ENABLED:-true}"
       LOGOS_RATE_LIMIT_PUBLIC_RPM: "${LOGOS_RATE_LIMIT_PUBLIC_RPM:-60}"
       LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM: "${LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM:-20}"
+      LOGOS_RATE_LIMIT_TRUSTED_PROXY_CIDRS: "${LOGOS_RATE_LIMIT_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
       KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:-http://localhost:8085/realms/tum}"
       KEYCLOAK_JWKS_URI: "${KEYCLOAK_JWKS_URI:-http://keycloak:8080/realms/tum/protocol/openid-connect/certs}"
@@ -307,7 +308,7 @@ services:
     expose:
       - "8081"
     ports:
-      - "18082:8081"
+      - "127.0.0.1:18082:8081"
     labels:
       - "traefik.enable=true"
       # strip-api middleware is defined on the Traefik container (see above).

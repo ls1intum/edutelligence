@@ -123,20 +123,27 @@ def test_enforce_ip_rate_limit_disabled_when_rpm_is_zero(monkeypatch):
         rl.enforce_ip_rate_limit("1.2.3.4", "health", rpm=0)
 
 
-def test_auth_failure_budget_is_spent_only_by_record_auth_failure(monkeypatch):
+def test_auth_failure_budget_counts_completed_failures_only(monkeypatch):
     monkeypatch.setattr(rl, "_rate_limiter", InMemoryRateLimiter())
     monkeypatch.setattr(rl, "AUTH_FAILURE_RPM", 2)
 
-    # Merely checking never spends the budget.
+    # Reserving lookups never spends the budget, so valid concurrent callers
+    # are not rejected based on the failure limit.
     for _ in range(10):
         rl.enforce_auth_failure_budget("9.9.9.9")
+        rl.release_auth_failure_reservation("9.9.9.9")
 
-    rl.record_auth_failure("9.9.9.9")
-    rl.enforce_auth_failure_budget("9.9.9.9")  # still one slot left
-    rl.record_auth_failure("9.9.9.9")
-    with pytest.raises(HTTPException) as exc:
+    for _ in range(2):
         rl.enforce_auth_failure_budget("9.9.9.9")
-    assert exc.value.status_code == 429
+        assert rl.record_auth_failure("9.9.9.9")
+
+    rl.enforce_auth_failure_budget("9.9.9.9")
+    assert not rl.record_auth_failure("9.9.9.9")
+
+    # The next lookup is still allowed to determine whether it is valid; only
+    # another completed failure is rejected.
+    rl.enforce_auth_failure_budget("9.9.9.9")
+    assert not rl.record_auth_failure("9.9.9.9")
 
 
 def test_high_cardinality_churn_is_reclaimed_once_stale(monkeypatch):

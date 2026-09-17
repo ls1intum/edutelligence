@@ -121,7 +121,7 @@ def authenticate_api_key(headers: Optional[Dict[str, str]], client_ip: Optional[
     # import would bind the submodule to the discarded pre-handover package
     # object instead of logos.main, breaking `import logos.rate_limiter`
     # anywhere else (see logos/rate_limiter.py's own lazy-import callers).
-    from logos.rate_limiter import enforce_auth_failure_budget, record_auth_failure
+    from logos.rate_limiter import enforce_auth_failure_budget, record_auth_failure, release_auth_failure_reservation
 
     enforce_auth_failure_budget(client_ip)
     try:
@@ -130,10 +130,21 @@ def authenticate_api_key(headers: Optional[Dict[str, str]], client_ip: Optional[
             row = db.get_api_key_by_value(logos_key)
         if row is None:
             raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+        release_auth_failure_reservation(client_ip)
         return _auth_context_from_key_row(row)
     except HTTPException as exc:
         if exc.status_code == 401:
-            record_auth_failure(client_ip)
+            if not record_auth_failure(client_ip):
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many failed authentication attempts",
+                    headers={"Retry-After": "60"},
+                ) from exc
+        else:
+            release_auth_failure_reservation(client_ip)
+        raise
+    except Exception:
+        release_auth_failure_reservation(client_ip)
         raise
 
 

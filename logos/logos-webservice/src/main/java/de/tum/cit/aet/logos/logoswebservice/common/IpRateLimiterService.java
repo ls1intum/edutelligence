@@ -1,10 +1,13 @@
 package de.tum.cit.aet.logos.logoswebservice.common;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -17,14 +20,11 @@ import jakarta.servlet.http.HttpServletRequest;
  * Two categories are covered:
  * <ul>
  * <li>Public endpoints (e.g. {@code /info}) — every request is bounded, via {@link #enforcePublicEndpoint}.</li>
- * <li>The failure path of API-key authentication (e.g. {@code /logosdb/get_model_health}) — only a 401 spends
- * budget. {@link #tryReserveAuthFailureSlot} atomically checks the budget and reserves a slot in the same
- * operation (Tomcat handles requests on a pool of threads, so a plain check-then-record pair would let a burst
- * of concurrent requests all observe the same free slot before any of them records a failure); the caller then
- * gives the slot back via {@link #releaseAuthFailureSlot} once authentication turns out to have succeeded, so
- * traffic that keeps authenticating successfully never approaches the limit. Callers must release the
- * reservation as soon as the key is known valid — before any slower downstream work — so that work in flight
- * cannot itself hold slots that would otherwise be available to other valid callers.</li>
+ * <li>The failure path of API-key authentication (e.g. {@code /logosdb/get_model_health}) — only a completed
+ * 401 spends budget. Pending lookups are tracked separately by {@link #tryReserveAuthFailureSlot}, then either
+ * released via {@link #releaseAuthFailureSlot} for valid credentials or converted to a completed failure by
+ * {@link #recordAuthFailureSlot}. This keeps valid concurrent requests outside the failure budget while the
+ * completed-failure update remains atomic.</li>
  * </ul>
  *
  * <p>
@@ -52,18 +52,31 @@ public class IpRateLimiterService {
     private final RateLimitingProperties properties;
 
     private final Duration window;
+    private final String trustedProxyCidrs;
 
     private final ConcurrentHashMap<String, ArrayDeque<Long>> requestWindows = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> pendingAuthRequests = new ConcurrentHashMap<>();
+
+    public IpRateLimiterService(RateLimitingProperties properties) {
+        this(properties, DEFAULT_WINDOW, "172.16.0.0/12");
+    }
 
     @Autowired
-    public IpRateLimiterService(RateLimitingProperties properties) {
-        this(properties, DEFAULT_WINDOW);
+    public IpRateLimiterService(
+            RateLimitingProperties properties,
+            @Value("${logos.rate-limiting.trusted-proxy-cidrs:172.16.0.0/12}") String trustedProxyCidrs) {
+        this(properties, DEFAULT_WINDOW, trustedProxyCidrs);
     }
 
     /** Package-private: lets tests use a short window so real-time expiry can be observed without sleeping a minute. */
     IpRateLimiterService(RateLimitingProperties properties, Duration window) {
+        this(properties, window, "172.16.0.0/12");
+    }
+
+    private IpRateLimiterService(RateLimitingProperties properties, Duration window, String trustedProxyCidrs) {
         this.properties = properties;
         this.window = window;
+        this.trustedProxyCidrs = trustedProxyCidrs;
     }
 
     /**
@@ -84,40 +97,59 @@ public class IpRateLimiterService {
     }
 
     /**
-     * Atomically checks {@code clientIp}'s authentication-failure budget and, if any remains, reserves one slot
-     * from it in the same operation — so concurrent callers cannot all observe the same free slot the way a
-     * separate check-then-record pair would. Call before attempting authentication.
+     * Tracks an authentication lookup that is in progress. The failure budget is
+     * deliberately not checked here: valid concurrent requests must not be
+     * rejected because other requests are still being authenticated or because
+     * completed failures have filled the failure window.
      *
      * <p>
-     * The reservation must be resolved afterward: give it back with {@link #releaseAuthFailureSlot} the moment
-     * authentication is known to have succeeded — before any slower work that depends on it — so that work
-     * cannot itself hold a slot other valid callers need. Leave it in place — do nothing — if authentication
-     * fails; the reservation already counts as the spent unit.
+     * The reservation must be resolved afterward: give it back with {@link #releaseAuthFailureSlot} when
+     * authentication succeeds, or convert it to a completed failure with {@link #recordAuthFailureSlot}.
      *
-     * @return true if a slot was reserved (or the limiter is disabled/unlimited), false if the budget is exhausted
+     * @return true if the lookup was tracked (or the limiter is disabled/unlimited)
      */
     public boolean tryReserveAuthFailureSlot(String clientIp) {
         if (!properties.enabled() || properties.authFailureRequestsPerMinute() <= 0 || clientIp == null) {
             return true;
         }
-        return tryConsume(key(clientIp, "auth_fail"), properties.authFailureRequestsPerMinute());
+        pendingAuthRequests.merge(key(clientIp, "auth_fail"), 1, Integer::sum);
+        return true;
     }
 
-    /** Gives back a slot reserved by {@link #tryReserveAuthFailureSlot}, once authentication succeeded after all. */
+    /** Gives back a pending lookup reservation once authentication succeeded. */
     public void releaseAuthFailureSlot(String clientIp) {
         if (!properties.enabled() || properties.authFailureRequestsPerMinute() <= 0 || clientIp == null) {
             return;
         }
-        // computeIfPresent: a reservation always created the window first, so there is normally always one to
-        // release into; if it were ever already gone (e.g. an unexpected double release) there is nothing to
-        // give back, and creating a fresh window here would fabricate budget rather than restore it.
-        requestWindows.computeIfPresent(key(clientIp, "auth_fail"), (k, deque) -> {
-            // Any entry may be released, not necessarily the one this caller's own reservation added: every
-            // entry in the window is fungible for counting purposes, so removing one restores the budget by
-            // exactly the unit this caller is giving back, regardless of which concurrent reservation it was.
-            deque.pollLast();
-            return deque.isEmpty() ? null : deque;
+        releasePending(key(clientIp, "auth_fail"));
+    }
+
+    /**
+     * Converts one pending lookup into a completed failure if the failure window has capacity.
+     *
+     * @return false when this completed failure is beyond the configured limit
+     */
+    public boolean recordAuthFailureSlot(String clientIp) {
+        if (!properties.enabled() || properties.authFailureRequestsPerMinute() <= 0 || clientIp == null) {
+            return true;
+        }
+        String key = key(clientIp, "auth_fail");
+        boolean[] admitted = {false};
+        requestWindows.compute(key, (k, existing) -> {
+            ArrayDeque<Long> deque = existing != null ? existing : new ArrayDeque<>();
+            prune(deque);
+            if (deque.size() < properties.authFailureRequestsPerMinute()) {
+                deque.addLast(System.nanoTime());
+                admitted[0] = true;
+            }
+            return deque;
         });
+        releasePending(key);
+        return admitted[0];
+    }
+
+    private void releasePending(String key) {
+        pendingAuthRequests.computeIfPresent(key, (k, pending) -> pending <= 1 ? null : pending - 1);
     }
 
     private boolean tryConsume(String key, int limit) {
@@ -171,15 +203,54 @@ public class IpRateLimiterService {
         return requestWindows.size();
     }
 
-    /**
-     * Resolves the caller's address from a request, preferring the first hop of X-Forwarded-For (the deployment
-     * sits behind a reverse proxy) and falling back to the socket's remote address.
-     */
-    public static String clientIp(HttpServletRequest request) {
+    /** Resolves the caller's address, trusting forwarded headers only from configured proxies. */
+    public String clientIp(HttpServletRequest request) {
+        String remoteAddr = request.getRemoteAddr();
         String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (forwardedFor != null && !forwardedFor.isBlank()) {
+        if (isTrustedProxy(remoteAddr) && forwardedFor != null && !forwardedFor.isBlank()) {
             return forwardedFor.split(",")[0].strip();
         }
-        return request.getRemoteAddr();
+        return remoteAddr;
+    }
+
+    private boolean isTrustedProxy(String address) {
+        if (address == null || trustedProxyCidrs == null) {
+            return false;
+        }
+        for (String cidr : trustedProxyCidrs.split(",")) {
+            if (addressInCidr(address, cidr.strip())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean addressInCidr(String address, String cidr) {
+        try {
+            int slash = cidr.indexOf('/');
+            InetAddress candidate = InetAddress.getByName(address);
+            InetAddress network = InetAddress.getByName(slash < 0 ? cidr : cidr.substring(0, slash));
+            byte[] candidateBytes = candidate.getAddress();
+            byte[] networkBytes = network.getAddress();
+            if (candidateBytes.length != networkBytes.length) {
+                return false;
+            }
+            int prefixBits = slash < 0 ? networkBytes.length * 8 : Integer.parseInt(cidr.substring(slash + 1));
+            if (prefixBits < 0 || prefixBits > candidateBytes.length * 8) {
+                return false;
+            }
+            int fullBytes = prefixBits / 8;
+            int remainingBits = prefixBits % 8;
+            for (int i = 0; i < fullBytes; i++) {
+                if (candidateBytes[i] != networkBytes[i]) {
+                    return false;
+                }
+            }
+            return remainingBits == 0
+                || (candidateBytes[fullBytes] & (0xFF << (8 - remainingBits)))
+                    == (networkBytes[fullBytes] & (0xFF << (8 - remainingBits)));
+        } catch (UnknownHostException | NumberFormatException e) {
+            return false;
+        }
     }
 }

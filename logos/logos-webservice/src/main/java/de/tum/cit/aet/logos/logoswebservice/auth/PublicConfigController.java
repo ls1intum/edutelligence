@@ -46,7 +46,7 @@ public class PublicConfigController {
      */
     @GetMapping("/info")
     public ResponseEntity<Map<String, Object>> info(HttpServletRequest request) {
-        rateLimiter.enforcePublicEndpoint(IpRateLimiterService.clientIp(request), "info");
+        rateLimiter.enforcePublicEndpoint(rateLimiter.clientIp(request), "info");
 
         Map<String, Object> keycloak = new LinkedHashMap<>();
         keycloak.put("issuer", issuer);

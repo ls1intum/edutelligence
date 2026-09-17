@@ -7,6 +7,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -66,9 +67,16 @@ class ModelHealthControllerReleaseTimingTest {
     void aSecondValidRequestSucceedsWhileTheFirstIsStillBlockedDownstream() throws Exception {
         CountDownLatch reachedDownstream = new CountDownLatch(1);
         CountDownLatch releaseDownstream = new CountDownLatch(1);
+        AtomicInteger downstreamCalls = new AtomicInteger();
         when(modelHealthClient.getModelHealth()).thenAnswer(invocation -> {
-            reachedDownstream.countDown();
-            releaseDownstream.await(5, TimeUnit.SECONDS);
+            if (downstreamCalls.getAndIncrement() == 0) {
+                reachedDownstream.countDown();
+                try {
+                    releaseDownstream.await(5, TimeUnit.SECONDS);
+                } finally {
+                    releaseDownstream.countDown();
+                }
+            }
             return List.of(Map.of("name", "gpt-4", "status", "UP"));
         });
 
