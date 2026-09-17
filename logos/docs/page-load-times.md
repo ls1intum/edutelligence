@@ -1,6 +1,6 @@
 # Page load times
 
-Where the web UI's slow pages spend their time, what was changed about it, and
+Where the web application's slow pages spend their time, what was changed about it, and
 what is left. Every number here was measured against production data: either by
 running the page's own query on the production host (`ssh logos`, read-only), or
 against a full snapshot of it restored locally. Both are named per measurement,

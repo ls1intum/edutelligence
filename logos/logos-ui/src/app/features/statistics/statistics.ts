@@ -320,7 +320,7 @@ export class Statistics implements OnInit, OnDestroy {
       startDate = r.currStart;
       // currEnd is the exclusive next-period midnight (e.g. Jul 1 for June).
       // Cap at now so we don't request future buckets, and subtract 1ms so
-      // the backend doesn't include a stray midnight bucket from the next period.
+      // the application server doesn't include a stray midnight bucket from the next period.
       endDate = new Date(Math.min(r.currEnd.getTime() - 1, Date.now()));
     }
     const spanMs = Math.max(endDate.getTime() - startDate.getTime(), 60 * 1000);
@@ -589,11 +589,11 @@ export class Statistics implements OnInit, OnDestroy {
    * aggregate.
    *
    * It used to be re-derived in the browser from the raw enqueue events of
-   * every request in the range. That was wrong at production scale (issue
-   * #1022): the server capped the event list at 200k rows ordered oldest-first,
-   * so any range holding more than that — the default 30 days holds 417k — lost
-   * everything after the cut. The chart went flat for the most recent 13 days
-   * while the KPI card above it still counted all 417k requests.
+   * every request in the range. That was wrong at production scale: the server
+   * capped the event list at 200k rows ordered oldest-first, so any range
+   * holding more than that — the default 30 days holds 417k — lost everything
+   * after the cut. The chart went flat for the most recent 13 days while the
+   * KPI card above it still counted all 417k requests.
    *
    * `stats.timeSeries` has neither problem: it is aggregated in the database
    * over the whole range, it arrives already bucketed, and it costs a few

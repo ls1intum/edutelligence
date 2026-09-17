@@ -392,7 +392,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("requestIds") List<String> requestIds);
 
     /**
-     * The request traces of one team for the export (issue #667).
+     * The request traces of one team for the export.
      *
      * Every request of the window comes out — the export must describe the
      * same slice of traffic the activity list above shows, and a download that
@@ -676,7 +676,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                -- counts stay on the local side of the cloud/local split: the
                -- KPI card labels the denominator "local starts" and pairing
                -- that number with a denominator that also counts cloud requests
-               -- (issue #928) understates the cold-start share. The predicate
+               -- understates the cold-start share. The predicate
                -- mirrors localRequests above, so cold + warm always adds up to
                -- exactly the local request count.
                COALESCE(SUM(pt.requests) FILTER (WHERE (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND pt.was_cold_start), 0)::bigint AS coldStarts,
@@ -763,7 +763,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                SUM(pt.requests)::bigint AS requestCount,
                (SUM(pt.queue_seconds_sum) / NULLIF(SUM(pt.queue_seconds_count), 0))::double precision AS avgQueueSeconds,
                (SUM(pt.run_seconds_sum)   / NULLIF(SUM(pt.run_seconds_count), 0))::double precision   AS avgRunSeconds,
-               -- Same local-only rule as the totals above (issue #928): a cloud
+               -- Same local-only rule as the totals above: a cloud
                -- request on a model has no local start, so it must not pad the
                -- warm count for that model.
                COALESCE(SUM(pt.requests) FILTER (WHERE (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND pt.was_cold_start), 0)::bigint AS coldStarts,

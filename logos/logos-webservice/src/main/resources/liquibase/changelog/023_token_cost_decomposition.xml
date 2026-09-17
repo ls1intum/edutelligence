@@ -544,7 +544,7 @@
                    --
                    -- The token rollup is a scalar subquery inside the branches
                    -- that use it, not a LEFT JOIN LATERAL ... ON <condition>
-                   -- beside them (issue #1022). Both spell the same value, but a
+                   -- beside them. Both spell the same value, but a
                    -- lateral is evaluated for every row and only *then* filtered
                    -- by its ON clause, so a settled row still paid for a full
                    -- usage_tokens aggregation before the join threw it away. On
