@@ -35,8 +35,20 @@ Start the Logos server and make sure it is reachable over HTTPS (e.g. `https://l
 ```bash
 curl -X POST https://logos.example.com/logosdb/providers/logosnode/register \
   -H 'Content-Type: application/json' \
-  -d '{"logos_key":"<root_key>","provider_name":"my-worker-node","base_url":""}'
+  -d '{"logos_key":"<root_key>","provider_name":"my-worker-node","base_url":"","privacy_level":"LOCAL"}'
 ```
+
+`privacy_level` is required and states how far this node may be trusted with
+data. There is deliberately no default:
+
+| Value | Use for |
+|-------|---------|
+| `LOCAL` | Hardware you operate — your own datacentre. The most trusted tier. |
+| `THIRD_PARTY_HARDWARE` | Hardware outside your control: a rented GPU, or a personal machine running the MLX worker. Its owner can inspect the running processes. |
+
+Registering a rented or personal machine as `LOCAL` makes it eligible for
+requests that are restricted to operator-controlled hardware, so pick the tier
+that matches reality rather than the one that unblocks the setup.
 
 Save the response values — you will need both:
 - `provider_id`
