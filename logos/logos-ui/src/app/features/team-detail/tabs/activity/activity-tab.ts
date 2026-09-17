@@ -30,7 +30,7 @@ const DAY_OPTIONS: AppSelectOption[] = [
 
 /**
  * What this team is running right now, what it has used, and the requests
- * behind both (issue #776).
+ * behind both.
  *
  * Sits next to Cloud Usage, which answers the same period in money: that tab
  * is what the cloud providers billed, this one is what the platform did. A
@@ -58,7 +58,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
 
   readonly dayOptions = DAY_OPTIONS;
 
-  // ── Trace export (issue #667) ────────────────────────────────────────────
+  // ── Trace export ─────────────────────────────────────────────
 
   readonly exportFormat = signal<'json' | 'csv'>('json');
   readonly exporting = signal(false);
@@ -85,7 +85,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
    * its answer while it is still the newest: with a page still loading, a
    * click used to advance the index on the strength of the previous page's
    * answer — its `has_more` flag and next cursor both pointed at the page
-   * behind — walking past the last page (issue #799).
+   * behind — walking past the last page.
    */
   private loadSeq = 0;
   /** Seqs of the loads still out. */
@@ -100,7 +100,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   readonly selectedDaysValue = computed(() => String(this.days()));
 
   /**
-   * The hint the export control carries (issue #667): a team whose keys all
+   * The hint the export control carries: a team whose keys all
    * stay on billing logging never had request or response content stored, so
    * the download holds metadata without content — say so before the click
    * instead of letting the empty columns speak for themselves.
@@ -135,7 +135,6 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
    * newest unsettled load: an older one's answer will be dropped, so it
    * cannot push the page anywhere — letting a slow stale request hold the
    * buttons shut would just stall the pager after the shown page is ready
-   * (issue #799).
    */
   readonly pageLoadInFlight = computed(() => this.newestInFlight() > this.settledSeq());
 
@@ -326,7 +325,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
       // window or the filter changed, the timer re-fired). Its answer belongs
       // to the view we left: applying it would land old rows — and an old
       // `has_more` flag — on the new page, which is how the pager walked past
-      // the last page (issue #799).
+      // the last page.
       if (seq !== this.loadSeq) return;
       this.activity.set(payload);
       this.error.set(null);
@@ -356,7 +355,7 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   }
 }
 
-// ── Trace export helpers (issue #667) ────────────────────────────────────────
+// ── Trace export helpers  ────────────────────────────────────────
 
 /** Column order of the CSV export; the JSON envelope is the reference. */
 export const TRACE_CSV_COLUMNS: (keyof TraceExportItem)[] = [

@@ -548,3 +548,48 @@ async def test_stop_cancels_a_refresh_still_in_flight(monkeypatch):
     await service.stop()
 
     assert service._refresh_task is None
+
+
+@pytest.mark.asyncio
+async def test_a_requested_refresh_is_busy_until_its_pass_finishes(monkeypatch):
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+
+    assert service.is_busy() is False
+    service.request_refresh()
+    assert service.is_busy() is True
+    await service._refresh_task
+
+    assert service.is_busy() is False
+
+
+@pytest.mark.asyncio
+async def test_a_queued_follow_up_keeps_the_sync_busy(monkeypatch):
+    """Between the first pass ending and its follow-up writing, the sync must
+    still report busy — otherwise the UI stops on a stale catalogue."""
+    release_first = asyncio.Event()
+    release_second = asyncio.Event()
+    fetches = 0
+
+    async def fetch(url, headers, client):  # noqa: ARG001
+        nonlocal fetches
+        fetches += 1
+        if fetches == 1:
+            await release_first.wait()
+        else:
+            await release_second.wait()
+        return LOGOS_LISTING
+
+    service = _run(monkeypatch, [_provider()], lambda url, headers: LOGOS_LISTING)
+    monkeypatch.setattr(cloud_model_sync, "fetch_models", fetch)
+
+    service.request_refresh()
+    await asyncio.sleep(0)  # first pass now blocked in the upstream
+    service.request_refresh()  # collapses into a follow-up on the running task
+    release_first.set()
+    await asyncio.sleep(0)  # first pass done, follow-up now blocked upstream
+
+    assert service.is_busy() is True
+    release_second.set()
+    await service._refresh_task
+
+    assert service.is_busy() is False

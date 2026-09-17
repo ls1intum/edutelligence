@@ -8,6 +8,7 @@ import {
   Provider,
   UpdateProviderPayload,
 } from '../../shared/models/provider.model';
+import { Model } from '../../shared/models/model.model';
 import { Providers } from './providers';
 
 /**
@@ -33,28 +34,51 @@ const makeProvider = (overrides: Partial<Provider> = {}): Provider => ({
   ...overrides,
 });
 
+const makeModel = (id: number, name = `model-${id}`): Model => ({
+  id,
+  name,
+  description: null,
+  tags: null,
+  aliases: null,
+  weight_latency: null,
+  weight_accuracy: null,
+  weight_cost: null,
+  weight_quality: null,
+});
+
 describe('Providers', () => {
   let fixture: ComponentFixture<Providers>;
   let component: Providers;
   let addProvider: ReturnType<typeof vi.fn>;
   let updateProvider: ReturnType<typeof vi.fn>;
+  let refreshModels: ReturnType<typeof vi.fn>;
+  let modelSyncStatus: ReturnType<typeof vi.fn>;
+  let getModels: ReturnType<typeof vi.fn>;
+  let getProviderModels: ReturnType<typeof vi.fn>;
 
   const optionValues = (options: { value: string }[]): string[] => options.map((o) => o.value);
 
   beforeEach(async () => {
     addProvider = vi.fn().mockResolvedValue({});
     updateProvider = vi.fn().mockResolvedValue({});
+    refreshModels = vi.fn().mockResolvedValue({ result: 'Model refresh triggered.' });
+    modelSyncStatus = vi.fn().mockResolvedValue({ running: false });
+    getModels = vi.fn().mockResolvedValue([]);
+    getProviderModels = vi.fn().mockResolvedValue([]);
     const providerService = {
       getProviders: vi.fn().mockResolvedValue([makeProvider()]),
       addProvider,
       updateProvider,
+      refreshModels,
+      modelSyncStatus,
+      getProviderModels,
     };
 
     await TestBed.configureTestingModule({
       imports: [Providers],
       providers: [
         { provide: ProviderManagementService, useValue: providerService },
-        { provide: ModelManagementService, useValue: { getModels: vi.fn().mockResolvedValue([]) } },
+        { provide: ModelManagementService, useValue: { getModels } },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(Providers);
@@ -139,6 +163,152 @@ describe('Providers', () => {
         Array.from(s.options).some((o) => o.value === 'logosnode'),
       );
       expect(typeSelect?.value).toBe('cloud');
+    });
+  });
+
+  describe('the model refresh', () => {
+    beforeEach(() => {
+      // The first change detection (and with it ngOnInit, which fetches the
+      // model list) is otherwise scheduled outside the test's control and can
+      // land inside the fake-timer window, skewing the call counts.
+      fixture.detectChanges();
+      getModels.mockClear();
+    });
+
+    it('triggers the backend sync and stops once the pass reports done', async () => {
+      vi.useFakeTimers();
+      try {
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000);
+        await refresh;
+
+        expect(refreshModels).toHaveBeenCalledTimes(1);
+        // The pass reports idle on the first poll: one refetch, no rounds.
+        expect(modelSyncStatus).toHaveBeenCalledTimes(1);
+        expect(getModels).toHaveBeenCalledTimes(1);
+        expect(component.refreshing()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps polling while the pass is still running', async () => {
+      vi.useFakeTimers();
+      try {
+        modelSyncStatus
+          .mockResolvedValueOnce({ running: true })
+          .mockResolvedValueOnce({ running: true })
+          .mockResolvedValueOnce({ running: false });
+        getModels
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([makeModel(1)])
+          .mockResolvedValueOnce([makeModel(1), makeModel(2)]);
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000 * 2);
+        await refresh;
+
+        expect(modelSyncStatus).toHaveBeenCalledTimes(3);
+        expect(getModels).toHaveBeenCalledTimes(3);
+        expect(component.allModels().map((m) => m.id)).toEqual([1, 2]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('refetches the connections of an expanded provider', async () => {
+      vi.useFakeTimers();
+      try {
+        component.toggleExpand(component.providers()[0]!);
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000);
+        await refresh;
+
+        // One from the expansion itself, one from the refresh refetch.
+        expect(getProviderModels).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not start a second refresh while one is running', async () => {
+      vi.useFakeTimers();
+      try {
+        const first = component.refreshModels();
+        const second = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000 * 2);
+        await Promise.all([first, second]);
+
+        expect(refreshModels).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('surfaces an error when the trigger fails', async () => {
+      refreshModels.mockRejectedValueOnce(new Error('orchestrator unreachable'));
+      await component.refreshModels();
+
+      expect(component.refreshError()).toBe(true);
+      expect(component.refreshing()).toBe(false);
+      expect(modelSyncStatus).not.toHaveBeenCalled();
+      expect(getModels).not.toHaveBeenCalled();
+    });
+
+    it('retries an unreadable status within the rounds cap', async () => {
+      vi.useFakeTimers();
+      try {
+        // A failed status read is unknown, not done: the accepted sync may
+        // still be writing, so the UI polls until the cap instead of
+        // reporting completion on a transient failure (timeout, rolling
+        // deploy).
+        modelSyncStatus.mockRejectedValue(new Error('unknown endpoint'));
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(45 * 2000 + 1000);
+        await refresh;
+
+        expect(modelSyncStatus).toHaveBeenCalledTimes(45);
+        expect(getModels).toHaveBeenCalledTimes(45);
+        expect(component.refreshing()).toBe(false);
+        expect(component.refreshError()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps polling through unreadable statuses and stops on an explicit idle', async () => {
+      vi.useFakeTimers();
+      try {
+        modelSyncStatus
+          .mockRejectedValueOnce(new Error('timeout'))
+          .mockResolvedValueOnce({ running: null })
+          .mockResolvedValueOnce({ running: false });
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000 * 2);
+        await refresh;
+
+        expect(modelSyncStatus).toHaveBeenCalledTimes(3);
+        expect(getModels).toHaveBeenCalledTimes(3);
+        expect(component.refreshing()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('gives up at the rounds cap if the pass never reports done', async () => {
+      vi.useFakeTimers();
+      try {
+        modelSyncStatus.mockResolvedValue({ running: true });
+        const refresh = component.refreshModels();
+        // 45 rounds x 2 s is the component cap; the margin covers the
+        // round work after the last timer.
+        await vi.advanceTimersByTimeAsync(45 * 2000 + 1000);
+        await refresh;
+
+        expect(component.refreshing()).toBe(false);
+        expect(component.refreshError()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

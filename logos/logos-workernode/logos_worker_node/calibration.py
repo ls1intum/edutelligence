@@ -1117,7 +1117,7 @@ class CalibrationResult:
     # from-disk cold load; a deliberately cold reading (dropping the host
     # page cache) is out of scope here, and consumers must not substitute
     # this value for a from-disk cold-start constant (estimator-side
-    # consumption is tracked in #860). None when the warmup request did not
+    # consumption is tracked in ). None when the warmup request did not
     # serve: a value that never actually served a request must not pose as a
     # cold-load measurement.
     cold_load_time_s: float | None = None
@@ -3199,7 +3199,7 @@ def calibration_gpu_slice(available_gpus: int) -> list[int]:
     length equals the maximum tensor-parallel size the node supports, so the
     existing max-first TP escalation fits inside it unchanged.
 
-    Pinning the calibration to this concrete slice (issue #592) leaves the
+    Pinning the calibration to this concrete slice leaves the
     leftover GPUs (``slice_size..N-1``) free for production lanes, which would
     otherwise sit idle for the entire calibration window, and makes the VRAM
     baseline a well-defined sum over exactly the GPUs the probe uses.
@@ -3228,7 +3228,7 @@ def pin_plan_gpu_devices(plan: dict[str, Any], available_gpus: int) -> dict[str,
     unchanged: the operator's choice is authoritative. A plan left at
     "all"/blank is pinned to the node's calibration slice so the probe only
     touches that slice (``CUDA_VISIBLE_DEVICES``) and its VRAM baseline is
-    measured over a well-defined set of GPUs (issue #592).
+    measured over a well-defined set of GPUs.
     """
     if not _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
         return plan

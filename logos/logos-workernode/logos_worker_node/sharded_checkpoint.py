@@ -16,7 +16,7 @@ This module owns:
     interpreter via the standalone :mod:`logos_worker_node._sharded_convert`
     entrypoint.
 
-Conversion is triggered from two places (issue #615):
+Conversion is triggered from two places:
 
   1. right after calibration, when the calibrated TP is > 1
      (``logos_bridge._run_calibration_session``), and

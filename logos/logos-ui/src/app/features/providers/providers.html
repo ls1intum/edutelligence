@@ -8,6 +8,14 @@
       placeholder="Search providers..."
       (valueChange)="search.set($event)"
     />
+    <button type="button" class="btn-secondary" (click)="refreshModels()" [disabled]="refreshing()">
+      @if (refreshing()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      } @else {
+        <i class="pi pi-refresh" aria-hidden="true"></i>
+      }
+      Refresh
+    </button>
     <button type="button" class="btn-primary" (click)="openAddDialog()">
       <i class="pi pi-plus" aria-hidden="true"></i> Add Provider
     </button>
@@ -15,6 +23,10 @@
 
   @if (loadError()) {
     <app-error-message variant="banner" message="Failed to load providers, please refresh." />
+  }
+
+  @if (refreshError()) {
+    <app-error-message variant="banner" message="Failed to refresh models, please try again." />
   }
 
   <app-data-table
