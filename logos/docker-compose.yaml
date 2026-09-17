@@ -15,6 +15,38 @@ services:
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.secure8080.address=:8080"
+      # Per-IP rate-limit gateway (logos-rate-gateway): the public
+      # entrypoints select only its catch-all router, which checks the
+      # per-IP budget and forwards here — an entrypoint WITHOUT a published
+      # host port, reachable only from inside the compose network. Every
+      # other router in this stack hangs off it.
+      - "--entrypoints.internal8090.address=:8090"
+      # The gateway is a reverse proxy on this second hop: trust its
+      # container address so the first hop's X-Forwarded-Proto/-For survive.
+      # Without this Traefik strips them, and services lose the TLS signal
+      # (the logosnode auth/session endpoints reject non-TLS callers).
+      - "--entrypoints.internal8090.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
+      # First hop: only sources in those ranges may set X-Forwarded-For;
+      # everyone else's header is stripped before it enters the stack, so
+      # the gateway's per-IP budgeting cannot be fooled by a forged header.
+      # The default (the Docker bridges) matches no public client. A
+      # deployment fronted by an outer reverse proxy (the chair's nginx)
+      # adds that proxy's CIDR here — otherwise every client counts as
+      # that one proxy IP and the per-IP isolation is lost.
+      # Comma-delimited (e.g. "172.16.0.0/12,129.79.32.0/20"): Traefik's
+      # CLI wants commas, so a space-delimited value would leave the outer
+      # proxy untrusted (or invalidate the static config). The in-stack
+      # nginx gateway normalises commas to spaces itself, so one value
+      # serves both consumers.
+      # One list is shared with internal8090 and the gateway's real-IP
+      # configuration on purpose: the only source on internal8090 is the
+      # gateway itself (its peer list is this network and Traefik), so an
+      # outer-proxy entry there matches no reachable source; and in the
+      # gateway, real_ip_recursive resolves the client as the rightmost
+      # UNtrusted address in the chain, which is always the real client —
+      # a forged entry sits to its left and is never reached.
+      - "--entrypoints.websecure.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
+      - "--entrypoints.secure8080.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}"
@@ -43,8 +75,89 @@ services:
       # of strips — a "/api,/agent" list strips only the first match (/api)
       # and hands FastAPI /agent/... paths, which 404.
       - "traefik.http.middlewares.strip-api-agent.stripprefix.prefixes=/api/agent"
+      # Same lifecycle reason as strip-api above: the rl-* limiters are
+      # referenced by routers on THREE containers (orchestrator, webservice,
+      # agent), so they must not be owned by any one of them. When the
+      # orchestrator restarts, Traefik drops its dynamic configuration for a
+      # moment — limiters defined here stay up throughout, so the
+      # webservice/agent routes never reference a missing middleware.
+      #
+      # Per-service request limits (second layer; the first is the per-IP
+      # budget in logos-rate-gateway, see docs/deployment.md). Generous on
+      # purpose — raise via .env when a deployment needs more headroom.
+      - "traefik.http.middlewares.rl-model.ratelimit.average=${LOGOS_RATE_LIMIT_MODEL_AVG:-100}"
+      - "traefik.http.middlewares.rl-model.ratelimit.burst=${LOGOS_RATE_LIMIT_MODEL_BURST:-200}"
+      - "traefik.http.middlewares.rl-jobs.ratelimit.average=${LOGOS_RATE_LIMIT_JOBS_AVG:-50}"
+      - "traefik.http.middlewares.rl-jobs.ratelimit.burst=${LOGOS_RATE_LIMIT_JOBS_BURST:-100}"
+      - "traefik.http.middlewares.rl-admin.ratelimit.average=${LOGOS_RATE_LIMIT_ADMIN_AVG:-20}"
+      - "traefik.http.middlewares.rl-admin.ratelimit.burst=${LOGOS_RATE_LIMIT_ADMIN_BURST:-40}"
     networks:
       - internal
+      # Second hop of the per-IP rate limiting: the gateway's only peer on
+      # this network is Traefik itself (see logos-rate-gateway).
+      - ratelimit
+
+  # Front door of the stack: every public request (443, 8080) lands on this
+  # nginx first, which enforces per-IP request budgets — something Traefik's
+  # rateLimit middleware cannot do, it counts per service, not per client.
+  # The public entrypoints select only the gateway's catch-all router; the
+  # gateway then forwards to Traefik's internal8090 entrypoint, where all
+  # the other routers (and their per-service limits) apply as a second
+  # layer. See logos/rate-limit-gateway/nginx.conf and docs/deployment.md.
+  logos-rate-gateway:
+    # Configuration is baked into the image (not bind-mounted): a
+    # deployment copies only the compose file to its VM, so a mount of
+    # ./rate-limit-gateway/... would resolve to a missing path there.
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-rate-gateway:${IMAGE_TAG:-latest}
+    container_name: logos-rate-gateway
+    restart: unless-stopped
+    depends_on:
+      - traefik
+    # Validate the configuration and probe the local listener.
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t && wget -q --spider http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      # Per-IP budgets: requests/second and burst per client IP. Generous —
+      # this is a flood backstop, not a QoS knob. Raise in .env when a
+      # deployment legitimately needs more headroom per IP.
+      LOGOS_IP_RATE_LIMIT_AVG: "${LOGOS_IP_RATE_LIMIT_AVG:-30}"
+      LOGOS_IP_RATE_LIMIT_BURST: "${LOGOS_IP_RATE_LIMIT_BURST:-60}"
+      LOGOS_IP_CONTROL_RATE_LIMIT_AVG: "${LOGOS_IP_CONTROL_RATE_LIMIT_AVG:-5}"
+      LOGOS_IP_CONTROL_RATE_LIMIT_BURST: "${LOGOS_IP_CONTROL_RATE_LIMIT_BURST:-20}"
+      # IPs/CIDRs freed from the limits, space-separated (IPv4 or CIDR), e.g.
+      # a corporate egress or the benchmark rig. Empty = no whitelist.
+      # Malformed entries are skipped with a log line, they do not crash the
+      # gateway.
+      LOGOS_RATE_LIMIT_WHITELISTED_IPS: "${LOGOS_RATE_LIMIT_WHITELISTED_IPS:-}"
+      # Which source ranges may set X-Forwarded-For (the Docker bridge
+      # ranges; extend if your compose networks sit elsewhere).
+      LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS: "${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
+      # Where to forward: Traefik's internal entrypoint (no host port).
+      LOGOS_GATEWAY_UPSTREAM: "${LOGOS_GATEWAY_UPSTREAM:-traefik:8090}"
+    expose:
+      - "80"
+    labels:
+      - "traefik.enable=true"
+      # The one router left on the public entrypoints: catch-all, so 443 and
+      # 8080 funnel every request through the per-IP budget first. TLS is
+      # terminated here (once, for all paths), and re-signalled to the second
+      # hop via X-Forwarded-Proto — see upstream.conf.
+      - "traefik.http.routers.public-rate-gateway.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.public-rate-gateway.entrypoints=websecure,secure8080"
+      - "traefik.http.routers.public-rate-gateway.tls=true"
+      - "traefik.http.routers.public-rate-gateway.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.public-rate-gateway.service=logos-rate-gateway-svc"
+      - "traefik.http.routers.public-rate-gateway.priority=100"
+      - "traefik.http.services.logos-rate-gateway-svc.loadbalancer.server.port=80"
+    networks:
+      # Deliberately NOT on `internal`: the gateway's only peer must be
+      # Traefik, so it cannot reach the database, Keycloak, or the service
+      # APIs on its own. Its container address on this network is what the
+      # internal8090 entrypoint trusts (LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS).
+      - ratelimit
 
   logos-orchestrator:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos:${IMAGE_TAG:-latest}
@@ -96,45 +209,52 @@ services:
       HF_TOKEN: "${HF_TOKEN:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      # API docs (/docs, /redoc, /openapi.json) publish the full endpoint
+      # map, internal paths included — they stay off unless a deployment
+      # explicitly opts in (the dev compose does).
+      LOGOS_DOCS_ENABLED: "${LOGOS_DOCS_ENABLED:-}"
+      # Per-IP rate limits: /health (no credential, DB-backed) and repeated
+      # auth failures on /v1/models, /v1/chat/completions. See logos.rate_limiter.
+      LOGOS_PUBLIC_ENDPOINT_RPM: "${LOGOS_PUBLIC_ENDPOINT_RPM:-60}"
+      LOGOS_AUTH_FAILURE_RPM: "${LOGOS_AUTH_FAILURE_RPM:-20}"
       TZ: "${TZ:-Europe/Berlin}"
     expose:
       - "8080"
     labels:
       - "traefik.enable=true"
 
+      # The rl-* limiters these routers reference are defined on the
+      # Traefik container (see there) so they outlive any single service's
+      # restarts.
+
       # ── User-facing routes (ports 443 + 8080) ──
 
       # === Routing: /v1 ===
       - "traefik.http.routers.logos-orchestrator-v1.rule=PathPrefix(`/v1`)"
-      - "traefik.http.routers.logos-orchestrator-v1.entrypoints=websecure,secure8080"
-      - "traefik.http.routers.logos-orchestrator-v1.tls=true"
-      - "traefik.http.routers.logos-orchestrator-v1.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-v1.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-v1.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-v1.middlewares=rl-model"
       - "traefik.http.routers.logos-orchestrator-v1.priority=100"
 
       # === Routing: /openai ===
       - "traefik.http.routers.logos-orchestrator-openai.rule=PathPrefix(`/openai`)"
-      - "traefik.http.routers.logos-orchestrator-openai.entrypoints=websecure,secure8\
-        080"
-      - "traefik.http.routers.logos-orchestrator-openai.tls=true"
-      - "traefik.http.routers.logos-orchestrator-openai.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-openai.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-openai.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-openai.middlewares=rl-model"
       - "traefik.http.routers.logos-orchestrator-openai.priority=100"
 
       # === Routing: /jobs ===
       - "traefik.http.routers.logos-orchestrator-jobs.rule=PathPrefix(`/jobs`)"
-      - "traefik.http.routers.logos-orchestrator-jobs.entrypoints=websecure,secure8080"
-      - "traefik.http.routers.logos-orchestrator-jobs.tls=true"
-      - "traefik.http.routers.logos-orchestrator-jobs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-jobs.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-jobs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-jobs.middlewares=rl-jobs"
       - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
 
       # === Routing: /health ===
       - "traefik.http.routers.logos-orchestrator-health.rule=PathPrefix(`/health`)"
-      - "traefik.http.routers.logos-orchestrator-health.entrypoints=websecure,secure8080"
-      - "traefik.http.routers.logos-orchestrator-health.tls=true"
-      - "traefik.http.routers.logos-orchestrator-health.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-health.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-health.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-health.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-health.priority=100"
 
       # ── Admin routes ──
@@ -143,61 +263,52 @@ services:
       # router priority (UI catch-all 0 < orchestrator 100 < webservice 200).
 
       # === Routing: /api (all UI-internal endpoints) ===
-      # Backend strips the `/api` prefix, so adding a new admin endpoint
+      # application server strips the `/api` prefix, so adding a new admin endpoint
       # requires no change here — just a new FastAPI route under any path.
+      # rl-admin, not rl-model: the gateway classifies /api as control-plane
+      # traffic, so the second layer must carry the control-plane budget
+      # too — otherwise the aggregate /api cap here (100 rps) would far
+      # exceed the one every other /api router applies (20 rps).
       - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
-      - "traefik.http.routers.logos-orchestrator-api.entrypoints=websecure"
-      - "traefik.http.routers.logos-orchestrator-api.tls=true"
-      - "traefik.http.routers.logos-orchestrator-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-api.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-api.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-api.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-api.priority=100"
 
       # === Routing: /logosdb/providers/logosnode (workernode protocol) ===
       - "traefik.http.routers.logos-orchestrator-logosnode.rule=PathPrefix(`/logosdb/p\
         roviders/logosnode`)"
-      - "traefik.http.routers.logos-orchestrator-logosnode.entrypoints=websecure"
-      - "traefik.http.routers.logos-orchestrator-logosnode.tls=true"
-      - "traefik.http.routers.logos-orchestrator-logosnode.tls.certresolver=letsencry\
-        pt"
+      - "traefik.http.routers.logos-orchestrator-logosnode.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-logosnode.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-logosnode.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-logosnode.priority=100"
 
       # === Routing: /docs ===
       - "traefik.http.routers.logos-orchestrator-docs.rule=PathPrefix(`/docs`) ||
-        PathPrefix(`/openapi.json`)"
-      - "traefik.http.routers.logos-orchestrator-docs.entrypoints=websecure"
-      - "traefik.http.routers.logos-orchestrator-docs.tls=true"
-      - "traefik.http.routers.logos-orchestrator-docs.tls.certresolver=letsencrypt"
+        PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`)"
+      - "traefik.http.routers.logos-orchestrator-docs.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-docs.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-docs.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-docs.priority=100"
 
       # === Routing: /metrics (Prometheus) ===
       - "traefik.http.routers.logos-orchestrator-metrics.rule=PathPrefix(`/metrics`)"
-      - "traefik.http.routers.logos-orchestrator-metrics.entrypoints=websecure"
-      - "traefik.http.routers.logos-orchestrator-metrics.tls=true"
-      - "traefik.http.routers.logos-orchestrator-metrics.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-metrics.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-metrics.service=logos-orchestrator"
+      - "traefik.http.routers.logos-orchestrator-metrics.middlewares=rl-admin"
       - "traefik.http.routers.logos-orchestrator-metrics.priority=100"
-
-      # === Routing: /api/logosdb/scheduler_state ===
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.entrypoints=websecure"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.tls=true"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.middlewares=strip-api"
-      - "traefik.http.routers.logos-orchestrator-scheduler-state.priority=201"
 
       # === Routing: /api/logosdb/providers/logosnode (UI → worker admin actions) ===
       # Must outrank the webservice's /api/logosdb catch-all (priority 200):
       # calibrate_uncalibrated/status/lanes/etc. live in the orchestrator,
       # which holds the worker registry — the webservice would 404 them.
       - "traefik.http.routers.logos-orchestrator-api-logosnode.rule=PathPrefix(`/api/logosdb/providers/logosnode`)"
-      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=websecure"
-      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls=true"
-      - "traefik.http.routers.logos-orchestrator-api-logosnode.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.entrypoints=internal8090"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api"
+      # Higher-priority routers serving /api carry the limiter alongside
+      # their strip middleware — a limit on the priority-100 fallback alone
+      # would be bypassed by every request selected by these rules.
+      - "traefik.http.routers.logos-orchestrator-api-logosnode.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.logos-orchestrator-api-logosnode.priority=201"
 
       # Service-Port
@@ -220,6 +331,12 @@ services:
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      # Per-IP rate limits: /info (no credential) and repeated auth failures on
+      # /logosdb/get_model_health. See application.properties (logos.rate-limiting.*).
+      LOGOS_RATE_LIMITING_ENABLED: "${LOGOS_RATE_LIMITING_ENABLED:-true}"
+      LOGOS_RATE_LIMIT_PUBLIC_RPM: "${LOGOS_RATE_LIMIT_PUBLIC_RPM:-60}"
+      LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM: "${LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM:-20}"
+      LOGOS_RATE_LIMIT_TRUSTED_PROXY_CIDRS: "${LOGOS_RATE_LIMIT_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
       # Keycloak (also served back to the UI via /api/info)
       KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:?KEYCLOAK_ISSUER_URI must be set}"
@@ -257,20 +374,16 @@ services:
 
       # === Routing: /api/me, /api/users, /api/teams, /api/info ===
       - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`) || Path(`/api/info`)"
-      - "traefik.http.routers.webservice-identity.entrypoints=websecure"
-      - "traefik.http.routers.webservice-identity.tls=true"
-      - "traefik.http.routers.webservice-identity.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-identity.entrypoints=internal8090"
       - "traefik.http.routers.webservice-identity.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-identity.middlewares=strip-api"
+      - "traefik.http.routers.webservice-identity.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-identity.priority=200"
 
       # === Routing: /api/logosdb ===
       - "traefik.http.routers.webservice-config.rule=PathPrefix(`/api/logosdb`)"
-      - "traefik.http.routers.webservice-config.entrypoints=websecure"
-      - "traefik.http.routers.webservice-config.tls=true"
-      - "traefik.http.routers.webservice-config.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-config.entrypoints=internal8090"
       - "traefik.http.routers.webservice-config.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-config.middlewares=strip-api"
+      - "traefik.http.routers.webservice-config.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-config.priority=200"
 
       # === Routing: the operator-facing logosnode admin actions ===
@@ -283,30 +396,24 @@ services:
       # and to both services but not to this line is still routed straight to the
       # orchestrator — which does not serve Spring's paths and answers 404. That
       # is what happened to lanes/add: present end to end, unreachable in prod.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
-      - "traefik.http.routers.webservice-logosnode-admin.entrypoints=websecure"
-      - "traefik.http.routers.webservice-logosnode-admin.tls=true"
-      - "traefik.http.routers.webservice-logosnode-admin.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.webservice-logosnode-admin.entrypoints=internal8090"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-logosnode-admin.priority=202"
 
       # === Routing: /api/admin ===
       - "traefik.http.routers.webservice-admin.rule=PathPrefix(`/api/admin`)"
-      - "traefik.http.routers.webservice-admin.entrypoints=websecure"
-      - "traefik.http.routers.webservice-admin.tls=true"
-      - "traefik.http.routers.webservice-admin.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-admin.entrypoints=internal8090"
       - "traefik.http.routers.webservice-admin.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-admin.middlewares=strip-api"
+      - "traefik.http.routers.webservice-admin.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-admin.priority=200"
 
       # === Routing: /api/ws/stats, /api/ws/stats/v2 (WebSocket) ===
       - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
-      - "traefik.http.routers.webservice-ws.entrypoints=websecure"
-      - "traefik.http.routers.webservice-ws.tls=true"
-      - "traefik.http.routers.webservice-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.webservice-ws.entrypoints=internal8090"
       - "traefik.http.routers.webservice-ws.service=logos-webservice-svc"
-      - "traefik.http.routers.webservice-ws.middlewares=strip-api"
+      - "traefik.http.routers.webservice-ws.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-ws.priority=200"
 
       # Service-Port
@@ -465,11 +572,9 @@ services:
 
       # === Routing: /api/agent ===
       - "traefik.http.routers.agent-api.rule=PathPrefix(`/api/agent`)"
-      - "traefik.http.routers.agent-api.entrypoints=websecure"
-      - "traefik.http.routers.agent-api.tls=true"
-      - "traefik.http.routers.agent-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.agent-api.entrypoints=internal8090"
       - "traefik.http.routers.agent-api.service=logos-agent-svc"
-      - "traefik.http.routers.agent-api.middlewares=strip-api-agent"
+      - "traefik.http.routers.agent-api.middlewares=strip-api-agent,rl-admin"
       - "traefik.http.routers.agent-api.priority=200"
 
       - "traefik.http.services.logos-agent-svc.loadbalancer.server.port=8082"
@@ -530,9 +635,7 @@ services:
       # Override: set LOGOS_DOMAIN in .env
       - "traefik.http.routers.internal-ui.rule=Host(`${LOGOS_DOMAIN:-localhost}\
         `) && PathPrefix(`/`)"
-      - "traefik.http.routers.internal-ui.entrypoints=websecure"
-      - "traefik.http.routers.internal-ui.tls=true"
-      - "traefik.http.routers.internal-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.internal-ui.entrypoints=internal8090"
       - "traefik.http.routers.internal-ui.service=internal-ui-svc"
       - "traefik.http.routers.internal-ui.priority=0"
 
@@ -554,6 +657,11 @@ volumes:
 
 networks:
   internal:
+    driver: bridge
+  # Second hop of the per-IP rate limiting: only Traefik and the rate
+  # gateway share it, so the gateway — which sees every public request —
+  # cannot reach any other service on its own.
+  ratelimit:
     driver: bridge
   # The untrusted agent phase lives here. It is *internal*: Docker gives
   # containers on it no external egress at all, so the only reachable peer

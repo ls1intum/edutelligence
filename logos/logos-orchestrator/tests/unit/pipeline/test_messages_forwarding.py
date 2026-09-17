@@ -21,6 +21,7 @@ AZURE_CHAT_ENDPOINT = (
 AZURE_RESPONSES_ENDPOINT = (
     "https://ase-se01.openai.azure.com/openai/deployments/" "gpt-56-luna/responses?api-version=2025-04-01-preview"
 )
+AZURE_ANTHROPIC_ENDPOINT = "https://ase-se01.openai.azure.com/openai/deployments/" "claude-opus-5/anthropic/v1/messages"
 
 MESSAGES_BODY = {
     "model": "gpt-4.1-nano",
@@ -114,8 +115,63 @@ async def test_azure_reasoning_deployment_uses_the_responses_dialect(monkeypatch
         endpoint=AZURE_RESPONSES_ENDPOINT,
     )
     assert context.forward_url == "https://ase-se01.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
-    assert context.azure_responses_deployment == "gpt-56-luna"
+    assert context.azure_body_deployment == "gpt-56-luna"
     assert context.anthropic_dialect is UpstreamDialect.RESPONSES
+
+
+@pytest.mark.asyncio
+async def test_azure_claude_deployment_collapses_to_the_anthropic_route(monkeypatch):
+    # The stored deployment-scoped endpoint is collapsed to Azure's real
+    # route, which names no deployment — the id goes into the body instead.
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="azure",
+        model_name="claude-opus-5",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint=AZURE_ANTHROPIC_ENDPOINT,
+    )
+    assert context.forward_url == "https://ase-se01.openai.azure.com/anthropic/v1/messages"
+    assert context.azure_body_deployment == "claude-opus-5"
+    assert context.anthropic_dialect is UpstreamDialect.NATIVE
+
+
+@pytest.mark.asyncio
+async def test_azure_claude_deployment_authenticates_anthropic_style(monkeypatch):
+    # The route reads x-api-key, not the api-key header an Azure deployment
+    # conventionally carries, and requires anthropic-version on every request.
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="azure",
+        model_name="claude-opus-5",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint=AZURE_ANTHROPIC_ENDPOINT,
+        auth_name="api-key",
+    )
+    headers, _ = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
+    assert headers["x-api-key"] == "sk-secret"
+    assert "api-key" not in headers
+    assert headers["anthropic-version"]
+
+
+@pytest.mark.asyncio
+async def test_azure_claude_deployment_body_model_is_rewritten_to_the_deployment(monkeypatch):
+    # Azure resolves the deployment from the body's "model", which must be the
+    # deployment id — a deployment renamed during setup (id != served model)
+    # would 404 on the catalogue name. Native means the rest of the body is
+    # untouched.
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="azure",
+        model_name="claude-opus-5",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint="https://ase-se01.openai.azure.com/openai/deployments/claude-prod/anthropic/v1/messages",
+    )
+    _, payload = ContextResolver.prepare_headers_and_payload(context, {**MESSAGES_BODY, "model": "claude-opus-5"})
+    assert payload["model"] == "claude-prod"
+    assert payload["system"] == "Be brief."
 
 
 @pytest.mark.asyncio
@@ -228,3 +284,95 @@ async def test_other_cloud_providers_get_no_protocol_headers(monkeypatch):
     headers, _ = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
     assert "anthropic-version" not in headers
     assert headers["Authorization"] == "Bearer sk-secret"
+
+
+# ── the mirror direction: chat/completions against a Messages-only upstream ──
+
+CHAT_BODY = {
+    "model": "claude-opus-5",
+    "messages": [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+}
+
+
+@pytest.mark.asyncio
+async def test_a_claude_deployment_takes_a_chat_request_as_a_messages_call(monkeypatch):
+    """The failure this pins down, from #1040.
+
+    Foundry serves Claude on /anthropic/v1/messages and has no OpenAI route at
+    all, so an inbound /v1/chat/completions used to be posted there verbatim:
+    a plain prompt happened to parse and came back as an Anthropic message,
+    while anything OpenAI-specific was a 400.
+    """
+    context = await _resolve(
+        monkeypatch,
+        "v1/chat/completions",
+        cloud_provider_type="azure",
+        model_name="claude-opus-5",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint=AZURE_ANTHROPIC_ENDPOINT,
+    )
+    assert context.messages_upstream is True
+    # Unchanged by this direction: the upstream dialect only describes an
+    # inbound Messages request, and this one was not.
+    assert context.anthropic_dialect is None
+
+    headers, payload = ContextResolver.prepare_headers_and_payload(
+        context, {**CHAT_BODY, "response_format": {"type": "json_object"}, "seed": 7}
+    )
+    assert payload["system"] == "Be brief."
+    assert payload["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert payload["max_tokens"] > 0
+    assert headers["anthropic-version"]
+    # Nothing OpenAI-only reaches the upstream: an unknown field is a 400
+    # there, and the whole point is that the client's request goes through.
+    assert set(payload) == {"model", "messages", "system", "max_tokens"}
+    # Azure resolves the deployment from the body, and that rewrite has to
+    # survive the translation.
+    assert payload["model"] == "claude-opus-5"
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_provider_is_addressed_on_messages_for_a_chat_request(monkeypatch):
+    # The base_url branch: the path has to follow the same decision as the
+    # translation, or the body and the URL disagree.
+    context = await _resolve(
+        monkeypatch,
+        "v1/chat/completions",
+        cloud_provider_type="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        api_key="sk-ant",
+    )
+    assert context.forward_url == "https://api.anthropic.com/v1/messages"
+    assert context.messages_upstream is True
+
+
+@pytest.mark.asyncio
+async def test_upstreams_that_serve_chat_completions_are_left_alone(monkeypatch):
+    # An OpenAI-shaped upstream needs nothing translated on this path, and
+    # neither does vLLM — it serves both surfaces.
+    context = await _resolve(monkeypatch, "v1/chat/completions")
+    assert context.messages_upstream is False
+    _, payload = ContextResolver.prepare_headers_and_payload(context, CHAT_BODY)
+    assert payload == CHAT_BODY
+
+    class DummyRegistry:
+        async def select_lane_for_model(self, provider_id, model_name):  # noqa: ARG002
+            return {"lane_id": "lane-1"}
+
+    with _patched_db(monkeypatch, _auth_info(provider_type="logosnode", cloud_provider_type=None, api_key=None)):
+        worker = await ContextResolver(logosnode_registry=DummyRegistry()).resolve_context(35, 4, "v1/chat/completions")
+    assert worker.messages_upstream is False
+
+
+@pytest.mark.asyncio
+async def test_a_logos_upstream_keeps_its_own_chat_route(monkeypatch):
+    # A Logos instance serves both surfaces, so translating would cost
+    # fidelity for nothing.
+    context = await _resolve(
+        monkeypatch,
+        "v1/chat/completions",
+        cloud_provider_type="logos",
+        base_url="https://logos.aet.cit.tum.de/v1",
+    )
+    assert context.messages_upstream is False
+    assert context.forward_url == "https://logos.aet.cit.tum.de/v1/chat/completions"

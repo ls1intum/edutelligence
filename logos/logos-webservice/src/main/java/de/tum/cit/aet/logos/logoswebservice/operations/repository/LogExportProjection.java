@@ -3,7 +3,7 @@ package de.tum.cit.aet.logos.logoswebservice.operations.repository;
 import java.time.Instant;
 
 /**
- * One request trace of the team export (issue #667).
+ * One request trace of the team export.
  *
  * Every row carries the lifecycle metadata; only the FULL-privacy rows
  * (the ones the requester consented to) carry non-null content in the

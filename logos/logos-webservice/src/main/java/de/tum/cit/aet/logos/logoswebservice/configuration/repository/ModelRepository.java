@@ -109,9 +109,16 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
         FROM models m
         -- A model can be served by several providers, each with its own catalog
         -- price. Show the price for the provider the model was most recently
-        -- routed to (idx_log_entry_model_id_timestamp_request makes this a single
-        -- index seek); a never-used model falls through to a stable provider_id
+        -- routed to; a never-used model falls through to a stable provider_id
         -- tiebreak so the figure never flips between equal valid_from rows.
+        --
+        -- idx_log_entry_model_provider_recent (migration 036) is what makes this
+        -- a seek. It has to carry provider_id, because the IS NOT NULL below is
+        -- part of the predicate: without that column the planner cannot answer
+        -- the lateral from a (model_id, timestamp_request) index and falls back
+        -- to one with model_id in third position, which is not seekable on
+        -- equality. That cost 195 ms per model on production - 9.5 s for one
+        -- page load - so do not drop the INCLUDE.
         LEFT JOIN LATERAL (
             SELECT le.provider_id
             FROM log_entry le

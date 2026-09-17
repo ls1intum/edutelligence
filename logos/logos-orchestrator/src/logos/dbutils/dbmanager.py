@@ -782,7 +782,8 @@ class DBManager:
 
         original_provider_type = provider_type or ""
 
-        # Ollama is no longer a provider type — every worker lane runs vLLM.
+        # The legacy local-provider type is no longer supported — every worker
+        # lane runs the current engine.
         # Refuse it explicitly instead of letting it through as an unknown
         # type the DB enum would reject with a raw constraint error.
         if original_provider_type.strip().lower() == "ollama":

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Track in-flight requests: request_id → (start_time, model, provider).
 # start_time feeds the duration histogram; model/provider are the label
-# values for REQUEST_DURATION_SECONDS / COLD_STARTS_TOTAL (see #738) —
+# values for REQUEST_DURATION_SECONDS / COLD_STARTS_TOTAL  —
 # "unknown" is only the pre-selection fallback.
 _request_states: Dict[str, tuple[float, str, str]] = {}
 

@@ -103,6 +103,23 @@ class TestReadHostMemoryMb:
             assert metal.read_host_memory_mb() is None
 
 
+class TestReadWiredMemoryMb:
+    def test_reads_wired_pages_in_mib(self) -> None:
+        with patch.object(metal, "read_vm_stat", return_value=metal.parse_vm_stat(VM_STAT_SAMPLE)):
+            result = metal.read_wired_memory_mb()
+        assert result == pytest.approx(218557 * PAGE / 1024**2, abs=1)
+
+    def test_returns_none_when_vm_stat_fails(self) -> None:
+        with patch.object(metal, "read_vm_stat", return_value=None):
+            assert metal.read_wired_memory_mb() is None
+
+    def test_returns_none_without_a_wired_field(self) -> None:
+        stats = metal.parse_vm_stat(VM_STAT_SAMPLE)
+        del stats["Pages wired down"]
+        with patch.object(metal, "read_vm_stat", return_value=stats):
+            assert metal.read_wired_memory_mb() is None
+
+
 class TestReadSwapMb:
     def test_parses_sysctl_swapusage(self) -> None:
         raw = "total = 2048.00M  used = 512.25M  free = 1535.75M  (encrypted)"

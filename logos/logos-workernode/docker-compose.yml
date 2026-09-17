@@ -79,7 +79,7 @@ services:
       - ./data:/app/data
       # Model volume — backward-compatible source resolution (kept for one
       # release): LOGOS_MODELS_MOUNT → legacy OLLAMA_MODELS_MOUNT → the
-      # pre-existing `ollama-models` named volume. In-place upgrades keep
+      # the pre-existing model named volume. In-place upgrades keep
       # their cached model weights (the legacy env var / volume still
       # resolves); fresh deployments set LOGOS_MODELS_MOUNT (.env.example).
       - ${LOGOS_MODELS_MOUNT:-${OLLAMA_MODELS_MOUNT:-ollama-models}}:/usr/share/logos/models
@@ -157,7 +157,7 @@ services:
       - ./data:/app/data
       # Model volume — backward-compatible source resolution (kept for one
       # release): LOGOS_MODELS_MOUNT → legacy OLLAMA_MODELS_MOUNT → the
-      # pre-existing `ollama-models` named volume. In-place upgrades keep
+      # the pre-existing model named volume. In-place upgrades keep
       # their cached model weights (the legacy env var / volume still
       # resolves); fresh deployments set LOGOS_MODELS_MOUNT (.env.example).
       - ${LOGOS_MODELS_MOUNT:-${OLLAMA_MODELS_MOUNT:-ollama-models}}:/usr/share/logos/models
@@ -169,7 +169,7 @@ services:
         tmpfs:
           size: ${TMPFS_SIZE:-0}
 
-# `ollama-models` is the pre-upgrade volume name — kept for one release so
+# The pre-upgrade model volume name is kept for one release so
 # in-place upgrades resolve to the volume that already holds the cached
 # weights (see the mount comment above).
 volumes:

@@ -127,6 +127,22 @@ def test_azure_responses_route_ignores_chat_completions():
     assert ContextResolver._azure_responses_route(AZURE_ENDPOINT) == (None, None)
 
 
+def test_azure_anthropic_route_collapses_and_extracts_deployment():
+    # Deployment-scoped Anthropic-Messages URL -> real /anthropic/v1/messages
+    # route + the deployment id the body "model" must be rewritten to.
+    url = "https://ase-se01.openai.azure.com/openai/deployments/claude-opus-5/anthropic/v1/messages"
+    real_url, deployment = ContextResolver._azure_anthropic_route(url)
+    assert real_url == "https://ase-se01.openai.azure.com/anthropic/v1/messages"
+    assert deployment == "claude-opus-5"
+
+
+def test_azure_anthropic_route_ignores_other_operations():
+    assert ContextResolver._azure_anthropic_route(AZURE_ENDPOINT) == (None, None)
+    assert ContextResolver._azure_responses_route(
+        "https://ase-se01.openai.azure.com/openai/deployments/claude-opus-5/anthropic/v1/messages"
+    ) == (None, None)
+
+
 def test_prepare_payload_rewrites_model_for_azure_responses():
     # The client addresses the served name (gpt-5.1); Azure /responses needs the
     # deployment id (gpt-4o) in the body to resolve the deployment.
@@ -139,7 +155,7 @@ def test_prepare_payload_rewrites_model_for_azure_responses():
         auth_header="api-key",
         auth_value="secret",
         model_name="gpt-5.1",
-        azure_responses_deployment="gpt-4o",
+        azure_body_deployment="gpt-4o",
     )
     _, payload = ContextResolver.prepare_headers_and_payload(context, {"model": "gpt-5.1", "input": "hi"})
     assert payload["model"] == "gpt-4o"

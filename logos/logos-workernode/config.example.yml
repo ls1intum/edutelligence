@@ -60,8 +60,8 @@ worker:
   # Persistent model store directory (the deployment's model volume). Holds
   # the HuggingFace model store that vLLM lanes load from. Also the default
   # root for the worker's caches when cache_path below is empty.
-  # Backward compatibility: an Ollama-era config left on the old container
-  # path (/usr/share/ollama/.ollama/models) is auto-translated to this path
+  # Backward compatibility: a legacy config left on the old container path
+  # is auto-translated to this path
   # at load time (with a warning) — no manual edit required, but prefer
   # updating the config file itself.
   models_path: /usr/share/logos/models
@@ -339,7 +339,7 @@ engines:
 #   model: str (required)        — HuggingFace Hub ID.
 #   vllm: bool                   — always true; kept for compatibility with
 #                                  existing configs. Explicitly setting it to
-#                                  false is rejected (the Ollama engine was
+#                                  false is rejected (the legacy engine was
 #                                  removed).
 #   lane_id: str                 — stable identifier for this lane. Defaults to
 #                                  the model name. Set explicitly when running

@@ -13,9 +13,7 @@ import org.springframework.stereotype.Service;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelBreakdownProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ModelTimeSeriesProjection;
-import de.tum.cit.aet.logos.logoswebservice.operations.repository.QueueDepthProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogTotalsProjection;
-import de.tum.cit.aet.logos.logoswebservice.operations.repository.RuntimeByColdStartProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ScopeOptionProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.StatusCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TimeSeriesProjection;
@@ -24,6 +22,9 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.TimeSeriesProj
 public class RequestLogStatsService {
 
     private static final int[] NICE_BUCKETS = {60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400};
+
+    /** Below this the hourly rollup has nothing to offer; see {@code useRollup}. */
+    private static final int SECONDS_PER_HOUR = 3600;
 
     private final LogEntryRepository logEntryRepository;
 
@@ -59,24 +60,23 @@ public class RequestLogStatsService {
         Timestamp startTs = Timestamp.from(startDt.toInstant());
         Timestamp endTs   = Timestamp.from(endDt.toInstant());
 
-        String lastEventTs = queryLastEventTs(startTs, endTs, userId, teamId);
+        // The hourly rollup cannot express a bucket shorter than an hour. Those
+        // ranges are short enough that idx_log_entry_effective_ts serves them
+        // from log_entry directly, which is what useRollup = false selects.
+        boolean useRollup = bucketSeconds >= SECONDS_PER_HOUR;
+
         Map<String, Object> totals = queryTotals(startTs, endTs, userId, teamId);
         Map<String, Integer> statusCounts = queryStatusCounts(startTs, endTs, userId, teamId);
         List<Map<String, Object>> modelBreakdown = queryModelBreakdown(startTs, endTs, userId, teamId);
-        List<Map<String, Object>> timeSeries = queryTimeSeries(startTs, endTs, bucketSeconds, userId, teamId);
-        List<Map<String, Object>> modelTimeSeries = queryModelTimeSeries(startTs, endTs, bucketSeconds, userId, teamId);
-        Map<String, Object> queueDepth = queryQueueDepth(startTs, endTs, userId, teamId);
-        List<Map<String, Object>> runtimeByColdStart = queryRuntimeByColdStart(startTs, endTs, userId, teamId);
+        List<Map<String, Object>> timeSeries = queryTimeSeries(startTs, endTs, bucketSeconds, useRollup, userId, teamId);
+        List<Map<String, Object>> modelTimeSeries = queryModelTimeSeries(startTs, endTs, bucketSeconds, useRollup, userId, teamId);
 
         Map<String, Object> stats = new LinkedHashMap<>();
-        stats.put("lastEventTs", lastEventTs);
         stats.put("totals", totals);
         stats.put("statusCounts", statusCounts);
         stats.put("modelBreakdown", modelBreakdown);
         stats.put("timeSeries", timeSeries);
         stats.put("modelTimeSeries", modelTimeSeries);
-        stats.put("queueDepth", queueDepth);
-        stats.put("runtimeByColdStart", runtimeByColdStart);
 
         Map<String, Object> range = new LinkedHashMap<>();
         range.put("start", startDt.toInstant().toString());
@@ -130,12 +130,6 @@ public class RequestLogStatsService {
             .toList();
     }
 
-    private String queryLastEventTs(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
-        var result = logEntryRepository.findLastEventTs(start, end, userId, teamId);
-        java.time.Instant t = result != null ? result.getLastTs() : null;
-        return t != null ? t.toString() : null;
-    }
-
     private Map<String, Object> queryTotals(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
         RequestLogTotalsProjection p = logEntryRepository.findTotals(start, end, userId, teamId);
         Map<String, Object> m = new LinkedHashMap<>();
@@ -176,8 +170,9 @@ public class RequestLogStatsService {
             .toList();
     }
 
-    private List<Map<String, Object>> queryTimeSeries(Timestamp start, Timestamp end, int bucketSeconds, Integer userId, Integer teamId) {
-        return logEntryRepository.findTimeSeries(start, end, bucketSeconds, userId, teamId).stream()
+    private List<Map<String, Object>> queryTimeSeries(Timestamp start, Timestamp end, int bucketSeconds,
+                                                      boolean useRollup, Integer userId, Integer teamId) {
+        return logEntryRepository.findTimeSeries(start, end, bucketSeconds, useRollup, userId, teamId).stream()
             .filter(p -> p.getBucketTs() != null)
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -187,15 +182,15 @@ public class RequestLogStatsService {
                 m.put("local", p.getLocal());
                 m.put("total", p.getTotal());
                 m.put("avgRunSeconds", p.getAvgRunSeconds());
-                m.put("avgVram", p.getAvgVram());
                 return m;
             })
             .toList();
     }
 
-    private List<Map<String, Object>> queryModelTimeSeries(Timestamp start, Timestamp end, int bucketSeconds, Integer userId, Integer teamId) {
+    private List<Map<String, Object>> queryModelTimeSeries(Timestamp start, Timestamp end, int bucketSeconds,
+                                                           boolean useRollup, Integer userId, Integer teamId) {
         List<Map<String, Object>> result = new ArrayList<>();
-        for (ModelTimeSeriesProjection p : logEntryRepository.findModelTimeSeries(start, end, bucketSeconds, userId, teamId)) {
+        for (ModelTimeSeriesProjection p : logEntryRepository.findModelTimeSeries(start, end, bucketSeconds, useRollup, userId, teamId)) {
             if (p.getBucketTs() == null) continue;
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("timestamp", (long) (double) p.getBucketTs() * 1000L);
@@ -207,27 +202,7 @@ public class RequestLogStatsService {
         return result;
     }
 
-    private Map<String, Object> queryQueueDepth(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
-        QueueDepthProjection p = logEntryRepository.findQueueDepth(start, end, userId, teamId);
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("avgEnqueueDepth", p != null ? p.getAvgEnqueue() : null);
-        m.put("avgScheduleDepth", p != null ? p.getAvgSchedule() : null);
-        m.put("p95EnqueueDepth", p != null ? p.getP95Enqueue() : null);
-        m.put("p95ScheduleDepth", p != null ? p.getP95Schedule() : null);
-        return m;
-    }
 
-    private List<Map<String, Object>> queryRuntimeByColdStart(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
-        return logEntryRepository.findRuntimeByColdStart(start, end, userId, teamId).stream()
-            .map(p -> {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("type", p.getKind());
-                m.put("avgRunSeconds", p.getAvgRunSeconds());
-                m.put("count", p.getCount());
-                return m;
-            })
-            .toList();
-    }
 
     static int chooseBucketSeconds(long durationSeconds, int targetBuckets) {
         double rawBucket = Math.max((double) durationSeconds / targetBuckets, 60);
