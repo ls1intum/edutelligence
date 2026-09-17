@@ -30,7 +30,7 @@ dependencies = [
 
 [tool.poetry.group.dev.dependencies]
 black = "26.5.1"
-flake8 = "7.1.2"
+flake8 = "7.3.0"
 
 [virtualenvs]
 create = true
