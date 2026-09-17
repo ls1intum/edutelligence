@@ -21,6 +21,7 @@ module_modeling_llm = { path = "../modules/modeling/module_modeling_llm", develo
 
 # Security floor for a package that is otherwise transitive only.
 starlette = ">=1.3.1"
+langgraph-checkpoint = ">=4.1.1"
 
 [tool.poetry.group.dev.dependencies]
 prospector = "^1.17.3"

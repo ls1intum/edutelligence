@@ -140,7 +140,12 @@ async def _auto_calibrate_if_needed(
     state_dir: "Path",
     model_cache: Any | None = None,
 ) -> None:
-    """Check for uncalibrated capabilities models and calibrate them on startup."""
+    """Check for uncalibrated capabilities models and calibrate them on startup.
+
+    Not called anywhere in this file today — the nightly/manual RPC path
+    (start_calibration_session) replaced it. Kept only for its tests; ask
+    before wiring a new caller to it.
+    """
     if os.getenv("LOGOS_SKIP_AUTO_CALIBRATION", "").strip().lower() in (
         "1",
         "true",
@@ -149,13 +154,14 @@ async def _auto_calibrate_if_needed(
         logger.info("Auto-calibration disabled via LOGOS_SKIP_AUTO_CALIBRATION")
         return
 
-    # The Metal engine has no nvidia-smi and no /proc/meminfo to measure
-    # against, so calibration is impossible there by construction. Profiles
-    # come from model_profile_overrides instead — no flag required.
+    # This legacy boot-time path calls auto_calibrate_models(), the CUDA-only
+    # entry point — it was never wired to calibrate_model_metal(). Metal
+    # calibration does run today, just via the session-driven RPC path
+    # (start_calibration_session), not this one.
     if is_metal_backend():
         logger.info(
-            "Auto-calibration unavailable on the Metal backend — skipping "
-            "(use model_profile_overrides for capacity profiles)"
+            "Auto-calibration on startup is CUDA-only — skipping on Metal "
+            "(the orchestrator's nightly/manual session path covers it)"
         )
         return
 
@@ -1206,9 +1212,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     # Auto-calibration on startup is disabled — the Logos server now drives
-    # calibration via start_calibration / stop_calibration commands during the
-    # nightly maintenance window.  The _auto_calibrate_if_needed function is
-    # kept for the standalone CLI tool path (tools/calibrate_vram_profiles.py).
+    # calibration via start_calibration / stop_calibration commands during
+    # the nightly maintenance window. _auto_calibrate_if_needed has no
+    # production caller left (tools/calibrate_vram_profiles.py calls
+    # calibrate_model directly, not this) — see the docstring on that
+    # function before wiring anything new to it.
 
     if model_cache.enabled:
         caps = list(cfg.logos.capabilities_models) if cfg.logos else []

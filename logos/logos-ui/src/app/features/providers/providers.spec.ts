@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { ProviderManagementService } from '../../core/services/provider-management.service';
-import { AddProviderPayload, Provider, UpdateProviderPayload } from '../../shared/models/provider.model';
+import {
+  AddProviderPayload,
+  Provider,
+  UpdateProviderPayload,
+} from '../../shared/models/provider.model';
 import { Model } from '../../shared/models/model.model';
 import { Providers } from './providers';
 
@@ -107,7 +111,9 @@ describe('Providers', () => {
       component.addCloudProviderType.set('openai');
       await component.submitAdd();
 
-      expect((addProvider.mock.calls[0][0] as AddProviderPayload).cloud_provider_type).toBe('openai');
+      expect((addProvider.mock.calls[0][0] as AddProviderPayload).cloud_provider_type).toBe(
+        'openai',
+      );
     });
 
     it('does not relabel an untyped cloud provider as azure on edit', async () => {
@@ -117,7 +123,9 @@ describe('Providers', () => {
       expect(component.editCloudProviderType()).toBe('none');
 
       await component.submitEdit();
-      expect((updateProvider.mock.calls[0][0] as UpdateProviderPayload).cloud_provider_type).toBe('none');
+      expect((updateProvider.mock.calls[0][0] as UpdateProviderPayload).cloud_provider_type).toBe(
+        'none',
+      );
     });
 
     it('stays out of the way for a logosnode', () => {
@@ -134,7 +142,9 @@ describe('Providers', () => {
     });
 
     it('opens on the type the provider actually has', () => {
-      component.openEditDialog(makeProvider({ provider_type: 'logosnode', privacy_level: 'LOCAL' }));
+      component.openEditDialog(
+        makeProvider({ provider_type: 'logosnode', privacy_level: 'LOCAL' }),
+      );
       expect(component.editProviderType()).toBe('logosnode');
     });
 
@@ -146,7 +156,9 @@ describe('Providers', () => {
       fixture.detectChanges();
       await fixture.whenStable();
 
-      const selects = fixture.nativeElement.querySelectorAll('select') as NodeListOf<HTMLSelectElement>;
+      // The dialog's content renders into a CDK overlay appended to
+      // document.body, outside the fixture's own DOM subtree.
+      const selects = document.querySelectorAll('select') as NodeListOf<HTMLSelectElement>;
       const typeSelect = Array.from(selects).find((s) =>
         Array.from(s.options).some((o) => o.value === 'logosnode'),
       );

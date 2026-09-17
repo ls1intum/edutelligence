@@ -24,7 +24,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
+from logos.anthropic_compat import (
+    MessagesStreamTranslator,
+    UpstreamDialect,
+    from_message,
+    stream_translator,
+    translate_error,
+    translate_response,
+)
 from logos.auth import AuthContext, authenticate_api_key
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
 from logos.batch_local import local_batch_runner_loop
@@ -57,15 +64,9 @@ from logos.jobs.job_service import JobService, JobSubmission
 from logos.live_stream import _LiveStreamRegistry, _StreamingLogAccumulator, _usage_tokens_from_payload
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, LogosNodeRuntimeRegistry
 from logos.logosnode_snapshot import (
-    _build_live_local_provider_sample,
-    _is_today_or_all_utc,
     _lane_served_context_window,
-    _logosnode_snapshot_is_connected,
-    _merge_provider_samples,
     _profile_native_context_length,
     _resolve_requested_model_name,
-    _safe_float,
-    _sample_snapshot_id,
 )
 from logos.middleware import APIPrefixStripperMiddleware
 from logos.monitoring import prometheus_metrics as prom
@@ -246,181 +247,6 @@ def _record_azure_rate_limits(
 
     if provider_metrics:
         _pipeline.record_provider_metrics(request_id, provider_metrics)
-
-
-def _load_persisted_local_provider_vram_payload(
-    logos_key: str,
-    *,
-    day: str,
-    after_snapshot_id: int = 0,
-) -> Dict[str, Any]:
-    with DBManager() as db:
-        if int(after_snapshot_id or 0) > 0:
-            payload, status = db.get_provider_vram_deltas(
-                logos_key,
-                day=day,
-                after_snapshot_id=int(after_snapshot_id or 0),
-            )
-        elif str(day).strip().lower() == "all":
-            # Initial WS load with no cursor. Cap to a recent window so the
-            # init payload stays small even after weeks of accumulated
-            # snapshots — the UI only renders a 30-min live window anyway,
-            # and live deltas keep flowing afterwards via after_snapshot_id.
-            recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
-            payload, status = db.get_provider_vram_deltas(
-                logos_key,
-                day="all",
-                after_snapshot_id=0,
-                since=recent_since,
-            )
-        else:
-            payload, status = db.get_provider_vram_stats(logos_key, day=day, bucket_seconds=5)
-    if status != 200 or not isinstance(payload, dict):
-        return {
-            "providers": [],
-            "last_snapshot_id": int(after_snapshot_id or 0),
-        }
-    payload.setdefault("providers", [])
-    payload.setdefault("last_snapshot_id", int(after_snapshot_id or 0))
-    return payload
-
-
-def _merge_local_provider_vram_payload(
-    logos_key: str,
-    payload: Dict[str, Any],
-    *,
-    day: str,
-    after_snapshot_id: int = 0,
-    include_live_runtime: bool,
-) -> Dict[str, Any]:
-    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
-    providers_by_id: Dict[int, Dict[str, Any]] = {}
-    unnamed_providers: list[Dict[str, Any]] = []
-
-    for provider in providers:
-        if not isinstance(provider, dict):
-            continue
-        entry = dict(provider)
-        entry["data"] = list(entry.get("data") or [])
-        provider_id = entry.get("provider_id")
-        if isinstance(provider_id, int):
-            providers_by_id[provider_id] = entry
-        else:
-            unnamed_providers.append(entry)
-
-    with DBManager() as db:
-        inventory, status = db.get_local_provider_inventory(logos_key)
-    if status != 200 or not isinstance(inventory, list):
-        merged = list(providers_by_id.values()) + unnamed_providers
-        merged.sort(key=lambda item: str(item.get("name") or "").lower())
-        next_payload = dict(payload)
-        next_payload["providers"] = merged
-        return next_payload
-
-    for provider in inventory:
-        if not isinstance(provider, dict):
-            continue
-        provider_id = int(provider.get("provider_id") or 0)
-        if provider_id <= 0:
-            continue
-        entry = providers_by_id.get(provider_id)
-        if entry is None:
-            entry = {
-                "provider_id": provider_id,
-                "name": provider.get("name") or f"Provider {provider_id}",
-                "data": [],
-            }
-            providers_by_id[provider_id] = entry
-
-        entry["provider_type"] = provider.get("provider_type")
-        entry["base_url"] = provider.get("base_url")
-        entry["parallel_capacity"] = provider.get("parallel_capacity")
-        if provider.get("total_vram_mb") is not None:
-            entry["configured_total_vram_mb"] = provider.get("total_vram_mb")
-
-        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
-        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
-        entry["connected"] = connected
-        entry["connection_state"] = "online" if connected else "offline"
-        entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
-
-        runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
-        entry["runtime_modes"] = ["vllm"]
-        transport = (
-            runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
-        )
-        if transport:
-            entry["transport_connected"] = bool(transport.get("connected", connected))
-
-        runtime_devices = runtime.get("devices") if isinstance(runtime, dict) else {}
-        if isinstance(runtime_devices, dict):
-            raw_device_list = runtime_devices.get("devices") or []
-            if isinstance(raw_device_list, list) and raw_device_list:
-                entry["devices"] = [
-                    {
-                        "device_id": d.get("device_id", ""),
-                        "kind": d.get("kind", "nvidia"),
-                        "name": d.get("name", ""),
-                        "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
-                        "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
-                        "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
-                        "utilization_percent": _safe_float(d.get("utilization_percent")),
-                        "temperature_celsius": _safe_float(d.get("temperature_celsius")),
-                        "power_draw_watts": _safe_float(d.get("power_draw_watts")),
-                    }
-                    for d in raw_device_list
-                    if isinstance(d, dict)
-                ]
-
-        data = list(entry.get("data") or [])
-
-        if include_live_runtime and _is_today_or_all_utc(day):
-            recent_samples = _logosnode_registry.peek_recent_samples(
-                provider_id,
-                after_snapshot_id=int(after_snapshot_id or 0),
-            )
-            if recent_samples:
-                data = _merge_provider_samples(data, recent_samples)
-            elif connected:
-                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
-                if live_sample is not None:
-                    data = _merge_provider_samples(data, [live_sample])
-
-        entry["data"] = data
-
-    merged = list(providers_by_id.values()) + unnamed_providers
-    merged.sort(key=lambda item: str(item.get("name") or "").lower())
-    next_payload = dict(payload)
-    next_payload["providers"] = merged
-    return next_payload
-
-
-def _build_live_local_provider_vram_payload(
-    logos_key: str,
-    *,
-    day: str,
-    after_snapshot_id: int = 0,
-) -> Dict[str, Any]:
-    payload = _load_persisted_local_provider_vram_payload(
-        logos_key,
-        day=day,
-        after_snapshot_id=after_snapshot_id,
-    )
-    payload = _merge_local_provider_vram_payload(
-        logos_key,
-        payload,
-        day=day,
-        after_snapshot_id=after_snapshot_id,
-        include_live_runtime=True,
-    )
-    last_snapshot_id = int(payload.get("last_snapshot_id") or after_snapshot_id or 0)
-    for provider in payload.get("providers") or []:
-        for sample in provider.get("data") or []:
-            sample_id = _sample_snapshot_id(sample)
-            if sample_id > last_snapshot_id:
-                last_snapshot_id = sample_id
-    payload["last_snapshot_id"] = last_snapshot_id
-    return payload
 
 
 def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
@@ -830,10 +656,17 @@ async def lifespan(app: FastAPI):
 _PROMETHEUS_API_KEY = os.getenv("PROMETHEUS_API_KEY")
 _INTERNAL_SECRET = os.getenv("LOGOS_INTERNAL_SECRET")
 
+# API docs are off by default: /docs and /openapi.json publish the full
+# endpoint map — every /internal/* and /logosdb/* path included — and the
+# public router serves them on the same port as the completion API. Turn
+# them on for development with LOGOS_DOCS_ENABLED=1.
+_DOCS_ENABLED = os.getenv("LOGOS_DOCS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
 # Initialize FastAPI app with lifespan
 app = FastAPI(
-    docs_url="/docs",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
     lifespan=lifespan,
     swagger_ui_init_oauth={},
     openapi_tags=[
@@ -2001,12 +1834,12 @@ async def _streaming_response(
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-    # A translated response is an Anthropic event stream regardless of how the
-    # upstream labelled its own, so the client is told what it is actually
-    # about to parse rather than what the upstream sent.
-    translating_messages = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+    # A translated response is an event stream in the client's own dialect
+    # regardless of how the upstream labelled its own, so the client is told
+    # what it is actually about to parse rather than what the upstream sent.
+    translating = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE) or context.messages_upstream
     response_headers["content-type"] = (
-        "text/event-stream" if translating_messages else (upstream_content_type or "text/event-stream")
+        "text/event-stream" if translating else (upstream_content_type or "text/event-stream")
     )
 
     async def http_streamer():
@@ -2016,14 +1849,15 @@ async def _streaming_response(
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
             else None
         )
-        # A Messages request forwarded to an upstream without a Messages route
-        # comes back as a chat/completions or Responses event stream; the
-        # client's SSE parser only understands the Anthropic one.
-        anthropic_stream = (
-            stream_translator(context.anthropic_dialect, model_name=context.model_name)
-            if context.anthropic_dialect is not None
-            else None
-        )
+        # A request forwarded to an upstream that speaks the other dialect
+        # comes back as the other dialect's event stream, and the client's SSE
+        # parser only understands its own.
+        if context.messages_upstream:
+            translated_stream = MessagesStreamTranslator(context.model_name)
+        elif context.anthropic_dialect is not None:
+            translated_stream = stream_translator(context.anthropic_dialect, model_name=context.model_name)
+        else:
+            translated_stream = None
         error_message = None
         ttft_recorded = False
 
@@ -2038,7 +1872,7 @@ async def _streaming_response(
             the bytes on the wire change shape.
             """
             stream_log.feed(chunk)
-            return anthropic_stream.feed(chunk) if anthropic_stream else [chunk]
+            return translated_stream.feed(chunk) if translated_stream else [chunk]
 
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
@@ -2071,11 +1905,26 @@ async def _streaming_response(
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
                         yield client_chunk
-            if anthropic_stream:
-                # Idempotent: a stream that already ended on [DONE] (or on the
-                # Responses API's terminal event) has emitted its message_stop,
-                # and this closes one that simply ran out of bytes.
-                for client_chunk in anthropic_stream.finish():
+            if translated_stream:
+                # A mid-stream failure the executor caught after the first byte
+                # ends the iterator without raising, so it reaches here rather
+                # than the except branch below — and closing the translated
+                # stream normally would hand the client a terminal event, i.e.
+                # a truncated answer that reads as a complete one. On an SSE
+                # upstream the executor also appends an error frame, which the
+                # translator has already turned into one of its own; both calls
+                # are idempotent, so whichever ran first wins.
+                #
+                # Otherwise this is the ordinary close: idempotent again, since
+                # a stream that ended on its protocol's terminal event ([DONE],
+                # response.completed, message_stop) has emitted its own, and
+                # this closes one that simply ran out of bytes.
+                terminal_chunks = (
+                    translated_stream.error(stream_status.error)
+                    if stream_status.error is not None
+                    else translated_stream.finish()
+                )
+                for client_chunk in terminal_chunks:
                     yield client_chunk
         except Exception as exc:
             error_message = str(exc)
@@ -2084,11 +1933,11 @@ async def _streaming_response(
                     for client_chunk in client_chunks(outgoing_chunk):
                         yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
-            # synthetic error frame without corrupting its protocol — in the
-            # dialect the client is reading, which is Anthropic's whenever the
-            # response was being translated.
-            if anthropic_stream:
-                for client_chunk in anthropic_stream.error(str(exc)):
+            # synthetic error frame without corrupting its protocol — and it
+            # has to be in the dialect the client is reading, which the
+            # translator knows and the raw upstream stream does not.
+            if translated_stream:
+                for client_chunk in translated_stream.error(str(exc)):
                     yield client_chunk
             elif upstream_media_type == "text/event-stream":
                 import json as _json
@@ -2438,6 +2287,12 @@ async def _sync_response(
                 if exec_result.success
                 else translate_error(response_payload)
             )
+        # The mirror case, and it needs no error branch: an Anthropic failure
+        # body is ``{"error": {"message", "type"}}`` under a wrapper, which is
+        # the OpenAI shape ``coerce_upstream_error`` has already unwrapped it
+        # to just above.
+        elif context.messages_upstream and exec_result.success and isinstance(response_payload, dict):
+            response_payload = from_message(response_payload, model_name=context.model_name)
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:

@@ -11,7 +11,7 @@ from itertools import combinations
 from typing import Any, Awaitable, Callable, Iterable
 
 from logos_worker_node import prometheus_metrics as prom
-from logos_worker_node.calibration import calibration_gpu_slice
+from logos_worker_node.calibration import select_calibration_gpus
 from logos_worker_node.host_ram import measure_process_tree_host_ram_mb
 from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.metal_process import MetalVllmProcessHandle
@@ -497,21 +497,45 @@ class LaneManager:
         """GPUs held by a running calibration session, or ``None`` when idle."""
         return self._calibration_gpu_subset
 
-    def begin_calibration_session(self) -> frozenset[int]:
-        """Hold the node's largest power-of-two GPU slice for a calibration run.
+    def _busy_gpu_indices(self) -> frozenset[int]:
+        """GPU indices touched by any currently running vLLM lane.
 
-        Returns the held slice (GPUs ``0..slice_size-1``). While it is held,
-        auto-placement excludes these GPUs and any new lane targeting them is
-        refused, so the calibration probe keeps the slice's VRAM to itself.
-        Lanes on the leftover GPUs (``slice_size..N-1``) are unaffected and keep
-        serving during the session.
+        A lane whose ``gpu_devices`` is blank/"all" spans every GPU, so the
+        whole node counts as busy rather than under-reporting its footprint.
         """
-        self._calibration_gpu_subset = frozenset(calibration_gpu_slice(self._gpu_device_count()))
+        busy: set[int] = set()
+        for handle in self._handles.values():
+            lc = handle.lane_config
+            if lc is None or not lc.vllm:
+                continue
+            gset = self._lane_gpu_set(lc.gpu_devices)
+            if gset is None:
+                return frozenset(range(self._gpu_device_count()))
+            busy |= gset
+        return frozenset(busy)
+
+    def begin_calibration_session(self) -> frozenset[int]:
+        """Hold a GPU slice for a calibration run, preferring idle GPUs.
+
+        Returns the held slice — the node's largest power-of-two GPU count,
+        picked from currently-idle GPUs first (so a model loaded on GPU 0
+        doesn't force calibration onto ``[0, 1]`` while ``[1, 2]`` sit idle;
+        see :func:`select_calibration_gpus`). Only falls back to the naive
+        ``0..slice_size-1`` slice when too few GPUs are idle to cover the
+        needed size. While the slice is held, auto-placement excludes these
+        GPUs and any new lane targeting them is refused, so the calibration
+        probe keeps the slice's VRAM to itself. Lanes outside the slice are
+        unaffected and keep serving during the session.
+        """
+        total = self._gpu_device_count()
+        busy = self._busy_gpu_indices()
+        self._calibration_gpu_subset = frozenset(select_calibration_gpus(total, busy))
         if self._calibration_gpu_subset:
             logger.info(
-                "Calibration session holds GPU(s) %s — new lanes on these are refused; "
-                "leftover GPU(s) stay placeable",
+                "Calibration session holds GPU(s) %s (%s) — new lanes on these are "
+                "refused; leftover GPU(s) stay placeable",
                 sorted(self._calibration_gpu_subset),
+                "fully idle" if not (busy & self._calibration_gpu_subset) else "includes busy GPU(s)",
             )
         return self._calibration_gpu_subset
 

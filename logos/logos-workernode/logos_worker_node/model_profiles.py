@@ -207,6 +207,12 @@ class ModelProfileRecord:
     # Reason code matching FatalLoadErrorPattern.reason_code, for diagnostics.
     # Surfaced to ops in master logs alongside `calibration_unsupported=True`.
     calibration_unsupported_reason: str | None = None
+    # Metal only: this node's working-set budget (MB) when this model last
+    # failed calibration with a capacity-like error. The orchestrator
+    # compares this across nodes to skip retrying on any node no bigger.
+    # Clear a false positive: set this key to null under
+    # capabilities_overrides.<model> in config.yml.
+    metal_capacity_floor_mb: float | None = None
     # --max-model-len that calibration auto-injected because the operator's
     # pinned kv_cache_memory_bytes couldn't hold one request at the model's
     # default max_seq_len (see vllm_compat.py's _extract_vllm_max_model_len_suggestion).
@@ -283,6 +289,7 @@ class ModelProfileRecord:
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,
+            "metal_capacity_floor_mb": self.metal_capacity_floor_mb,
             "calibration_max_model_len": self.calibration_max_model_len,
             "calibration_max_num_seqs": self.calibration_max_num_seqs,
             "kv_cache_to_max_model_len_pairs": self.kv_cache_to_max_model_len_pairs,
@@ -505,6 +512,17 @@ class ModelProfileRegistry:
         if "host_ram_residual_mb" in overrides:
             profile.host_ram_residual_mb = float(overrides["host_ram_residual_mb"])
             applied.append(f"host_ram_residual={profile.host_ram_residual_mb:.0f}MB")
+        if "metal_capacity_floor_mb" in overrides:
+            # null clears a floor a false-positive capacity failure set
+            # (see mark_capacity_floor) — the only way to undo it, since
+            # that method only ever raises the stored value.
+            value = overrides["metal_capacity_floor_mb"]
+            if value is None:
+                profile.metal_capacity_floor_mb = None
+                applied.append("metal_capacity_floor=cleared")
+            else:
+                profile.metal_capacity_floor_mb = float(value)
+                applied.append(f"metal_capacity_floor={profile.metal_capacity_floor_mb:.0f}MB")
 
         if applied:
             logger.info("Applied manual overrides for %s: %s", model_name, ", ".join(applied))
@@ -814,6 +832,22 @@ class ModelProfileRegistry:
         self._persist()
         return True
 
+    def mark_capacity_floor(self, model_name: str, floor_mb: float) -> bool:
+        """Record that this model failed to fit under *floor_mb* on this node.
+
+        Only ever raises the stored value — see the config.yml override in
+        _apply_manual_overrides to undo a false positive instead.
+        """
+        with self._lock:
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            current = profile.metal_capacity_floor_mb
+            new_floor = floor_mb if current is None else max(current, floor_mb)
+            if new_floor == current:
+                return False
+            profile.metal_capacity_floor_mb = new_floor
+        self._persist()
+        return True
+
     def apply_hf_precheck(
         self,
         model_name: str,
@@ -985,6 +1019,7 @@ class ModelProfileRegistry:
                     sleep_mode_disabled=profile_data.get("sleep_mode_disabled"),
                     calibration_unsupported=profile_data.get("calibration_unsupported"),
                     calibration_unsupported_reason=profile_data.get("calibration_unsupported_reason"),
+                    metal_capacity_floor_mb=profile_data.get("metal_capacity_floor_mb"),
                     calibration_max_model_len=(
                         int(profile_data["calibration_max_model_len"])
                         if profile_data.get("calibration_max_model_len")
