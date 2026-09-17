@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -125,6 +126,19 @@ public class PermissionController {
             @PathVariable Integer providerId) {
         permissionService.addTeamProviderPermission(teamId, providerId);
         return ResponseEntity.ok(Map.of("result", "Team provider permission added"));
+    }
+
+    /**
+     * One-click de-provisioning from the model access page: atomically removes
+     * a single team-provider grant without replacing the team's other grants.
+     */
+    @DeleteMapping("/teams/{teamId}/provider-permissions/{providerId}")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> removeTeamProviderPermission(
+            @PathVariable Integer teamId,
+            @PathVariable Integer providerId) {
+        permissionService.removeTeamProviderPermission(teamId, providerId);
+        return ResponseEntity.ok(Map.of("result", "Team provider permission removed"));
     }
 
     private void enforceKeyAccess(Integer keyId, AuthContext auth) {

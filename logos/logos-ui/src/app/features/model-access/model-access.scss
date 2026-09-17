@@ -94,29 +94,18 @@
   &--no { color: rgb(var(--color-typography-700)); opacity: 0.55; }
 }
 
-// One-click "grant this provider to the team" in the matrix.
-.grant-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border: 1px solid rgb(var(--color-text-accent) / 0.45);
-  border-radius: 999px;
-  background: rgb(var(--color-text-accent) / 0.08);
-  color: rgb(var(--color-text-accent));
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
+// One-click grant / revocation in the team matrix: the provider cell is a
+// checkbox — checked means the team has the hosting-provider grant.
+.grant-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
   cursor: pointer;
-  transition: background 0.15s ease;
-
-  &:hover:not(:disabled),
-  &:focus-visible {
-    background: rgb(var(--color-text-accent) / 0.16);
-  }
+  accent-color: rgb(var(--color-text-accent));
 
   &:disabled {
     cursor: wait;
-    opacity: 0.7;
+    opacity: 0.6;
   }
 }
 

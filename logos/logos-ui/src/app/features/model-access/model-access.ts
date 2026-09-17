@@ -22,8 +22,9 @@ import { formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
  * Admin view for a single model: where it is hosted, and which teams /
  * custom-permission keys actually have both the model grant and a grant for
  * a hosting provider. Orphaned grants (model grant without any reachable
- * provider) are highlighted, and a missing team-provider grant can be
- * repaired right here with one click (the team's other grants are kept).
+ * provider) are highlighted, and team-provider grants can be granted or
+ * revoked right here by toggling a checkbox — each change is one atomic
+ * backend operation that keeps the team's other grants.
  */
 @Component({
   selector: 'app-model-access',
@@ -41,9 +42,9 @@ export class ModelAccess implements OnInit {
   access = signal<ModelAccessResponse | null>(null);
   loading = signal(true);
   loadError = signal(false);
-  /** One grant action in flight; all grant buttons stay disabled meanwhile. */
-  granting = signal(false);
-  grantError = signal<string | null>(null);
+  /** One grant toggle in flight; all checkboxes stay disabled meanwhile. */
+  toggling = signal(false);
+  toggleError = signal<string | null>(null);
 
   /** Provider columns of the matrix, e.g. "Logos Mac1". */
   readonly providerColumns = computed(() =>
@@ -93,24 +94,29 @@ export class ModelAccess implements OnInit {
   }
 
   /**
-   * One-click repair: atomically adds the hosting provider to the team's
-   * provider grants. The backend performs a single idempotent upsert, so the
-   * team's other grants are preserved by construction and a concurrent admin
-   * edit can neither be clobbered nor trigger the model-grant cascade. The
-   * matrix is then reloaded with the usual loading/error feedback.
+   * Toggle a team-provider grant in the matrix. Both directions are single
+   * atomic backend operations (idempotent upsert / single-row delete), never
+   * a full-set PUT — the team's other grants are preserved by construction
+   * and a concurrent admin edit can neither be clobbered nor trigger the
+   * model-grant cascade. The matrix is then reloaded with the usual
+   * loading/error feedback.
    */
-  async grantProviderToTeam(teamId: number, providerId: number): Promise<void> {
-    if (this.granting()) return;
-    this.granting.set(true);
-    this.grantError.set(null);
+  async toggleProviderGrant(teamId: number, providerId: number, granted: boolean): Promise<void> {
+    if (this.toggling()) return;
+    this.toggling.set(true);
+    this.toggleError.set(null);
     try {
-      await this.teamService.addTeamProviderPermission(teamId, providerId);
+      if (granted) {
+        await this.teamService.removeTeamProviderPermission(teamId, providerId);
+      } else {
+        await this.teamService.addTeamProviderPermission(teamId, providerId);
+      }
       const id = Number(this.route.snapshot.paramMap.get('id'));
       await this.load(id);
     } catch {
-      this.grantError.set('Failed to grant the provider to the team, please try again.');
+      this.toggleError.set('Failed to update the provider grant, please try again.');
     } finally {
-      this.granting.set(false);
+      this.toggling.set(false);
     }
   }
 

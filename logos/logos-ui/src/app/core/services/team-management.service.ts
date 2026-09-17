@@ -71,6 +71,11 @@ export class TeamManagementService {
     return firstValueFrom(this.http.post<void>(`/api/admin/teams/${teamId}/provider-permissions/${providerId}`, {}));
   }
 
+  /** Atomic single-grant removal (model access page) — no full-set replacement. */
+  removeTeamProviderPermission(teamId: number, providerId: number): Promise<void> {
+    return firstValueFrom(this.http.delete<void>(`/api/admin/teams/${teamId}/provider-permissions/${providerId}`));
+  }
+
   getAllProviders(): Promise<ProviderItem[]> {
     return firstValueFrom(this.http.post<ProviderItem[]>('/api/logosdb/get_providers', {}));
   }

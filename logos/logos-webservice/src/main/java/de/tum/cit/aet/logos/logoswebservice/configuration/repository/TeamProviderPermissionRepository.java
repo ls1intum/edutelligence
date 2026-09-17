@@ -30,4 +30,18 @@ public interface TeamProviderPermissionRepository
         ON CONFLICT DO NOTHING
         """, nativeQuery = true)
     void grantIfAbsent(@Param("teamId") int teamId, @Param("providerId") int providerId);
+
+    /**
+     * Atomic single-grant removal (model access page): deletes exactly this
+     * one team-provider row. Like grantIfAbsent it never reads or replaces the
+     * team's other grants and never re-runs the model-grant cascade, so a
+     * concurrent permission edit cannot be undone by a stale client snapshot.
+     */
+    @Transactional
+    @Modifying
+    @Query(value = """
+        DELETE FROM team_provider_permissions
+        WHERE team_id = :teamId AND provider_id = :providerId
+        """, nativeQuery = true)
+    void revoke(@Param("teamId") int teamId, @Param("providerId") int providerId);
 }

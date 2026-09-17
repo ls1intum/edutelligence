@@ -91,4 +91,14 @@ public class PermissionService {
     public void addTeamProviderPermission(int teamId, Integer providerId) {
         teamProviderRepo.grantIfAbsent(teamId, providerId);
     }
+
+    /**
+     * Atomic counterpart of {@link #addTeamProviderPermission}: removes a
+     * single team-provider grant (one-click de-provisioning from the model
+     * access page) — idempotent, touches nothing else, no cascade.
+     */
+    @Transactional
+    public void removeTeamProviderPermission(int teamId, Integer providerId) {
+        teamProviderRepo.revoke(teamId, providerId);
+    }
 }

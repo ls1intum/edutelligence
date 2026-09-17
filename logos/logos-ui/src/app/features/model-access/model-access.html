@@ -49,13 +49,14 @@
         Effective access needs the model grant and a grant for at least one hosting provider.
         <span class="hint-flag hint-flag--orphaned">Orphaned</span> = model grant without any
         host provider (can never route); <span class="hint-flag hint-flag--provider-only">provider only</span>
-        = host provider grant without the model grant. Click a missing provider grant to grant
-        it to the team — the team's other provider grants are kept.
+        = host provider grant without the model grant. Toggle a provider grant directly in
+        the matrix — each change is one atomic grant or revocation, and the team's other
+        provider grants are kept.
       </p>
-      @if (grantError()) {
+      @if (toggleError()) {
         <div class="notice notice--error">
           <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-          <span>{{ grantError() }}</span>
+          <span>{{ toggleError() }}</span>
         </div>
       }
       <app-data-table
@@ -83,25 +84,15 @@
             </div>
             @for (g of t.provider_grants; track g.provider_id; let gi = $index) {
               <div role="cell" [attr.data-label]="a.providers[gi]?.name ?? 'Provider'">
-                @if (g.granted) {
-                  <i
-                    class="pi pi-check check--yes"
-                    role="img"
-                    [attr.aria-label]="'Provider grant: yes'"
-                  ></i>
-                } @else {
-                  <button
-                    type="button"
-                    class="grant-btn"
-                    [disabled]="granting()"
-                    [title]="'Grant ' + (a.providers[gi]?.name ?? 'provider') + ' to ' + t.team_name"
-                    [attr.aria-label]="'Grant ' + (a.providers[gi]?.name ?? 'provider') + ' to ' + t.team_name"
-                    (click)="grantProviderToTeam(t.team_id, g.provider_id)"
-                  >
-                    <i class="pi {{ granting() ? 'pi-spin pi-spinner' : 'pi-plus' }}" aria-hidden="true"></i>
-                    <span>grant</span>
-                  </button>
-                }
+                <input
+                  type="checkbox"
+                  class="grant-checkbox"
+                  [checked]="g.granted"
+                  [disabled]="toggling()"
+                  [title]="(g.granted ? 'Revoke ' : 'Grant ') + (a.providers[gi]?.name ?? 'provider') + ' for ' + t.team_name"
+                  [attr.aria-label]="(g.granted ? 'Revoke ' : 'Grant ') + (a.providers[gi]?.name ?? 'provider') + ' for ' + t.team_name"
+                  (change)="toggleProviderGrant(t.team_id, g.provider_id, g.granted)"
+                />
               </div>
             }
             <div class="col-status" role="cell" data-label="Status">
