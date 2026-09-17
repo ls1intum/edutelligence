@@ -5,30 +5,34 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- api_keys.default_priority already used 0 as the "not explicitly
-         set" marker (the admin key API defaults a missing value to 0), but
-         auto-provisioned developer keys were written with the legacy column
-         default 1. The local queue treats any non-zero value as an explicit
-         key override, so those keys could never pick up a team priority.
+    <!-- Queue priorities need a persisted "key priority not set" state: 0 is
+         the marker (the admin key API already defaults a missing value to 0),
+         and the queue treats any non-zero value as an explicit override that
+         beats the team priority. ApiKeyFactory now writes 0 for newly
+         auto-provisioned developer keys, so team priorities apply to their
+         traffic out of the box.
 
-         Reset auto-provisioned developer keys to the unset state and align
-         the column default with the convention. Value 1 is indistinguishable
-         from the legacy default, so an explicitly pinned 1 on a developer key
-         is reset as well (re-pinnable via the key update API); every other
-         explicit value (2..10) and all non-developer keys stay untouched. -->
+         Existing rows are deliberately left untouched: a stored 1 on a
+         developer key is ambiguous - it may be the legacy factory/backfill
+         default or a deliberately pinned LOW override, and there is no
+         reliable provenance to tell the two apart. Resetting it in bulk
+         would silently lift pinned-LOW keys to team/policy priority without
+         owner intent. Admins who want the reset opt in per key via the key
+         update API (an explicit default_priority of 0 sets the key back to
+         "follow the team/policy") or, per team after checking that no key
+         is deliberately pinned LOW:
+
+             UPDATE api_keys SET default_priority = 0
+             WHERE key_type = 'developer' AND default_priority = 1
+               AND team_id = <team>;
+
+         This changeset only re-points the column default so future raw
+         inserts follow the same convention. -->
     <changeSet id="036-api-key-priority-unset" author="wasnertobias">
-        <sql>
-            UPDATE api_keys SET default_priority = 0
-            WHERE key_type = 'developer' AND default_priority = 1;
-        </sql>
         <sql>
             ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 0;
         </sql>
         <rollback>
-            <sql>
-                UPDATE api_keys SET default_priority = 1
-                WHERE key_type = 'developer' AND default_priority = 0;
-            </sql>
             <sql>
                 ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 1;
             </sql>

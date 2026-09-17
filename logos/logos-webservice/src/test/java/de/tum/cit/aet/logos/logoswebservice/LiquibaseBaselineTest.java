@@ -141,9 +141,9 @@ class LiquibaseBaselineTest {
         assertThat(key.get("name")).isEqualTo("Ada Lovelace-Team Alpha-key");
         assertThat(key.get("is_active")).isEqualTo(true);
         assertThat(key.get("environment")).isEqualTo("-");
-        // The 002 backfill SQL still writes the legacy default 1; changeset
-        // 036 (already run earlier in this baseline) would reset such keys to
-        // 0 in production, but the helper re-ran the SQL after 036.
+        // The 002 backfill SQL writes the legacy default 1, which is preserved
+        // as-is (changeset 036 deliberately does not rewrite existing rows;
+        // 1 keeps acting as an explicit LOW override until an admin resets it).
         assertThat(((Number) key.get("default_priority")).intValue()).isEqualTo(1);
         assertThat(key.get("use_custom_permissions")).isEqualTo(false);
     }
@@ -182,19 +182,20 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration036_resetsAutoProvisionedDeveloperKeysToUnsetPriority() {
-        // Legacy auto-provisioned developer keys carry the old column default
-        // (1), which the queue reads as an explicit key override and which
-        // therefore shadows any team priority. 036 resets them to the "unset"
-        // state (0) so team priority can apply, and re-points the column
-        // default. Explicit values on other keys must survive untouched.
+    void migration036_preservesExistingPrioritiesAndUnsetsFutureDefaults() {
+        // A stored 1 on a developer key is ambiguous: legacy factory/backfill
+        // default or a deliberately pinned LOW override. There is no reliable
+        // provenance, so 036 must leave every existing row untouched (a bulk
+        // reset would silently lift pinned-LOW keys to team/policy priority
+        // without owner intent) and only re-point the column default so
+        // future raw inserts use the "unset" marker 0.
         Integer userId = jdbc.queryForObject(
             "INSERT INTO users (username, role, is_active) VALUES ('key-reset', 'app_developer', true) RETURNING id",
             Integer.class);
         Integer teamId = jdbc.queryForObject(
             "INSERT INTO teams (name) VALUES ('Reset') RETURNING id", Integer.class);
         jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
-            + "VALUES ('lg-legacy-dev', 'legacy dev', 'developer', ?, ?, 1, true)", teamId, userId);
+            + "VALUES ('lg-pinned-low-dev', 'pinned low dev', 'developer', ?, ?, 1, true)", teamId, userId);
         jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
             + "VALUES ('lg-explicit-dev', 'explicit dev', 'developer', ?, ?, 5, true)", teamId, userId);
         jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
@@ -202,9 +203,15 @@ class LiquibaseBaselineTest {
 
         runMigration036();
 
-        assertThat(keyPriority("lg-legacy-dev")).isEqualTo(0);
+        // Existing values survive, including a developer key pinned to LOW.
+        assertThat(keyPriority("lg-pinned-low-dev")).isEqualTo(1);
         assertThat(keyPriority("lg-explicit-dev")).isEqualTo(5);
         assertThat(keyPriority("lg-app-key")).isEqualTo(1);
+
+        // A new row that omits default_priority gets the new default 0.
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, is_active) "
+            + "VALUES ('lg-default-dev', 'default dev', 'developer', ?, ?, true)", teamId, userId);
+        assertThat(keyPriority("lg-default-dev")).isEqualTo(0);
     }
 
     private int keyPriority(String keyValue) {
@@ -214,7 +221,6 @@ class LiquibaseBaselineTest {
     }
 
     private void runMigration036() {
-        jdbc.update("UPDATE api_keys SET default_priority = 0 WHERE key_type='developer' AND default_priority = 1");
         jdbc.update("ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 0");
     }
 
