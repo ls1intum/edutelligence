@@ -44,8 +44,9 @@ def test_sync_azure_deployments_reports_ids_for_newly_inserted_models():
         MagicMock(fetchone=MagicMock(return_value=None)),  # SELECT id m1
         MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 42}))),  # INSERT models
         MagicMock(),  # link upsert
+        MagicMock(),  # queue discovery notification
     ]
-    db, _ = _db_with_execute_side_effects(side_effects)
+    db, session = _db_with_execute_side_effects(side_effects)
 
     result = db.sync_azure_deployments(provider_id=1, deployments=[{"model_name": "m1", "endpoint": "https://e/m1"}])
 
@@ -54,6 +55,9 @@ def test_sync_azure_deployments_reports_ids_for_newly_inserted_models():
         "new_model_ids": [42],
         "changed": True,
     }
+    # The notification is queued in the same transaction as the link, so it
+    # is retried on a later pass if the webservice was down.
+    assert session.execute.call_args_list[-1].args[1] == {"id": 42}
 
 
 def test_sync_azure_deployments_reports_ids_for_existing_model_new_link():
@@ -64,6 +68,7 @@ def test_sync_azure_deployments_reports_ids_for_existing_model_new_link():
         MagicMock(fetchall=MagicMock(return_value=[])),  # existing links
         MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 7}))),  # SELECT id m2
         MagicMock(),  # link upsert
+        MagicMock(),  # queue discovery notification
     ]
     db, _ = _db_with_execute_side_effects(side_effects)
 
@@ -83,6 +88,7 @@ def test_sync_cloud_models_reports_ids_for_existing_model_new_link():
         MagicMock(fetchall=MagicMock(return_value=[])),  # existing links
         MagicMock(fetchone=MagicMock(return_value=MockRow({"id": 9}))),  # SELECT id m3
         MagicMock(),  # link insert
+        MagicMock(),  # queue discovery notification
     ]
     db, _ = _db_with_execute_side_effects(side_effects)
 

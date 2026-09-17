@@ -36,7 +36,7 @@ import httpx
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
-from logos.sdi.model_discovery_notifier import notify_models_discovered
+from logos.sdi.model_discovery_notifier import deliver_discovery_notifications
 
 logger = logging.getLogger(__name__)
 
@@ -385,12 +385,19 @@ class CloudModelSyncService:
                 result = db.sync_cloud_models(pid, model_names)
                 context_changed = db.replace_cloud_model_context(pid, contexts)
                 self._note_logos_upstream(db, provider, looks_like_logos)
+                try:
+                    await deliver_discovery_notifications(db)
+                except Exception:  # noqa: BLE001
+                    # A queue read/delivery failure must not fail the pass —
+                    # the IDs stay queued and are retried on the next pass.
+                    logger.exception(
+                        "Cloud model sync: discovery notification delivery failed for provider %s (%s)", pid, name
+                    )
         except Exception:  # noqa: BLE001
             logger.exception("Cloud model sync: DB update failed for provider %s (%s)", pid, name)
             return False, False
 
         newly = result["new_models"]
-        await notify_models_discovered(result.get("new_model_ids", []))
         logger.info(
             "Cloud model sync: provider %s (%s) — %d model(s), %d new%s%s%s",
             pid,

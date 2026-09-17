@@ -1106,6 +1106,7 @@ class DBManager:
                 {"pid": pid, "mid": mid, "endpoint": endpoint},
             )
 
+        self._queue_discovery_notifications(newly_linked_ids)
         self.session.commit()
         return {
             "new_models": newly_inserted,
@@ -1246,8 +1247,56 @@ class DBManager:
             )
             changed = True
 
+        self._queue_discovery_notifications(newly_linked_ids)
         self.session.commit()
         return {"new_models": newly_inserted, "new_model_ids": newly_linked_ids, "changed": changed}
+
+    def _queue_discovery_notifications(self, model_ids: list[int]) -> None:
+        """Queue freshly linked models for a webservice refresh notification.
+
+        Runs in the caller's open transaction, so a queue row commits
+        atomically with the model_provider link that created the need for
+        it: a crash can never leave a freshly linked model whose price/
+        capability refresh was never queued and thus never retried.
+        """
+        for model_id in model_ids:
+            self.session.execute(
+                text("""
+                    INSERT INTO model_discovery_notifications (model_id)
+                    VALUES (:id)
+                    ON CONFLICT (model_id) DO NOTHING
+                    """),
+                {"id": model_id},
+            )
+
+    def get_pending_discovery_model_ids(self) -> list[int]:
+        """Model IDs still waiting for a webservice discovery notification.
+
+        The discovery syncs queue every newly linked model here (see
+        :meth:`_queue_discovery_notifications`); the notifier delivers the
+        whole queue on each pass and clears it only on acknowledgment, so a
+        webservice outage delays the refresh to the next pass instead of
+        losing it until the daily full refresh.
+        """
+        rows = self.session.execute(
+            text("SELECT model_id FROM model_discovery_notifications ORDER BY model_id")
+        ).fetchall()
+        return [row.model_id for row in rows]
+
+    def mark_discovery_notified(self, model_ids: list[int]) -> None:
+        """Drop queue entries the webservice has acknowledged.
+
+        The webservice refresh is idempotent, so if an ID is queued again
+        while the delivery is in flight (a re-link in a concurrent pass),
+        this only delays that refresh to the following pass.
+        """
+        if not model_ids:
+            return
+        self.session.execute(
+            text("DELETE FROM model_discovery_notifications WHERE model_id = ANY(:ids)"),
+            {"ids": list(model_ids)},
+        )
+        self.session.commit()
 
     def replace_cloud_model_context(self, provider_id: int, contexts: Dict[str, Dict[str, int]]) -> bool:
         """Store the context windows a cloud upstream reports for its models.
