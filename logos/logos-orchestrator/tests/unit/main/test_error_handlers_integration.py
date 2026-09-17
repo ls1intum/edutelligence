@@ -274,6 +274,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -332,6 +333,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -384,6 +386,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -444,6 +447,7 @@ class TestStreamingErrors:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
