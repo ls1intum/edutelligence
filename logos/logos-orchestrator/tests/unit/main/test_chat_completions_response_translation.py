@@ -244,3 +244,39 @@ async def test_pre_stream_error_keeps_the_openai_error_shape(monkeypatch):
     assert response.status_code == 429
     assert body["error"]["message"] == "Overloaded"
     assert "type" not in body
+
+
+@pytest.mark.asyncio
+async def test_a_silent_terminal_failure_is_not_closed_as_a_complete_answer(monkeypatch):
+    """A caught post-yield failure ends the iterator without raising.
+
+    It therefore reaches the normal close rather than the except branch, and
+    finishing the translated stream there would emit a finish_reason and
+    [DONE] — a truncated answer the client cannot tell from a complete one.
+    """
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    _passthrough_resolver(monkeypatch)
+
+    pipeline, _, _ = _make_pipeline(
+        stream_chunks=[
+            b'event: message_start\ndata: {"type":"message_start","message":'
+            b'{"id":"msg_t","model":"claude-opus-5"}}\n\n',
+            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+            b'"delta":{"type":"text_delta","text":"partial"}}\n\n',
+        ],
+        stream_headers={"Content-Type": "text/event-stream"},
+        terminal_status_error="upstream went away",
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        CLAUDE_CONTEXT, CHAT_BODY, 85, 12, 27, -1, {"policy": "ok"}, request_path="v1/chat/completions"
+    )
+    frames = _frames(await _read_stream_response(response))
+
+    assert frames[-2]["error"]["message"] == "upstream went away"
+    assert frames[-1] == "[DONE]"
+    assert not any(
+        frame != "[DONE]" and frame.get("choices") and frame["choices"][0].get("finish_reason") for frame in frames
+    )

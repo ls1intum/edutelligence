@@ -495,10 +495,17 @@ class MessagesStreamTranslator:
             return []
 
         event = str(frame.get("type") or "")
-        if event == "error":
+        # Anthropic's own error event carries ``type: "error"``; a frame with
+        # nothing but an ``error`` object is the one Logos appends itself when
+        # its forwarding breaks after the first byte (see ``Executor.
+        # execute_streaming``). Both mean the turn did not complete, and
+        # missing the second would let a failed stream reach the client as a
+        # finished answer.
+        if event == "error" or isinstance(frame.get("error"), (dict, str)):
             error = frame.get("error") if isinstance(frame.get("error"), dict) else {}
+            message = error.get("message") if isinstance(error, dict) else frame.get("error")
             return self.error(
-                str(error.get("message") or "upstream stream error"),
+                str(message or "upstream stream error"),
                 str(error.get("type") or "api_error"),
             )
         if event == "message_start":

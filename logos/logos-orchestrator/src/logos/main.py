@@ -2080,11 +2080,25 @@ async def _streaming_response(
                     for client_chunk in client_chunks(outgoing_chunk):
                         yield client_chunk
             if translated_stream:
-                # Idempotent: a stream that already ended on its protocol's
-                # terminal event ([DONE], response.completed, message_stop) has
-                # emitted its own, and this closes one that simply ran out of
-                # bytes.
-                for client_chunk in translated_stream.finish():
+                # A mid-stream failure the executor caught after the first byte
+                # ends the iterator without raising, so it reaches here rather
+                # than the except branch below — and closing the translated
+                # stream normally would hand the client a terminal event, i.e.
+                # a truncated answer that reads as a complete one. On an SSE
+                # upstream the executor also appends an error frame, which the
+                # translator has already turned into one of its own; both calls
+                # are idempotent, so whichever ran first wins.
+                #
+                # Otherwise this is the ordinary close: idempotent again, since
+                # a stream that ended on its protocol's terminal event ([DONE],
+                # response.completed, message_stop) has emitted its own, and
+                # this closes one that simply ran out of bytes.
+                terminal_chunks = (
+                    translated_stream.error(stream_status.error)
+                    if stream_status.error is not None
+                    else translated_stream.finish()
+                )
+                for client_chunk in terminal_chunks:
                     yield client_chunk
         except Exception as exc:
             error_message = str(exc)

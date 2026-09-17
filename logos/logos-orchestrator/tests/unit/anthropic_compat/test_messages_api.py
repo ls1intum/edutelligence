@@ -535,3 +535,26 @@ def test_a_stream_that_never_terminated_is_still_closed():
     frames = _frames(translator.finish())
     assert frames[0]["choices"][0]["finish_reason"] == "stop"
     assert frames[-1] == "[DONE]"
+
+
+def test_an_error_frame_logos_appended_itself_is_recognised():
+    """The executor's own recovery frame is OpenAI-shaped, not Anthropic.
+
+    When forwarding breaks after the first byte, ``Executor.execute_streaming``
+    appends ``data: {"error": {...}}`` to the upstream stream rather than
+    raising. It carries no ``type: "error"``, so a translator that only looks
+    for Anthropic's event would drop it and then close the stream normally —
+    handing the client a truncated answer that reads as a complete one.
+    """
+    translator = MessagesStreamTranslator("claude-opus-5")
+    chunks = translator.feed(
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_r","model":"m"}}\n\n'
+    )
+    chunks += translator.feed(b'data: {"error": {"message": "connection reset", "type": "api_error"}}\n\n')
+    frames = _frames(chunks)
+
+    assert frames[-2] == {"error": {"message": "connection reset", "type": "api_error"}}
+    assert frames[-1] == "[DONE]"
+    # And the stream is closed, so the [DONE] the executor appends next cannot
+    # be followed by a terminal choice from finish().
+    assert translator.finish() == []
