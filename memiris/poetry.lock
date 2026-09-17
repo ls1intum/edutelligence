@@ -1832,26 +1832,26 @@ langchain-core = ">=1.2.31,<2.0.0"
 
 [[package]]
 name = "langfuse"
-version = "4.15.4"
-description = "Langfuse Python SDK - LLM observability/tracing, datasets, experiments, LLM-as-a-judge evaluation, and prompt management"
+version = "3.15.0"
+description = "A client library for accessing langfuse"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "langfuse-4.15.4-py3-none-any.whl", hash = "sha256:8e75c70b1522a722a11ab6c7d88e27534a5d0c3844a1a464ac5eb548b014e9c3"},
-    {file = "langfuse-4.15.4.tar.gz", hash = "sha256:b9a36194f4e968206d919313c24ea71c6ea68e21286370b01de752d20b26e7a3"},
+    {file = "langfuse-3.15.0-py3-none-any.whl", hash = "sha256:66a3c2b75af9402ffc13690fce73181325d6f78e723463e38844b317d37279ac"},
+    {file = "langfuse-3.15.0.tar.gz", hash = "sha256:4b6453c82c8159e5f0655ced24b145ed8279b47382a6b4a6d7a57111ef922181"},
 ]
 
 [package.dependencies]
 backoff = ">=1.10.0"
 httpx = ">=0.15.4,<1.0"
-opentelemetry-api = ">=1.33.1,<2"
-opentelemetry-exporter-otlp-proto-http = ">=1.33.1,<2"
-opentelemetry-sdk = ">=1.33.1,<2"
-packaging = ">=23.2,<27.0"
-pydantic = ">=2,<3"
-typing-extensions = ">=4.12.2,<5"
-wrapt = ">=1.14,<3"
+openai = ">=0.27.8"
+opentelemetry-api = ">=1.33.1,<2.0.0"
+opentelemetry-exporter-otlp-proto-http = ">=1.33.1,<2.0.0"
+opentelemetry-sdk = ">=1.33.1,<2.0.0"
+packaging = ">=23.2,<26.0"
+pydantic = ">=1.10.7,<3.0"
+wrapt = ">=1.14,<2.0"
 
 [[package]]
 name = "langgraph"
@@ -4786,4 +4786,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4.0.0"
-content-hash = "34e464ac04fa151a20dfd7c753305512bb0f61d26e9bc320d50fe1b237dd5083"
+content-hash = "38bf41f142e22e8719abcef6204ae289c144da3372967df8f8bca238109e2e30"
