@@ -106,6 +106,53 @@ docker compose exec logos-orchestrator python /app/tests/performance/run_api_wor
   --workload /app/tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv
 ```
 
+Remote run against a deployed environment (http-only, from a workstation):
+
+The runtime snapshots (`runtime_samples.jsonl`) come from the internal
+endpoints `/logosdb/scheduler_state` and
+`/logosdb/providers/logosnode/status`. Both live on the orchestrator container's
+port 8080, which is **compose-network-internal**: `logos-orchestrator` has
+`expose: 8080` but no host port, and the host's published `:8080` is Traefik's
+TLS `secure8080` entrypoint, *not* the orchestrator. So the telemetry base must
+reach the orchestrator through an authenticated tunnel to its **bridge
+address** (the Docker host routes to compose-network IPs), keeping the cleartext
+hop on your own loopback:
+
+```bash
+# 1) The orchestrator's address on the compose network (its single `internal`
+#    bridge network; the host can reach this IP directly).
+ORCH_IP=$(ssh "$VM_USERNAME"@"$VM_HOST" \
+  "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' logos-orchestrator")
+
+# 2) Authenticated tunnel: local loopback 18443 -> orchestrator :8080.
+ssh -N -L 18443:"$ORCH_IP":8080 "$VM_USERNAME"@"$VM_HOST" &
+
+# 3) Run the benchmark: public API for /v1, tunneled loopback base for telemetry.
+./tests/performance/test_scheduling_performance.sh \
+  --logos-key "<ROOT_LOGOS_KEY>" \
+  --api-base "https://logos.example.org" \
+  --telemetry-base "http://127.0.0.1:18443" \
+  --internal-secret "$LOGOS_INTERNAL_SECRET" \
+  --workload tests/performance/workloads/explicit/10m/workload_explicit_local5_skewed_bursty_10m.csv
+```
+
+The two telemetry endpoints use **different credentials**:
+
+- `/logosdb/scheduler_state` — the shared internal secret, sent as a Bearer
+  token (`--internal-secret` / `LOGOS_INTERNAL_SECRET`).
+- `/logosdb/providers/logosnode/status` — a **root** `logos_key` (the
+  `--logos-key`), *not* the internal secret. Use a root/admin key or the
+  provider-status half of each snapshot is missing.
+
+Because the secret rides the telemetry base as a Bearer token, `--telemetry-base`
+must keep it off any link you don't control: use an **HTTPS** telemetry URL, or
+an **authenticated tunnel to a local port** as above (the cleartext hop is then
+confined to your own loopback). The runner refuses a plain-HTTP `--telemetry-base`
+for a non-local host, because that would put the shared secret in cleartext on the
+workstation-to-deployment link. If the telemetry base is not reachable the run
+still completes, but `runtime_samples.jsonl` is empty and the runner prints a
+warning; `run_meta.json` records `telemetry_base` and `telemetry_ok`.
+
 ## What Gets Saved
 
 Each run is written into its own folder using the wrapper host's local timestamp:

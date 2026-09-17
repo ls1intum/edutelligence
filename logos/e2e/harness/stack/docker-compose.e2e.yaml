@@ -84,6 +84,13 @@ services:
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "true"
       LOGOS_CAPACITY_PLANNER_ENABLED: "true"
       LOGOS_SCHEDULER_ETTFT_ENABLED: "true"
+      # The healthcheck below probes /docs as a "server is up" signal. Docs are
+      # off by default after the API hardening, so without this /docs returns
+      # 404, the container stays unhealthy, and `compose up --wait` aborts
+      # before any test runs. This is an isolated e2e network (no public
+      # exposure), so re-enabling the endpoint map is safe and matches the
+      # dev compose.
+      LOGOS_DOCS_ENABLED: "1"
       LOGOS_INTERNAL_SECRET: "logos-e2e-internal-secret"
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "120"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "120"

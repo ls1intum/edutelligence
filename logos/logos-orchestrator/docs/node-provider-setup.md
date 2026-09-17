@@ -148,10 +148,9 @@ curl -X POST https://logos.example.com/logosdb/providers/logosnode/status \
 
 ## 8. Connect a model to the provider
 
-Use the normal Logos DB endpoints:
-- `POST /logosdb/get_models`
-- `POST /logosdb/connect_model_provider`
-- `POST /logosdb/connect_profile_model`
+Use the Logos UI (Providers → connect model) or the webservice's admin API
+(`/api/logosdb/connect_model_provider`, Keycloak-authenticated — the
+orchestrator no longer exposes these paths with a plain API key).
 
 ## 9. Scheduling & Capacity Management
 
