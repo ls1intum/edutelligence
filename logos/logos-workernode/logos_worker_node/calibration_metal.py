@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from logos_worker_node.calibration import (
     _FATAL_PROBE_MODEL_KINDS,
@@ -289,6 +289,7 @@ def calibrate_model_metal(
     ready_timeout_s: float,
     cancel_event: threading.Event | None = None,
     worker_metal_config: MetalConfig | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Single-point calibration for a model served on the Metal backend.
 
@@ -367,6 +368,12 @@ def calibrate_model_metal(
     proc: subprocess.Popen[str] | None = None
     try:
         proc = _spawn_vllm_metal(cmd, log_path, worker_metal_config, plan.get("env_overrides"))
+        # Make the live process reachable to stop_calibration_session: it
+        # has no other way to unblock the plain blocking warmup call below
+        # once its 15s grace period elapses (see kill_current_proc in
+        # logos_bridge.py).
+        if proc_callback is not None:
+            proc_callback(proc)
         wait_ready(base_url, ready_timeout_s, proc, cancel_event=cancel_event)
 
         if cancel_event is not None and cancel_event.is_set():
@@ -381,6 +388,12 @@ def calibrate_model_metal(
         model_kind = _resolve_probed_model_kind(base_url, model, model_kind)
 
         served = warmup_inference(base_url, model, model_kind=model_kind)
+        # A killed-to-unblock probe answers this call with a connection
+        # error just like a genuine failure — check cancellation first so
+        # it reports as "cancelled", not as a crash/serving-failure verdict.
+        if cancel_event is not None and cancel_event.is_set():
+            result.error = "cancelled"
+            return result
         if not served:
             if model_kind in _FATAL_PROBE_MODEL_KINDS:
                 # A classified pooling/transcription model has a real,
@@ -437,5 +450,7 @@ def calibrate_model_metal(
         )
         return result
     finally:
+        if proc_callback is not None:
+            proc_callback(None)
         if proc is not None:
             stop_vllm(proc)

@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -78,6 +79,30 @@ class _CalibrationSession:
         # Updated by the session driver as it walks the model list — surfaced
         # so a future status RPC could inspect what's running without polling.
         self.current_model: str | None = None
+        # The live probe subprocess, set by the session driver right after
+        # each spawn. warmup_inference has no cancel_event support — it's a
+        # plain blocking HTTP call — so this is stop_calibration_session's
+        # only way to unblock one once its grace period elapses.
+        self._current_proc: subprocess.Popen[str] | None = None
+        self._proc_lock = threading.Lock()
+
+    def set_current_proc(self, proc: subprocess.Popen[str] | None) -> None:
+        with self._proc_lock:
+            self._current_proc = proc
+
+    def kill_current_proc(self) -> None:
+        """Force-stop the running probe subprocess, if any.
+
+        Makes a blocking warmup/probe HTTP call fail immediately with a
+        connection error instead of waiting out its full 600s/120s timeout.
+        """
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc is None:
+            return
+        from logos_worker_node.calibration import stop_vllm  # noqa: PLC0415
+
+        stop_vllm(proc)
 
 
 # ANSI color codes for structured log output
@@ -1333,7 +1358,9 @@ class LogosBridgeClient:
         Sets the cancel_event so the calibration's wait_ready polling kills
         the running vLLM probe within ~2s, then awaits the session task
         briefly so the terminal ``calibration_session_cancelled`` event is
-        emitted before the RPC reply.
+        emitted before the RPC reply. If that grace period elapses with the
+        probe stuck inside a blocking warmup call instead, kills the probe
+        subprocess directly so the RPC reply doesn't outlive it by minutes.
         """
         session = self._active_calibration_session
         if session is None:
@@ -1345,10 +1372,13 @@ class LogosBridgeClient:
             try:
                 await asyncio.wait_for(asyncio.shield(session.task), timeout=15.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
-                # Session is still wrapping up (subprocess teardown). The
-                # terminal event will arrive on the event channel when it
-                # does. Don't block the RPC longer than 15s.
-                pass
+                # Session is still wrapping up. A blocking warmup/probe HTTP
+                # call has no cancel_event support and can otherwise hold
+                # the subprocess for up to its 600s/120s timeout — kill it
+                # directly so that call fails fast and the session unwinds
+                # promptly. The terminal event still arrives on the event
+                # channel once it does; don't block the RPC longer than 15s.
+                session.kill_current_proc()
         logger.info(
             "[Calibration] stop_calibration_session received — cancelled (current_model=%s)",
             current_model or "<none>",
@@ -1887,6 +1917,7 @@ class LogosBridgeClient:
                                 ready_timeout_s=_READY_TIMEOUT_S,
                                 cancel_event=session.cancel_event,
                                 worker_metal_config=cfg.engines.metal,
+                                proc_callback=session.set_current_proc,
                             ),
                         )
                     else:
@@ -1903,6 +1934,7 @@ class LogosBridgeClient:
                                 model_cache=_mc,
                                 cancel_event=session.cancel_event,
                                 establish_host_ram_floor=_establish_host_ram_floor_for_probe,
+                                proc_callback=session.set_current_proc,
                             ),
                         )
                 except Exception as exc:  # noqa: BLE001

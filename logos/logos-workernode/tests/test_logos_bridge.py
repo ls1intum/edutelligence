@@ -1191,6 +1191,55 @@ async def test_stop_calibration_session_sets_cancel_event(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stop_calibration_session_kills_stuck_probe_after_grace_period(tmp_path, monkeypatch):
+    """A cancel that lands inside the blocking warmup HTTP call (no
+    cancel_event support there) leaves wait_ready's usual ~2s bail-out
+    unusable — the session task simply won't finish within the 15s grace
+    period. The stop handler must then kill the registered probe
+    subprocess directly rather than let it hold the GPU for the warmup's
+    full 600s/120s timeout."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=[],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    from logos_worker_node.logos_bridge import _CalibrationSession
+
+    session = _CalibrationSession(sleep_level=1)
+    session.current_model = "test/model"
+    fake_proc = MagicMock()
+    session.set_current_proc(fake_proc)
+
+    # Never finishes on its own — simulates a probe stuck inside the
+    # blocking warmup call.
+    session.task = asyncio.create_task(asyncio.sleep(60))
+    client._active_calibration_session = session  # noqa: SLF001
+
+    stop_vllm_mock = MagicMock()
+    monkeypatch.setattr("logos_worker_node.calibration.stop_vllm", stop_vllm_mock)
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.asyncio.wait_for",
+        AsyncMock(side_effect=asyncio.TimeoutError),
+    )
+
+    response = await client._handle_stop_calibration_session()  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["was_active"] is True
+    stop_vllm_mock.assert_called_once_with(fake_proc)
+
+    session.task.cancel()
+    try:
+        await session.task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
 async def test_stop_calibration_session_idempotent_when_no_session(tmp_path):
     """A stop with no active session is a no-op — important so the master
     can fire it on window close without worrying whether a session is

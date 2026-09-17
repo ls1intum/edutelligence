@@ -1609,6 +1609,7 @@ def calibrate_model(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker — the public entry point.
 
@@ -1657,6 +1658,7 @@ def calibrate_model(
             cancel_event=cancel_event,
             cache_use_reserved=cache_use_reserved,
             establish_host_ram_floor=establish_host_ram_floor,
+            proc_callback=proc_callback,
         )
     finally:
         # Release on EVERY exit — a failed, cancelled, or early-returned run
@@ -1679,6 +1681,7 @@ def _calibrate_model_probe(
     cancel_event: threading.Event | None = None,
     cache_use_reserved: list[bool],
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker and return a :class:`CalibrationResult`.
 
@@ -2763,6 +2766,12 @@ def _calibrate_model_probe(
         partial.error = "cancelled"
         return partial
 
+    # Make the live process reachable to stop_calibration_session: it has
+    # no other way to unblock the plain blocking warmup call below once its
+    # 15s grace period elapses (see kill_current_proc in logos_bridge.py).
+    if proc_callback is not None:
+        proc_callback(proc)
+
     # Ground-truth check before trusting a fatal probe: does this vLLM
     # process actually serve model_kind's endpoint at all? See
     # _resolve_probed_model_kind — downgrades to "generative" on a
@@ -2786,6 +2795,13 @@ def _calibrate_model_probe(
         warmup_t0 = time.perf_counter()
         warmup_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
         warmup_dt = time.perf_counter() - warmup_t0
+        # A killed-to-unblock probe answers this call with a connection
+        # error just like a genuine failure — check cancellation first so
+        # it reports as "cancelled", not as a fatal/serving-failure verdict.
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("  Calibration cancelled during warmup.")
+            partial.error = "cancelled"
+            return partial
         if warmup_ok:
             logger.info(
                 "        warmup done in %.1fs — graphs/JIT/KV pools allocated",
@@ -3016,6 +3032,10 @@ def _calibrate_model_probe(
                     # unusable as one that never wakes. Same call as the Phase
                     # 2.5 warmup — one 1-token completion.
                     post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
+                    if cancel_event is not None and cancel_event.is_set():
+                        logger.info("  Calibration cancelled during post-wake warmup.")
+                        partial.error = "cancelled"
+                        return partial
                     if not post_wake_ok and warmup_ok:
                         # Served before sleep but not after: the sleep/wake
                         # cycle broke serving.
@@ -3133,6 +3153,8 @@ def _calibrate_model_probe(
         )
 
     finally:
+        if proc_callback is not None:
+            proc_callback(None)
         logger.info("  Stopping vLLM...")
         stop_vllm(proc)
         # Kill any orphaned TP workers left behind by CUDA/NCCL crashes during
@@ -3521,6 +3543,7 @@ def _try_calibrate(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -3537,6 +3560,7 @@ def _try_calibrate(
             model_cache=model_cache,
             cancel_event=cancel_event,
             establish_host_ram_floor=establish_host_ram_floor,
+            proc_callback=proc_callback,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -3564,6 +3588,7 @@ def calibrate_with_tp_escalation(
     available_gpus: int | None = None,
     cancel_event: threading.Event | None = None,
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model using a max-first, search-down TP strategy.
 
@@ -3624,6 +3649,7 @@ def calibrate_with_tp_escalation(
         model_cache=_mc,
         cancel_event=cancel_event,
         establish_host_ram_floor=establish_host_ram_floor,
+        proc_callback=proc_callback,
     )
 
     def _retry_with_trust_remote_code_if_needed(
