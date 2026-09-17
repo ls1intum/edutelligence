@@ -100,7 +100,7 @@ The worker API only exposes its root (plus FastAPI's `/docs`); it has no
 outbound session — check it on the server side in step 7:
 
 ```bash
-# Service info; port is WORKER_PORT (default 80)
+# Service info (the production worker listens on port 80)
 curl http://localhost:80/
 ```
 
