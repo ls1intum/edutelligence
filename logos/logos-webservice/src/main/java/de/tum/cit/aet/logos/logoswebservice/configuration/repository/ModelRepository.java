@@ -62,7 +62,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
             SELECT le.provider_id
             FROM log_entry le
             WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
-            ORDER BY le.timestamp_request DESC
+            ORDER BY le.timestamp_request DESC, le.id DESC
             LIMIT 1
         ) dp ON true
         WHERE m.id = :modelId
@@ -109,8 +109,11 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
         FROM models m
         -- A model can be served by several providers, each with its own catalog
         -- price. Show the price for the provider the model was most recently
-        -- routed to; a never-used model falls through to a stable provider_id
-        -- tiebreak so the figure never flips between equal valid_from rows.
+        -- routed to; requests sharing the newest timestamp_request are broken
+        -- by log_entry.id, so the picked provider — and the price shown for it —
+        -- is deterministic; a never-used model falls through to a stable
+        -- provider_id tiebreak so the figure never flips between equal
+        -- valid_from rows.
         --
         -- idx_log_entry_model_provider_recent (migration 036) is what makes this
         -- a seek. It has to carry provider_id, because the IS NOT NULL below is
@@ -118,12 +121,14 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
         -- the lateral from a (model_id, timestamp_request) index and falls back
         -- to one with model_id in third position, which is not seekable on
         -- equality. That cost 195 ms per model on production - 9.5 s for one
-        -- page load - so do not drop the INCLUDE.
+        -- page load - so do not drop the INCLUDE. The log_entry.id tiebreak
+        -- only applies within rows sharing one timestamp_request, so the index
+        -- still answers the lateral.
         LEFT JOIN LATERAL (
             SELECT le.provider_id
             FROM log_entry le
             WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
-            ORDER BY le.timestamp_request DESC
+            ORDER BY le.timestamp_request DESC, le.id DESC
             LIMIT 1
         ) dp ON true
         ORDER BY m.id
@@ -191,7 +196,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
             SELECT le.provider_id
             FROM log_entry le
             WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
-            ORDER BY le.timestamp_request DESC
+            ORDER BY le.timestamp_request DESC, le.id DESC
             LIMIT 1
         ) dp ON true
         ORDER BY m.id

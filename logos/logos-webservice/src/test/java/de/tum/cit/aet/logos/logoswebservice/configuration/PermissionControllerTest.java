@@ -1,16 +1,27 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamProviderPermissionRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PermissionService;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -39,6 +50,9 @@ class PermissionControllerTest {
 
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
+    @Autowired DataSource dataSource;
+    @Autowired PlatformTransactionManager txManager;
+    @Autowired TeamProviderPermissionRepository teamProviderRepo;
     @MockitoBean JwtDecoder jwtDecoder;
 
     @Test
@@ -329,5 +343,42 @@ class PermissionControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1))
            .andExpect(jsonPath("$[0]").value(5002));
+    }
+
+    /**
+     * Pins the advisory-lock contract behind the concurrent revoke/grant fix:
+     * every team provider-permission mutation (full-set PUT, atomic add,
+     * atomic remove) takes the same per-team, transaction-scoped lock first,
+     * so a concurrent mutation cannot commit between another mutation's
+     * targeted row write and its model-grant cascade under READ COMMITTED.
+     */
+    @Test
+    void teamProviderPermissionMutations_areSerializedPerTeam() throws Exception {
+        DefaultTransactionDefinition def = new DefaultTransactionDefinition();
+        TransactionStatus status = txManager.getTransaction(def);
+        try {
+            // The very lock the add/remove/PUT paths acquire first.
+            teamProviderRepo.lockTeamProviderPermissions(PermissionService.teamProviderPermsLockKey(2001));
+
+            // A concurrent mutation of team 2001 would block on the held lock...
+            assertFalse(tryLockOnFreshConnection(PermissionService.teamProviderPermsLockKey(2001)));
+            // ...while another team's mutation namespace is untouched.
+            assertTrue(tryLockOnFreshConnection(PermissionService.teamProviderPermsLockKey(2002)));
+        } finally {
+            txManager.rollback(status);
+        }
+    }
+
+    /**
+     * pg_try_advisory_xact_lock on a physically fresh (autocommit) connection:
+     * true iff the key is currently free.
+     */
+    private boolean tryLockOnFreshConnection(long key) throws Exception {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement("SELECT pg_try_advisory_xact_lock(" + key + ")");
+             ResultSet rs = ps.executeQuery()) {
+            assertTrue(rs.next());
+            return rs.getBoolean(1);
+        }
     }
 }

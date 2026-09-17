@@ -15,6 +15,24 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamProvide
 @Service
 public class PermissionService {
 
+    /**
+     * Stable key space for per-team provider-permission mutation locks:
+     * {@code TEAM_PROVIDER_PERMS_LOCK_BASE + teamId}, keeping the keys
+     * disjoint from other advisory-lock namespaces.
+     */
+    private static final long TEAM_PROVIDER_PERMS_LOCK_BASE = 0x5445414D5045524DL; // "TEAMPERM"
+
+    /**
+     * Advisory-lock key serializing one team's provider-permission mutations.
+     * All mutation paths (full-set PUT, atomic add, atomic remove) acquire
+     * {@code pg_advisory_xact_lock} with this key first, so under READ
+     * COMMITTED a concurrent mutation cannot commit between another
+     * mutation's targeted row write and its model-grant cascade.
+     */
+    public static long teamProviderPermsLockKey(int teamId) {
+        return TEAM_PROVIDER_PERMS_LOCK_BASE + teamId;
+    }
+
     private final ApiKeyModelPermissionRepository apiKeyModelRepo;
     private final ApiKeyProviderPermissionRepository apiKeyProviderRepo;
     private final TeamModelPermissionRepository teamModelRepo;
@@ -74,6 +92,7 @@ public class PermissionService {
 
     @Transactional
     public void setTeamProviderPermissions(int teamId, List<Integer> providerIds) {
+        teamProviderRepo.lockTeamProviderPermissions(teamProviderPermsLockKey(teamId));
         teamProviderRepo.deleteById_TeamId(teamId);
         teamProviderRepo.saveAll(providerIds.stream()
             .map(pid -> new TeamProviderPermission(teamId, pid)).toList());
@@ -89,6 +108,7 @@ public class PermissionService {
      */
     @Transactional
     public void addTeamProviderPermission(int teamId, Integer providerId) {
+        teamProviderRepo.lockTeamProviderPermissions(teamProviderPermsLockKey(teamId));
         teamProviderRepo.grantIfAbsent(teamId, providerId);
     }
 
@@ -106,6 +126,7 @@ public class PermissionService {
      */
     @Transactional
     public void removeTeamProviderPermission(int teamId, Integer providerId) {
+        teamProviderRepo.lockTeamProviderPermissions(teamProviderPermsLockKey(teamId));
         teamProviderRepo.revoke(teamId, providerId);
         teamModelRepo.deleteCascadeForTeam(teamId);
     }

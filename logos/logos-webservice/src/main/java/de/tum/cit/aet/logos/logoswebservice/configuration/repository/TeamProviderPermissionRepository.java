@@ -14,6 +14,16 @@ public interface TeamProviderPermissionRepository
 
     List<TeamProviderPermission> findById_TeamId(Integer teamId);
 
+    /**
+     * Acquires a transaction-scoped advisory lock on the given key, blocking
+     * until any other holder's transaction commits or rolls back. Used to
+     * serialize one team's provider-permission mutations (see
+     * {@code PermissionService#teamProviderPermsLockKey}); released
+     * automatically with the surrounding transaction.
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(:key)", nativeQuery = true)
+    void lockTeamProviderPermissions(@Param("key") long key);
+
     @Transactional
     void deleteById_TeamId(Integer teamId);
 
