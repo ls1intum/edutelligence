@@ -186,6 +186,40 @@ def test_a_dead_or_tampered_credential_is_a_401_like_any_bad_key(monkeypatch):
     assert fake.seen_by_id is None
 
 
+def test_repeated_failed_auth_from_one_ip_is_rate_limited(monkeypatch):
+    from logos import rate_limiter as rate_limiter_mod
+
+    monkeypatch.setattr(rate_limiter_mod, "_rate_limiter", rate_limiter_mod.InMemoryRateLimiter())
+    monkeypatch.setattr(rate_limiter_mod, "AUTH_FAILURE_RPM", 2)
+    _patch_db(monkeypatch, None)
+
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc:
+            auth.authenticate_api_key({"logos-key": "bad-key"}, client_ip="198.51.100.9")
+        assert exc.value.status_code == 401
+
+    with pytest.raises(HTTPException) as exc:
+        auth.authenticate_api_key({"logos-key": "bad-key"}, client_ip="198.51.100.9")
+    assert exc.value.status_code == 429
+
+    # A different source address still has its own budget.
+    with pytest.raises(HTTPException) as exc:
+        auth.authenticate_api_key({"logos-key": "bad-key"}, client_ip="198.51.100.10")
+    assert exc.value.status_code == 401
+
+
+def test_successful_auth_never_spends_the_failure_budget(monkeypatch):
+    from logos import rate_limiter as rate_limiter_mod
+
+    monkeypatch.setattr(rate_limiter_mod, "_rate_limiter", rate_limiter_mod.InMemoryRateLimiter())
+    monkeypatch.setattr(rate_limiter_mod, "AUTH_FAILURE_RPM", 1)
+    _patch_db(monkeypatch, _api_key_row("lg-test-abc"))
+
+    for _ in range(10):
+        ctx = auth.authenticate_api_key({"logos-key": "lg-test-abc"}, client_ip="198.51.100.9")
+        assert ctx.key_value == "lg-test-abc"
+
+
 def test_the_global_key_auth_refuses_a_batch_credential(monkeypatch):
     # The credential is a batch-only bearer: every other route authenticates
     # with key values alone, so it must 401 there — otherwise it would open

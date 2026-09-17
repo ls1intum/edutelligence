@@ -3362,7 +3362,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     # callers from consuming the audio upload/base64 memory budget.
     headers = dict(request.headers)
     client_ip = get_client_ip(request)
-    auth = authenticate_api_key(headers) if use_profile_auth else None
+    auth = authenticate_api_key(headers, client_ip=client_ip) if use_profile_auth else None
 
     # OpenAI-compatible audio uploads use multipart/form-data. Other inference
     # operations retain the existing JSON request contract.
