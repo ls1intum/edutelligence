@@ -178,7 +178,7 @@
     <!-- Where a session's answer is posted when it finishes. The agent
          phase holds no GitHub credential, so it writes its reply into its
          artefact directory and the runner posts it — this column is what
-         tells the runner where: '<issue-id>' for a thread, or
+         tells the runner where: 'issue:<number>' for a thread, or
          'review_comment:772:3910035243' to answer inside an inline review
          thread. Null for sessions nobody asked a question. -->
     <changeSet id="020-agent-session-reply-target" author="logos">
