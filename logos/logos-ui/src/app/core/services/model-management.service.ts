@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { ModelBenchmarkResponse, StartModelBenchmarkResponse } from '../../shared/models/provider.model';
+import { ModelPriceResponse } from '../../shared/models/model-price.model';
 
 @Injectable({ providedIn: 'root' })
 export class ModelManagementService {
@@ -10,6 +11,19 @@ export class ModelManagementService {
 
   getModels(): Promise<Model[]> {
     return firstValueFrom(this.http.post<Model[]>('/api/logosdb/get_models', {}));
+  }
+
+  /**
+   * Current and historic catalogue prices for one model, grouped per
+   * linked provider. Only logos admins may read it (model details page).
+   */
+  getModelPrices(modelId: number): Promise<ModelPriceResponse> {
+    return firstValueFrom(
+      this.http.post<ModelPriceResponse>(
+        '/api/logosdb/get_model_prices',
+        { id: modelId },
+      ),
+    );
   }
 
   getBenchmarks(modelId: number): Promise<ModelBenchmarkResponse> {
@@ -52,7 +66,7 @@ export class ModelManagementService {
     );
   }
 
-  /** Returns the id of the newly created model (the backend replies `{ model_id }`). */
+  /** Returns the id of the newly created model (the application server replies `{ model_id }`). */
   async addModel(payload: AddModelPayload): Promise<number> {
     const res = await firstValueFrom(
       this.http.post<{ model_id: number }>('/api/logosdb/add_model', payload),
@@ -60,7 +74,7 @@ export class ModelManagementService {
     return res.model_id;
   }
 
-  /** The backend replies `{ result }` only; no model body is returned. */
+  /** the application server replies `{ result }` only; no model body is returned. */
   async updateModel(payload: UpdateModelPayload): Promise<void> {
     await firstValueFrom(this.http.post('/api/logosdb/update_model_info', payload));
   }

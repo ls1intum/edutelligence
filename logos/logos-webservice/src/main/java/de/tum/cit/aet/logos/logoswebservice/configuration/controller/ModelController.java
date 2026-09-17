@@ -22,6 +22,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabiliti
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelPriceService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
@@ -35,17 +36,20 @@ import jakarta.servlet.http.HttpServletRequest;
 public class ModelController {
 
     private final ModelService modelService;
+    private final ModelPriceService modelPriceService;
     private final PriceUpdaterService priceUpdaterService;
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
     private final ObjectMapper objectMapper;
 
     public ModelController(ModelService modelService,
+                           ModelPriceService modelPriceService,
                            PriceUpdaterService priceUpdaterService,
                            ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
                            OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient,
                            ObjectMapper objectMapper) {
         this.modelService = modelService;
+        this.modelPriceService = modelPriceService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
@@ -148,6 +152,23 @@ public class ModelController {
             @RequestBody GetModelRequestDTO req) {
         if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
         return modelService.getModel(req.id())
+            .map(ResponseEntity::ok)
+            .<ResponseEntity<?>>map(r -> r)
+            .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
+    /**
+     * Current and historic catalogue prices for one model, grouped per
+     * linked provider. Backs the Prices tab of the model details page,
+     * which the UI hides for models served only by local (logosnode)
+     * providers — those simply carry no price rows.
+     */
+    @PostMapping("/get_model_prices")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getModelPrices(
+            @RequestBody GetModelRequestDTO req) {
+        if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
+        return modelPriceService.getModelPrices(req.id())
             .map(ResponseEntity::ok)
             .<ResponseEntity<?>>map(r -> r)
             .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));

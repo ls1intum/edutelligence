@@ -201,6 +201,7 @@ services:
       # blocks). Off restores the previous random tie-break placement.
       LOGOS_PREFIX_AFFINITY_ENABLED: "${LOGOS_PREFIX_AFFINITY_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
+      HF_TOKEN: "${HF_TOKEN:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       # API docs (/docs, /redoc, /openapi.json) publish the full endpoint
@@ -253,7 +254,7 @@ services:
       # router priority (UI catch-all 0 < orchestrator 100 < webservice 200).
 
       # === Routing: /api (all UI-internal endpoints) ===
-      # Backend strips the `/api` prefix, so adding a new admin endpoint
+      # application server strips the `/api` prefix, so adding a new admin endpoint
       # requires no change here — just a new FastAPI route under any path.
       # rl-admin, not rl-model: the gateway classifies /api as control-plane
       # traffic, so the second layer must carry the control-plane budget

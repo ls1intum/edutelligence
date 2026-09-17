@@ -314,6 +314,9 @@ class ProviderSession:
     # discover uncalibrated models (capabilities_models only contains
     # already-calibrated entries that are safe to route requests to).
     configured_models: set[str] = field(default_factory=set)
+    # Unlike last_heartbeat, this never moves for the life of the session —
+    # the "ws connection uptime" baseline for the stats page.
+    connected_at: datetime = field(default_factory=_utc_now)
     last_heartbeat: datetime = field(default_factory=_utc_now)
     first_status_received: bool = False
     latest_runtime: dict[str, Any] = field(default_factory=dict)
@@ -1374,6 +1377,7 @@ class LogosNodeRuntimeRegistry:
             "capabilities_models": sorted(session.capabilities_models),
             "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
+            "connected_at": session.connected_at.isoformat(),
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
             "events": list(session.latest_events),

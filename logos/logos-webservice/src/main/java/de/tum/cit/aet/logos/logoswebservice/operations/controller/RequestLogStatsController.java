@@ -22,7 +22,7 @@ import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsSe
  * fallback to hide behind. The {@code /ws/stats/v2} handshake and
  * {@code /logosdb/latest_requests} apply the same rule to the same rows;
  * leaving these two open would let a caller read one team's spend that the
- * team activity endpoint (issue #776) refuses them. Team owners get their
+ * team activity endpoint refuses them. Team owners get their
  * slice there, scoped and checked.
  */
 @RestController

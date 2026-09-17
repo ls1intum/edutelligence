@@ -34,7 +34,7 @@ from logos_worker_node.vllm_process import VllmProcessHandle, effective_gmu
 
 logger = logging.getLogger("logos_worker_node.lane_manager")
 
-# Type for the backend process handle (vLLM is the only engine)
+# Type for the application server process handle (vLLM is the only engine)
 ProcessHandle = VllmProcessHandle
 
 _DEFAULT_PORT_START = 11436
@@ -381,7 +381,7 @@ class LaneManager:
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
-        # GPUs held by a running calibration session (issue #592). Non-None while
+        # GPUs held by a running calibration session. Non-None while
         # a session is live: auto-placement must not put new lanes on these GPUs
         # and an explicit lane targeting them is refused, so the calibration's
         # probe keeps the slice's VRAM to itself. Leftover GPUs stay placeable.
@@ -453,7 +453,7 @@ class LaneManager:
         for model_name in capabilities_models:
             # Check HF cache (transformers style: models--org--name)
             hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
-            # Check direct model path (ollama-style models dir, and — on
+            # Check direct model path (legacy models directory, and — on
             # backends with their own cache root — a model dir placed there)
             checked = [os.path.join(models_path, model_name)]
             if cache_root:
@@ -489,7 +489,7 @@ class LaneManager:
         return lane_id in self._static_lane_ids
 
     # ------------------------------------------------------------------
-    # Calibration session (issue #592)
+    # Calibration session
     # ------------------------------------------------------------------
 
     @property
@@ -1596,7 +1596,7 @@ class LaneManager:
         )
 
     async def destroy_lanes_on_gpus(self, gpu_set: set[int]) -> int:
-        """Stop only the vLLM lanes that occupy a GPU in *gpu_set* (issue #592).
+        """Stop only the vLLM lanes that occupy a GPU in *gpu_set*.
 
         Used at the start of a calibration session to free the held GPU slice
         for the probe without touching lanes on the leftover GPUs, which keep
@@ -1711,7 +1711,7 @@ class LaneManager:
           footprint (weights + KV, often most of a GPU), which the heuristic
           misreads as "does not fit one GPU" and escalates to a higher TP,
           silently overwriting the calibrated verdict with a split-brain
-          profile (see issue #616).
+          profile.
         - Otherwise: TP=1 is the safe default when the model fits on one GPU.
         - If TP is explicitly set > 1, respect the operator's choice.
         - If TP is at default (1) and the model **provably** does not fit on
@@ -1891,7 +1891,7 @@ class LaneManager:
         return frozenset(int(part) for part in raw.split(",") if part.isdigit())
 
     def _lane_touches_gpus(self, gpu_devices: str | None, gpu_set: set[int]) -> bool:
-        """True when a lane's GPU set intersects *gpu_set* (issue #592 guard)."""
+        """True when a lane's GPU set intersects *gpu_set* (guard)."""
         lanes = self._lane_gpu_set(gpu_devices)
         if lanes is None:
             return True  # spans all GPUs → intersects any non-empty set
@@ -2076,7 +2076,7 @@ class LaneManager:
         allowed_rows = [row for row in device_rows if int(row["index"]) in set(allowed_indices)]
         if self._calibration_gpu_subset:
             # A running calibration holds its slice's VRAM for the probe — a new
-            # lane may only take the leftover GPUs (issue #592).
+            # lane may only take the leftover GPUs.
             held = set(self._calibration_gpu_subset)
             allowed_rows = [row for row in allowed_rows if int(row["index"]) not in held]
         tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
@@ -2298,7 +2298,7 @@ class LaneManager:
                 break  # can't check — proceed with spawn
 
             # nvidia_smi_available stays False on Metal nodes (there is no
-            # nvidia-smi to speak of), so gate on the backend-neutral flag and
+            # nvidia-smi to speak of), so gate on the application server-neutral flag and
             # fall back to the legacy one for snapshots that predate it. A
             # Metal snapshot on the sysctl-fallback path also reports
             # telemetry_available=False (its budget is an estimate, not a

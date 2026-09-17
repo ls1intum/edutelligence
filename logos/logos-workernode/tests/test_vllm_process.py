@@ -57,7 +57,7 @@ def test_build_cmd_does_not_duplicate_enforce_eager(monkeypatch) -> None:
 def test_build_cmd_includes_prompt_tokens_details_by_default(monkeypatch) -> None:
     # vLLM keeps usage.prompt_tokens_details (cached_tokens) off by default;
     # Logos lanes must enable it so consumers see the prefix-cache hit share
-    # of local requests the same way they do for cloud providers (#813).
+    # of local requests the same way they do for cloud providers.
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
     # Return a list, like the real _resolve_vllm_binary does: _build_cmd
     # splats the prefix, so a string would expand into a broken command.

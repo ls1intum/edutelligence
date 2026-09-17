@@ -163,6 +163,7 @@ services:
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "true"
       LOGOSNODE_INFER_TIMEOUT_SECONDS: "1200"
       LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
+      HF_TOKEN: "${HF_TOKEN:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
       LOGOS_DOCS_ENABLED: "true"
@@ -198,7 +199,7 @@ services:
       - "traefik.http.routers.logos-orchestrator-jobs.middlewares=rl-jobs"
       - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
 
-      # === Routing: /api (UI-internal endpoints; backend strips /api prefix) ===
+      # === Routing: /api (UI-internal endpoints; application server strips /api prefix) ===
       # rl-admin, not rl-model: the gateway classifies /api as control-plane
       # traffic, so the second layer carries the control-plane budget here
       # too (see the prod compose for the reasoning).

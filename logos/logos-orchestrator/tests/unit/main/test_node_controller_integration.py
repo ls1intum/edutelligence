@@ -352,6 +352,82 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_logosnode_auth_sends_central_hf_token(monkeypatch):
+    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setenv("HF_TOKEN", "central-token")
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_logosnode_provider_by_api_key(api_key: str):
+            if api_key != "shared-secret":
+                return None
+            return {
+                "id": 3,
+                "provider_type": "logosnode",
+                "api_key": "shared-secret",
+            }
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    req = LogosNodeAuthRequest(shared_key="shared-secret")
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "method": "POST",
+            "path": "/logosdb/providers/logosnode/auth",
+            "headers": [(b"host", b"logos.local:8080")],
+        }
+    )
+    response = await logosnode_mod.logosnode_auth(req, request)
+    assert response["hf_token"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_logosnode_auth_sends_empty_hf_token_when_unset(monkeypatch):
+    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_logosnode_provider_by_api_key(api_key: str):
+            if api_key != "shared-secret":
+                return None
+            return {
+                "id": 3,
+                "provider_type": "logosnode",
+                "api_key": "shared-secret",
+            }
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    req = LogosNodeAuthRequest(shared_key="shared-secret")
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "method": "POST",
+            "path": "/logosdb/providers/logosnode/auth",
+            "headers": [(b"host", b"logos.local:8080")],
+        }
+    )
+    response = await logosnode_mod.logosnode_auth(req, request)
+    assert response["hf_token"] == ""
+
+
+@pytest.mark.asyncio
 async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
     registry = LogosNodeRuntimeRegistry()
     ticket = await registry.consume_ticket(await registry.issue_ticket(3, "worker-a", []))
