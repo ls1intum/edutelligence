@@ -62,3 +62,9 @@ repos:
         entry: poetry run mypy
         language: system
         types: [python]
+        # One process, one writer. pre-commit otherwise splits the files over
+        # several concurrent mypy runs that share .mypy_cache, and on a cold
+        # cache they race and crash with "INTERNAL ERROR" (exit code 2). CI
+        # always starts cold, so it failed every time while a warm local cache
+        # hid it.
+        require_serial: true

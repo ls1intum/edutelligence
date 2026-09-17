@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Fake C compiler. `VllmProcessHandle._require_c_compiler` only probes for
+# presence on PATH (Triton/FlashInfer would JIT-compile with it). Omit this
+# file to reproduce an image built without build-essential.
+echo "cc (gpusim) 13.2.0" >&2
+exit 0

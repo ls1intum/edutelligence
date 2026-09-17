@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+# Fake `nvcc`. The worker's preflight (`VllmProcessHandle._require_nvcc`) only
+# checks that the binary exists and is executable on PATH or under CUDA_HOME —
+# it never compiles anything. Omit this file from the sim's bin directory to
+# reproduce a container without CUDA toolkit visibility.
+case "$1" in
+  --version|-V)
+    echo "nvcc: NVIDIA (R) Cuda compiler driver"
+    echo "Cuda compilation tools, release 12.6, V12.6.85"
+    ;;
+  *)
+    echo "nvcc (gpusim): no-op" >&2
+    ;;
+esac
+exit 0
