@@ -70,6 +70,33 @@ def test_shutdown_is_a_no_op_when_never_used():
     q.shutdown(timeout=0.1)  # no thread was started; must not hang or raise
 
 
+def test_shutdown_timeout_keeps_a_stalled_worker_registered():
+    """A worker that outlives the shutdown deadline must stay registered so a
+    later enqueue cannot start a second drain thread (which would break the
+    per-request FIFO ordering)."""
+    q = write_queue.WriteQueue(sync=False, maxsize=2)
+    started = threading.Event()
+    gate = threading.Event()
+
+    def blocker():
+        started.set()
+        gate.wait(5.0)
+
+    q.enqueue(blocker)
+    assert started.wait(1.0)  # worker parked on the gate
+    q.enqueue(lambda: None)  # buffered (1/2)
+    q.enqueue(lambda: None)  # buffered (2/2) — queue now full
+
+    thread = q._thread  # noqa: SLF001
+    q.shutdown(timeout=0.2)  # sentinel cannot fit; deadline must bound this
+
+    assert thread is q._thread  # noqa: SLF001 — still registered, not replaced
+    assert thread.is_alive()
+    gate.set()
+    thread.join(2.0)  # worker finishes the buffered writes + sentinel
+    assert thread is q._thread  # noqa: SLF001 — still owned (now exited)
+
+
 def test_global_singleton_round_trip():
     original = write_queue.get_write_queue()
     try:

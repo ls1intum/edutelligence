@@ -68,6 +68,30 @@ class TestRefCache:
             cache.set((i,), i)
         assert len(cache._entries) <= refcache.RefCache.MAX_ENTRIES
 
+    def test_one_namespace_cannot_evict_the_others(self):
+        """Filling a user-controlled namespace (the requested-model name is
+        attacker-supplied) must evict within that namespace, not clear the
+        other tenants' cached api keys / teams / deployments."""
+        cache = refcache.RefCache(ttl_s=10.0)
+        cache.set(("api_key", 1), "tenant-1-key")
+        cache.set(("team", 1), "tenant-1-team")
+        for i in range(refcache.RefCache.MAX_ENTRIES_PER_NAMESPACE + 16):
+            cache.set(("resolve_model", 1, f"model-{i}"), "r")
+        assert cache.get(("api_key", 1)) == "tenant-1-key"
+        assert cache.get(("team", 1)) == "tenant-1-team"
+        assert sum(1 for k in cache._entries if k[0] == "resolve_model") <= refcache.RefCache.MAX_ENTRIES_PER_NAMESPACE
+
+    def test_global_eviction_prefers_expired_entries(self):
+        cache = refcache.RefCache(ttl_s=0.01)
+        cache.set(("stale", 1), "old")
+        time.sleep(0.02)
+        # Distinct namespaces so only the global cap can trigger.
+        for i in range(refcache.RefCache.MAX_ENTRIES):
+            cache.set((f"ns-{i}",), "x")
+        # The expired entry was swept before any fresh one was evicted.
+        assert cache.get(("stale", 1)) is refcache._MISSING
+        assert cache.get((f"ns-{refcache.RefCache.MAX_ENTRIES - 1}",)) == "x"
+
 
 class _AuthKeyRow:
     """Builds the minimal api_keys row shape _auth_context_from_key_row reads."""
@@ -103,37 +127,42 @@ class _CountingDBManager:
         return _AuthKeyRow.row(key_value)
 
 
-class TestAuthKeyCache:
-    def test_repeated_key_is_served_from_cache(self, monkeypatch):
+class TestAuthKeyIsNotCached:
+    """The api-key row carries is_active: a revoked key must fail on the very
+    next request, so authentication reads the row fresh every time (#980
+    review) — the ref cache must not front it."""
+
+    def test_repeated_key_hits_the_db_every_time(self, monkeypatch):
         fake = _CountingDBManager()
         monkeypatch.setattr(auth, "DBManager", lambda: fake)
 
         first = auth.authenticate_api_key({"logos-key": "lg-test-abc"})
         second = auth.authenticate_api_key({"logos-key": "lg-test-abc"})
 
-        # One DB call for both authentications: the second hit is cached.
-        assert fake.calls == ["lg-test-abc"]
+        # Two DB calls for two authentications: no caching of the key row.
+        assert fake.calls == ["lg-test-abc", "lg-test-abc"]
         assert first.api_key_id == second.api_key_id == 5
 
-    def test_invalid_key_negative_cache_still_401(self, monkeypatch):
+    def test_revoked_key_fails_on_the_next_request(self, monkeypatch):
         fake = _CountingDBManager()
-        fake.get_api_key_by_value = lambda key: (fake.calls.append(key), None)[1]
+        rows = ["lg-test-abc", None]  # the row disappears after the first call
+
+        def _lookup(key):
+            return _AuthKeyRow.row(key) if rows.pop(0) is not None else None
+
+        fake.get_api_key_by_value = _lookup
         monkeypatch.setattr(auth, "DBManager", lambda: fake)
 
         import pytest
         from fastapi import HTTPException
 
+        auth.authenticate_api_key({"logos-key": "lg-test-abc"})
         with pytest.raises(HTTPException):
-            auth.authenticate_api_key({"logos-key": "lg-missing"})
-        with pytest.raises(HTTPException):
-            auth.authenticate_api_key({"logos-key": "lg-missing"})
-
-        # The negative result is cached too: one lookup, two 401s.
-        assert fake.calls == ["lg-missing"]
+            auth.authenticate_api_key({"logos-key": "lg-test-abc"})
 
     def test_context_is_fresh_per_call(self, monkeypatch):
-        """The cached row is shared, but the AuthContext must not be — the
-        request path mutates cloud_rl/local_rl on it."""
+        """The row is read fresh, but the AuthContext must not be shared —
+        the request path mutates cloud_rl/local_rl on it."""
         fake = _CountingDBManager()
         monkeypatch.setattr(auth, "DBManager", lambda: fake)
 

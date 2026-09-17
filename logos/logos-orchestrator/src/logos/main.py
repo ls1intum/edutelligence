@@ -516,20 +516,24 @@ def _record_log_failure(
                 queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival"),
                 utilization_at_arrival=scheduling_stats.get("utilization_at_arrival"),
             )
-            # The explicit arguments above win over buffered values on a
-            # collision, so the keys this call sets itself are removed from
-            # the buffered side first.
+            # Explicit values win over buffered ones on a collision — but only
+            # when they are not None: a failure before deployment selection
+            # passes model_id/provider_id=None, and the values the recorder
+            # buffered at schedule time must still reach the row.
             metrics_fields = {k: v for k, v in buffered_metrics.items() if v is not None}
-            for key in ("model_id", "provider_id", "result_status", "error_message", "cold_start"):
-                metrics_fields.pop(key, None)
+            explicit_metrics = {
+                "model_id": model_id,
+                "provider_id": provider_id,
+                "result_status": result_status,
+                "error_message": error_message,
+                "cold_start": scheduling_stats.get("is_cold_start"),
+            }
+            for key, value in explicit_metrics.items():
+                if value is not None:
+                    metrics_fields[key] = value
             db.update_log_entry_metrics(
                 log_id=log_id,
                 request_id=request_id,
-                model_id=model_id,
-                provider_id=provider_id,
-                result_status=result_status,
-                error_message=error_message,
-                cold_start=scheduling_stats.get("is_cold_start"),
                 **metrics_fields,
             )
     except Exception:
@@ -2209,51 +2213,28 @@ async def _streaming_response(
 def _persist_response_block(
     log_id: int,
     response_payload,
-    provider_id,
-    model_id,
-    usage_tokens,
     policy_id,
     classification_stats,
     *,
-    service_tier=None,
-    set_first_token=None,
-    request_id=None,
     queue_depth_at_arrival=None,
     utilization_at_arrival=None,
-    result_status=None,
-    error_message=None,
 ) -> None:
-    """Persist the terminal response payload and metrics for a log row in one
-    pool checkout. Runs on the write-behind thread (#980 O13): the request's
-    event loop is already back to serving by the time this executes, so it is
-    invisible to the client.
+    """Non-billing half of the terminal response write, drained off the event
+    loop (#980 O13). The billing-critical writes — usage tokens, model /
+    provider, terminal status (which fires the settled cost snapshot) — are
+    committed synchronously before the client gets its response; only the
+    payload JSONB and its side columns ride the write-behind queue, so a
+    crash after the response can no longer undercount the ledger (#980
+    review).
     """
     with DBManager() as db:
-        db.set_response_payload(
+        db.store_response_payload(
             log_id,
             response_payload,
-            provider_id,
-            model_id,
-            usage_tokens,
-            policy_id,
-            classification_stats,
-            service_tier=service_tier,
-            set_first_token=set_first_token,
-            request_id=request_id,
+            policy_id=policy_id,
+            classified=classification_stats,
             queue_depth_at_arrival=queue_depth_at_arrival,
             utilization_at_arrival=utilization_at_arrival,
-        )
-        # result_status is written directly by log_id (not via the
-        # request_id-keyed monitoring flush below): that flush only runs when
-        # scheduling_stats is present, which left cloud requests with no
-        # scheduling stats — e.g. a failed Azure call — at result_status NULL,
-        # rendering grey (neither success nor error) on the statistics page.
-        db.update_log_entry_metrics(
-            log_id=log_id,
-            provider_id=provider_id,
-            model_id=model_id,
-            result_status=result_status,
-            error_message=error_message,
         )
 
 
@@ -2436,29 +2417,45 @@ async def _sync_response(
             _result_status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _error_message = error_message if timed_out else (exec_result.error if not exec_result.success else None)
             with perf_trace.phase(request_id, "db.response_block"):
-                # Terminal response + metrics are bookkeeping the client never
-                # waits for — hand them to the write-behind thread instead of
-                # running psycopg2 on this loop (#980 O13).
+                # Split terminal write (#980 O13, after review): the
+                # billing-critical half — usage tokens plus everything the
+                # settled cost snapshot reads — stays synchronous, committed
+                # before the client gets its response, so a crash in between
+                # cannot undercount the ledger. Only the payload JSONB is
+                # deferred to the write-behind thread (#980 O13).
+                with DBManager() as db:
+                    db.finalize_billing_row(
+                        log_id,
+                        usage_tokens,
+                        model_id=model_id,
+                        provider_id=provider_id,
+                        service_tier=extract_service_tier(response_payload),
+                        set_first_token=exec_result.success,
+                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
+                    )
+                    # result_status is written directly by log_id (not via
+                    # the request_id-keyed monitoring flush below): that flush
+                    # only runs when scheduling_stats is present, which left
+                    # cloud requests with no scheduling stats — e.g. a failed
+                    # Azure call — at result_status NULL, rendering grey
+                    # (neither success nor error) on the statistics page.
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        result_status=_result_status,
+                        error_message=_error_message,
+                    )
                 write_queue.get_write_queue().enqueue(
                     _persist_response_block,
                     log_id,
                     response_payload,
-                    provider_id,
-                    model_id,
-                    usage_tokens,
                     policy_id,
                     classification_stats,
-                    service_tier=extract_service_tier(response_payload),
-                    set_first_token=exec_result.success,
-                    request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                     queue_depth_at_arrival=(
                         scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
                     ),
                     utilization_at_arrival=(
                         scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
                     ),
-                    result_status=_result_status,
-                    error_message=_error_message,
                 )
 
         if scheduling_stats:
@@ -2793,7 +2790,10 @@ async def _execute_proxy_mode(
         model_name = requested_model_name if model_id is not None else None
     else:
         with perf_trace.phase(request_id, "mode.resolve_model"):
-            resolved = _cached_resolve_model(auth.api_key_id, requested_model_name)
+            # Permission data — read fresh per request, never from the ref
+            # cache (a removed model permission must not wait for a TTL).
+            with DBManager() as db:
+                resolved = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
             if resolved is None:
                 raise HTTPException(
                     status_code=404,
@@ -3570,7 +3570,15 @@ async def handle_sync_request(path: str, request: Request):
 
 
 def _cached_team(team_id: Optional[int]) -> Optional[dict]:
-    """Team row (rate-limit defaults) from the short-TTL ref cache (#980 O12)."""
+    """Team row (rate-limit defaults) from the short-TTL ref cache (#980 O12).
+
+    The team row is the only reference data this cache fronts: its contents
+    are configuration (rate-limit defaults), not authorization. The api-key
+    row and the permission lookups (deployments, resolve_proxy_model) are
+    deliberately read fresh per request — caching them would delay a key
+    revocation or a permission removal until the TTL expires, which would be
+    an authorization behavior change (#980 review).
+    """
     if team_id is None:
         return None
 
@@ -3579,26 +3587,6 @@ def _cached_team(team_id: Optional[int]) -> Optional[dict]:
             return db.get_team(team_id)
 
     return refcache.get_ref_cache().load(("team", team_id), _load)
-
-
-def _cached_deployments(api_key_id: int) -> list:
-    """The key's deployment rows from the short-TTL ref cache (#980 O12)."""
-
-    def _load():
-        with DBManager() as db:
-            return db.get_deployments_for_api_key(api_key_id)
-
-    return refcache.get_ref_cache().load(("deployments", api_key_id), _load)
-
-
-def _cached_resolve_model(api_key_id: int, requested_name: str):
-    """resolve_proxy_model result from the short-TTL ref cache (#980 O12)."""
-
-    def _load():
-        with DBManager() as db:
-            return db.resolve_proxy_model(api_key_id, requested_name)
-
-    return refcache.get_ref_cache().load(("resolve_model", api_key_id, requested_name), _load)
 
 
 async def auth_parse_log(request: Request, use_profile_auth: bool = False, request_id: Optional[str] = None):
@@ -3693,14 +3681,12 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         if c_log == 200:
             log_id = int(r_log["log-id"])
 
-        with perf_trace.phase(request_id, "setup.deployments"):
-            # Deployment rows are reference data too (#980 O12): the ref
-            # cache fronts them, so this phase is DB-free on a cache hit.
-            raw_deployments, _ = request_setup(
-                headers,
-                auth.api_key_id,
-                raw_deployments=_cached_deployments(auth.api_key_id),
-            )
+            with perf_trace.phase(request_id, "setup.deployments"):
+                # Deployment rows are permission data (which models/providers
+                # this key may use): read them fresh in the auth session,
+                # never from the ref cache — a removed permission must not
+                # wait for a TTL (#980 review).
+                raw_deployments, _ = request_setup(headers, auth.api_key_id, db=db)
 
         return headers, auth, body, client_ip, log_id, raw_deployments
 
@@ -3840,11 +3826,9 @@ async def execute_proxy_job(
                         request_id=request_id,
                         timeout_s=json_data.get("timeout_s"),
                     )
-            raw_deployments, allowed_models = request_setup(
-                headers,
-                auth.api_key_id,
-                raw_deployments=_cached_deployments(auth.api_key_id),
-            )
+                # Deployment rows are permission data — read fresh in this
+                # session, never from the ref cache (#980 review).
+                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
             deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
         except PermissionError as e:
             _record_log_failure(log_id, request_id, str(e), result_status="error")

@@ -74,8 +74,8 @@ def _profile_auth(monkeypatch):
     )
     monkeypatch.setattr(main, "authenticate_api_key", lambda headers: auth)
 
-    def fake_request_setup(headers, api_key_id, db=None, raw_deployments=None):
-        return (raw_deployments, [1])
+    def fake_request_setup(headers, api_key_id, db=None):
+        return (db.get_deployments_for_api_key(api_key_id), [1])
 
     monkeypatch.setattr(main, "request_setup", fake_request_setup)
     return db
@@ -101,9 +101,10 @@ async def test_missing_timeout_defaults_to_none(_profile_auth):
 
 
 @pytest.mark.asyncio
-async def test_deployments_comes_from_the_ref_cache(_profile_auth):
-    """#980 O12: deployment rows are served by the short-TTL ref cache. The
-    DB is queried once per (test, key) — the second call is a cache hit."""
+async def test_deployments_are_read_fresh_per_request(_profile_auth):
+    """Deployment rows are permission data: one DB read per request, never
+    served from the ref cache — a removed permission must not wait for a TTL
+    (#980 review)."""
     _, _, _, _, _, raw_deployments = await main.auth_parse_log(
         _request({"model": "m"}), use_profile_auth=True, request_id="req-1"
     )
@@ -114,7 +115,7 @@ async def test_deployments_comes_from_the_ref_cache(_profile_auth):
         _request({"model": "m"}), use_profile_auth=True, request_id="req-2"
     )
     assert raw_deployments_again == [{"model_id": 1, "provider_id": 2}]
-    assert _profile_auth.deployments_calls == 1  # second call served from cache
+    assert _profile_auth.deployments_calls == 2  # fresh read, no cache
 
 
 @pytest.mark.asyncio

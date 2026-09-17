@@ -3982,6 +3982,188 @@ class DBManager:
         self.session.commit()
         return {"result": "time_at_first_token set"}, 200
 
+    def _upsert_usage_tokens(self, log_id: int, usage) -> None:
+        """Token-type bookkeeping for one log row (#980), no commit — the
+        caller owns the transaction.
+
+        Two roundtrips instead of a SELECT + (INSERT + commit) per token
+        type: one lookup for every name, one multi-row upsert for the
+        missing ones (auto-creation is preserved, e.g. Whisper's
+        audio_milliseconds), then one multi-row upsert for the positive
+        usage rows. token_types.name is UNIQUE, so the upsert is race-safe:
+        a concurrent creator wins, this side sees the row on the refetch
+        below.
+
+        Only strictly positive integer counts are billable — the same
+        invariant the batch settlement path enforces (billing.quantities):
+        `extract_token_usage` preserves negative integers, and a bare
+        truthiness check would upsert them as usage.
+        """
+        positive = {
+            name: count
+            for name, count in (usage or {}).items()
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0
+        }
+        if not usage:
+            return
+        # Every reported name registers its type (a metered response can
+        # report a quantity as 0 without the type being new); only strictly
+        # positive counts upsert a usage row.
+        type_ids = dict()
+        names = list(usage)
+        type_ids.update(
+            {
+                row.name: row.id
+                for row in self.session.execute(
+                    text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                    {"names": names},
+                ).fetchall()
+            }
+        )
+        missing = [name for name in names if name not in type_ids]
+        if missing:
+            type_ids.update(
+                {
+                    row.name: row.id
+                    for row in self.session.execute(
+                        text("""
+                        INSERT INTO token_types (name, description)
+                        SELECT v.name, v.description
+                        FROM unnest(:names, :descriptions) AS v(name, description)
+                        ON CONFLICT (name) DO NOTHING
+                        RETURNING id, name
+                        """),
+                        {"names": missing, "descriptions": ["" for _ in missing]},
+                    ).fetchall()
+                }
+            )
+            still_missing = [name for name in missing if name not in type_ids]
+            if still_missing:
+                type_ids.update(
+                    {
+                        row.name: row.id
+                        for row in self.session.execute(
+                            text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                            {"names": still_missing},
+                        ).fetchall()
+                    }
+                )
+        if not positive:
+            return
+
+        value_clauses = ", ".join(
+            f"(:log_entry_id, :type_id_{index}, :token_count_{index})" for index in range(len(positive))
+        )
+        usage_params = {"log_entry_id": log_id}
+        for index, (name, count) in enumerate(positive.items()):
+            usage_params[f"type_id_{index}"] = type_ids[name]
+            usage_params[f"token_count_{index}"] = count
+        self.session.execute(
+            text(f"""
+                INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+                VALUES {value_clauses}
+                ON CONFLICT (log_entry_id, type_id)
+                DO UPDATE SET token_count = EXCLUDED.token_count
+                """),
+            usage_params,
+        )
+
+    def finalize_billing_row(
+        self,
+        log_id: int,
+        usage,
+        *,
+        model_id=None,
+        provider_id=None,
+        service_tier=None,
+        set_first_token: bool = False,
+        request_id=None,
+    ):
+        """Synchronous billing half of the terminal response write (#980 O13
+        split, after review): the usage_tokens rows plus exactly the row
+        columns the settled cost snapshot reads (model_id, provider_id,
+        service_tier, timestamp_response, time_at_first_token). This must be
+        committed BEFORE the client gets its response — a crash in between
+        must not be able to undercount the ledger. The non-billing half
+        (`store_response_payload`) may run later on the write-behind queue.
+        """
+        if not isinstance(log_id, int):
+            return
+        self._upsert_usage_tokens(log_id, usage)
+        sql = text("""
+                   UPDATE log_entry
+                   SET model_id            = COALESCE(:model_id, model_id),
+                       provider_id         = COALESCE(:provider_id, provider_id),
+                       service_tier        = COALESCE(:service_tier, service_tier),
+                       timestamp_response  = :timestamp,
+                       request_id          = COALESCE(:request_id, request_id),
+                       time_at_first_token = COALESCE(:first_token, time_at_first_token)
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(
+            sql,
+            {
+                "model_id": model_id,
+                "provider_id": provider_id,
+                "service_tier": service_tier,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "log_id": log_id,
+                "request_id": request_id,
+                "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
+            },
+        )
+        self.session.commit()
+
+    def store_response_payload(
+        self,
+        log_id: int,
+        payload: dict,
+        *,
+        policy_id=-1,
+        classified=None,
+        queue_depth_at_arrival=None,
+        utilization_at_arrival=None,
+    ):
+        """Non-billing half of the terminal response write (#980 O13 split):
+        the response payload JSONB (privacy-gated) plus the classification /
+        policy / queue-metric side columns. Safe to run off the event loop
+        after `finalize_billing_row` has committed — neither the ledger nor
+        the settled cost snapshot reads these columns.
+        """
+        if not isinstance(log_id, int):
+            return
+        if classified is None:
+            classified = dict()
+        result = self.session.execute(
+            text("SELECT privacy_level FROM log_entry WHERE id = :log_id"),
+            {"log_id": log_id},
+        ).fetchone()
+        if result is None:
+            return
+        if result[0] != "FULL":
+            payload = None
+        sql = text("""
+                   UPDATE log_entry
+                   SET response_payload          = :payload,
+                       policy_id                 = COALESCE(:policy_id, policy_id),
+                       classification_statistics = :classification_statistics,
+                       queue_depth_at_arrival    = COALESCE(:queue_depth, queue_depth_at_arrival),
+                       utilization_at_arrival    = COALESCE(:utilization, utilization_at_arrival)
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(
+            sql,
+            {
+                "payload": _json_for_jsonb(payload) if payload else None,
+                "log_id": log_id,
+                "policy_id": policy_id if policy_id != -1 else None,
+                "classification_statistics": _json_for_jsonb(classified),
+                "queue_depth": queue_depth_at_arrival,
+                "utilization": utilization_at_arrival,
+            },
+        )
+        self.session.commit()
+
     def set_response_payload(
         self,
         log_id: int,
@@ -4013,72 +4195,7 @@ class DBManager:
         if result[0] != "FULL":
             payload = None
 
-        # Token-type bookkeeping in two roundtrips instead of a SELECT +
-        # (INSERT + commit) per token type (#980): one lookup for every name,
-        # one multi-row upsert for the missing ones (auto-creation is
-        # preserved, e.g. Whisper's audio_milliseconds), then one multi-row
-        # upsert for the non-zero usage rows. token_types.name is UNIQUE, so
-        # the upsert is race-safe: a concurrent creator wins, this side sees
-        # the row on the refetch below.
-        type_ids = dict()
-        if usage:
-            names = list(usage)
-            type_ids.update(
-                {
-                    row.name: row.id
-                    for row in self.session.execute(
-                        text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
-                        {"names": names},
-                    ).fetchall()
-                }
-            )
-            missing = [name for name in names if name not in type_ids]
-            if missing:
-                type_ids.update(
-                    {
-                        row.name: row.id
-                        for row in self.session.execute(
-                            text("""
-                            INSERT INTO token_types (name, description)
-                            SELECT v.name, v.description
-                            FROM unnest(:names, :descriptions) AS v(name, description)
-                            ON CONFLICT (name) DO NOTHING
-                            RETURNING id, name
-                            """),
-                            {"names": missing, "descriptions": ["" for _ in missing]},
-                        ).fetchall()
-                    }
-                )
-                still_missing = [name for name in missing if name not in type_ids]
-                if still_missing:
-                    type_ids.update(
-                        {
-                            row.name: row.id
-                            for row in self.session.execute(
-                                text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
-                                {"names": still_missing},
-                            ).fetchall()
-                        }
-                    )
-
-            positive = {name: count for name, count in usage.items() if count}
-            if positive:
-                value_clauses = ", ".join(
-                    f"(:log_entry_id, :type_id_{index}, :token_count_{index})" for index in range(len(positive))
-                )
-                usage_params = {"log_entry_id": log_id}
-                for index, (name, count) in enumerate(positive.items()):
-                    usage_params[f"type_id_{index}"] = type_ids[name]
-                    usage_params[f"token_count_{index}"] = count
-                self.session.execute(
-                    text(f"""
-                        INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
-                        VALUES {value_clauses}
-                        ON CONFLICT (log_entry_id, type_id)
-                        DO UPDATE SET token_count = EXCLUDED.token_count
-                        """),
-                    usage_params,
-                )
+        self._upsert_usage_tokens(log_id, usage)
 
         sql = text("""
                    UPDATE log_entry

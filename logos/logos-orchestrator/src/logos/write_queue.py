@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from typing import Any, Callable, Tuple
 
 logger = logging.getLogger(__name__)
@@ -98,9 +99,32 @@ class WriteQueue:
         """Drain pending writes (bounded by ``timeout``) and stop the thread."""
         if self._sync or self._thread is None:
             return
-        self._q.put(_SENTINEL)
-        self._thread.join(timeout)
-        self._thread = None
+        deadline = time.monotonic() + max(timeout, 0.0)
+        # put() with no timeout would block forever on a full queue whose
+        # worker is stalled; insert the sentinel within the deadline instead.
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "write-behind %s: could not enqueue the shutdown sentinel within %.1fs", self._name, timeout
+                )
+                return
+            try:
+                self._q.put(_SENTINEL, timeout=remaining)
+                break
+            except queue.Full:  # a stalled worker keeps the queue full
+                continue
+        thread = self._thread
+        thread.join(max(0.0, deadline - time.monotonic()))
+        # A worker that outlived the deadline is still draining the queue.
+        # Keep it registered so a later enqueue cannot start a second worker —
+        # two concurrent drains would break the per-request FIFO ordering.
+        if thread.is_alive():
+            logger.warning(
+                "write-behind %s: drain thread still alive after %.1fs; keeping it registered", self._name, timeout
+            )
+        else:
+            self._thread = None
 
 
 _default: "WriteQueue | None" = None

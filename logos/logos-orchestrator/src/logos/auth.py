@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from logos import batch_credential, refcache
+from logos import batch_credential
 from logos.dbutils.dbmanager import DBManager
 
 
@@ -114,10 +114,10 @@ def _lookup_api_key_row(logos_key: str) -> Optional[Dict[str, Any]]:
 
 def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
     logos_key = _resolve_logos_key(headers)
-    # The key row is reference data: the per-request checkout + query cost
-    # ~0.5 ms on the event loop, so it is served from the short-TTL ref
-    # cache (#980 O12). A revoked key stops working within one TTL.
-    row = refcache.get_ref_cache().load(("api_key_value", logos_key), lambda: _lookup_api_key_row(logos_key))
+    # Read fresh on every request: the row carries is_active, and a revoked
+    # key must stop working on the very next request — not after a cache TTL
+    # (#980 review: the ref cache must not front authorization data).
+    row = _lookup_api_key_row(logos_key)
     if row is None:
         raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
     return _auth_context_from_key_row(row)
@@ -133,7 +133,8 @@ def authenticate_batch_api_key(headers: Optional[Dict[str, str]]) -> AuthContext
     admin-owned key, the role-gated routes — for its whole TTL.
     """
     logos_key = _resolve_logos_key(headers)
-    row = refcache.get_ref_cache().load(("api_key_value", logos_key), lambda: _lookup_api_key_row(logos_key))
+    # Same revocation semantics as authenticate_api_key: fresh row per call.
+    row = _lookup_api_key_row(logos_key)
     if row is None:
         # A key value that is not a key value: try the scoped credential the
         # batch proxy exchanged for the key.

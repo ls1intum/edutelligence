@@ -79,6 +79,12 @@ def _stub_db(monkeypatch):
         def set_response_payload(self, *a, **k):
             pass
 
+        def finalize_billing_row(self, *a, **k):
+            pass
+
+        def store_response_payload(self, *a, **k):
+            pass
+
         def get_team(self, team_id):
             return {
                 "id": team_id,
@@ -128,10 +134,7 @@ def _stub_request_setup(monkeypatch):
     monkeypatch.setattr(
         main,
         "request_setup",
-        lambda headers, api_key_id, db=None, raw_deployments=None: (
-            [{"model_id": 1, "provider_id": 1, "type": "openai"}],
-            [1],
-        ),
+        lambda headers, api_key_id, db=None: ([{"model_id": 1, "provider_id": 1, "type": "openai"}], [1]),
         raising=False,
     )
     monkeypatch.setattr(

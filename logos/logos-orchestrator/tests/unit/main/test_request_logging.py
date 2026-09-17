@@ -17,6 +17,8 @@ def _make_dummy_db(cost_micro_cents=None):
         ttft_calls = []
         payload_calls = []
         metric_calls = []
+        finalize_calls = []
+        store_calls = []
 
         def __enter__(self):
             return self
@@ -26,6 +28,50 @@ def _make_dummy_db(cost_micro_cents=None):
 
         def set_time_at_first_token(self, log_id):
             self.ttft_calls.append(log_id)
+
+        def finalize_billing_row(
+            self,
+            log_id,
+            usage,
+            *,
+            model_id=None,
+            provider_id=None,
+            service_tier=None,
+            set_first_token=False,
+            request_id=None,
+        ):
+            self.finalize_calls.append(
+                {
+                    "log_id": log_id,
+                    "usage": usage,
+                    "model_id": model_id,
+                    "provider_id": provider_id,
+                    "service_tier": service_tier,
+                    "set_first_token": set_first_token,
+                    "request_id": request_id,
+                }
+            )
+
+        def store_response_payload(
+            self,
+            log_id,
+            payload,
+            *,
+            policy_id=-1,
+            classified=None,
+            queue_depth_at_arrival=None,
+            utilization_at_arrival=None,
+        ):
+            self.store_calls.append(
+                {
+                    "log_id": log_id,
+                    "payload": payload,
+                    "policy_id": policy_id,
+                    "classified": classified,
+                    "queue_depth_at_arrival": queue_depth_at_arrival,
+                    "utilization_at_arrival": utilization_at_arrival,
+                }
+            )
 
         def set_response_payload(
             self,
@@ -382,7 +428,7 @@ async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
 
     content = json.loads(response.body)
     assert content["usage"]["prompt_tokens_details"]["cached_tokens"] == 6
-    assert dummy_db.payload_calls[0]["usage"]["prompt_cached_tokens"] == 6
+    assert dummy_db.finalize_calls[0]["usage"]["prompt_cached_tokens"] == 6
 
 
 @pytest.mark.asyncio
@@ -517,7 +563,7 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
     body = json.loads(response.body)
     assert body["usage"]["cost"] == 0.00012345
     assert body["usage"]["cost_currency"] == "USD"
-    assert dummy_db.payload_calls[0]["usage"] == {
+    assert dummy_db.finalize_calls[0]["usage"] == {
         "prompt_tokens": 10,
         "completion_tokens": 5,
         "total_tokens": 15,
@@ -964,8 +1010,8 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     assert response.status_code == 500
     assert response.headers["x-request-id"] == "req-sync-error"
     assert dummy_db.ttft_calls == []
-    assert dummy_db.payload_calls[0]["kwargs"]["set_first_token"] is False
-    assert dummy_db.payload_calls[0]["payload"] == {"error": "bad request"}
+    assert dummy_db.finalize_calls[0]["set_first_token"] is False
+    assert dummy_db.store_calls[0]["payload"] == {"error": "bad request"}
     assert completion_calls == [
         {
             "request_id": "req-sync-error",
@@ -1032,8 +1078,8 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     # The first-token timestamp merged into the response write (#980), so the
     # sync path no longer issues its own UPDATE for it.
     assert dummy_db.ttft_calls == []
-    assert dummy_db.payload_calls[0]["kwargs"]["set_first_token"] is True
-    assert dummy_db.payload_calls[0]["usage"] == {
+    assert dummy_db.finalize_calls[0]["set_first_token"] is True
+    assert dummy_db.finalize_calls[0]["usage"] == {
         "prompt_tokens": 11,
         "completion_tokens": 13,
         "total_tokens": 24,
@@ -1337,7 +1383,7 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
+    assert dummy_db.finalize_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio
@@ -1395,7 +1441,7 @@ async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "application/json"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
+    assert dummy_db.finalize_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio
