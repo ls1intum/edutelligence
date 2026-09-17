@@ -85,7 +85,7 @@
               [attr.aria-label]="'Queue priority for team ' + team.name"
               title="Queue priority of this team's traffic (applies to all its keys without an explicit key priority)"
               [value]="team.priority ?? ''"
-              [disabled]="prioritySavingId() === team.id"
+              [disabled]="prioritySaving().has(team.id)"
               (click)="$event.stopPropagation()"
               (change)="$event.stopPropagation(); changeTeamPriority(team, $any($event.target).value)"
             >

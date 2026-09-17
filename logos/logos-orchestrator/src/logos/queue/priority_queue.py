@@ -184,7 +184,8 @@ class PriorityQueueManager:
                 for index, (*_ordering, candidate) in sorted(
                     # Order by the heap's leading keys:
                     # (-raw_priority, -role_rank, ts, entry_id).
-                    enumerate(queue), key=lambda item: item[1][:4]
+                    enumerate(queue),
+                    key=lambda item: item[1][:4],
                 )
                 if provider_id is None or candidate.provider_affinity in (None, provider_id)
             ),

@@ -158,4 +158,36 @@ describe('TeamManagement', () => {
     expect(component.teams()[0].priority).toBeNull();
     expect(component.priorityError()).toContain('test-team');
   });
+
+  it('tracks overlapping saves per team, keeping each row locked until its own request finishes', async () => {
+    await createFor('logos_admin');
+    const teamB = team({ id: 2002, name: 'other-team' });
+    component.teams.set([team(), teamB]);
+
+    // Team A's save stays in flight; team B resolves immediately.
+    let resolveFirst: (value: void) => void;
+    const first = new Promise<void>((resolve) => (resolveFirst = resolve));
+    teamService.updateTeamPriority.mockImplementation((id: number) =>
+      id === 2001 ? first : Promise.resolve(),
+    );
+
+    const selects = (): HTMLSelectElement[] =>
+      Array.from(fixture.nativeElement.querySelectorAll('.priority-cell select'));
+
+    const saveA = component.changeTeamPriority(component.teams()[0], '10');
+    fixture.detectChanges();
+    expect(selects()[0].disabled).toBe(true);
+
+    // Starting team B's save must not unlock team A's in-flight selector.
+    await component.changeTeamPriority(teamB, '5');
+    fixture.detectChanges();
+    expect(selects()[0].disabled).toBe(true);
+    expect(selects()[1].disabled).toBe(false);
+
+    // Team A unlocks only when its own request settles.
+    resolveFirst!();
+    await saveA;
+    fixture.detectChanges();
+    expect(selects()[0].disabled).toBe(false);
+  });
 });

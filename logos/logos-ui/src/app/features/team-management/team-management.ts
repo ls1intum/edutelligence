@@ -63,7 +63,10 @@ export class TeamManagement implements OnInit {
   createError = signal('');
 
   // ── Team queue priority (logos_admin only) ──────────────────────────────
-  prioritySavingId = signal<number | null>(null);
+  /** Team ids with a priority PATCH in flight, one entry per team so
+   *  overlapping saves on different rows don't unlock each other's
+   *  selectors. */
+  prioritySaving = signal<Set<number>>(new Set());
   priorityError = signal('');
 
   // ── Computed ─────────────────────────────────────────────────────────────
@@ -176,14 +179,19 @@ export class TeamManagement implements OnInit {
     const previous = team.priority;
     this.priorityError.set('');
     this.teams.update((list) => list.map((t) => (t.id === team.id ? { ...t, priority } : t)));
-    this.prioritySavingId.set(team.id);
+    this.prioritySaving.update((saving) => new Set(saving).add(team.id));
     try {
       await this.teamService.updateTeamPriority(team.id, priority);
     } catch {
       this.teams.update((list) => list.map((t) => (t.id === team.id ? { ...t, priority: previous } : t)));
       this.priorityError.set(`Failed to update the queue priority of '${team.name}'.`);
     } finally {
-      this.prioritySavingId.set(null);
+      // Unlock only this team's selector — other rows may still be saving.
+      this.prioritySaving.update((saving) => {
+        const next = new Set(saving);
+        next.delete(team.id);
+        return next;
+      });
     }
   }
 
