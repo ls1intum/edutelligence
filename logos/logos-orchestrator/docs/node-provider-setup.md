@@ -44,6 +44,14 @@ Save the response values — you will need both:
 
 ## 3. Configure credentials (.env)
 
+If you are following this guide from a repository checkout, enter the
+worker directory first — the Compose file, `.env` and `config.yml` all live
+there (in production deployments it is already the working directory):
+
+```bash
+cd logos/logos-workernode
+```
+
 Copy `.env.example` to `.env` and fill in the required values:
 
 ```bash
@@ -89,13 +97,15 @@ engines:
 
 ## 5. Start the worker
 
-The production Compose file pulls `${REGISTRY}/logos-workernode-vllm` from
+(From the worker directory entered in step 3.) The production Compose file
+pulls `${REGISTRY}/logos-workernode-vllm` from
 the project's registry (Harbor for team deployments — set `REGISTRY` and
-`IMAGE_TAG` in `.env` and log in). Without registry access, build it first
-from this directory (the worker directory is the build context), matching
-the `.env` values:
+`IMAGE_TAG` in `.env` and log in). Without registry access, build the image
+first (this directory is the build context). Put the values in `.env` and
+export them in the shell as well — the Docker CLI does not read `.env`:
 
 ```bash
+export REGISTRY=<your-registry> IMAGE_TAG=<tag>
 docker build -t "$REGISTRY/logos-workernode-vllm:$IMAGE_TAG" .
 ```
 
