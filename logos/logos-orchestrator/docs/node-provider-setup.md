@@ -92,10 +92,11 @@ engines:
 The production Compose file pulls `${REGISTRY}/logos-workernode-vllm` from
 the project's registry (Harbor for team deployments — set `REGISTRY` and
 `IMAGE_TAG` in `.env` and log in). Without registry access, build it first
-from the repository root, matching the `.env` values:
+from this directory (the worker directory is the build context), matching
+the `.env` values:
 
 ```bash
-docker build -t "$REGISTRY/logos-workernode-vllm:$IMAGE_TAG" logos/logos-workernode
+docker build -t "$REGISTRY/logos-workernode-vllm:$IMAGE_TAG" .
 ```
 
 Then start the worker:

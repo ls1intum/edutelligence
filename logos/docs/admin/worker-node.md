@@ -21,11 +21,11 @@ The production Compose file pulls the worker image
 workflow publishes it to the project's Harbor registry (team-internal) —
 see the [installation guide](installation.md) for the `REGISTRY`/`IMAGE_TAG`
 and login setup. Without access to that registry, build it locally from the
-repository root and set the matching `REGISTRY`/`IMAGE_TAG` in the worker's
-`.env`:
+worker directory (which is the build context) and set the matching
+`REGISTRY`/`IMAGE_TAG` in the worker's `.env`:
 
 ```bash
-docker build -t "$REGISTRY/logos-workernode-vllm:$IMAGE_TAG" logos/logos-workernode
+docker build -t "$REGISTRY/logos-workernode-vllm:$IMAGE_TAG" .
 ```
 
 See [the detailed worker setup](https://github.com/ls1intum/edutelligence/blob/main/logos/logos-orchestrator/docs/node-provider-setup.md)
