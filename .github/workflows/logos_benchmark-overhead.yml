@@ -1,0 +1,160 @@
+---
+name: Logos - Per-Request Overhead Benchmark
+
+# Issue #980: benchmark the per-request forwarding overhead (orchestrator →
+# workernode → back) on every PR and gate on the < 1 ms goal. The job FAILs
+# while the overhead p50 stays within CI noise of the goal (fail threshold
+# 1.5 ms); the PR comment reports the phase table regardless.
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - "logos/**"
+      - "shared/**"
+      - ".github/workflows/logos_benchmark-overhead.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: root
+          POSTGRES_DB: logosdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      LOGOS_BENCH_DB_URL: postgresql://postgres:root@127.0.0.1:5432/logosdb
+      LOGOS_BENCH_OUTPUT: ${{ github.workspace }}/logos/benchmarks/per_request_overhead/reports/ci
+      # The worker's default state dir is /app/data (Docker layout); on a
+      # GitHub runner it must be a writable temp path.
+      LOGOS_STATE_DIR: ${{ runner.temp }}/logos-bench-state
+      # The orchestrator loads all-MiniLM-L6-v2 (SentenceTransformer) eagerly
+      # at startup; pin the cache so the Prime step and the run share it.
+      HF_HOME: ${{ runner.temp }}/hf-cache
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Migrate schema (Liquibase)
+        # The liquibase image ships a JRE, so no Java setup step is needed.
+        # From inside the container, host.docker.internal is the runner.
+        run: |
+          docker run --rm \
+            --add-host=host.docker.internal:host-gateway \
+            -v "$GITHUB_WORKSPACE/logos/logos-webservice/src/main/resources:/resources:ro" \
+            # --search-path is a global option and must precede the command.
+            liquibase/liquibase:4.28.0 --search-path=/resources migrate \
+            --changelog-file=liquibase/changelog/master.xml \
+            --url="jdbc:postgresql://host.docker.internal:5432/logosdb" \
+            --username=postgres --password=root
+
+      - name: Seed benchmark data
+        # Runs after the migration: seed.sql inserts fixed ids and sets the
+        # benchmark team's rate limits to NULL — with the DDL defaults
+        # (5 RPM) the run would 429 from the sixth request on.
+        run: |
+          docker run --rm -i \
+            --add-host=host.docker.internal:host-gateway \
+            -v "$GITHUB_WORKSPACE/logos/benchmarks/per_request_overhead/seed.sql:/seed.sql:ro" \
+            postgres:17 psql "postgresql://postgres:root@host.docker.internal:5432/logosdb" -v ON_ERROR_STOP=1 -f /seed.sql
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Link shared dependency
+        run: ln -s ../../shared logos/logos-orchestrator/shared
+
+      - name: Restore HF model cache
+        # A cache miss is fine — the Prime step below downloads while the
+        # network is still healthy; the benchmark run itself is offline.
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/hf-cache
+          key: hf-all-MiniLM-L6-v2-v1-${{ runner.os }}
+          restore-keys: |
+            hf-all-MiniLM-L6-v2-
+            hf-
+
+      - name: Install Dependencies
+        run: |
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install .
+          uv pip install -r ../logos-workernode/requirements.txt
+          # The checked-in gRPC gencode (src/logos/grpclocal/model_pb2.py) was
+          # generated with protoc 6.30; older protobuf runtimes refuse to
+          # import it.
+          uv pip install "protobuf>=6.30,<7"
+        working-directory: logos/logos-orchestrator
+
+      - name: Prime HF model cache
+        run: |
+          source .venv/bin/activate
+          python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+        working-directory: logos/logos-orchestrator
+
+      - name: Run benchmark
+        # Offline: the model is in the local cache (restored or primed), so a
+        # flaky HF Hub connection cannot turn a startup into a failure.
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: |
+          source .venv/bin/activate
+          python ../benchmarks/per_request_overhead/run_benchmark.py
+        working-directory: logos/logos-orchestrator
+
+      - name: Check overhead gate
+        # Blocking: FAIL while p50 > 1.5 ms (CI noise tolerance around the
+        # 1.0 ms goal). If this turns out to be flaky in practice, the
+        # follow-up is to demote it to an informational comment.
+        run: |
+          source .venv/bin/activate
+          python ../benchmarks/per_request_overhead/pr_comment.py --check
+        working-directory: logos/logos-orchestrator
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v6
+        with:
+          name: logos-overhead-benchmark
+          path: logos/benchmarks/per_request_overhead/reports/ci
+          if-no-files-found: error
+
+      - name: Comment on PR
+        # Idempotent (HTML anchor, edits the last bench comment).
+        # continue-on-error: fork PRs run with a read-only token — the gate
+        # and the artifact above still count.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          source .venv/bin/activate
+          python ../benchmarks/per_request_overhead/pr_comment.py
+        working-directory: logos/logos-orchestrator
