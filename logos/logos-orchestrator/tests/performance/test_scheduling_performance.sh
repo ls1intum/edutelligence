@@ -169,15 +169,17 @@ if is_local_api_base "$API_BASE"; then
     docker compose exec "$CONTAINER_NAME" "${RUNNER_CMD[@]}" || test_exit_code=$?
 else
     # Remote runs hit the public --api-base for /v1. The internal telemetry
-    # endpoints (scheduler_state, provider status) are gated on the internal
-    # secret and are NOT on the public Traefik routers, so pass --telemetry-base
-    # pointing at a base that reaches the orchestrator internally. That base
-    # carries the shared secret as a Bearer token, so it must be HTTPS or a
-    # local port behind an authenticated tunnel (a plain-HTTP remote host is
-    # refused by the runner). Supply the secret via --internal-secret, or
-    # LOGOS_INTERNAL_SECRET in the environment. Without a reachable telemetry
-    # base the run still completes, but runtime_samples.jsonl is empty and the
-    # runner warns.
+    # endpoints (scheduler_state, provider status) are NOT on the public
+    # Traefik routers, so pass --telemetry-base pointing at a base that reaches
+    # the orchestrator internally. The two use different credentials:
+    # scheduler_state is gated on the internal secret (carried as a Bearer
+    # token on that base, so it must be HTTPS or a local port behind an
+    # authenticated tunnel — a plain-HTTP remote host is refused by the
+    # runner), while provider status requires a root logos_key (a non-root
+    # --logos-key still yields scheduler data but no provider snapshots).
+    # Supply the internal secret via --internal-secret, or LOGOS_INTERNAL_SECRET
+    # in the environment. Without a reachable telemetry base the run still
+    # completes, but runtime_samples.jsonl is empty and the runner warns.
     RUNNER_CMD=(
         poetry run python tests/performance/run_api_workload.py
         --logos-key "$LOGOS_KEY"

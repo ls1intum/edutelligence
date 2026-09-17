@@ -1526,11 +1526,14 @@ def main() -> None:
             "Base URL for the internal runtime-sampling endpoints "
             "(/logosdb/scheduler_state, /logosdb/providers/logosnode/status). "
             "Defaults to --api-base. For remote runs point this at a base that "
-            "can reach the orchestrator's internal endpoints — they are gated "
-            "on the internal secret and are not on the public Traefik routers. "
-            "It carries that secret as a Bearer token, so it must be HTTPS or a "
-            "local port (e.g. behind an authenticated tunnel); a plain-HTTP "
-            "non-local host is refused."
+            "can reach the orchestrator's internal endpoints, which are not on "
+            "the public Traefik routers. The two use different credentials: "
+            "scheduler_state is gated on the internal secret (carried as a "
+            "Bearer token here, so the base must be HTTPS or a local port "
+            "behind an authenticated tunnel — a plain-HTTP non-local host is "
+            "refused), while provider status requires a root logos_key (a "
+            "non-root --logos-key yields scheduler data but no provider "
+            "snapshots)."
         ),
     )
     parser.add_argument("--output", type=Path, help="Destination CSV file.")
