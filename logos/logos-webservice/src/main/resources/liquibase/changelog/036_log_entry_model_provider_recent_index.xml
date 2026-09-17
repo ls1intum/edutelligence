@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Models page load time.
+
+         ModelRepository.findAllWithPricing resolves, per model, the provider it
+         was most recently routed to, so the catalog price it shows is the price
+         of that provider:
+
+             LEFT JOIN LATERAL (
+                 SELECT le.provider_id FROM log_entry le
+                 WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
+                 ORDER BY le.timestamp_request DESC LIMIT 1
+             ) dp ON true
+
+         A comment there says migration 014's (model_id, timestamp_request) makes
+         this a single index seek. It does not, and measurement on production says
+         so plainly: the whole query takes 9.6 s, of which 9.5 s is this lateral
+         at 195 ms per model.
+
+         The reason is that 014's index does not carry provider_id. With
+         `provider_id IS NOT NULL` in the predicate, that index cannot answer the
+         lateral on its own, so the planner instead picks
+         idx_log_entry_performance_window — (timestamp_request DESC, provider_id,
+         model_id) — which is covering but has model_id third. Equality on a
+         non-leading column is not seekable, so each of the 49 models walks the
+         index in timestamp order until a row for that model turns up; a model
+         with no recent traffic walks all of it.
+
+         This index puts model_id first, so the equality is the seek, keeps
+         timestamp_request DESC next so LIMIT 1 stops at the first row, and
+         carries provider_id as a payload so the scan stays index-only. The
+         partial predicate matches the lateral's and keeps the index off every
+         row that could never satisfy it.
+
+         Measured on a production snapshot: 252 ms -> 1.7 ms for the full models
+         query, with the lateral dropping from 5.1 ms to 0.004 ms per model.
+
+         Runs outside a transaction so CONCURRENTLY can build without locking
+         log_entry against the logos-orchestrator, which keeps writing to this
+         table while logos-webservice is redeployed (same rationale as
+         012/014/027/028/035). -->
+    <changeSet id="036-log-entry-model-provider-recent-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_model_provider_recent"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_model_provider_recent
+                ON log_entry (model_id, timestamp_request DESC)
+                INCLUDE (provider_id)
+                WHERE provider_id IS NOT NULL;
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_model_provider_recent;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -118,6 +118,69 @@ def test_scheduler_signals_leave_host_ram_unset_without_a_summary() -> None:
     assert signals["provider"]["host_ram_available_mb"] is None
 
 
+def test_lane_signals_carry_their_own_host_ram() -> None:
+    """Host RAM belongs on the lane as well as the provider. The statistics page
+    breaks the host's memory down by model exactly as it does the GPU's, and the
+    only place the per-model split can come from is the lane, which is where the
+    worker measures it (PSS where it can read it, RSS otherwise — hence the
+    source travelling alongside)."""
+    runtime = {
+        "timestamp": "2026-03-16T18:00:00Z",
+        "transport": {"connected": True},
+        "devices": {},
+        "capacity": {},
+        "lanes": [
+            {
+                "lane_id": "qwen-a",
+                "model": "Qwen/Qwen3-8B",
+                "runtime_state": "running",
+                "effective_vram_mb": 6144,
+                "host_ram_mb": 18432.0,
+                "host_ram_source": "pss",
+            },
+            {
+                "lane_id": "qwen-b",
+                "model": "Qwen/Qwen3-8B",
+                "runtime_state": "sleeping",
+                "effective_vram_mb": 0,
+                "host_ram_mb": 12288.0,
+                "host_ram_source": "rss",
+            },
+        ],
+    }
+
+    signals = _build_logosnode_scheduler_signals(runtime)
+    assert signals["lanes"]["qwen-a"]["host_ram_mb"] == 18432.0
+    assert signals["lanes"]["qwen-a"]["host_ram_source"] == "pss"
+    assert signals["lanes"]["qwen-b"]["host_ram_mb"] == 12288.0
+    # A sleeping lane still holds its weights in host RAM, so the model total is
+    # both lanes and not just the running one.
+    assert signals["models"]["Qwen/Qwen3-8B"]["host_ram_mb"] == 30720.0
+
+
+def test_lane_signals_report_no_host_ram_when_the_worker_measures_none() -> None:
+    """A worker that cannot read process memory reports nothing. Zero is a real
+    measurement and must not be invented for it."""
+    runtime = {
+        "timestamp": "2026-03-16T18:00:00Z",
+        "transport": {"connected": True},
+        "devices": {},
+        "capacity": {},
+        "lanes": [
+            {
+                "lane_id": "qwen-a",
+                "model": "Qwen/Qwen3-8B",
+                "runtime_state": "running",
+                "effective_vram_mb": 6144,
+            }
+        ],
+    }
+
+    signals = _build_logosnode_scheduler_signals(runtime)
+    assert signals["lanes"]["qwen-a"]["host_ram_mb"] == 0.0
+    assert signals["lanes"]["qwen-a"]["host_ram_source"] is None
+
+
 # ── Per-lane context window ──────────────────────────────────────────────────
 # The statistics page shows the window each lane is serving at. It has to travel
 # on the lane, not the model: the planner sizes every lane against the KV cache
