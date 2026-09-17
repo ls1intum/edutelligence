@@ -24,6 +24,15 @@ from logos.sdi.azure_deployment_sync import AZURE_OPERATION_API_VERSIONS
 
 logger = logging.getLogger(__name__)
 
+# The provider_type spellings the worker registration flow stores; everything
+# else passes through as a plain type string.
+_LOGOSNODE_PROVIDER_TYPES = {"logosnode", "node", "node_controller", "logos_worker_node"}
+
+
+def _normalize_provider_type(provider_type: Optional[str]) -> str:
+    raw = (provider_type or "").lower()
+    return "logosnode" if raw in _LOGOSNODE_PROVIDER_TYPES else raw
+
 
 @dataclass
 class ExecutionContext:
@@ -81,6 +90,7 @@ class ContextResolver:
         provider_id: int,
         request_path: Optional[str] = None,
         request_id: Optional[str] = None,
+        deployment_info: Optional[Dict[str, Any]] = None,
     ) -> Optional[ExecutionContext]:
         """
         Resolve all DB information needed to execute a request with authorization verification.
@@ -96,57 +106,73 @@ class ContextResolver:
             provider_id: The ID of the provider (currently unused, for future extension)
             logos_key: User's logos key (for authorization check)
             profile_id: Profile ID (for authorization check)
+            deployment_info: The key's already-fetched deployment entry for this
+                model/provider pair (``get_deployments_for_api_key``). For a
+                logosnode deployment it carries everything this resolution
+                needs — the lane lookup runs on the provider/model names and
+                endpoint/base URL/auth stay unused on that branch — so the
+                database roundtrip is skipped outright (#980). Callers without
+                a deployment list (async jobs) omit it and take the DB path.
 
         Returns:
             `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
         """
-        with perf_trace.phase(request_id, "context.resolve_db"):
-            with DBManager() as db:
-                auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
-                if not auth_info:
-                    logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
-                    return None
+        deployment = (
+            deployment_info
+            if deployment_info is not None
+            and (deployment_info.get("model_name") or "").strip()
+            and (deployment_info.get("provider_name") or "").strip()
+            and _normalize_provider_type(deployment_info.get("type")) == "logosnode"
+            else None
+        )
 
-                provider_type_raw = (auth_info.get("provider_type") or "").lower()
-                provider_type = (
-                    "logosnode"
-                    if provider_type_raw
-                    in {
-                        "logosnode",
-                        "node",
-                        "node_controller",
-                        "logos_worker_node",
-                    }
-                    else provider_type_raw
-                )
-                cloud_type = str(auth_info.get("cloud_provider_type") or "").lower() or None
-                auth_name = (auth_info.get("auth_name") or "").strip()
-                auth_format = auth_info.get("auth_format") or ""
-                api_key = auth_info.get("api_key")
+        if deployment is not None:
+            # Fast path: no DB access. Logosnode lanes receive no credentials
+            # (worker registration stores empty auth fields), so the empty
+            # values reproduce what the DB path below produced.
+            provider_type = "logosnode"
+            provider_name = deployment["provider_name"]
+            model_name = deployment["model_name"]
+            cloud_type = None
+            auth_name = ""
+            auth_value = ""
+        else:
+            with perf_trace.phase(request_id, "context.resolve_db"):
+                with DBManager() as db:
+                    auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
+                    if not auth_info:
+                        logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
+                        return None
 
-                # Cloud credentials get the convention the provider form
-                # advertises filled in — see ``cloud_auth_header``, which the
-                # model sync uses against the same providers. A provider that
-                # configured a header but has no key cannot authenticate at
-                # all, which is an error rather than an unauthenticated
-                # request.
-                auth_value = auth_format.format(api_key or "")
-                if provider_type != "logosnode":
-                    header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
-                    if header is None:
-                        if auth_name or auth_format:
-                            logger.error(
-                                f"No API key for model {model_id} / "
-                                f"provider {auth_info.get('provider_name', provider_id)}"
-                            )
-                            return None
-                    else:
-                        auth_name, auth_value = header
+                    provider_type = _normalize_provider_type(auth_info.get("provider_type"))
+                    cloud_type = str(auth_info.get("cloud_provider_type") or "").lower() or None
+                    auth_name = (auth_info.get("auth_name") or "").strip()
+                    auth_format = auth_info.get("auth_format") or ""
+                    api_key = auth_info.get("api_key")
 
-        provider_name = auth_info["provider_name"]
-        model_name = auth_info["model_name"]
-        endpoint = auth_info["endpoint"]
-        base_url = auth_info["base_url"]
+                    # Cloud credentials get the convention the provider form
+                    # advertises filled in — see ``cloud_auth_header``, which the
+                    # model sync uses against the same providers. A provider that
+                    # configured a header but has no key cannot authenticate at
+                    # all, which is an error rather than an unauthenticated
+                    # request.
+                    auth_value = auth_format.format(api_key or "")
+                    if provider_type != "logosnode":
+                        header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
+                        if header is None:
+                            if auth_name or auth_format:
+                                logger.error(
+                                    f"No API key for model {model_id} / "
+                                    f"provider {auth_info.get('provider_name', provider_id)}"
+                                )
+                                return None
+                        else:
+                            auth_name, auth_value = header
+
+            provider_name = auth_info["provider_name"]
+            model_name = auth_info["model_name"]
+            endpoint = auth_info["endpoint"]
+            base_url = auth_info["base_url"]
         lane_id: Optional[str] = None
         azure_responses_deployment: Optional[str] = None
 

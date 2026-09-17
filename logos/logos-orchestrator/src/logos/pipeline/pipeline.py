@@ -358,6 +358,7 @@ class RequestPipeline:
                 request_path=request.request_path,
                 request_id=request_id,
                 schedule_start_s=schedule_start_s,
+                deployment_info=self._scheduled_deployment(request, scheduling_result),
             )
         if not ctx_result.success:
             return ctx_result
@@ -395,6 +396,24 @@ class RequestPipeline:
     _CONTEXT_RESOLVE_TIMEOUT_S = global_timeout_s(600.0)
     _CONTEXT_RESOLVE_INTERVAL_S = 2.0
 
+    @staticmethod
+    def _scheduled_deployment(request: "PipelineRequest", scheduling_result) -> Optional[Dict[str, Any]]:
+        """The scheduled entry from the key's already-fetched deployment list.
+
+        The context resolver uses it to skip its database roundtrip for
+        logosnode targets (#980); callers without a deployment list (async
+        jobs) yield ``None`` and take the DB path.
+        """
+        return next(
+            (
+                d
+                for d in request.deployments
+                if d.get("model_id") == scheduling_result.model_id
+                and d.get("provider_id") == scheduling_result.provider_id
+            ),
+            None,
+        )
+
     async def _resolve_context_with_retry(
         self,
         scheduling_result,
@@ -402,6 +421,7 @@ class RequestPipeline:
         request_id: str,
         request_path: Optional[str] = None,
         schedule_start_s: Optional[float] = None,
+        deployment_info: Optional[Dict[str, Any]] = None,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
         deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
@@ -414,6 +434,7 @@ class RequestPipeline:
                     provider_id=scheduling_result.provider_id,
                     request_path=request_path,
                     request_id=request_id,
+                    deployment_info=deployment_info,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")

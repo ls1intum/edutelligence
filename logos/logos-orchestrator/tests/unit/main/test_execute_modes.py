@@ -189,6 +189,116 @@ async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_ali
     streaming_response.assert_not_awaited()
 
 
+async def test_execute_resource_mode_logosnode_skips_the_budget_db_checkout(monkeypatch):
+    """A scheduled logosnode provider costs no DB checkout for the budget
+    check — budgets only meter cloud usage, so the check returns before
+    touching the database (#980)."""
+
+    instantiations = []
+
+    class DummyDB:
+        def __init__(self):
+            instantiations.append(1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+
+    class Result:
+        success = True
+        error = None
+        execution_context = MagicMock(model_name="local-model", provider_type="logosnode")
+        provider_id = 1
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-budget-local", "provider_type": "logosnode"}
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type("P", (), {"process": AsyncMock(return_value=Result())}),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+    sync_response = AsyncMock(return_value={"mode": "sync"})
+    streaming_response = AsyncMock(return_value={"mode": "stream"})
+    monkeypatch.setattr(main, "_sync_response", sync_response)
+    monkeypatch.setattr(main, "_streaming_response", streaming_response)
+
+    response = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1, "type": "logosnode"}],
+        body={"model": "local-model"},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1, cloud_rl=None, local_rl=None),
+        log_id=1,
+        is_async_job=False,
+    )
+
+    assert response == {"mode": "sync"}
+    assert instantiations == []
+
+
+async def test_execute_resource_mode_cloud_still_checks_the_budget_in_db(monkeypatch):
+    """The checkout is only skipped for logosnode — cloud keys keep the check."""
+
+    instantiations = []
+
+    class DummyDB:
+        def __init__(self):
+            instantiations.append(1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_team(self, team_id):
+            return None
+
+        def get_api_key_budget_limit(self, api_key_id):
+            return None
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+
+    class Result:
+        success = True
+        error = None
+        execution_context = MagicMock(model_name="cloud-model", provider_type="cloud")
+        provider_id = 1
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-budget-cloud", "provider_type": "cloud"}
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type("P", (), {"process": AsyncMock(return_value=Result())}),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+    sync_response = AsyncMock(return_value={"mode": "sync"})
+    streaming_response = AsyncMock(return_value={"mode": "stream"})
+    monkeypatch.setattr(main, "_sync_response", sync_response)
+    monkeypatch.setattr(main, "_streaming_response", streaming_response)
+
+    response = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1, "type": "cloud"}],
+        body={"model": "cloud-model"},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1, cloud_rl=None, local_rl=None),
+        log_id=1,
+        is_async_job=False,
+    )
+
+    assert response == {"mode": "sync"}
+    assert instantiations == [1]
+
+
 async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     """_execute_proxy_mode keeps classification/scheduling but narrows deployments to one model."""
 

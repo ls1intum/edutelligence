@@ -2928,7 +2928,10 @@ async def _execute_resource_mode(
                 rl_tpm_key = rl_key
 
     with perf_trace.phase(request_id, "mode.budget_check"):
-        with DBManager() as db:
+        # Budgets only meter cloud usage — for a scheduled logosnode provider
+        # the check returns before touching the database, so the pool checkout
+        # exists to be checked out for nothing (#980).
+        with (DBManager() if provider_type != "logosnode" else nullcontext()) as db:
             try:
                 _check_budget_if_cloud(
                     db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
