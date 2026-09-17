@@ -1,0 +1,10 @@
+INFO 03-10 14:29:41 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 03-10 14:29:43 [core.py:200] Initializing a V1 LLM engine (tensor_parallel_size=2, disable_custom_all_reduce=False)
+INFO 03-10 14:29:48 [multiproc_executor.py:120] Starting VLLM::Worker_TP0 and VLLM::Worker_TP1
+worker-node:1018:1092 [1] NCCL INFO Bootstrap : Using eth0:10.0.4.7<0>
+worker-node:1018:1092 [1] NCCL WARN Cuda failure 'an illegal memory access was encountered'
+worker-node:1018:1092 [1] NCCL INFO init.cc:1892 -> 1
+worker-node:1018:1092 [1] NCCL INFO group.cc:64 -> 1 [Async thread]
+ERROR 03-10 14:29:56 [multiproc_executor.py:560] WorkerProc(VLLM::Worker_TP1) died with signal 6 (SIGABRT)
+ERROR 03-10 14:29:56 [core.py:712] EngineCore encountered a fatal error.
+ERROR 03-10 14:29:56 [core.py:712] RuntimeError: Engine core initialization failed. See root cause above.

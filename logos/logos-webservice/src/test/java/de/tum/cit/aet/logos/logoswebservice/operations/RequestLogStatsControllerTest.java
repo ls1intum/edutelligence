@@ -65,7 +65,7 @@ class RequestLogStatsControllerTest {
     // Unscoped, these endpoints return the whole platform's request data — and
     // the scope narrows to any team or requester the caller names, so a non
     // admin calling them with a foreign team id would read exactly what the
-    // team activity endpoint (issue #776) refuses them. The rule must hold
+    // team activity endpoint  refuses them. The rule must hold
     // here, not only on the statistics page's router gate.
 
     @Test
@@ -124,7 +124,7 @@ class RequestLogStatsControllerTest {
            .andExpect(jsonPath("$.stats.totals.warmStarts").value(1));
     }
 
-    // Cold and warm starts are a property of local lanes (issue #928): the KPI
+    // Cold and warm starts are a property of local lanes: the KPI
     // card shows the cold-start share of "local starts", so a cloud request
     // must not land in either count — not as a warm start, and not even when
     // its row carries was_cold_start = true. The rows are added through

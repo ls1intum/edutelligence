@@ -229,8 +229,7 @@ def current_log_max(process_id: int) -> int:
 def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
     with DBManager() as db:
         rows = db.session.execute(
-            text(
-                """
+            text("""
                 SELECT
                     le.id,
                     le.timestamp_request,
@@ -248,8 +247,7 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 WHERE le.process_id = :pid
                   AND le.id > :start_id
                 ORDER BY le.id ASC
-                """
-            ),
+                """),
             {"pid": process_id, "start_id": start_log_id},
         ).fetchall()
 

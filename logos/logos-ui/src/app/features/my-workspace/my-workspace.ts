@@ -314,7 +314,7 @@ export class MyWorkspace implements OnInit {
   // ── Display ────────────────────────────────────────────────────────────────
   /**
    * The key's usage inside the current rate-limit window, or null when the
-   * backend found nothing for the window. Null is kept distinct from zero on
+   * the application service found nothing for the window. Null is kept distinct from zero on
    * purpose: a rate-limit figure of zero claims the entire budget is
    * available, so an unknown window must not be rendered as one.
    */

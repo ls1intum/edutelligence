@@ -1,0 +1,8 @@
+{
+  "name": "NVIDIA RTX 6000 Ada Generation",
+  "compute_cap": "8.9",
+  "memory_total_mb": 49140,
+  "idle_power_w": 27.0,
+  "idle_temp_c": 35.0,
+  "fan_speed": "30"
+}

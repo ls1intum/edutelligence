@@ -1,4 +1,4 @@
-"""The single home for vLLM-bound magic values (issue #873).
+"""The single home for vLLM-bound magic values.
 
 Everything in this module is bound to a specific vLLM version, configuration,
 or instance and has to be re-checked whenever the worker's vLLM upgrade

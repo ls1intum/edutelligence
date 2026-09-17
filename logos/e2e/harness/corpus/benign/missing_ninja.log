@@ -1,0 +1,9 @@
+INFO 03-10 11:19:02 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 03-10 11:19:22 [backends.py:580] Start compiling function <code object forward>
+WARNING 03-10 11:19:24 [jit.py:88] FlashInfer JIT build requested for head_dim=128
+ERROR 03-10 11:19:25 [core.py:712] EngineCore failed to start.
+ERROR 03-10 11:19:25 [core.py:712] Traceback (most recent call last):
+ERROR 03-10 11:19:25 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/torch/utils/cpp_extension.py", line 2107, in _write_ninja_file_and_build_library
+ERROR 03-10 11:19:25 [core.py:712]     verify_ninja_availability()
+ERROR 03-10 11:19:25 [core.py:712] FileNotFoundError: [Errno 2] No such file or directory: 'ninja'
+Process EngineCore_DP0: exited with code 1

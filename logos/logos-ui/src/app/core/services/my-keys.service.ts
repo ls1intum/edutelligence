@@ -146,7 +146,7 @@ export class MyKeysService {
       const generation = ++this.hasKeysFetchGeneration;
       this.hasKeys.set(null);
       if (fingerprint === null) return;
-      // A membership change is exactly when the backend may have just
+      // A membership change is exactly when the application server may have just
       // created/deactivated a key, so this bypasses the short TTL cache
       // above rather than risk a pre-mutation value.
       this.invalidateCache();

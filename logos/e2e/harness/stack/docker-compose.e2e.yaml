@@ -1,0 +1,302 @@
+# The E2E stack: real orchestrator, real database, real worker nodes, fake GPUs.
+#
+# Deliberately *not* an overlay on docker-compose.dev.yaml. The dev stack exists
+# to be developed against — it keeps a warm volume, seeds through Keycloak, and
+# binds well-known host ports. An E2E run needs the opposite: a database that is
+# empty every time, a key that is known before startup, and no port that can
+# collide with a dev stack someone left running.
+#
+# Two differences from production worth knowing when reading a failure:
+#   * schema migrations run as a one-shot Liquibase container rather than inside
+#     the webservice, so the inter-node tier does not have to wait on Keycloak;
+#   * worker nodes run the nodesim image (see harness/nodesim/Dockerfile).
+#
+# Build context for every service is the `logos/` directory.
+#
+#   docker compose -f e2e/harness/stack/docker-compose.e2e.yaml up --wait
+#
+# The `ui` profile adds Keycloak, the webservice and the UI for the Playwright
+# tier; leave it off and the stack comes up in roughly a third of the time.
+
+name: logos-e2e
+
+services:
+  logos-db:
+    build: ../../../db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: logosdb
+    # tmpfs, not a named volume: every run starts from an empty database, and
+    # nothing survives to be cleaned up between runs.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=postgres"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    networks: [e2e]
+
+  # One-shot: bring the schema up to the same revision the webservice would.
+  migrate:
+    image: liquibase/liquibase:4.31
+    depends_on:
+      logos-db:
+        condition: service_healthy
+    volumes:
+      - ../../../logos-webservice/src/main/resources:/liquibase/changelog:ro
+    command:
+      - --searchPath=/liquibase/changelog
+      - --changeLogFile=liquibase/changelog/master.xml
+      - --url=jdbc:postgresql://logos-db:5432/logosdb
+      - --username=postgres
+      - --password=root
+      - update
+    networks: [e2e]
+
+  # One-shot: the admin and developer keys the tests authenticate with.
+  seed:
+    image: postgres:17
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./seed.sql:/seed.sql:ro
+    environment:
+      PGPASSWORD: root
+    command: ["psql", "-h", "logos-db", "-U", "postgres", "-d", "logosdb", "-v", "ON_ERROR_STOP=1", "-f", "/seed.sql"]
+    networks: [e2e]
+
+  logos-orchestrator:
+    build:
+      context: ../../../../
+      dockerfile: ./logos/logos-orchestrator/Dockerfile
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    environment:
+      LOGOS_DB_URL: "postgresql://postgres:root@logos-db:5432/logosdb"
+      LOGOS_DOMAIN: "localhost"
+      # The stack speaks plain HTTP on an isolated network; without this the
+      # node auth and session endpoints refuse every request. The TLS-required
+      # path is covered separately in tests/node/test_node_registration.py.
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "true"
+      LOGOS_CAPACITY_PLANNER_ENABLED: "true"
+      LOGOS_SCHEDULER_ETTFT_ENABLED: "true"
+      LOGOS_INTERNAL_SECRET: "logos-e2e-internal-secret"
+      LOGOSNODE_INFER_TIMEOUT_SECONDS: "120"
+      LOGOSNODE_STREAM_TIMEOUT_SECONDS: "120"
+    ports:
+      - "${E2E_ORCHESTRATOR_PORT:-18090}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/docs > /dev/null"]
+      interval: 2s
+      timeout: 5s
+      retries: 45
+    # Only consumed when the `ui` profile brings Traefik up; inert otherwise.
+    # The worker-node admin routes must outrank the webservice's /api/logosdb
+    # catch-all (200) — the orchestrator holds the node registry, and the
+    # webservice would 404 them.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.orch-api-logosnode.rule=PathPrefix(`/api/logosdb/providers/logosnode`)"
+      - "traefik.http.routers.orch-api-logosnode.entrypoints=web8080"
+      - "traefik.http.routers.orch-api-logosnode.service=orch-svc"
+      - "traefik.http.routers.orch-api-logosnode.middlewares=strip-api"
+      - "traefik.http.routers.orch-api-logosnode.priority=201"
+      - "traefik.http.routers.orch-scheduler-state.rule=Path(`/api/logosdb/scheduler_state`)"
+      - "traefik.http.routers.orch-scheduler-state.entrypoints=web8080"
+      - "traefik.http.routers.orch-scheduler-state.service=orch-svc"
+      - "traefik.http.routers.orch-scheduler-state.middlewares=strip-api"
+      - "traefik.http.routers.orch-scheduler-state.priority=201"
+      - "traefik.http.routers.orch-v1.rule=PathPrefix(`/v1`) || PathPrefix(`/openai`)"
+      - "traefik.http.routers.orch-v1.entrypoints=web8080"
+      - "traefik.http.routers.orch-v1.service=orch-svc"
+      - "traefik.http.routers.orch-v1.priority=100"
+      - "traefik.http.services.orch-svc.loadbalancer.server.port=8080"
+    networks: [e2e]
+
+  # A heterogeneous fleet on purpose: placement and eviction decisions that look
+  # right on identical nodes routinely get the mixed case wrong.
+  node-l40s:
+    build:
+      context: ../../../
+      dockerfile: ./e2e/harness/nodesim/Dockerfile
+    depends_on:
+      logos-orchestrator:
+        condition: service_healthy
+    environment:
+      LOGOS_SIM_PROFILE: l40s
+      LOGOS_SIM_GPU_COUNT: "2"
+      LOGOS_URL: "http://logos-orchestrator:8080"
+      LOGOS_ALLOW_INSECURE_HTTP: "true"
+    healthcheck:
+      # The worker exposes `/` and nothing else — every `/health` in
+      # logos_worker_node is it probing *vLLM's* health, not serving its own.
+      # Curling /health here 404s, `curl -f` fails, and the container is marked
+      # unhealthy, which aborts `compose up --wait` before any test runs.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/ > /dev/null || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    networks: [e2e]
+
+  node-2080ti:
+    build:
+      context: ../../../
+      dockerfile: ./e2e/harness/nodesim/Dockerfile
+    depends_on:
+      logos-orchestrator:
+        condition: service_healthy
+    environment:
+      LOGOS_SIM_PROFILE: rtx2080ti
+      LOGOS_SIM_GPU_COUNT: "1"
+      LOGOS_URL: "http://logos-orchestrator:8080"
+      LOGOS_ALLOW_INSECURE_HTTP: "true"
+    healthcheck:
+      # The worker exposes `/` and nothing else — every `/health` in
+      # logos_worker_node is it probing *vLLM's* health, not serving its own.
+      # Curling /health here 404s, `curl -f` fails, and the container is marked
+      # unhealthy, which aborts `compose up --wait` before any test runs.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/ > /dev/null || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    networks: [e2e]
+
+  # ---------------------------------------------------------------------------
+  # `ui` profile — the browser tier only.
+  #
+  # Keycloak takes the better part of a minute to become healthy and the Angular
+  # production build is not fast either, so none of this runs for the
+  # inter-node tier. Start it with:
+  #
+  #   docker compose ... --profile ui up --wait
+  #   python -m harness.stack.compose up --ui
+  # ---------------------------------------------------------------------------
+
+  traefik:
+    profiles: [ui]
+    image: traefik:v3.7.10
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web8080.address=:8080"
+      - "--api.dashboard=false"
+    ports:
+      - "${E2E_UI_PORT:-18091}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.strip-api.stripprefix.prefixes=/api"
+    networks: [e2e]
+
+  keycloak:
+    profiles: [ui]
+    image: quay.io/keycloak/keycloak:26.7
+    command: ["start-dev", "--import-realm", "--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: "http://localhost:${E2E_KEYCLOAK_PORT:-18095}"
+    volumes:
+      - ../../../keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "${E2E_KEYCLOAK_PORT:-18095}:8080"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    networks: [e2e]
+
+  logos-webservice:
+    profiles: [ui]
+    build:
+      context: ../../../logos-webservice
+      dockerfile: Dockerfile
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
+      LOGOS_INTERNAL_SECRET: "logos-e2e-internal-secret"
+      JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=70.0"
+      KEYCLOAK_ISSUER_URI: "http://localhost:${E2E_KEYCLOAK_PORT:-18095}/realms/tum"
+      KEYCLOAK_JWKS_URI: "http://keycloak:8080/realms/tum/protocol/openid-connect/certs"
+      KEYCLOAK_ADMIN_BASE_URL: "http://keycloak:8080"
+      KEYCLOAK_REALM: "tum"
+      KEYCLOAK_CLIENT_ID: "logos"
+      # Browsers attach an Origin even to same-origin POSTs and WebSocket
+      # upgrades, so an empty allowlist makes every UI write 403 — see the
+      # production compose for the incident this note comes from.
+      LOGOS_CORS_ALLOWED_ORIGINS: "http://localhost:${E2E_UI_PORT:-18091}"
+    expose:
+      - "8081"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ws-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`) || Path(`/api/info`)"
+      - "traefik.http.routers.ws-identity.entrypoints=web8080"
+      - "traefik.http.routers.ws-identity.service=ws-svc"
+      - "traefik.http.routers.ws-identity.middlewares=strip-api"
+      - "traefik.http.routers.ws-identity.priority=200"
+      - "traefik.http.routers.ws-config.rule=PathPrefix(`/api/logosdb`)"
+      - "traefik.http.routers.ws-config.entrypoints=web8080"
+      - "traefik.http.routers.ws-config.service=ws-svc"
+      - "traefik.http.routers.ws-config.middlewares=strip-api"
+      - "traefik.http.routers.ws-config.priority=200"
+      - "traefik.http.routers.ws-stats.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
+      - "traefik.http.routers.ws-stats.entrypoints=web8080"
+      - "traefik.http.routers.ws-stats.service=ws-svc"
+      - "traefik.http.routers.ws-stats.middlewares=strip-api"
+      - "traefik.http.routers.ws-stats.priority=200"
+      # The operator-facing lane actions, at priority 202 so they outrank the
+      # orchestrator's /api/logosdb/providers/logosnode catch-all (201). The UI
+      # sends a JWT and {provider_id, ...} to these; the orchestrator's own
+      # endpoints want a logos_key, so without this router the six paths below
+      # reach the wrong service and answer with a validation or auth error —
+      # and the browser tier would be exercising a route production does not
+      # use. Mirrors docker-compose.dev.yaml; keep the two lists in step.
+      - "traefik.http.routers.ws-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.ws-logosnode-admin.entrypoints=web8080"
+      - "traefik.http.routers.ws-logosnode-admin.service=ws-svc"
+      - "traefik.http.routers.ws-logosnode-admin.middlewares=strip-api"
+      - "traefik.http.routers.ws-logosnode-admin.priority=202"
+      - "traefik.http.services.ws-svc.loadbalancer.server.port=8081"
+    networks: [e2e]
+
+  logos-ui:
+    profiles: [ui]
+    build:
+      context: ../../../logos-ui
+      dockerfile: Dockerfile
+    depends_on:
+      logos-webservice:
+        condition: service_started
+    expose:
+      - "80"
+    labels:
+      - "traefik.enable=true"
+      # Priority 0 catch-all: the API routers win on their paths, the UI serves
+      # everything else — same origin, exactly as in production.
+      - "traefik.http.routers.e2e-ui.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.e2e-ui.entrypoints=web8080"
+      - "traefik.http.routers.e2e-ui.service=e2e-ui-svc"
+      - "traefik.http.routers.e2e-ui.priority=0"
+      - "traefik.http.services.e2e-ui-svc.loadbalancer.server.port=80"
+    networks: [e2e]
+
+networks:
+  e2e:
+    driver: bridge
