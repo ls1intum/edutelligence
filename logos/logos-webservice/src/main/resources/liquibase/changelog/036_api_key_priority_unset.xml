@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- api_keys.default_priority already used 0 as the "not explicitly
+         set" marker (the admin key API defaults a missing value to 0), but
+         auto-provisioned developer keys were written with the legacy column
+         default 1. The local queue treats any non-zero value as an explicit
+         key override, so those keys could never pick up a team priority.
+
+         Reset auto-provisioned developer keys to the unset state and align
+         the column default with the convention. Value 1 is indistinguishable
+         from the legacy default, so an explicitly pinned 1 on a developer key
+         is reset as well (re-pinnable via the key update API); every other
+         explicit value (2..10) and all non-developer keys stay untouched. -->
+    <changeSet id="036-api-key-priority-unset" author="wasnertobias">
+        <sql>
+            UPDATE api_keys SET default_priority = 0
+            WHERE key_type = 'developer' AND default_priority = 1;
+        </sql>
+        <sql>
+            ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 0;
+        </sql>
+        <rollback>
+            <sql>
+                UPDATE api_keys SET default_priority = 1
+                WHERE key_type = 'developer' AND default_priority = 0;
+            </sql>
+            <sql>
+                ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 1;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

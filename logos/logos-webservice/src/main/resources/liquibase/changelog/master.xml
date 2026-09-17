@@ -39,5 +39,6 @@
     <include file="liquibase/changelog/033_batch_settlement.xml"/>
     <include file="liquibase/changelog/034_model_capabilities_max_input_tokens.xml"/>
     <include file="liquibase/changelog/035_team_priority.xml"/>
+    <include file="liquibase/changelog/036_api_key_priority_unset.xml"/>
 
 </databaseChangeLog>

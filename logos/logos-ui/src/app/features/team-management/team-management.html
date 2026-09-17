@@ -89,10 +89,9 @@
               (click)="$event.stopPropagation()"
               (change)="$event.stopPropagation(); changeTeamPriority(team, $any($event.target).value)"
             >
-              <option value="">Default</option>
-              <option [value]="1">Low</option>
-              <option [value]="5">Normal</option>
-              <option [value]="10">High</option>
+              @for (option of priorityOptions; track option.value) {
+                <option [value]="option.value">{{ option.label }}</option>
+              }
             </select>
           } @else {
             <span class="count-badge">{{ priorityLabel(team) }}</span>

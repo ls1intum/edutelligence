@@ -141,6 +141,9 @@ class LiquibaseBaselineTest {
         assertThat(key.get("name")).isEqualTo("Ada Lovelace-Team Alpha-key");
         assertThat(key.get("is_active")).isEqualTo(true);
         assertThat(key.get("environment")).isEqualTo("-");
+        // The 002 backfill SQL still writes the legacy default 1; changeset
+        // 036 (already run earlier in this baseline) would reset such keys to
+        // 0 in production, but the helper re-ran the SQL after 036.
         assertThat(((Number) key.get("default_priority")).intValue()).isEqualTo(1);
         assertThat(key.get("use_custom_permissions")).isEqualTo(false);
     }
@@ -176,6 +179,43 @@ class LiquibaseBaselineTest {
             "SELECT is_active FROM api_keys WHERE key_value='lg-existing'", Boolean.class)).isFalse();
         assertThat(developerKeyCount(rootUser, teamId)).isEqualTo(0);
         assertThat(developerKeyCount(inactiveUser, teamId)).isEqualTo(0);
+    }
+
+    @Test
+    void migration036_resetsAutoProvisionedDeveloperKeysToUnsetPriority() {
+        // Legacy auto-provisioned developer keys carry the old column default
+        // (1), which the queue reads as an explicit key override and which
+        // therefore shadows any team priority. 036 resets them to the "unset"
+        // state (0) so team priority can apply, and re-points the column
+        // default. Explicit values on other keys must survive untouched.
+        Integer userId = jdbc.queryForObject(
+            "INSERT INTO users (username, role, is_active) VALUES ('key-reset', 'app_developer', true) RETURNING id",
+            Integer.class);
+        Integer teamId = jdbc.queryForObject(
+            "INSERT INTO teams (name) VALUES ('Reset') RETURNING id", Integer.class);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-legacy-dev', 'legacy dev', 'developer', ?, ?, 1, true)", teamId, userId);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-explicit-dev', 'explicit dev', 'developer', ?, ?, 5, true)", teamId, userId);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-app-key', 'app key', 'application', ?, ?, 1, true)", teamId, userId);
+
+        runMigration036();
+
+        assertThat(keyPriority("lg-legacy-dev")).isEqualTo(0);
+        assertThat(keyPriority("lg-explicit-dev")).isEqualTo(5);
+        assertThat(keyPriority("lg-app-key")).isEqualTo(1);
+    }
+
+    private int keyPriority(String keyValue) {
+        Number priority = jdbc.queryForObject(
+            "SELECT default_priority FROM api_keys WHERE key_value=?", Number.class, keyValue);
+        return priority.intValue();
+    }
+
+    private void runMigration036() {
+        jdbc.update("UPDATE api_keys SET default_priority = 0 WHERE key_type='developer' AND default_priority = 1");
+        jdbc.update("ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 0");
     }
 
     private int developerKeyCount(Integer userId, Integer teamId) {

@@ -20,7 +20,10 @@ def test_resolve_queue_priority_key_wins_when_set():
 
 
 def test_resolve_queue_priority_unset_key_falls_back_to_team():
-    # An unset key takes the team's admin-set priority.
+    # An unset key takes the team's admin-set priority. 0 is the production
+    # default for auto-provisioned developer keys (ApiKeyFactory + webservice
+    # changelog 036), so this is the case normal developer/app-admin traffic
+    # actually hits.
     assert resolve_queue_priority(0, 5, 10) == 5
     assert resolve_queue_priority(None, 1, 10) == 1
     # The team's choice wins over the policy's.

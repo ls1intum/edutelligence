@@ -110,6 +110,35 @@ describe('TeamManagement', () => {
     expect(component.priorityError()).toBe('');
   });
 
+  it('offers Default plus every priority value 1-10, with bucket annotations', async () => {
+    await createFor('logos_admin');
+    const select: HTMLSelectElement | null = fixture.nativeElement.querySelector('.priority-cell select');
+    expect(select).toBeTruthy();
+    if (!select) return;
+    const options = Array.from(select.options);
+    expect(options.map((o) => o.value)).toEqual(['', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
+    expect(options[1].text).toBe('Low (1)');
+    expect(options[5].text).toBe('Normal (5)');
+    expect(options[10].text).toBe('High (10)');
+    // Non-bucket values are offered as-is.
+    expect(options[7].text).toBe('7');
+  });
+
+  it('saves a non-bucket priority such as 7 from the select', async () => {
+    await createFor('logos_admin');
+    const select: HTMLSelectElement | null = fixture.nativeElement.querySelector('.priority-cell select');
+    expect(select).toBeTruthy();
+    if (!select) return;
+
+    select.value = '7';
+    select.dispatchEvent(new Event('change'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(teamService.updateTeamPriority).toHaveBeenCalledWith(2001, 7);
+    expect(component.teams()[0].priority).toBe(7);
+    expect(component.priorityLabel(component.teams()[0])).toBe('7');
+  });
+
   it('treats the empty option as unsetting the priority', async () => {
     await createFor('logos_admin');
     component.teams.set([team({ priority: 10 })]);

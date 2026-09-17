@@ -153,6 +153,17 @@ export class TeamManagement implements OnInit {
   }
 
   // ── Team queue priority ─────────────────────────────────────────────────
+  /** Select options: Default (unset) plus every value the API accepts (1–10),
+   *  with Low/Normal/High annotating the classic bucket values. */
+  readonly priorityOptions: { value: string; label: string }[] = [
+    { value: '', label: 'Default' },
+    ...Array.from({ length: 10 }, (_, i): { value: string; label: string } => {
+      const v = i + 1;
+      const bucket: Record<number, string> = { 1: 'Low', 5: 'Normal', 10: 'High' };
+      return { value: String(v), label: bucket[v] ? `${bucket[v]} (${v})` : String(v) };
+    }),
+  ];
+
   priorityLabel(team: Team): string {
     if (team.priority === null || team.priority === undefined) return 'Default';
     const known: Record<number, string> = { 1: 'Low', 5: 'Normal', 10: 'High' };
