@@ -541,18 +541,41 @@
                    -- rows (result_status NULL) aren't priced. NULL when Logos has no
                    -- pricing knowledge: logs UI omits the cost line, budget SUM()s
                    -- ignore it.
+                   --
+                   -- The token rollup is a scalar subquery inside the branches
+                   -- that use it, not a LEFT JOIN LATERAL ... ON <condition>
+                   -- beside them (issue #1022). Both spell the same value, but a
+                   -- lateral is evaluated for every row and only *then* filtered
+                   -- by its ON clause, so a settled row still paid for a full
+                   -- usage_tokens aggregation before the join threw it away. On
+                   -- production nearly every row is settled: the budget history
+                   -- query ran 415k of those aggregations to keep 22 of them.
+                   -- A subquery inside a CASE branch is only evaluated when the
+                   -- branch is taken, so the work now happens exactly where it
+                   -- is used. Verified equivalent over a production snapshot --
+                   -- all 689,682 rows identical, same total -- and the budget
+                   -- history query went from 4.75 s to 0.68 s.
                    CASE
+                       WHEN le.cost_finalized
+                            AND le.result_status IN ('success', 'error', 'timeout')
+                           THEN le.settled_cost_micro_cents
                        WHEN le.result_status = 'success' THEN
-                           CASE WHEN le.cost_finalized THEN le.settled_cost_micro_cents
-                           ELSE logos_price_usage(le.model_id, le.provider_id,
-                                             COALESCE(le.timestamp_response, le.timestamp_request),
-                                             le.service_tier, pe.usage_json) END
-                       WHEN le.result_status IN ('error', 'timeout') THEN
-                           CASE WHEN le.cost_finalized THEN le.settled_cost_micro_cents
-                           ELSE logos_price_usage(le.model_id, le.provider_id,
+                           logos_price_usage(le.model_id, le.provider_id,
                                              COALESCE(le.timestamp_response, le.timestamp_request),
                                              le.service_tier,
-                                             pe.usage_json - ARRAY[
+                                             (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                                              FROM usage_tokens ut
+                                              JOIN token_types tt ON tt.id = ut.type_id
+                                              WHERE ut.log_entry_id = le.id))
+                       WHEN le.result_status IN ('error', 'timeout') THEN
+                           logos_price_usage(le.model_id, le.provider_id,
+                                             COALESCE(le.timestamp_response, le.timestamp_request),
+                                             le.service_tier,
+                                             (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                                              FROM usage_tokens ut
+                                              JOIN token_types tt ON tt.id = ut.type_id
+                                              WHERE ut.log_entry_id = le.id)
+                                             - ARRAY[
                                                  'billed_requests',
                                                  'billed_input_characters',
                                                  'billed_input_pixels',
@@ -565,16 +588,9 @@
                                                  'billed_output_milliseconds',
                                                  'billed_output_milliseconds_1080p',
                                                  'billed_output_milliseconds_4k'
-                                             ]) END
+                                             ])
                    END AS cost_micro_cents
-            FROM log_entry le
-            LEFT JOIN LATERAL (
-                SELECT jsonb_object_agg(tt.name, ut.token_count) AS usage_json
-                FROM usage_tokens ut
-                JOIN token_types tt ON tt.id = ut.type_id
-                WHERE ut.log_entry_id = le.id
-            ) pe ON NOT le.cost_finalized
-                 AND le.result_status IN ('success', 'error', 'timeout');
+            FROM log_entry le;
         ]]></sql>
     </changeSet>
 

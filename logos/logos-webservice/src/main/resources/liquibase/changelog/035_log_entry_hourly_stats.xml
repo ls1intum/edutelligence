@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Statistics page load time (issue #1022).
+
+         Every aggregate behind the page filters log_entry on the expression
+
+             COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)
+
+         and none of the existing indexes covers it, so each one fell back to a
+         sequential scan. Measured against a production snapshot (689k log_entry
+         rows, 2.4M usage_tokens), one page load cost 6.5 s of database time on
+         the production host, 3.4 s of it in findTotals alone.
+
+         An index on that expression does not fix the default view: the 30-day
+         preset selects roughly 60 percent of the table, where a sequential scan
+         is the cheaper plan and the planner rightly picks it. Counting 400k+
+         rows into 120 buckets is O(n) work that only pre-aggregation removes.
+
+         Hence the rollup below. At its finest grain the whole history collapses
+         to about 12.5k rows (3.4 MB), a factor of 55, and every aggregate
+         becomes a scan of that instead of the base table. Measured on the same
+         snapshot the eight page queries went from 1769 ms to 22 ms locally, and
+         the merged reader (rollup plus a live tail) answers the 30-day totals in
+         51 ms against 504 ms live.
+
+         The expression index is still created: it is what makes the live tail
+         and the short presets (last hour, today) cheap, which is exactly the
+         selectivity range where an index does win.
+
+         Freshness: the view holds only *complete* hours, so a partial head hour
+         and everything newer than the last refresh are read from log_entry and
+         merged on top. Correctness therefore never depends on the refresh having
+         run - a stale or lagging view only shifts work back to the base table.
+         RequestLogStatsRefreshService refreshes it hourly. -->
+
+    <!-- log_entry_cost calls logos_price_usage, which reaches for `providers`
+         without a schema. CREATE and REFRESH MATERIALIZED VIEW run with a
+         restricted search_path, so any rollup over that view fails with
+         "relation providers does not exist" until the functions carry their own
+         search_path. Pinning it is the fix and is worth having on its own: a
+         function whose meaning depends on the caller's search_path is a latent
+         hazard well beyond this view. -->
+    <changeSet id="035-pin-pricing-function-search-path" author="logos">
+        <sql splitStatements="false"><![CDATA[
+            DO $$
+            DECLARE fn record;
+            BEGIN
+                FOR fn IN
+                    SELECT p.oid::regprocedure AS signature
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'public'
+                      AND p.proname LIKE 'logos\_%'
+                LOOP
+                    EXECUTE format('ALTER FUNCTION %s SET search_path = public, pg_catalog',
+                                   fn.signature);
+                END LOOP;
+            END $$;
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+                DO $$
+                DECLARE fn record;
+                BEGIN
+                    FOR fn IN
+                        SELECT p.oid::regprocedure AS signature
+                        FROM pg_proc p
+                        JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.proname LIKE 'logos\_%'
+                    LOOP
+                        EXECUTE format('ALTER FUNCTION %s RESET search_path', fn.signature);
+                    END LOOP;
+                END $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Serves the live tail above the rollup watermark and the short presets.
+         Outside a transaction so CONCURRENTLY can build without locking
+         log_entry against the logos-orchestrator, which keeps writing to this
+         table while logos-webservice is redeployed (same rationale as
+         012/014/027/028). -->
+    <changeSet id="035-log-entry-effective-ts-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_effective_ts"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_effective_ts
+                ON log_entry ((COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)));
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_effective_ts;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- The rollup itself.
+
+         Grain is (hour, model, provider, team, user, status, cold start): every
+         dimension the page groups or filters by, so one view answers the totals,
+         the status counts, the model breakdown, both time series and the
+         cold/warm split. provider_id and model_id stay as ids rather than baked
+         privacy levels or names, so the reader joins providers/models live and a
+         renamed model or a changed privacy level needs no refresh to show up.
+
+         Averages are stored as sum plus count, never as an average: averaging
+         pre-averaged hours would weight a quiet hour like a busy one.
+
+         Only complete hours are included (now() is re-evaluated on every
+         refresh), which is what lets the reader treat max(bucket_hour) + 1 hour
+         as a watermark it can trust and read anything above it live.
+
+         Created WITH DATA: an unpopulated materialized view raises on SELECT
+         rather than returning nothing, so the reader could not fall back. The
+         one-off build cost is roughly a minute on production. -->
+    <changeSet id="035-log-entry-hourly-stats" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*) FROM pg_matviews WHERE matviewname = 'log_entry_hourly_stats'
+            </sqlCheck>
+        </preConditions>
+        <sql splitStatements="false"><![CDATA[
+            CREATE MATERIALIZED VIEW log_entry_hourly_stats AS
+            SELECT
+                date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                            le.timestamp_request,
+                                            le.timestamp_response))          AS bucket_hour,
+                le.model_id,
+                le.provider_id,
+                le.team_id,
+                le.user_id,
+                le.result_status,
+                COALESCE(le.was_cold_start, FALSE)                           AS was_cold_start,
+                COUNT(*)                                                     AS requests,
+                SUM(CASE WHEN le.timestamp_request IS NOT NULL
+                          AND le.timestamp_forwarding IS NOT NULL
+                         THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                    END)                                                     AS queue_seconds_sum,
+                COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
+                                   AND le.timestamp_forwarding IS NOT NULL)  AS queue_seconds_count,
+                SUM(CASE WHEN le.timestamp_forwarding IS NOT NULL
+                          AND le.timestamp_response IS NOT NULL
+                         THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+                    END)                                                     AS run_seconds_sum,
+                COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL
+                                   AND le.timestamp_response IS NOT NULL)    AS run_seconds_count,
+                COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
+                                    OR (le.error_message IS NOT NULL
+                                        AND le.error_message <> ''))         AS error_count,
+                COALESCE(SUM(tok.total_tokens), 0)::bigint                   AS total_tokens,
+                COALESCE(SUM(lec.cost_micro_cents), 0)::bigint               AS cost_micro_cents
+            FROM log_entry le
+            LEFT JOIN LATERAL (
+                SELECT SUM(ut.token_count) AS total_tokens
+                FROM usage_tokens ut
+                JOIN token_types tt ON tt.id = ut.type_id
+                WHERE ut.log_entry_id = le.id
+                  AND tt.name = 'total_tokens'
+            ) tok ON TRUE
+            LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
+            WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
+                  < date_trunc('hour', now())
+            GROUP BY 1, 2, 3, 4, 5, 6, 7;
+        ]]></sql>
+        <!-- REFRESH MATERIALIZED VIEW CONCURRENTLY requires a unique index over
+             the grain; it is also what keeps the grain honest. -->
+        <sql>
+            CREATE UNIQUE INDEX ux_log_entry_hourly_stats_grain
+                ON log_entry_hourly_stats (bucket_hour, model_id, provider_id, team_id,
+                                           user_id, result_status, was_cold_start);
+        </sql>
+        <sql>
+            CREATE INDEX idx_log_entry_hourly_stats_bucket
+                ON log_entry_hourly_stats (bucket_hour);
+        </sql>
+        <!-- The single split point between "read the rollup" and "read
+             log_entry", shared by every statistics aggregate.
+
+             It is a function and not five copies of the same CTE on purpose: if
+             two aggregates disagreed by one hour about where the rollup ends,
+             one would double-count the overlap and another would drop a gap, and
+             the page would contradict itself in a way no single query looks
+             wrong for.
+
+               mv_lo  first whole hour at or after p_start - a range starting at
+                      03:43 must not pull in all of the 03:00 bucket, so that
+                      partial head hour stays with the live side.
+               mv_hi  exclusive upper bound: the last hour the range covers,
+                      capped at the rollup watermark (max bucket + 1h). Floored
+                      at mv_lo so that an empty or lagging rollup yields an empty
+                      window rather than an inverted one - which is what makes
+                      "live covers everything below mv_lo or at/above mv_hi"
+                      exactly a partition, with no overlap and no gap.
+
+             p_use_rollup = false collapses the window to empty and sends the
+             whole query to log_entry; that is how sub-hour buckets are served. -->
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_stats_rollup_window(
+                p_start timestamptz,
+                p_end timestamptz,
+                p_use_rollup boolean
+            )
+            RETURNS TABLE (mv_lo timestamptz, mv_hi timestamptz)
+            LANGUAGE sql
+            STABLE
+            SET search_path = public, pg_catalog
+            AS $$
+                WITH lo AS (
+                    SELECT CASE WHEN p_start = date_trunc('hour', p_start)
+                                THEN p_start
+                                ELSE date_trunc('hour', p_start) + interval '1 hour'
+                           END AS mv_lo
+                )
+                SELECT lo.mv_lo,
+                       CASE WHEN p_use_rollup THEN
+                           GREATEST(
+                               LEAST(
+                                   date_trunc('hour', p_end + interval '1 microsecond'),
+                                   (SELECT COALESCE(max(bucket_hour) + interval '1 hour',
+                                                    '-infinity'::timestamptz)
+                                      FROM log_entry_hourly_stats)
+                               ),
+                               lo.mv_lo)
+                       ELSE lo.mv_lo END
+                FROM lo;
+            $$;
+        ]]></sql>
+        <rollback>
+            <sql>DROP FUNCTION IF EXISTS logos_stats_rollup_window(timestamptz, timestamptz, boolean);</sql>
+            <sql>DROP MATERIALIZED VIEW IF EXISTS log_entry_hourly_stats;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
