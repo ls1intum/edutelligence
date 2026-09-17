@@ -21,6 +21,7 @@ AZURE_CHAT_ENDPOINT = (
 AZURE_RESPONSES_ENDPOINT = (
     "https://ase-se01.openai.azure.com/openai/deployments/" "gpt-56-luna/responses?api-version=2025-04-01-preview"
 )
+AZURE_ANTHROPIC_ENDPOINT = "https://ase-se01.openai.azure.com/openai/deployments/" "claude-opus-5/anthropic/v1/messages"
 
 MESSAGES_BODY = {
     "model": "gpt-4.1-nano",
@@ -114,8 +115,63 @@ async def test_azure_reasoning_deployment_uses_the_responses_dialect(monkeypatch
         endpoint=AZURE_RESPONSES_ENDPOINT,
     )
     assert context.forward_url == "https://ase-se01.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
-    assert context.azure_responses_deployment == "gpt-56-luna"
+    assert context.azure_body_deployment == "gpt-56-luna"
     assert context.anthropic_dialect is UpstreamDialect.RESPONSES
+
+
+@pytest.mark.asyncio
+async def test_azure_claude_deployment_collapses_to_the_anthropic_route(monkeypatch):
+    # The stored deployment-scoped endpoint is collapsed to Azure's real
+    # route, which names no deployment — the id goes into the body instead.
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="azure",
+        model_name="claude-opus-5",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint=AZURE_ANTHROPIC_ENDPOINT,
+    )
+    assert context.forward_url == "https://ase-se01.openai.azure.com/anthropic/v1/messages"
+    assert context.azure_body_deployment == "claude-opus-5"
+    assert context.anthropic_dialect is UpstreamDialect.NATIVE
+
+
+@pytest.mark.asyncio
+async def test_azure_claude_deployment_authenticates_anthropic_style(monkeypatch):
+    # The route reads x-api-key, not the api-key header an Azure deployment
+    # conventionally carries, and requires anthropic-version on every request.
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="azure",
+        model_name="claude-opus-5",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint=AZURE_ANTHROPIC_ENDPOINT,
+        auth_name="api-key",
+    )
+    headers, _ = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
+    assert headers["x-api-key"] == "sk-secret"
+    assert "api-key" not in headers
+    assert headers["anthropic-version"]
+
+
+@pytest.mark.asyncio
+async def test_azure_claude_deployment_body_model_is_rewritten_to_the_deployment(monkeypatch):
+    # Azure resolves the deployment from the body's "model", which must be the
+    # deployment id — a deployment renamed during setup (id != served model)
+    # would 404 on the catalogue name. Native means the rest of the body is
+    # untouched.
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="azure",
+        model_name="claude-opus-5",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint="https://ase-se01.openai.azure.com/openai/deployments/claude-prod/anthropic/v1/messages",
+    )
+    _, payload = ContextResolver.prepare_headers_and_payload(context, {**MESSAGES_BODY, "model": "claude-opus-5"})
+    assert payload["model"] == "claude-prod"
+    assert payload["system"] == "Be brief."
 
 
 @pytest.mark.asyncio

@@ -148,6 +148,7 @@ class LogosBridgeClient:
         # restarts this process anyway, so caching for its lifetime is
         # exact, not an approximation. None means "not fetched yet".
         self._vllm_quant_methods: list[str] | None = None
+        self._local_hf_token: str = os.environ.get("HF_TOKEN", "")
 
     @property
     def worker_id(self) -> str:
@@ -161,6 +162,19 @@ class LogosBridgeClient:
             last_status_sent_at=self._last_status_sent_at,
             consecutive_failures=self._consecutive_failures,
         )
+
+    async def bootstrap_hf_token(self) -> None:
+        if not self._cfg.enabled:
+            return
+        try:
+            await self._authenticate()
+        except Exception:
+            logger.warning(
+                "Could not reach Logos to fetch a centrally configured HF_TOKEN "
+                "before startup model operations; falling back to the locally "
+                "configured HF_TOKEN",
+                exc_info=True,
+            )
 
     async def start(self) -> None:
         if not self._cfg.enabled:
@@ -310,6 +324,14 @@ class LogosBridgeClient:
         # Pick up server-resolved worker identity
         if "worker_id" in data:
             self._resolved_worker_id = str(data["worker_id"])
+
+        central_hf_token = str(data.get("hf_token", "")).strip()
+        if central_hf_token:
+            os.environ["HF_TOKEN"] = central_hf_token
+        elif self._local_hf_token:
+            os.environ["HF_TOKEN"] = self._local_hf_token
+        else:
+            os.environ.pop("HF_TOKEN", None)
 
         ws_url = str(data.get("ws_url", "")).strip()
         if not ws_url:
@@ -1311,10 +1333,10 @@ class LogosBridgeClient:
         back to the server. The server does not poll status and does not
         choose models; it only sends start/stop session RPCs.
         """
-        # Refuse up front on the Metal backend: calibration.py measures
+        # Refuse up front on the Metal engine: calibration.py measures
         # against nvidia-smi and samples /proc/meminfo, neither of which
         # exists on macOS, so no probe here can ever succeed. Capacity
-        # profiles on this backend come from model_profile_overrides
+        # profiles on this engine come from model_profile_overrides
         # (config.example.mlx.yml) — no flag is needed to keep the worker
         # away from a dead measurement path.
         if is_metal_backend():
@@ -1701,7 +1723,7 @@ class LogosBridgeClient:
             plan_by_model = {p["model"]: p for p in all_plans}
 
             # Free the calibration's GPU slice up front — but only that slice
-            # (issue #592). The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
+            # The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
             # so it only competes for the slice's VRAM; lanes on the leftover
             # GPUs keep serving for the rest of the session instead of sitting
             # idle. Without the pin the kv-cache search would start against an
@@ -1972,7 +1994,7 @@ class LogosBridgeClient:
                         except Exception:  # noqa: BLE001
                             logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
 
-                    # Issue #615: when the calibrated TP is >1, pre-shard the
+                    # When the calibrated TP is >1, pre-shard the
                     # checkpoint now while the GPU is free, so the lane that
                     # serves this model later loads each rank's shard directly
                     # instead of every rank re-reading the full checkpoint.
@@ -2046,7 +2068,7 @@ class LogosBridgeClient:
         Runs the (blocking, GPU-loading) conversion on the thread executor with
         the session's cancel_event wired through, so stop_calibration_session
         tears it down within ~2s. Best-effort: any failure is logged and the
-        model still serves from its full checkpoint. See issue #615.
+        model still serves from its full checkpoint.
         """
         try:
             from pathlib import Path  # noqa: PLC0415

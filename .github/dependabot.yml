@@ -18,6 +18,85 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
+  # The logos services are uv projects. They were not covered here at all, so
+  # their manifests were only ever read once by the dependency graph and never
+  # rescanned -- an alert for a dependency that had since been fixed stayed
+  # open indefinitely (GHSA-3936-cmfr-pm3m on logos-agent's black).
+  #
+  # The ecosystem is "uv" rather than "pip" deliberately: these images install
+  # with `uv sync --locked`, so a bump that edited pyproject.toml without
+  # updating uv.lock would fail the build.
+  - package-ecosystem: "uv"
+    directory: "logos/logos-agent"
+    schedule:
+      interval: "weekly"
+    groups:
+      logos-agent-python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+  - package-ecosystem: "uv"
+    directory: "logos/logos-orchestrator"
+    schedule:
+      interval: "weekly"
+    groups:
+      logos-orchestrator-python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+  # Athena is many small poetry projects rather than one. The globs cover the
+  # top level, the sibling packages beside it (assessment_module_manager,
+  # athena, evaluation, llm_core, log_viewer, tests) and the exercise modules
+  # two levels down. Directories without a pip manifest, such as the docs and
+  # playground npm projects, are simply skipped.
+  - package-ecosystem: "pip"
+    directories:
+      - "athena"
+      - "athena/*"
+      - "athena/modules/*/*"
+    schedule:
+      interval: "weekly"
+    groups:
+      athena-python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+  - package-ecosystem: "pip"
+    directory: "atlas/AtlasMl"
+    schedule:
+      interval: "weekly"
+    groups:
+      atlas-python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+  # shared is consumed by the other services as a path dependency, so a stale
+  # constraint here propagates to all of them.
+  - package-ecosystem: "pip"
+    directory: "shared"
+    schedule:
+      interval: "weekly"
+    groups:
+      shared-python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+  # The npm side: three docusaurus sites, the Athena playground and the Logos
+  # UI. Dependabot raises one pull request per directory.
+  - package-ecosystem: "npm"
+    directories:
+      - "athena/docs"
+      - "athena/playground"
+      - "atlas/docs"
+      - "iris/docs"
+      - "logos/logos-ui"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -105,7 +105,7 @@ class GpuMetricsCollector:
             nvidia_smi_available=available,
             # available is exactly "measured device telemetry" on this path
             # (start() only sets it when nvidia-smi exists and polls) — mirror
-            # it into the backend-neutral flag so the orchestrator's consumers
+            # it into the application server-neutral flag so the orchestrator's consumers
             # (main.py reporting, logosnode_provider gating) interpret the
             # snapshot the same way as the Metal path does.
             telemetry_available=available,

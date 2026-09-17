@@ -511,16 +511,14 @@ class DBManager:
 
         Returns the number of rows closed.
         """
-        sql = text(
-            """
+        sql = text("""
             UPDATE log_entry
                SET result_status = 'error',
                    timestamp_response = NOW(),
                    error_message = COALESCE(error_message, :error_message)
              WHERE result_status IS NULL
                AND timestamp_response IS NULL
-            """
-        )
+            """)
         result = self.session.execute(sql, {"error_message": error_message})
         self.session.commit()
         return int(result.rowcount or 0)
@@ -558,12 +556,10 @@ class DBManager:
             Job ID
         """
         row = self.session.execute(
-            text(
-                """
+            text("""
                  INSERT INTO jobs (status, request_payload, api_key_id, team_id, user_id, environment)
                  VALUES (:status, CAST(:payload AS jsonb), :aki, :tid, :uid, :env) RETURNING id
-                 """
-            ),
+                 """),
             {
                 "status": status,
                 "payload": _json_for_jsonb(payload),
@@ -580,8 +576,7 @@ class DBManager:
         """Resolve the endpoint and credential for one exact provider-model pair."""
         row = (
             self.session.execute(
-                text(
-                    """
+                text("""
                 SELECT mp.id AS model_provider_id,
                        m.id AS model_id,
                        m.name AS model_name,
@@ -597,8 +592,7 @@ class DBManager:
                 JOIN models m ON m.id = mp.model_id
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE mp.id = :model_provider_id
-                """
-                ),
+                """),
                 {"model_provider_id": int(model_provider_id)},
             )
             .mappings()
@@ -615,8 +609,7 @@ class DBManager:
         stale_after_seconds = max(1, int(stale_after_seconds))
         stale_error = f"Benchmark stopped updating for {stale_after_seconds} seconds"
         expired = self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE jobs
                 SET status = 'failed',
                     error_message = :stale_error,
@@ -626,8 +619,7 @@ class DBManager:
                   AND (request_payload ->> 'provider_id')::integer = :provider_id
                   AND COALESCE(updated_at, created_at)
                       < CURRENT_TIMESTAMP - CAST(:stale_after_seconds AS integer) * INTERVAL '1 second'
-                """
-            ),
+                """),
             {
                 "provider_id": int(provider_id),
                 "stale_after_seconds": stale_after_seconds,
@@ -639,8 +631,7 @@ class DBManager:
 
         row = (
             self.session.execute(
-                text(
-                    """
+                text("""
                 SELECT id, status, request_payload, created_at, updated_at
                 FROM jobs
                 WHERE environment = 'model-provider-benchmark'
@@ -648,8 +639,7 @@ class DBManager:
                   AND (request_payload ->> 'provider_id')::integer = :provider_id
                 ORDER BY created_at DESC
                 LIMIT 1
-                """
-                ),
+                """),
                 {"provider_id": int(provider_id)},
             )
             .mappings()
@@ -660,14 +650,12 @@ class DBManager:
     def touch_model_benchmark_job(self, job_id: int) -> bool:
         """Renew one active benchmark lease."""
         updated = self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE jobs SET updated_at = CURRENT_TIMESTAMP
                 WHERE id = :job_id
                   AND environment = 'model-provider-benchmark'
                   AND status IN ('pending', 'running')
-                """
-            ),
+                """),
             {"job_id": int(job_id)},
         )
         self.session.commit()
@@ -676,15 +664,13 @@ class DBManager:
     def cancel_model_benchmark_job(self, job_id: int, reason: str) -> bool:
         """Fail one active benchmark job and release its logical lease."""
         updated = self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE jobs
                 SET status = 'failed', error_message = :reason, updated_at = CURRENT_TIMESTAMP
                 WHERE id = :job_id
                   AND environment = 'model-provider-benchmark'
                   AND status IN ('pending', 'running')
-                """
-            ),
+                """),
             {"job_id": int(job_id), "reason": reason[:1000]},
         )
         self.session.commit()
@@ -702,16 +688,14 @@ class DBManager:
     ) -> int:
         """Persist one complete benchmark summary and return its id."""
         row = self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO model_provider_benchmarks
                     (model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
                 VALUES
                     (:model_provider_id, CAST(:configuration AS jsonb), :dataset, :sample_size,
                      CAST(:metrics AS jsonb), :recorded_at)
                 RETURNING id
-                """
-            ),
+                """),
             {
                 "model_provider_id": int(model_provider_id),
                 "configuration": _json_for_jsonb(configuration),
@@ -754,8 +738,7 @@ class DBManager:
     def record_benchmark_request_started(self, job_id: int) -> None:
         """Atomically advance an active benchmark's visible sample progress."""
         self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE jobs
                 SET result_payload = jsonb_set(
                         COALESCE(result_payload, '{}'::jsonb),
@@ -770,8 +753,7 @@ class DBManager:
                 WHERE id = :job_id
                   AND status = 'running'
                   AND result_payload->>'stage' = 'benchmarking'
-                """
-            ),
+                """),
             {"job_id": int(job_id)},
         )
         self.session.commit()
@@ -800,7 +782,8 @@ class DBManager:
 
         original_provider_type = provider_type or ""
 
-        # Ollama is no longer a provider type — every worker lane runs vLLM.
+        # The legacy local-provider type is no longer supported — every worker
+        # lane runs the current engine.
         # Refuse it explicitly instead of letting it through as an unknown
         # type the DB enum would reject with a raw constraint error.
         if original_provider_type.strip().lower() == "ollama":
@@ -842,8 +825,7 @@ class DBManager:
         return {"result": "Created Provider.", "provider-id": pk}, 200
 
     def get_policy(self, logos_key: str, policy_id: int):
-        sql = text(
-            """
+        sql = text("""
                    SELECT p.*
                    FROM policies p
                             JOIN api_keys ak ON (
@@ -852,8 +834,7 @@ class DBManager:
                        )
                    WHERE ak.key_value = :logos_key
                      AND p.id = :policy_id LIMIT 1
-                   """
-        )
+                   """)
         result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).mappings().first()
         if result is None:
             if self.check_authorization(logos_key):
@@ -874,13 +855,11 @@ class DBManager:
         return {"result": "Created Token Type.", "token-type-id": pk}, 200
 
     def get_token_name(self, name):
-        sql = text(
-            """
+        sql = text("""
                    SELECT *
                    FROM token_types
                    WHERE name = :name
-                   """
-        )
+                   """)
         entity = self.session.execute(sql, {"name": name}).fetchone()
         if entity is not None:
             return entity.id
@@ -897,8 +876,7 @@ class DBManager:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
 
-        upsert_sql = text(
-            """
+        upsert_sql = text("""
             INSERT INTO model_provider (provider_id, model_id, api_key, endpoint)
             VALUES (:pid, :mid, :api_key, :endpoint) ON CONFLICT (model_id, provider_id)
             DO
@@ -906,8 +884,7 @@ class DBManager:
                api_key = EXCLUDED.api_key,
                endpoint = EXCLUDED.endpoint
             RETURNING id
-            """
-        )
+            """)
         result = self.session.execute(
             upsert_sql,
             {
@@ -945,27 +922,23 @@ class DBManager:
 
         # Ensure logosnode_provider_keys entry exists for this provider
         self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO logosnode_provider_keys (provider_id)
                 VALUES (:pid)
                 ON CONFLICT (provider_id) DO NOTHING
-            """
-            ),
+            """),
             {"pid": pid},
         )
 
         # Get current model_provider links for this logosnode provider
         existing_rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT mp.model_id, m.name
                 FROM model_provider mp
                 JOIN models m ON m.id = mp.model_id
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE mp.provider_id = :pid AND p.provider_type = 'logosnode'
-            """
-            ),
+            """),
             {"pid": pid},
         ).fetchall()
         existing_by_name: dict[str, int] = {row.name: row.model_id for row in existing_rows}
@@ -994,14 +967,12 @@ class DBManager:
             else:
                 mid = (
                     self.session.execute(
-                        text(
-                            """
+                        text("""
                         INSERT INTO models (name, weight_latency, weight_accuracy,
                                             weight_cost, weight_quality, tags, description)
                         VALUES (:name, 0, 0, 0, 0, '', '')
                         RETURNING id
-                    """
-                        ),
+                    """),
                         {"name": model_name},
                     )
                     .fetchone()
@@ -1011,13 +982,11 @@ class DBManager:
 
             # Upsert model_provider link
             self.session.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO model_provider (provider_id, model_id)
                     VALUES (:pid, :mid)
                     ON CONFLICT DO NOTHING
-                """
-                ),
+                """),
                 {"pid": pid, "mid": mid},
             )
 
@@ -1030,15 +999,11 @@ class DBManager:
         Used by the Azure deployment auto-sync to discover which resources to
         poll. ``api_key`` is the provider-level resource key.
         """
-        rows = self.session.execute(
-            text(
-                """
+        rows = self.session.execute(text("""
                 SELECT id, name, base_url, api_key
                 FROM providers
                 WHERE provider_type = 'cloud' AND cloud_provider_type = 'azure'
-                """
-            )
-        ).fetchall()
+                """)).fetchall()
         return [{"id": r.id, "name": r.name, "base_url": r.base_url, "api_key": r.api_key} for r in rows]
 
     def sync_azure_deployments(self, provider_id: int, deployments: list[Dict[str, str]]) -> Dict[str, Any]:
@@ -1070,14 +1035,12 @@ class DBManager:
         desired = {d["model_name"]: d["endpoint"] for d in deployments}
 
         existing_rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT mp.model_id, m.name, mp.endpoint
                 FROM model_provider mp
                 JOIN models m ON m.id = mp.model_id
                 WHERE mp.provider_id = :pid
-                """
-            ),
+                """),
             {"pid": pid},
         ).fetchall()
         existing_by_name = {row.name: row.model_id for row in existing_rows}
@@ -1104,14 +1067,12 @@ class DBManager:
             else:
                 mid = (
                     self.session.execute(
-                        text(
-                            """
+                        text("""
                             INSERT INTO models (name, weight_latency, weight_accuracy,
                                                 weight_cost, weight_quality, tags, description)
                             VALUES (:name, 0, 0, 0, 0, '', '')
                             RETURNING id
-                            """
-                        ),
+                            """),
                         {"name": model_name},
                     )
                     .fetchone()
@@ -1126,14 +1087,12 @@ class DBManager:
 
             # Upsert the link and refresh the endpoint; preserve any api_key override.
             self.session.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO model_provider (provider_id, model_id, endpoint)
                     VALUES (:pid, :mid, :endpoint)
                     ON CONFLICT (model_id, provider_id)
                     DO UPDATE SET endpoint = EXCLUDED.endpoint
-                    """
-                ),
+                    """),
                 {"pid": pid, "mid": mid, "endpoint": endpoint},
             )
 
@@ -1152,9 +1111,7 @@ class DBManager:
         out; a provider with no key is returned, because an upstream that
         serves its model list unauthenticated is legitimate.
         """
-        rows = self.session.execute(
-            text(
-                """
+        rows = self.session.execute(text("""
                 SELECT id, name, base_url, api_key, auth_name, auth_format,
                        cloud_provider_type
                 FROM providers
@@ -1162,9 +1119,7 @@ class DBManager:
                   AND (cloud_provider_type IS NULL OR cloud_provider_type <> 'azure')
                   AND COALESCE(base_url, '') <> ''
                 ORDER BY id
-                """
-            )
-        ).fetchall()
+                """)).fetchall()
         return [
             {
                 "id": r.id,
@@ -1186,14 +1141,12 @@ class DBManager:
         choice someone made.
         """
         self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE providers
                 SET cloud_provider_type = CAST(:value AS cloud_provider_type_enum),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = :pid AND cloud_provider_type IS NULL
-                """
-            ),
+                """),
             {"pid": int(provider_id), "value": str(cloud_provider_type)},
         )
         self.session.commit()
@@ -1220,14 +1173,12 @@ class DBManager:
         desired = {name for name in model_names if name}
 
         existing_rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT mp.model_id, m.name
                 FROM model_provider mp
                 JOIN models m ON m.id = mp.model_id
                 WHERE mp.provider_id = :pid
-                """
-            ),
+                """),
             {"pid": pid},
         ).fetchall()
         existing_by_name = {row.name: row.model_id for row in existing_rows}
@@ -1253,14 +1204,12 @@ class DBManager:
             else:
                 mid = (
                     self.session.execute(
-                        text(
-                            """
+                        text("""
                             INSERT INTO models (name, weight_latency, weight_accuracy,
                                                 weight_cost, weight_quality, tags, description)
                             VALUES (:name, 0, 0, 0, 0, '', '')
                             RETURNING id
-                            """
-                        ),
+                            """),
                         {"name": model_name},
                     )
                     .fetchone()
@@ -1269,13 +1218,11 @@ class DBManager:
                 newly_inserted.append(model_name)
 
             self.session.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO model_provider (provider_id, model_id)
                     VALUES (:pid, :mid)
                     ON CONFLICT (model_id, provider_id) DO NOTHING
-                    """
-                ),
+                    """),
                 {"pid": pid, "mid": mid},
             )
             changed = True
@@ -1299,12 +1246,10 @@ class DBManager:
         previous = {
             row.model_name: (row.context_current_min, row.context_current_max, row.context_overall)
             for row in self.session.execute(
-                text(
-                    """
+                text("""
                     SELECT model_name, context_current_min, context_current_max, context_overall
                     FROM cloud_model_context WHERE provider_id = :pid
-                    """
-                ),
+                    """),
                 {"pid": pid},
             ).fetchall()
         }
@@ -1322,14 +1267,12 @@ class DBManager:
             )
             current[str(model_name)] = values
             self.session.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO cloud_model_context (
                         provider_id, model_name,
                         context_current_min, context_current_max, context_overall, updated_at
                     ) VALUES (:pid, :name, :cmin, :cmax, :overall, CURRENT_TIMESTAMP)
-                    """
-                ),
+                    """),
                 {
                     "pid": pid,
                     "name": str(model_name),
@@ -1352,14 +1295,10 @@ class DBManager:
         Only positive values are returned, so a model whose upstream reports no
         window is absent and callers treat it as unknown rather than zero.
         """
-        rows = self.session.execute(
-            text(
-                """
+        rows = self.session.execute(text("""
                 SELECT model_name, context_current_min, context_current_max, context_overall
                 FROM cloud_model_context
-                """
-            )
-        ).fetchall()
+                """)).fetchall()
 
         stats: Dict[str, Dict[str, int]] = {}
         for row in rows:
@@ -1401,9 +1340,7 @@ class DBManager:
         know (or that it lists without a window) is absent and callers treat
         it as unknown rather than zero.
         """
-        rows = self.session.execute(
-            text(
-                """
+        rows = self.session.execute(text("""
                 SELECT DISTINCT m.name, c.max_input_tokens
                 FROM model_capabilities c
                 JOIN models m ON m.id = c.model_id
@@ -1411,9 +1348,7 @@ class DBManager:
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE p.provider_type = 'cloud'
                   AND c.max_input_tokens IS NOT NULL AND c.max_input_tokens > 0
-                """
-            )
-        ).fetchall()
+                """)).fetchall()
 
         contexts: Dict[str, int] = {}
         for row in rows:
@@ -1434,14 +1369,12 @@ class DBManager:
         Returns:
             Dictionary with configuration fields if found, None otherwise
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT id, ollama_admin_url, total_vram_mb, parallel_capacity,
                    keep_alive_seconds, max_loaded_models, updated_at
             FROM providers
             WHERE id = :provider_id
-        """
-        )
+        """)
 
         result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
 
@@ -1464,16 +1397,14 @@ class DBManager:
         Returns:
             Dict with auth_name, auth_format, api_key (may be None) or None if provider not found.
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT id,
                    auth_name,
                    auth_format,
                    api_key
             FROM providers
             WHERE id = :provider_id
-        """
-        )
+        """)
 
         result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
         if not result:
@@ -1541,14 +1472,12 @@ class DBManager:
         updates.append("updated_at = CURRENT_TIMESTAMP")
         update_clause = ", ".join(updates)
 
-        sql = text(
-            f"""
+        sql = text(f"""
             UPDATE providers
             SET {update_clause}
             WHERE id = :provider_id
             RETURNING id
-        """
-        )
+        """)
 
         result = self.session.execute(sql, params)
         self.session.commit()
@@ -1592,8 +1521,7 @@ class DBManager:
             poll_success: Whether the poll was successful
             error_message: Error message if poll failed
         """
-        sql = text(
-            """
+        sql = text("""
             INSERT INTO provider_snapshots (
                 provider_id,
                 snapshot_ts,
@@ -1622,8 +1550,7 @@ class DBManager:
                 :error_message
             )
             RETURNING id
-        """
-        )
+        """)
 
         result = self.session.execute(
             sql,
@@ -1673,8 +1600,7 @@ class DBManager:
         if not profiles:
             return 0
 
-        sql = text(
-            """
+        sql = text("""
             INSERT INTO model_profiles (
                 provider_id, model_name,
                 base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
@@ -1714,8 +1640,7 @@ class DBManager:
                 observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
                 min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
                 updated_at = CURRENT_TIMESTAMP
-        """
-        )
+        """)
 
         count = 0
         for model_name, data in profiles.items():
@@ -1765,14 +1690,12 @@ class DBManager:
         survives every workernode going offline and an orchestrator restart,
         which is exactly when a live runtime snapshot would say nothing.
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT model_name, MAX(max_reported_context_length) AS max_context
             FROM model_profiles
             WHERE max_reported_context_length > 0
             GROUP BY model_name
-        """
-        )
+        """)
         result = self.session.execute(sql)
         historic: Dict[str, int] = {}
         for model_name, max_context in result:
@@ -1806,8 +1729,7 @@ class DBManager:
             log_text: Full raw calibration log for this (provider, model),
                 stored separately so it doesn't bloat/duplicate `summary`.
         """
-        sql = text(
-            """
+        sql = text("""
             INSERT INTO calibration_probe_logs (
                 provider_id, model_name,
                 success, probe_command, error,
@@ -1832,8 +1754,7 @@ class DBManager:
             WHERE calibration_probe_logs.recorded_at IS NULL
                OR EXCLUDED.recorded_at IS NULL
                OR EXCLUDED.recorded_at > calibration_probe_logs.recorded_at
-        """
-        )
+        """)
         self.session.execute(
             sql,
             {
@@ -1859,8 +1780,7 @@ class DBManager:
         the "Complete Logs" tab for successful calibrations, which no
         longer carry a ``log_text`` (see upsert_calibration_probe_log).
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
                    cpl.probe_command, cpl.error, cpl.summary, cpl.log_text,
                    cpl.recorded_at, cpl.updated_at
@@ -1868,8 +1788,7 @@ class DBManager:
             JOIN providers p ON p.id = cpl.provider_id
             WHERE cpl.model_name = :model_name
             ORDER BY cpl.provider_id
-        """
-        )
+        """)
         rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
         results = []
         for row in rows:
@@ -1918,8 +1837,7 @@ class DBManager:
             "end_ts": end_dt,
         }
 
-        sql = text(
-            """
+        sql = text("""
             SELECT
                 s.id,
                 s.provider_id,
@@ -1941,8 +1859,7 @@ class DBManager:
               AND s.snapshot_ts >= :start_ts
               AND s.snapshot_ts < :end_ts
             ORDER BY s.provider_id, s.snapshot_ts
-        """
-        )
+        """)
 
         try:
             rows = self.session.execute(sql, params).fetchall()
@@ -2059,8 +1976,7 @@ class DBManager:
             since_clause = " AND s.snapshot_ts >= :since_ts"
 
         if full_history:
-            sql = text(
-                f"""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2082,13 +1998,11 @@ class DBManager:
                   AND s.id > :after_snapshot_id
                   {since_clause}
                 ORDER BY s.id
-            """
-            )
+            """)
         else:
             params["start_ts"] = start_dt
             params["end_ts"] = end_dt
-            sql = text(
-                f"""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -2112,8 +2026,7 @@ class DBManager:
                   AND s.id > :after_snapshot_id
                   {since_clause}
                 ORDER BY s.id
-            """
-            )
+            """)
 
         try:
             rows = self.session.execute(sql, params).fetchall()
@@ -2226,8 +2139,7 @@ class DBManager:
             """
             params["api_key_id"] = int(api_key_id)
 
-        sql = text(
-            f"""
+        sql = text(f"""
             SELECT m.id          AS model_id,
                    m.name        AS model_name,
                    mp.endpoint   AS endpoint,
@@ -2245,20 +2157,17 @@ class DBManager:
             {permission_join}
             {filters}
             LIMIT 1
-        """
-        )
+        """)
 
         row = self.session.execute(sql, params).mappings().first()
         return dict(row) if row else None
 
     def get_endpoint_for_deployment(self, model_id: int, provider_id: int) -> Optional[str]:
         """Get the endpoint for a specific model-provider deployment from model_provider."""
-        sql = text(
-            """
+        sql = text("""
             SELECT endpoint FROM model_provider
             WHERE model_id = :model_id AND provider_id = :provider_id
-        """
-        )
+        """)
         row = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
         return row.endpoint if row else None
 
@@ -2266,8 +2175,7 @@ class DBManager:
         """
         Get a list of all authorized model deployments for an api key.
         """
-        sql = text(
-            """
+        sql = text("""
                    WITH key_info AS (
                             SELECT ak.id AS aki,
                                    ak.team_id AS tid,
@@ -2310,8 +2218,7 @@ class DBManager:
                         JOIN effective_models em ON m.id = em.model_id
                         JOIN effective_providers ep ON p.id = ep.provider_id
                    ORDER BY model_id, provider_id
-                   """
-        )
+                   """)
         rows = self.session.execute(sql, {"api_key_id": api_key_id}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
@@ -2330,8 +2237,7 @@ class DBManager:
         is the cached probe result — NULL when the provider was never probed,
         which the resolver treats as "ask the upstream now".
         """
-        sql = text(
-            """
+        sql = text("""
                    WITH key_info AS (
                             SELECT ak.id AS aki,
                                    ak.team_id AS tid,
@@ -2371,8 +2277,7 @@ class DBManager:
                    WHERE p.provider_type = 'cloud'
                      AND COALESCE(NULLIF(TRIM(p.base_url), ''), NULL) IS NOT NULL
                    ORDER BY p.id
-                   """
-        )
+                   """)
         rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
         return [dict(row) for row in rows]
 
@@ -2385,8 +2290,7 @@ class DBManager:
         """
         row = (
             self.session.execute(
-                text(
-                    """
+                text("""
                 SELECT p.id,
                        p.name,
                        p.base_url,
@@ -2403,8 +2307,7 @@ class DBManager:
                        ) AS api_key
                 FROM providers p
                 WHERE p.id = :provider_id
-                """
-                ),
+                """),
                 {"provider_id": int(provider_id)},
             )
             .mappings()
@@ -2415,16 +2318,14 @@ class DBManager:
     def record_provider_batch_capability(self, provider_id: int, supports_batch: bool, detail: str = "") -> None:
         """Cache what a Batch API probe found for one provider."""
         self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO provider_batch_capability (provider_id, supports_batch, detail, checked_at)
                 VALUES (:pid, :supports, :detail, :now)
                 ON CONFLICT (provider_id)
                 DO UPDATE SET supports_batch = EXCLUDED.supports_batch,
                               detail = EXCLUDED.detail,
                               checked_at = EXCLUDED.checked_at
-                """
-            ),
+                """),
             {
                 "pid": int(provider_id),
                 "supports": bool(supports_batch),
@@ -2444,13 +2345,11 @@ class DBManager:
         picked up automatically.
         """
         rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT model_id FROM provider_model_batch_eligibility
                 WHERE provider_id = :pid AND eligible = false
                   AND checked_at > :now - make_interval(days => :ttl)
-                """
-            ),
+                """),
             {
                 "pid": int(provider_id),
                 "now": datetime.datetime.now(datetime.timezone.utc),
@@ -2468,16 +2367,14 @@ class DBManager:
         fact about the upstream that changes on the provider's schedule.
         """
         self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO provider_model_batch_eligibility (provider_id, model_id, eligible, detail, checked_at)
                 VALUES (:pid, :mid, false, :detail, :now)
                 ON CONFLICT (provider_id, model_id)
                 DO UPDATE SET eligible = false,
                               detail = EXCLUDED.detail,
                               checked_at = EXCLUDED.checked_at
-                """
-            ),
+                """),
             {
                 "pid": int(provider_id),
                 "mid": int(model_id),
@@ -2500,8 +2397,7 @@ class DBManager:
         Passing ``provider_id`` narrows the answer to one provider.
         """
         scope = "WHERE mp.provider_id = :provider_id" if provider_id is not None else ""
-        sql = text(
-            f"""
+        sql = text(f"""
                    WITH key_info AS (
                             SELECT ak.id AS aki,
                                    ak.team_id AS tid,
@@ -2540,8 +2436,7 @@ class DBManager:
                         JOIN effective_providers ep ON ep.provider_id = p.id
                    {scope}
                    ORDER BY m.name, p.id
-                   """
-        )
+                   """)
         params: Dict[str, Any] = {"api_key_id": int(api_key_id)}
         if provider_id is not None:
             params["provider_id"] = int(provider_id)
@@ -2556,15 +2451,13 @@ class DBManager:
         any key's permission scope, so it reads the full link table.
         """
         rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT m.id AS model_id, m.name AS model_name, mp.endpoint AS endpoint
                 FROM model_provider mp
                      JOIN models m ON m.id = mp.model_id
                 WHERE mp.provider_id = :provider_id
                 ORDER BY m.name
-                """
-            ),
+                """),
             {"provider_id": int(provider_id)},
         ).mappings()
         return [dict(row) for row in rows.all()]
@@ -2602,8 +2495,7 @@ class DBManager:
         object again instead of letting the collision stand.
         """
         result = self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO batch_objects
                     (kind, upstream_id, provider_id, api_key_id, team_id, user_id,
                      input_file_id, status, models, provider_object_id, created_at, updated_at)
@@ -2621,8 +2513,7 @@ class DBManager:
                                                             batch_objects.provider_object_id),
                               updated_at = EXCLUDED.updated_at
                 WHERE COALESCE(batch_objects.provider_id, 0) = COALESCE(EXCLUDED.provider_id, 0)
-                """
-            ),
+                """),
             {
                 "kind": kind,
                 "upstream_id": upstream_id,
@@ -2692,14 +2583,12 @@ class DBManager:
             where = "kind = :kind AND api_key_id = :api_key_id"
             params = {"kind": kind, "api_key_id": int(api_key_id), "limit": int(limit)}
         row_set = self.session.execute(
-            text(
-                f"""
+            text(f"""
                 SELECT * FROM batch_objects
                 WHERE {where}
                 ORDER BY created_at DESC
                 LIMIT :limit
-                """
-            ),
+                """),
             params,
         ).mappings()
         return [dict(row) for row in row_set.all()]
@@ -2712,13 +2601,11 @@ class DBManager:
         check that could not run must rotate its batch to the back of it.
         """
         self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET status = COALESCE(:status, status), updated_at = :now
                 WHERE kind = 'batch' AND upstream_id = :upstream_id
-                """
-            ),
+                """),
             {
                 "upstream_id": upstream_id,
                 "status": status,
@@ -2764,8 +2651,7 @@ class DBManager:
         if not isinstance(status, str):
             status = None
         self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET status = COALESCE(:status, status),
                     output_file_id = COALESCE(:output_file_id, output_file_id),
@@ -2775,8 +2661,7 @@ class DBManager:
                     failed_requests = COALESCE(:failed_requests, failed_requests),
                     updated_at = :now
                 WHERE kind = 'batch' AND upstream_id = :upstream_id
-                """
-            ),
+                """),
             {
                 "upstream_id": upstream_id,
                 "status": status,
@@ -2806,14 +2691,12 @@ class DBManager:
         so a lease that lapses mid-settlement cannot double-bill.
         """
         result = self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET settlement_lease_expires_at = :now + make_interval(secs => :lease), updated_at = :now
                 WHERE id = :id AND settled_at IS NULL
                   AND (settlement_lease_expires_at IS NULL OR settlement_lease_expires_at <= :now)
-                """
-            ),
+                """),
             {
                 "id": int(batch_object_id),
                 "lease": int(lease_seconds),
@@ -2838,13 +2721,11 @@ class DBManager:
         was written before this point is either idempotent or already skipped.
         """
         self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET settled_at = :now, settlement_lease_expires_at = NULL, updated_at = :now
                 WHERE id = :id
-                """
-            ),
+                """),
             {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
         )
         self.session.commit()
@@ -2858,15 +2739,13 @@ class DBManager:
         that never finish cannot starve the batches behind them.
         """
         rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT id, upstream_id, provider_id, api_key_id, team_id, user_id, status
                 FROM batch_objects
                 WHERE kind = 'batch' AND settled_at IS NULL AND execution = 'provider'
                 ORDER BY updated_at
                 LIMIT :limit
-                """
-            ),
+                """),
             {"limit": int(limit)},
         ).mappings()
         return [dict(row) for row in rows.all()]
@@ -2891,16 +2770,14 @@ class DBManager:
         browser.
         """
         row = self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO batch_objects
                     (kind, upstream_id, execution, api_key_id, team_id, user_id,
                      filename, size_bytes, status, created_at, updated_at)
                 VALUES ('file', :upstream_id, 'logos', :api_key_id, :team_id, :user_id,
                         :filename, :size_bytes, :purpose, :now, :now)
                 RETURNING id
-                """
-            ),
+                """),
             {
                 "upstream_id": upstream_id,
                 "api_key_id": api_key_id,
@@ -2946,8 +2823,7 @@ class DBManager:
     ) -> int:
         """Record a batch Logos will execute itself, ready for the runner."""
         row = self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO batch_objects
                     (kind, upstream_id, execution, api_key_id, team_id, user_id,
                      input_file_id, endpoint, completion_window, request_metadata,
@@ -2956,8 +2832,7 @@ class DBManager:
                         :input_file_id, :endpoint, :completion_window, CAST(:metadata AS JSONB),
                         :total, 'validating', :now, :now)
                 RETURNING id
-                """
-            ),
+                """),
             {
                 "upstream_id": upstream_id,
                 "api_key_id": api_key_id,
@@ -2978,12 +2853,10 @@ class DBManager:
         """One Logos-run batch by the id its client holds."""
         row = (
             self.session.execute(
-                text(
-                    """
+                text("""
                 SELECT * FROM batch_objects
                 WHERE kind = 'batch' AND execution = 'logos' AND upstream_id = :upstream_id
-                """
-                ),
+                """),
                 {"upstream_id": upstream_id},
             )
             .mappings()
@@ -2995,12 +2868,10 @@ class DBManager:
         """One Logos-held file or batch, whatever its state."""
         row = (
             self.session.execute(
-                text(
-                    """
+                text("""
                 SELECT * FROM batch_objects
                 WHERE kind = :kind AND execution = 'logos' AND upstream_id = :upstream_id
-                """
-                ),
+                """),
                 {"kind": kind, "upstream_id": upstream_id},
             )
             .mappings()
@@ -3021,8 +2892,7 @@ class DBManager:
         batch a second time.
         """
         result = self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET status = CASE WHEN status = 'validating' THEN 'in_progress' ELSE status END,
                     started_at = COALESCE(started_at, :now),
@@ -3032,8 +2902,7 @@ class DBManager:
                 WHERE id = :id AND kind = 'batch' AND execution = 'logos'
                   AND status IN ('validating', 'in_progress', 'cancelling')
                   AND (runner_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= :now)
-                """
-            ),
+                """),
             {
                 "id": int(batch_object_id),
                 "runner": str(runner_id),
@@ -3051,16 +2920,14 @@ class DBManager:
         process is picked up again after a restart instead of hanging forever.
         """
         rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT id, upstream_id, input_file_id, endpoint, api_key_id, team_id, user_id, status
                 FROM batch_objects
                 WHERE kind = 'batch' AND execution = 'logos'
                   AND status IN ('validating', 'in_progress', 'cancelling')
                 ORDER BY created_at
                 LIMIT :limit
-                """
-            ),
+                """),
             {"limit": int(limit)},
         ).mappings()
         return [dict(row) for row in rows.all()]
@@ -3080,16 +2947,14 @@ class DBManager:
         longer holds the batch.
         """
         row = self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET completed_requests = :completed, failed_requests = :failed,
                     lease_expires_at = :now + make_interval(secs => :lease),
                     updated_at = :now
                 WHERE id = :id AND runner_id = :runner
                 RETURNING cancel_requested
-                """
-            ),
+                """),
             {
                 "id": int(batch_object_id),
                 "runner": str(runner_id),
@@ -3125,8 +2990,7 @@ class DBManager:
         "completed" without them.
         """
         result = self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET status = :status,
                     output_file_id = COALESCE(:output_file_id, output_file_id),
@@ -3139,8 +3003,7 @@ class DBManager:
                     settled_at = :now,
                     updated_at = :now
                 WHERE id = :id AND runner_id = :runner
-                """
-            ),
+                """),
             {
                 "id": int(batch_object_id),
                 "runner": str(runner_id),
@@ -3169,13 +3032,11 @@ class DBManager:
         one it was accepted to run.
         """
         row = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT count(*) FROM batch_objects
                 WHERE kind = 'batch' AND execution = 'logos' AND input_file_id = :file_id
                   AND status IN ('validating', 'in_progress', 'cancelling')
-                """
-            ),
+                """),
             {"file_id": str(input_file_id)},
         ).fetchone()
         return int(row[0]) if row else 0
@@ -3183,15 +3044,13 @@ class DBManager:
     def request_local_batch_cancel(self, batch_object_id: int) -> None:
         """Ask the runner to stop before its next request line."""
         self.session.execute(
-            text(
-                """
+            text("""
                 UPDATE batch_objects
                 SET cancel_requested = true,
                     status = CASE WHEN status IN ('validating', 'in_progress') THEN 'cancelling' ELSE status END,
                     updated_at = :now
                 WHERE id = :id
-                """
-            ),
+                """),
             {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
         )
         self.session.commit()
@@ -3241,12 +3100,10 @@ class DBManager:
         A resumed batch runs only the lines missing here.
         """
         rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT custom_id, row FROM batch_line_results
                 WHERE batch_object_id = :id
-                """
-            ),
+                """),
             {"id": int(batch_object_id)},
         ).mappings()
         return {row["custom_id"]: row["row"] for row in rows.all()}
@@ -3259,14 +3116,12 @@ class DBManager:
         """
         row = (
             self.session.execute(
-                text(
-                    """
+                text("""
                 SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
                        ak.environment, ak.log, ak.settings, ak.default_priority
                 FROM api_keys ak
                 WHERE ak.id = :api_key_id AND ak.is_active = true
-                """
-                ),
+                """),
                 {"api_key_id": int(api_key_id)},
             )
             .mappings()
@@ -3451,8 +3306,7 @@ class DBManager:
             - provider_id
             - type
         """
-        sql = text(
-            """
+        sql = text("""
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type,
@@ -3472,8 +3326,7 @@ class DBManager:
                             JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
                    WHERE p.provider_type = 'logosnode'
                    ORDER BY model_id, provider_id
-                   """
-        )
+                   """)
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
 
@@ -3486,8 +3339,7 @@ class DBManager:
         model_provider + logosnode_provider_keys — plus the display names the
         model-level health check reports per deployment.
         """
-        sql = text(
-            """
+        sql = text("""
                    SELECT m.id               as model_id,
                           m.name             as model_name,
                           p.id               as provider_id,
@@ -3509,8 +3361,7 @@ class DBManager:
                             JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
                    WHERE p.provider_type = 'logosnode'
                    ORDER BY model_id, provider_id
-                   """
-        )
+                   """)
         rows = self.session.execute(sql, {}).mappings().all()
         return [dict(row) for row in rows]
 
@@ -3521,8 +3372,7 @@ class DBManager:
         Returns:
             List of dicts with model id, name, and description.
         """
-        sql = text(
-            """
+        sql = text("""
            WITH key_info AS (
                 SELECT ak.id AS aki,
                        ak.team_id AS tid,
@@ -3561,8 +3411,7 @@ class DBManager:
            JOIN model_provider mp ON m.id = mp.model_id
            JOIN effective_providers ep ON mp.provider_id = ep.provider_id
            ORDER BY m.id
-       """
-        )
+       """)
         rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
         models = []
         for row in rows:
@@ -3585,8 +3434,7 @@ class DBManager:
         Returns:
             Dict with model id, name, and description, or None if not found.
         """
-        sql = text(
-            """
+        sql = text("""
            WITH key_info AS (
                 SELECT ak.id AS aki,
                        ak.team_id AS tid,
@@ -3622,8 +3470,7 @@ class DBManager:
             JOIN effective_providers ep ON mp.provider_id = ep.provider_id
             WHERE m.name = :name
             ORDER BY m.id LIMIT 1
-        """
-        )
+        """)
         row = self.session.execute(sql, {"api_key_id": int(api_key_id), "name": model_name}).mappings().first()
         return dict(row) if row else None
 
@@ -3684,12 +3531,10 @@ class DBManager:
         """
         Get a list of all models. ONLY FOR INTERNAL USE.
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT models.id
             FROM models
-        """
-        )
+        """)
         result = self.session.execute(sql).fetchall()
         return [i.id for i in result]
 
@@ -3701,21 +3546,18 @@ class DBManager:
 
         if not is_admin:
             role_row = self.session.execute(
-                text(
-                    """
+                text("""
                     SELECT u.role FROM api_keys ak
                     JOIN users u ON ak.user_id = u.id
                     WHERE ak.key_value = :logos_key AND ak.is_active = true
-                """
-                ),
+                """),
                 {"logos_key": logos_key},
             ).fetchone()
             if role_row is not None and role_row.role == "app_admin":
                 is_admin = True
 
         if is_admin:
-            sql = text(
-                """
+            sql = text("""
                        SELECT m.id,
                               m.name,
                               m.weight_latency,
@@ -3759,12 +3601,10 @@ class DBManager:
                             ) AS output_usd_per_million
                        FROM models m
                        ORDER BY m.id
-                       """
-            )
+                       """)
             params = {}
         else:
-            sql = text(
-                """
+            sql = text("""
                 WITH key_info AS (
                     SELECT ak.id AS aki,
                            ak.team_id AS tid,
@@ -3837,8 +3677,7 @@ class DBManager:
                 JOIN model_provider mp ON m.id = mp.model_id
                 JOIN effective_providers ep ON mp.provider_id = ep.provider_id
                 ORDER BY m.id
-            """
-            )
+            """)
             params = {"logos_key": logos_key}
 
         result = self.session.execute(sql, params).fetchall()
@@ -3950,13 +3789,11 @@ class DBManager:
         return None
 
     def get_model(self, model_id: int):
-        sql = text(
-            """
+        sql = text("""
             SELECT *
             FROM models
             WHERE id = :model_id
-        """
-        )
+        """)
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         if result is None:
             return None
@@ -3972,13 +3809,11 @@ class DBManager:
         }
 
     def get_provider(self, provider_id: int):
-        sql = text(
-            """
+        sql = text("""
             SELECT *
             FROM providers
             WHERE id = :provider_id
-        """
-        )
+        """)
         result = self.session.execute(sql, {"provider_id": int(provider_id)}).fetchone()
         if result is None:
             return None
@@ -3996,14 +3831,12 @@ class DBManager:
 
     def get_logosnode_provider_by_api_key(self, api_key: str):
         """Look up a logosnode provider by its shared API key."""
-        sql = text(
-            """
+        sql = text("""
             SELECT *
             FROM providers
             WHERE api_key = :api_key
               AND provider_type = 'logosnode'
-        """
-        )
+        """)
         result = self.session.execute(sql, {"api_key": api_key}).fetchone()
         if result is None:
             return None
@@ -4032,8 +3865,7 @@ class DBManager:
     def list_local_providers(self) -> list[dict]:
         """Unauthenticated variant of get_local_provider_inventory for internal
         (secret-gated) endpoints that have no user logos_key."""
-        sql = text(
-            """
+        sql = text("""
             SELECT
                 id,
                 name,
@@ -4050,8 +3882,7 @@ class DBManager:
                 'logos_worker_node'
             )
             ORDER BY LOWER(name), id
-        """
-        )
+        """)
 
         rows = self.session.execute(sql).fetchall()
         return [
@@ -4074,25 +3905,21 @@ class DBManager:
         longer runs, so they must be fixed by hand rather than silently left
         unservable.
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT id, name, provider_type
             FROM providers
             WHERE LOWER(provider_type::text) = 'ollama'
             ORDER BY id
-        """
-        )
+        """)
         rows = self.session.execute(sql).fetchall()
         return [{"id": row.id, "name": row.name, "provider_type": row.provider_type} for row in rows]
 
     def log(self, api_key_id: int):
-        sql = text(
-            """
+        sql = text("""
                    SELECT log
                    FROM api_keys
                    WHERE id = :api_key_id
-                   """
-        )
+                   """)
         result = self.session.execute(sql, {"api_key_id": int(api_key_id)}).fetchone()
         if result is None:
             return False
@@ -4116,8 +3943,7 @@ class DBManager:
         headers_str = _json_for_jsonb(dict(headers)) if log_level == "FULL" and headers else None
 
         row = self.session.execute(
-            text(
-                """
+            text("""
                  INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
                                         environment, client_ip,
                                         input_payload, headers, privacy_level, request_id, timeout_s)
@@ -4144,13 +3970,11 @@ class DBManager:
         return {"result": "Created log entry.", "log-id": row.id}, 200
 
     def set_time_at_first_token(self, log_id: int):
-        sql = text(
-            """
+        sql = text("""
                    UPDATE log_entry
                    SET time_at_first_token = :timestamp
                    WHERE id = :log_id
-                   """
-        )
+                   """)
         self.session.execute(
             sql,
             {
@@ -4255,8 +4079,7 @@ class DBManager:
                     usage_params,
                 )
 
-        sql = text(
-            """
+        sql = text("""
                    UPDATE log_entry
                    SET response_payload = :payload,
                        provider_id      = COALESCE(:provider_id, provider_id),
@@ -4270,8 +4093,7 @@ class DBManager:
                        service_tier = COALESCE(:service_tier, service_tier),
                        time_at_first_token = COALESCE(:first_token, time_at_first_token)
                    WHERE id = :log_id
-                   """
-        )
+                   """)
         self.session.execute(
             sql,
             {
@@ -4322,14 +4144,12 @@ class DBManager:
             return None
 
         row = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT logos_price_usage(
                     :model_id, :provider_id, :response_at, :service_tier,
                     CAST(:usage AS JSONB)
                 ) AS cost_micro_cents
-                """
-            ),
+                """),
             {
                 "model_id": int(model_id),
                 "provider_id": int(provider_id),
@@ -4343,33 +4163,28 @@ class DBManager:
         return int(row.cost_micro_cents)
 
     def check_authorization(self, logos_key: str):
-        sql = text(
-            """
+        sql = text("""
                                 SELECT *
                                 FROM api_keys ak
                                     JOIN users u ON ak.user_id = u.id
                                 WHERE ak.key_value = :logos_key
                                     AND u.role = 'logos_admin'
                                     AND ak.is_active = true
-                            """
-        )
+                            """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def user_authorization(self, logos_key: str):
-        sql = text(
-            """
+        sql = text("""
                                 SELECT *
                                 FROM api_keys
                                 WHERE key_value = :logos_key
                                   AND is_active = true
-                            """
-        )
+                            """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def get_team(self, team_id: int) -> dict | None:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT id, name,
                         default_cloud_rpm_limit, default_cloud_tpm_limit,
                         default_local_rpm_limit, default_local_tpm_limit,
@@ -4377,8 +4192,7 @@ class DBManager:
                         team_monthly_budget_micro_cents
                  FROM teams
                  WHERE id = :team_id
-                 """
-            ),
+                 """),
             {"team_id": team_id},
         ).fetchone()
         if row is None:
@@ -4387,23 +4201,20 @@ class DBManager:
 
     def is_team_owner(self, team_id: int, user_id: int) -> bool:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT *
                  FROM team_members
                  WHERE team_id = :team_id
                    AND user_id = :user_id
                    AND is_owner = true
-                 """
-            ),
+                 """),
             {"team_id": team_id, "user_id": user_id},
         ).fetchone()
         return row is not None
 
     def get_api_key_by_value(self, key_value: str) -> Optional[Dict[str, Any]]:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT ak.id,
                         ak.key_value,
                         ak.name,
@@ -4421,8 +4232,7 @@ class DBManager:
                           LEFT JOIN users u ON u.id = ak.user_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
-                 """
-            ),
+                 """),
             {"kv": key_value},
         ).fetchone()
 
@@ -4439,8 +4249,7 @@ class DBManager:
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
                  FROM log_entry_cost lec
                  WHERE lec.api_key_id = ANY(
@@ -4448,8 +4257,7 @@ class DBManager:
                        )
                    AND lec.timestamp_request >= CAST(:month AS DATE)
                    AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
-                 """
-            ),
+                 """),
             {"tid": team_id, "month": month_start},
         ).fetchone()
         return int(row._mapping["total"] or 0) if row else 0
@@ -4500,8 +4308,7 @@ class DBManager:
         key_value = generate_logos_api_key(label)
 
         row = self.session.execute(
-            text(
-                """
+            text("""
                  INSERT INTO api_keys
                  (key_value, name, key_type, team_id, user_id,
                   environment, log, settings, default_priority, is_active, use_custom_permissions)
@@ -4516,8 +4323,7 @@ class DBManager:
                          :dprio,
                          true,
                          :custom) RETURNING id, key_value
-                 """
-            ),
+                 """),
             {
                 "kv": key_value,
                 "name": name,
@@ -4536,8 +4342,7 @@ class DBManager:
 
     def get_user_by_api_key(self, key_value: str):
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT u.id,
                         u.username,
                         u.prename,
@@ -4549,8 +4354,7 @@ class DBManager:
                           LEFT JOIN users u ON u.id = ak.user_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
-                 """
-            ),
+                 """),
             {"kv": key_value},
         ).fetchone()
         if row is None:
@@ -4558,15 +4362,13 @@ class DBManager:
         return dict(row._mapping)
 
     def get_api_key_budget_limit(self, api_key_id: int) -> Optional[int]:
-        sql = text(
-            """
+        sql = text("""
                    SELECT CAST(ak.settings ->>'budget_limit_micro_cents' AS BIGINT) AS specific_limit,
                           t.default_monthly_budget_micro_cents                      AS default_limit
                    FROM api_keys ak
                             LEFT JOIN teams t ON t.id = ak.team_id
                    WHERE ak.id = :aki
-                   """
-        )
+                   """)
         row = self.session.execute(sql, {"aki": api_key_id}).fetchone()
 
         if not row:
@@ -4578,15 +4380,13 @@ class DBManager:
 
     def get_api_key_budget_usage(self, api_key_id: int, month_start: str) -> int:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
                  FROM log_entry_cost lec
                  WHERE lec.api_key_id = :aki
                    AND lec.timestamp_request >= CAST(:month AS DATE)
                    AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
-                 """
-            ),
+                 """),
             {"aki": api_key_id, "month": month_start},
         ).fetchone()
         return int(row[0]) if row else 0
@@ -4605,16 +4405,14 @@ class DBManager:
     ) -> None:
         """Insert or update a LatencyStore EWMA row."""
         self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO latency_observations (model_name, provider_id, tier, ewma_value, n, updated_at)
                 VALUES (:model_name, :provider_id, :tier, :ewma_value, :n, NOW())
                 ON CONFLICT (model_name, provider_id, tier)
                 DO UPDATE SET ewma_value = EXCLUDED.ewma_value,
                               n          = EXCLUDED.n,
                               updated_at = NOW()
-                """
-            ),
+                """),
             {
                 "model_name": model_name,
                 "provider_id": int(provider_id),

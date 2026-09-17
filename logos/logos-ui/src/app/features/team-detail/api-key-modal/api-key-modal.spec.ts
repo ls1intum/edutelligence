@@ -87,7 +87,7 @@ describe('ApiKeyModalComponent', () => {
 
       // Reopening the modal re-runs initForm via ngOnChanges, resetting the
       // transient form state; the displayed value must come from the (now
-      // rotated) key object, not a stale pre-rotation value (issue #733).
+      // rotated) key object, not a stale pre-rotation value.
       component.ngOnChanges({
         visible: new SimpleChange(false, true, false),
         key: new SimpleChange(null, key, false),

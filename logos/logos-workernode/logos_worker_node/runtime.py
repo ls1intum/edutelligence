@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 SERVICE_VERSION = "2.0.0"
 
+# Module import happens once at process startup, so this is a good proxy
+# for the worker's process start time.
+_PROCESS_STARTED_AT = datetime.now(timezone.utc)
+
 
 def _on_macos() -> bool:
     """True when running on macOS, where /proc does not exist."""
@@ -274,6 +278,7 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         worker_id=bridge.worker_id,
         service_version=SERVICE_VERSION,
         timestamp=datetime.now(timezone.utc),
+        process_started_at=_PROCESS_STARTED_AT,
         transport=bridge.transport_status(),
         devices=devices,
         host_memory=host_memory,

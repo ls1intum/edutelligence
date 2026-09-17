@@ -811,7 +811,7 @@ def test_auto_tp_non_calibrated_tp1_falls_through_to_heuristic() -> None:
 
 
 def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> None:
-    """Issue #616: a calibrated tp=1 must not be escalated by the size heuristic.
+    """a calibrated tp=1 must not be escalated by the size heuristic.
 
     The calibrated base_residency is the FULL awake footprint (weights + KV),
     which on a 2-GPU Ada node is most of a single card — the heuristic would
@@ -846,7 +846,7 @@ def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> N
 
 
 def test_auto_tp_calibrated_tp1_overrides_incoming_tp() -> None:
-    """Issue #616: the calibrated TP wins over a stale/re-inferred TP from upstream.
+    """the calibrated TP wins over a stale/re-inferred TP from upstream.
 
     The orchestrator's size-vs-VRAM inference sent tp=2 for a model the
     calibrator decided fits at tp=1 — the worker must not serve it at tp=2
@@ -2915,7 +2915,7 @@ def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Calibration GPU-slice guard (issue #592)
+# Calibration GPU-slice guard
 # ---------------------------------------------------------------------------
 
 
@@ -3031,7 +3031,7 @@ def _placement_manager(snapshot, n_gpus: int) -> LaneManager:
 @pytest.mark.asyncio
 async def test_auto_place_excludes_calibrating_slice() -> None:
     """GPUs 0,1 are the emptiest but held by a calibration — a tp=1 lane must
-    land on the leftover GPU 2 instead (#592)."""
+    land on the leftover GPU 2 instead."""
 
     async def _snapshot() -> DeviceSummary:
         return _snapshot_3gpu({0: 20000.0, 1: 19000.0, 2: 13000.0})

@@ -93,6 +93,7 @@ services:
       # blocks). Off restores the previous random tie-break placement.
       LOGOS_PREFIX_AFFINITY_ENABLED: "${LOGOS_PREFIX_AFFINITY_ENABLED:-true}"
       LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "${LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP:-}"
+      HF_TOKEN: "${HF_TOKEN:-}"
       PROMETHEUS_API_KEY: "${PROMETHEUS_API_KEY:-}"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       TZ: "${TZ:-Europe/Berlin}"
@@ -142,7 +143,7 @@ services:
       # router priority (UI catch-all 0 < orchestrator 100 < webservice 200).
 
       # === Routing: /api (all UI-internal endpoints) ===
-      # Backend strips the `/api` prefix, so adding a new admin endpoint
+      # application server strips the `/api` prefix, so adding a new admin endpoint
       # requires no change here — just a new FastAPI route under any path.
       - "traefik.http.routers.logos-orchestrator-api.rule=PathPrefix(`/api`)"
       - "traefik.http.routers.logos-orchestrator-api.entrypoints=websecure"

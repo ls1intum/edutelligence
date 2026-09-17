@@ -1,7 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.operations.repository;
 
 /**
- * Projections behind the team activity view (issue #776).
+ * Projections behind the team activity view.
  *
  * App administrators asked for what the statistics page gives Logos admins,
  * narrowed to their own teams and cut down to two questions: what is happening
