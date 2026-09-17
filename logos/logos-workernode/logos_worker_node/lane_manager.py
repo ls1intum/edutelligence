@@ -351,6 +351,14 @@ class LaneManager:
         self._starting_deadlines: dict[str, float] = {}
         self._status_revision = 0
         self._status_event = asyncio.Event()
+        # Separate revision for in-flight count changes. The bridge refresh
+        # loop must learn about every increment/decrement (the orchestrator's
+        # per-snapshot forward budget resets only on a new status push), but a
+        # count change is NOT a lifecycle change: waking the loop must not
+        # trigger a full-node status build (all lanes, all probes) — that is
+        # the exact cost W3 removed from the hot path. The loop reacts to a
+        # count bump by patching the last payload in memory (#980).
+        self._count_revision = 0
         # Per-lane status TTL cache for the request hot path (acquire_lane_
         # for_infer). A status build costs three HTTP probes against the lane
         # (loaded models, metrics, sleep state); before this, EVERY request
@@ -1536,10 +1544,16 @@ class LaneManager:
                 raise KeyError(f"Lane '{lane_id}' not found")
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
             # No _mark_status_dirty() here: counting a request is not a
-            # lifecycle change. Waking the refresh loop per request triggered
-            # a full-node status build (all lanes, all probes) next to the
+            # lifecycle change, and a dirty mark would make the bridge loop
+            # rebuild the full node status (all lanes, all probes) next to the
             # relay — the worker's biggest per-request cost (#980 W3). The
-            # bridge loop reports count changes within ~1s on its own tick.
+            # count revision instead wakes the loop (shared _status_event —
+            # the combined wait re-checks both revisions, so the spurious
+            # status wake is a cheap int compare), which patches the last
+            # payload in memory (no I/O) so the orchestrator still gets a
+            # per-request status push for its forward budget.
+            self._count_revision += 1
+            self._status_event.set()
 
     async def acquire_lane_for_infer(self, lane_id: str) -> LaneStatus:
         """Atomically verify the lane is routable AND count the request under a
@@ -1574,6 +1588,8 @@ class LaneManager:
                 )
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
             # See increment_active_requests: no dirty mark on the hot path.
+            self._count_revision += 1
+            self._status_event.set()
             return status
 
     async def decrement_active_requests(self, lane_id: str) -> None:
@@ -1583,19 +1599,22 @@ class LaneManager:
             current = self._active_requests.get(lane_id, 0)
             self._active_requests[lane_id] = max(0, current - 1)
             # See increment_active_requests: no dirty mark on the hot path.
+            self._count_revision += 1
+            self._status_event.set()
 
     async def total_active_requests(self) -> int:
-        """Total in-flight requests across all lanes (lock-protected).
-
-        The bridge refresh loop polls this once per tick and compares it with
-        the total in the last runtime payload it pushed: while per-request
-        counting no longer wakes the loop (no dirty marks), a count change
-        that lands between two ticks is still reported on the next one, so
-        active_requests stays at most ~1 tick stale instead of up to a full
-        status_refresh_interval_seconds.
-        """
+        """Total in-flight requests across all lanes (lock-protected)."""
         async with self._lock:
             return sum(self._active_requests.values())
+
+    async def active_requests_snapshot(self) -> dict[str, int]:
+        """Per-lane in-flight counts (lock-protected copy).
+
+        Used by the bridge refresh loop to patch the last pushed runtime
+        payload after a count change without rebuilding the status (#980 W3).
+        """
+        async with self._lock:
+            return dict(self._active_requests)
 
     @property
     def lane_ids(self) -> list[str]:
@@ -2830,6 +2849,39 @@ class LaneManager:
     def status_revision(self) -> int:
         return self._status_revision
 
+    @property
+    def count_revision(self) -> int:
+        return self._count_revision
+
+    async def wait_for_status_or_count_revision(
+        self, last_revision: int, last_count_revision: int, timeout: float | None = None
+    ) -> tuple[int, int]:
+        """Wait until either revision changes (or the timeout elapses).
+
+        Returns the current (status_revision, count_revision). The split
+        exists so the bridge can react to in-flight count changes with an
+        in-memory payload patch instead of a full status rebuild (#980 W3).
+        """
+        while True:
+            if (
+                self._status_revision != last_revision
+                or self._count_revision != last_count_revision
+            ):
+                return self._status_revision, self._count_revision
+            self._status_event.clear()
+            if (
+                self._status_revision != last_revision
+                or self._count_revision != last_count_revision
+            ):
+                continue
+            try:
+                if timeout is None:
+                    await self._status_event.wait()
+                else:
+                    await asyncio.wait_for(self._status_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                return self._status_revision, self._count_revision
+
     async def wait_for_status_revision(self, last_revision: int, timeout: float | None = None) -> int:
         while True:
             if self._status_revision != last_revision:
@@ -2852,8 +2904,9 @@ class LaneManager:
         # reconfigured/crashed): whatever a cached status said about any lane
         # may now be wrong, so drop the whole cache. The per-request hot path
         # (increment/acquire/decrement) deliberately does NOT mark dirty —
-        # that is what keeps the TTL cache warm (#980 W3); active-request
-        # counts are reported by the bridge refresh loop instead.
+        # that is what keeps the TTL cache warm (#980 W3); it bumps the count
+        # revision instead, which the bridge refresh loop turns into an
+        # in-memory patch of the last payload (no status rebuild).
         self._lane_status_cache.clear()
 
     async def _get_status_unlocked(self, lane_id: str) -> LaneStatus:

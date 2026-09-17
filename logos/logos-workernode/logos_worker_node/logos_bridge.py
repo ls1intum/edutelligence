@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import logging
 import os
@@ -353,31 +354,39 @@ class LogosBridgeClient:
     async def _status_refresh_loop(self, ws) -> None:
         lane_manager = self._app.state.lane_manager
         revision = getattr(lane_manager, "status_revision", 0)
+        count_revision = getattr(lane_manager, "count_revision", 0)
         refresh_interval = max(1, self._cfg.status_refresh_interval_seconds)
         last_refresh = time.monotonic()
         while not self._stopping.is_set():
-            next_revision = await lane_manager.wait_for_status_revision(revision, timeout=1.0)
+            next_revision, next_count_revision = await lane_manager.wait_for_status_or_count_revision(
+                revision, count_revision, timeout=1.0
+            )
             changed = next_revision != revision
             revision = next_revision
+            count_bumped = next_count_revision != count_revision
+            count_revision = next_count_revision
             now = time.monotonic()
             # Periodic refresh ensures VRAM/host-memory telemetry reaches the
             # server even on idle workers (no lane churn → revision never
             # bumps). The signature dedupe inside _send_runtime_status keeps
             # this cheap when nothing actually changed.
             interval_elapsed = (now - last_refresh) >= refresh_interval
-            # Per-request counting no longer bumps the status revision (#980
-            # W3: the dirty marks triggered a full-node status build on every
-            # request), so the loop watches the in-flight total itself. A
-            # count that differs from the last pushed payload is reported on
-            # this tick — active_requests stays at most ~1 tick stale instead
-            # of up to a full refresh interval.
-            count_changed = (
-                await lane_manager.total_active_requests()
-                != int(self._last_runtime_payload.get("active_requests", 0))
-            )
-            if changed or self._runtime_has_transient_lanes() or interval_elapsed or count_changed:
+            if changed or self._runtime_has_transient_lanes() or interval_elapsed:
+                # Lifecycle change or telemetry interval: rebuild the full
+                # status (probes every lane). The count watermark is
+                # deliberately NOT reset here: a bump that lands while the
+                # build is in flight is still above it, so the next pass
+                # pushes a patch carrying the post-build count.
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
+            elif count_bumped:
+                # Per-request counting must stay off the hot path (#980 W3):
+                # a full rebuild would re-probe every lane (nvidia-smi, HTTP,
+                # /proc) next to the relay. A count change only patches the
+                # fields a count touches in the last pushed payload, so the
+                # orchestrator still gets a status push per count change to
+                # reset its per-snapshot forward budget.
+                await self._send_count_update(ws)
 
     async def _vllm_metrics_loop(self, ws) -> None:
         """Periodically push this worker's merged vLLM ``/metrics`` upstream.
@@ -516,6 +525,38 @@ class LogosBridgeClient:
     async def _send_runtime_status(self, ws, force: bool = False) -> bool:
         runtime = await build_runtime_status(self._app)
         payload = runtime.model_dump(mode="json")
+        return await self._send_runtime_payload(ws, payload, force)
+
+    async def _send_count_update(self, ws) -> bool:
+        """Report an in-flight count change without rebuilding the status.
+
+        A full status build probes every lane (nvidia-smi, HTTP, /proc); doing
+        that on every increment/decrement would put the worker's biggest
+        per-request cost back on the request cycle (#980 W3). A count change
+        touches exactly two fields — each lane's active_requests and the
+        capacity total — so patch them from the live counters and re-send the
+        payload. Lane-set changes cannot reach this path: adding/removing a
+        lane bumps the status revision, which takes the full-build branch.
+        """
+        lane_manager = self._app.state.lane_manager
+        last = self._last_runtime_payload
+        if not last:
+            # No baseline yet (first pass before the initial push completed):
+            # fall back to a full build.
+            return await self._send_runtime_status(ws, force=True)
+        counts = await lane_manager.active_requests_snapshot()
+        payload = copy.deepcopy(last)
+        for lane in payload.get("lanes") or []:
+            if isinstance(lane, dict):
+                lane["active_requests"] = int(counts.get(lane.get("lane_id"), 0))
+        capacity = payload.get("capacity")
+        if isinstance(capacity, dict):
+            capacity["active_requests"] = sum(int(v) for v in counts.values())
+        # The signature dedupe drops no-op patches (e.g. a decrement that
+        # floored at zero) instead of re-sending an identical payload.
+        return await self._send_runtime_payload(ws, payload, force=False)
+
+    async def _send_runtime_payload(self, ws, payload: dict[str, Any], force: bool = False) -> bool:
         # Every status repeats the live calibration state, so the server can
         # settle it without depending on a lifecycle event arriving. An event
         # is a one-shot signal: the one that ends a session can be dropped

@@ -647,13 +647,11 @@ async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
-            return last_revision  # never changes
-
-        async def total_active_requests(self):
-            return 0
+            return last_revision, last_count_revision  # never changes
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -698,16 +696,14 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
             iterations[0] += 1
             if iterations[0] >= 5:
                 client._stopping.set()
-            return last_revision
-
-        async def total_active_requests(self):
-            return 0
+            return last_revision, last_count_revision
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -728,6 +724,165 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
     await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
 
     assert send_calls == []
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_loop_count_bump_sends_patch_not_full_build(monkeypatch):
+    """A count change (no lifecycle change, no interval elapsed) must take the
+    in-memory patch path (#980 W3): the loop must NOT rebuild the full status
+    (all lanes, all probes) just because a request was counted."""
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        status_refresh_interval_seconds=60,
+    )
+    app = _DummyApp()
+
+    class _CountBumpLaneManager:
+        status_revision = 0
+
+        def __init__(self):
+            self.count_revision = 0
+
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
+            await asyncio.sleep(0)
+            self.count_revision += 1
+            return last_revision, self.count_revision
+
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _CountBumpLaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {  # noqa: SLF001
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+
+    calls: list[str] = []
+
+    async def _fake_full(_ws, force=False):
+        calls.append("full")
+        return True
+
+    async def _fake_patch(_ws):
+        calls.append("patch")
+        if len(calls) >= 2:
+            client._stopping.set()
+        return True
+
+    client._send_runtime_status = _fake_full  # type: ignore[method-assign]  # noqa: SLF001
+    client._send_count_update = _fake_patch  # type: ignore[method-assign]  # noqa: SLF001
+
+    fake_time = SimpleNamespace(monotonic=lambda: 0.0)
+    monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
+
+    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+
+    assert calls == ["patch", "patch"]
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_patches_lane_and_capacity_counts(monkeypatch):
+    """The patch updates each lane's active_requests and the capacity total,
+    sends a normal status message, and leaves the stored baseline unmutated."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 2, "lane-b": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [
+            {"lane_id": "lane-a", "active_requests": 0, "runtime_state": "loaded"},
+            {"lane_id": "lane-b", "active_requests": 0, "runtime_state": "loaded"},
+        ],
+        "capacity": {"active_requests": 0, "lane_count": 2},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is True
+    assert len(sends) == 1
+    runtime = sends[0]["runtime"]
+    assert sends[0]["type"] == "status"
+    lanes = {lane["lane_id"]: lane["active_requests"] for lane in runtime["lanes"]}
+    assert lanes == {"lane-a": 2, "lane-b": 1}
+    assert runtime["capacity"]["active_requests"] == 3
+    # Deep copy: the baseline keeps its own (unpatched) objects.
+    assert client._last_runtime_payload is not baseline  # noqa: SLF001
+    assert baseline["lanes"][0]["active_requests"] == 0
+    assert baseline["capacity"]["active_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_with_unchanged_counts_is_deduped(monkeypatch):
+    """A bump that leaves the counts identical (e.g. a decrement floored at
+    zero) must not re-send an identical payload."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 0}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    # Establish the baseline bookkeeping exactly as the initial push would.
+    await client._send_runtime_payload(object(), baseline, force=True)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert len(sends) == 1
+    sends.clear()
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is False
+    assert sends == []
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_without_baseline_falls_back_to_full_build(monkeypatch):
+    """Before the first full push there is no payload to patch — the count
+    update must fall back to a forced full build."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {}  # noqa: SLF001
+    client._send_runtime_status = AsyncMock(return_value=True)  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_count_update(None)  # noqa: SLF001
+
+    client._send_runtime_status.assert_awaited_once_with(None, force=True)  # type: ignore[attr-defined]
 
 
 def test_runtime_has_transient_lanes_uses_last_payload():
