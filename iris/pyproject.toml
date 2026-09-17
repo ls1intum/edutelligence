@@ -66,6 +66,7 @@ h2 = ">=4.4.1"
 python-dotenv = ">=1.2.2"
 setuptools = ">=83.0.0"
 virtualenv = ">=20.36.1"
+torch = ">=2.13.0"
 
 [tool.poetry.group.train.dependencies]
 setfit = "^1.2.0"
