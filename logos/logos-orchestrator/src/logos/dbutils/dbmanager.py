@@ -946,7 +946,6 @@ class DBManager:
         announced = set(model_names)
         current = set(existing_by_name.keys())
         newly_inserted: list[str] = []
-        newly_inserted_ids: list[int] = []
 
         # Remove stale links (models no longer announced)
         for stale_name in current - announced:
@@ -980,7 +979,6 @@ class DBManager:
                     .id
                 )
                 newly_inserted.append(model_name)
-                newly_inserted_ids.append(mid)
 
             # Upsert model_provider link
             self.session.execute(
@@ -1031,7 +1029,10 @@ class DBManager:
         "changed": bool}``. ``changed`` is True when anything that affects
         routing changed (a link was inserted, an endpoint updated, or a stale
         link pruned) so the caller can refresh runtime state; ``new_models``
-        drives the (more expensive) classifier rebuild.
+        drives the (more expensive) classifier rebuild. ``new_model_ids``
+        covers every model that got a link to this provider in this pass —
+        including model rows that already existed globally, because their
+        per-provider price rows are created only on first link.
         """
         pid = int(provider_id)
         desired = {d["model_name"]: d["endpoint"] for d in deployments}
@@ -1059,6 +1060,7 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
+        newly_linked_ids: list[int] = []
         for model_name, endpoint in desired.items():
             row = self.session.execute(
                 text("SELECT id FROM models WHERE name = :name"),
@@ -1083,9 +1085,15 @@ class DBManager:
                 newly_inserted.append(model_name)
 
             # A new link for this provider, or an endpoint that drifted, changes
-            # routing and must be reflected in the runtime registry.
-            if model_name not in existing_by_name or existing_endpoint.get(model_name) != endpoint:
+            # routing and must be reflected in the runtime registry. The link
+            # is what gates the per-provider price rows, so every freshly
+            # linked model — even one whose row already existed globally —
+            # needs a price/capability refresh on the webservice side.
+            new_link = model_name not in existing_by_name
+            if new_link or existing_endpoint.get(model_name) != endpoint:
                 changed = True
+            if new_link:
+                newly_linked_ids.append(mid)
 
             # Upsert the link and refresh the endpoint; preserve any api_key override.
             self.session.execute(
@@ -1101,7 +1109,7 @@ class DBManager:
         self.session.commit()
         return {
             "new_models": newly_inserted,
-            "new_model_ids": newly_inserted_ids,
+            "new_model_ids": newly_linked_ids,
             "changed": changed or bool(newly_inserted),
         }
 
@@ -1198,7 +1206,10 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
-        newly_inserted_ids: list[int] = []
+        # Every model below receives a new link for this provider (existing
+        # links were skipped above), so each one needs a refresh — even when
+        # the models row already existed globally.
+        newly_linked_ids: list[int] = []
         for model_name in sorted(desired):
             if model_name in existing_by_name:
                 continue
@@ -1223,7 +1234,7 @@ class DBManager:
                     .id
                 )
                 newly_inserted.append(model_name)
-                newly_inserted_ids.append(mid)
+            newly_linked_ids.append(mid)
 
             self.session.execute(
                 text("""
@@ -1236,7 +1247,7 @@ class DBManager:
             changed = True
 
         self.session.commit()
-        return {"new_models": newly_inserted, "new_model_ids": newly_inserted_ids, "changed": changed}
+        return {"new_models": newly_inserted, "new_model_ids": newly_linked_ids, "changed": changed}
 
     def replace_cloud_model_context(self, provider_id: int, contexts: Dict[str, Dict[str, int]]) -> bool:
         """Store the context windows a cloud upstream reports for its models.

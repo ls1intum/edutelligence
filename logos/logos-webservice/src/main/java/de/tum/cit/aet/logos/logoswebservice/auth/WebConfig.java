@@ -18,7 +18,9 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(jwtAuthInterceptor)
-            .excludePathPatterns("/error", "/info", "/ws/**", "/logosdb/get_model_health");
+            // get_model_health and models_discovered authenticate API key /
+            // internal secret in their controllers, not a JWT.
+            .excludePathPatterns("/error", "/info", "/ws/**", "/logosdb/get_model_health", "/internal/models_discovered");
     }
 
     @Bean
