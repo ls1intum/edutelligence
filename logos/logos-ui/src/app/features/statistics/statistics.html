@@ -7,7 +7,7 @@
       @if (activeTab() === 'requests') {
         Request volume, model mix, and outcomes across all providers.
       } @else {
-        Live VRAM, lane health, and hardware across local providers.
+        Live VRAM, host RAM, lane health, and hardware per local provider.
       }
     </p>
 
@@ -90,6 +90,35 @@
     <!-- ── Requests: what traffic did in the selected period ──────────── -->
     @if (activeTab() === 'requests') {
 
+
+      <!-- ── Recent requests ───────────────────────────────────────────────── -->
+      <app-stats-chart-panel
+        title="Recent requests"
+        subtitle="Latest activity from the request log."
+      >
+        <span panelRight>
+          <!-- State filter for this list only — it sits with the feed, not in the
+               page scope, because it must not narrow the KPI cards and charts. -->
+          <app-select
+            class="stats-feed-status"
+            [options]="feedStatusOptions()"
+            [value]="selectedFeedStatusValue()"
+            [compact]="true"
+            ariaLabel="Filter requests by state"
+            (valueChange)="setFeedStatusFilter($event)"
+          />
+        </span>
+        <app-stats-recent-requests
+          [liveRequests]="latestRequests()"
+          [totalInRange]="requestFeedTotal()"
+          [range]="requestFeedRange()"
+          [pending]="requestsPending()"
+          [filterUserId]="filterUserId()"
+          [filterTeamId]="filterTeamId()"
+          [filterStatus]="feedStatus()"
+        />
+      </app-stats-chart-panel>
+
       <!-- ── KPI strip ─────────────────────────────────────────────────────── -->
       <!-- The period belongs here, once: inside a card label it wraps to a second
            line and every card in the row loses its alignment. -->
@@ -156,92 +185,6 @@
           <app-stats-skeleton variant="kpi" />
         }
 
-        <!-- Active lanes -->
-        @if (vramReady()) {
-          <app-stats-kpi-card
-            label="Active lanes"
-            [accent]="getLaneStateColor('loaded')"
-            [value]="derivedActiveLanes() + ' active'"
-          >
-            <!-- mini lane bars -->
-            @if (allLanesForKpi().length > 0) {
-              <div kpiRight class="stats-lane-bars">
-                @for (lane of allLanesForKpi().slice(0, 12); track $index) {
-                  <div
-                    class="stats-lane-bar"
-                    [style.height.px]="laneBarHeight(lane)"
-                    [style.background]="laneBarColor(lane)"
-                  ></div>
-                }
-              </div>
-            }
-            <!-- hint -->
-            @if (totalLanesAcrossProviders() > 0) {
-              <div kpiHint class="stats-lane-hint">
-                <div class="stats-lane-hint__states">
-                  @if ((laneStateCounts().loaded + laneStateCounts().running) > 0) {
-                    <span>
-                      <strong [style.color]="getLaneStateColor('loaded')">
-                        {{ laneStateCounts().loaded + laneStateCounts().running }}
-                      </strong>
-                      <span class="stats-lane-hint__lbl"> loaded</span>
-                    </span>
-                  }
-                  @if (laneStateCounts().starting > 0) {
-                    <span>
-                      <strong [style.color]="getLaneStateColor('starting')">
-                        {{ laneStateCounts().starting }}
-                      </strong>
-                      <span class="stats-lane-hint__lbl"> starting</span>
-                    </span>
-                  }
-                  @if (laneStateCounts().sleeping > 0) {
-                    <span>
-                      <strong [style.color]="getLaneStateColor('sleeping')">
-                        {{ laneStateCounts().sleeping }}
-                      </strong>
-                      <span class="stats-lane-hint__lbl"> sleeping</span>
-                    </span>
-                  }
-                  @if (laneStateCounts().cold > 0) {
-                    <span>
-                      <strong [style.color]="getLaneStateColor('cold')">
-                        {{ laneStateCounts().cold }}
-                      </strong>
-                      <span class="stats-lane-hint__lbl"> cold</span>
-                    </span>
-                  }
-                  @if ((laneStateCounts().stopped + laneStateCounts().error) > 0) {
-                    <span>
-                      <strong [style.color]="STATUS_COLOR.error">
-                        {{ laneStateCounts().stopped + laneStateCounts().error }}
-                      </strong>
-                      <span class="stats-lane-hint__lbl"> stopped</span>
-                    </span>
-                  }
-                </div>
-                @if (allProviderVramSummary().totalGb > 0) {
-                  <div>
-                    <strong>{{ allProviderVramSummary().usedGb.toFixed(1) }}</strong>
-                    /
-                    <strong>{{ allProviderVramSummary().totalGb.toFixed(0) }} GB</strong>
-                    VRAM
-                  </div>
-                }
-                @if (allProviderRamSummary().reported) {
-                  <div>
-                    <strong>{{ allProviderRamSummary().usedGb.toFixed(1) }}</strong>
-                    /
-                    <strong>{{ allProviderRamSummary().totalGb.toFixed(0) }} GB</strong>
-                    RAM
-                  </div>
-                }
-              </div>
-            }
-          </app-stats-kpi-card>
-        } @else {
-          <app-stats-skeleton variant="kpi" />
-        }
 
         <!-- Tokens processed (historic, selected range) -->
         @if (statsReady()) {
@@ -375,35 +318,8 @@
 
       </div>
 
-      <!-- ── Recent requests ───────────────────────────────────────────────── -->
-      <app-stats-chart-panel
-        title="Recent requests"
-        subtitle="Latest activity from the request log."
-      >
-        <span panelRight>
-          <!-- State filter for this list only — it sits with the feed, not in the
-               page scope, because it must not narrow the KPI cards and charts. -->
-          <app-select
-            class="stats-feed-status"
-            [options]="feedStatusOptions()"
-            [value]="selectedFeedStatusValue()"
-            [compact]="true"
-            ariaLabel="Filter requests by state"
-            (valueChange)="setFeedStatusFilter($event)"
-          />
-        </span>
-        <app-stats-recent-requests
-          [liveRequests]="latestRequests()"
-          [totalInRange]="requestFeedTotal()"
-          [range]="requestFeedRange()"
-          [pending]="requestsPending()"
-          [filterUserId]="filterUserId()"
-          [filterTeamId]="filterTeamId()"
-          [filterStatus]="feedStatus()"
-        />
-      </app-stats-chart-panel>
 
-    <!-- ── Infrastructure: what the hardware is doing right now ───────── -->
+    <!-- ── Local Providers: what the hardware is doing right now ──────── -->
     } @else {
 
       <!-- ── Provider-scoped glass row ─────────────────────────────────────── -->
@@ -433,7 +349,7 @@
         </div>
 
         <!-- Three chart panels -->
-        <div class="stats-three-col">
+        <div class="stats-panel-row">
 
           <!-- VRAM utilization -->
           <app-stats-chart-panel
@@ -447,10 +363,11 @@
             @if (!vramReady()) {
               <app-stats-skeleton variant="donut" />
             } @else if (hasSelectedProviderLanes()) {
-              <app-stats-lane-vram-pie
+              <app-stats-lane-memory-pie
+                metric="vram"
                 [lanes]="selectedProviderLanes()"
-                [totalVramMb]="selectedProviderTotalVramMb()"
-                [freeVramMb]="selectedProviderFreeVramMb()"
+                [totalMb]="selectedProviderTotalVramMb()"
+                [freeMb]="selectedProviderFreeVramMb()"
               />
             } @else if (!vramPieData().length) {
               <app-stats-empty-state message="No memory data yet." />
@@ -462,6 +379,31 @@
                 [centerBottom]="'of ' + vramSummary().totalGb.toFixed(1) + ' GB'"
                 valueSuffix=" GB"
                 [valueDecimals]="2"
+              />
+            }
+          </app-stats-chart-panel>
+
+          <!-- RAM utilization -->
+          <!-- Host RAM gets the same per-model breakdown as the GPU memory
+               beside it: sleeping lanes keep their weights in it and the
+               worker's model cache draws from it, so which model is holding the
+               host's memory is as real a question as it is for the card. -->
+          <app-stats-chart-panel
+            title="RAM utilization"
+            [subtitle]="selectedVramProvider()
+              ? selectedVramProvider()! + ' · host memory'
+              : 'Host memory across local providers.'"
+          >
+            @if (!vramReady()) {
+              <app-stats-skeleton variant="donut" />
+            } @else if (!selectedProviderRamMb().reported) {
+              <app-stats-empty-state message="This provider does not report host RAM." />
+            } @else {
+              <app-stats-lane-memory-pie
+                metric="ram"
+                [lanes]="hasSelectedProviderLaneRam() ? selectedProviderLanes() : {}"
+                [totalMb]="selectedProviderRamMb().totalMb"
+                [freeMb]="selectedProviderRamMb().freeMb"
               />
             }
           </app-stats-chart-panel>

@@ -64,8 +64,18 @@ The entire history collapses to **12,591 rows / 3.4 MB** — a factor of 55.
 
 Properties that matter:
 
-- **Only whole hours.** The view's `WHERE` excludes the running hour, so
-  `max(bucket_hour) + 1 hour` is a watermark the reader can trust.
+- **Whole hours, and only ones that closed six hours ago.** A closed hour does
+  not make its rows immutable — a request forwarded at 04:59 and still running
+  at the 05:05 refresh would be rolled up with no status, duration, tokens or
+  settled cost, and its effective timestamp puts it below the watermark where
+  the live branch can no longer correct it. Production carries 1,050 such rows
+  in closed hours. Six hours clears the p99.9 request duration of 20 minutes by
+  a wide margin.
+- **The boundary is a function of time alone.** Excluding rows by a mutable flag
+  would look tighter and be wrong: the rollup would hold what the flag said at
+  refresh time while the reader tested what it says now, so a row that settled
+  in between would belong to neither branch. A time boundary partitions the
+  range exactly once regardless of what any row does afterwards.
 - **Ids, not derived values.** `provider_id`/`model_id` stay as ids and the
   reader joins `providers`/`models` live, so a renamed model or a changed
   privacy level shows up without a refresh.
@@ -78,10 +88,14 @@ one shared split point (`logos_stats_rollup_window`). Sharing it is deliberate:
 if two aggregates disagreed by an hour about where the rollup ends, one would
 double-count the overlap and another would drop a gap.
 
-**Correctness never depends on the refresh.** A stale, lagging or failed refresh
-moves work back to `log_entry`; it cannot move numbers.
-`RequestLogStatsRefreshService` refreshes hourly (`REFRESH ... CONCURRENTLY`,
-guarded by an advisory lock so instances do not pile up rebuilds).
+**A stale refresh costs query time, not correctness.** Because the split is
+purely temporal, a lagging or failed refresh moves work back to `log_entry`
+without changing a number. `RequestLogStatsRefreshService` refreshes hourly
+(`REFRESH ... CONCURRENTLY`, guarded by a transaction-scoped advisory lock).
+The transactional half lives in its own bean: Spring applies `@Transactional`
+through a proxy, so a scheduled method calling it on `this` would run with no
+transaction at all — and the advisory lock, being transaction-scoped, would then
+be released the moment it was taken and guard nothing.
 
 Sub-hour buckets (the "last hour"/"today" presets) bypass the rollup entirely —
 it cannot express them — and are served from `log_entry` via the expression

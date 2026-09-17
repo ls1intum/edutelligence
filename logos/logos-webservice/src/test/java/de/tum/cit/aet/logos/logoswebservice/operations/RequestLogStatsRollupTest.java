@@ -40,8 +40,10 @@ import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsSe
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
     "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
-    // The scheduled refresh would race the explicit ones below.
-    "logos.stats.rollup.refresh-enabled=false",
+    // "-" is Spring's disabled-cron marker: the timer never fires on its own,
+    // so it cannot race the explicit refreshes below, while the scheduled entry
+    // point stays callable for the test that drives it directly.
+    "logos.stats.rollup.refresh-cron=-",
     "logos.auth.roles.logos-admin=itg-admin",
     "logos.auth.roles.app-admin=chair-member",
     "logos.auth.sync-debounce-minutes=5"
@@ -57,9 +59,20 @@ class RequestLogStatsRollupTest {
     @Autowired JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
 
-    /** Wide enough to cover the whole seed, ending now so the range stays live. */
-    private static final String START = Instant.now().minus(24, ChronoUnit.HOURS).toString();
-    private static final String END   = Instant.now().plus(1, ChronoUnit.MINUTES).toString();
+    /**
+     * Wide enough to cover the whole seed. Both ends are anchored to the hour
+     * rather than to "now": the seed places its live-tail rows at hour+1min and
+     * hour+2min, so an end of now+1min would drop one of them whenever the suite
+     * happens to start in the first minutes of an hour.
+     */
+    private static String start() {
+        return Instant.now().truncatedTo(ChronoUnit.HOURS).minus(24, ChronoUnit.HOURS).toString();
+    }
+
+    private static String end() {
+        return Instant.now().truncatedTo(ChronoUnit.HOURS).plus(1, ChronoUnit.HOURS)
+            .minusMillis(1).toString();
+    }
 
     /**
      * The seed rebuilds the rollup before inserting anything, so at the start of
@@ -91,7 +104,7 @@ class RequestLogStatsRollupTest {
     }
 
     private Map<String, Object> query(int targetBuckets, Integer userId, Integer teamId) {
-        return statsService.getRequestLogStats(START, END, targetBuckets, userId, teamId);
+        return statsService.getRequestLogStats(start(), end(), targetBuckets, userId, teamId);
     }
 
     @Test
@@ -107,12 +120,12 @@ class RequestLogStatsRollupTest {
         // And the numbers are the seed's, not an empty result that trivially
         // matches itself.
         Map<String, Object> totals = (Map<String, Object>) merged.get("totals");
-        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(6L);
+        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(7L);
         assertThat(((Number) totals.get("cloudRequests")).longValue()).isEqualTo(2L);
-        assertThat(((Number) totals.get("localRequests")).longValue()).isEqualTo(4L);
+        assertThat(((Number) totals.get("localRequests")).longValue()).isEqualTo(5L);
         // roll-002 and roll-006, one on each side of the watermark.
         assertThat(((Number) totals.get("coldStarts")).longValue()).isEqualTo(2L);
-        assertThat(((Number) totals.get("totalTokens")).longValue()).isEqualTo(2100L);
+        assertThat(((Number) totals.get("totalTokens")).longValue()).isEqualTo(2800L);
     }
 
     @Test
@@ -127,7 +140,7 @@ class RequestLogStatsRollupTest {
         assertThat(merged.get("modelBreakdown")).isEqualTo(live.get("modelBreakdown"));
 
         Map<String, Object> counts = (Map<String, Object>) merged.get("statusCounts");
-        assertThat(((Number) counts.get("success")).intValue()).isEqualTo(4);
+        assertThat(((Number) counts.get("success")).intValue()).isEqualTo(5);
         assertThat(((Number) counts.get("error")).intValue()).isEqualTo(2);
     }
 
@@ -147,7 +160,7 @@ class RequestLogStatsRollupTest {
         long charted = ((List<Map<String, Object>>) merged.get("timeSeries")).stream()
             .mapToLong(b -> ((Number) b.get("total")).longValue())
             .sum();
-        assertThat(charted).isEqualTo(6L);
+        assertThat(charted).isEqualTo(7L);
     }
 
     @Test
@@ -161,17 +174,17 @@ class RequestLogStatsRollupTest {
         long charted = ((List<Map<String, Object>>) fine.get("timeSeries")).stream()
             .mapToLong(b -> ((Number) b.get("total")).longValue())
             .sum();
-        assertThat(charted).isEqualTo(6L);
+        assertThat(charted).isEqualTo(7L);
 
         Map<String, Object> totals = (Map<String, Object>) fine.get("totals");
-        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(6L);
+        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(7L);
     }
 
     @Test
     void the_team_scope_reaches_both_sources() {
-        // Three of the six seeded rows carry team 2001, split across the
-        // watermark. A scope applied to only one branch would return four (the
-        // rollup's share plus every live row) or two.
+        // Five of the seven seeded rows carry team 2001, split across the
+        // watermark. A scope applied to only one branch would count the other
+        // branch unfiltered and come out too high.
         assertRollupIsEmpty();
         Map<String, Object> live = stats(query(24, null, 2001));
 
@@ -180,7 +193,7 @@ class RequestLogStatsRollupTest {
 
         assertThat(merged.get("totals")).isEqualTo(live.get("totals"));
         Map<String, Object> totals = (Map<String, Object>) merged.get("totals");
-        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(4L);
+        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(5L);
     }
 
     @Test
@@ -191,22 +204,71 @@ class RequestLogStatsRollupTest {
         // range boundary between the seed's two oldest rows.
         String unalignedStart = Instant.now()
             .truncatedTo(ChronoUnit.HOURS)
-            .minus(5, ChronoUnit.HOURS)
+            .minus(13, ChronoUnit.HOURS)
             .plus(15, ChronoUnit.MINUTES)
             .toString();
 
         assertRollupIsEmpty();
         Map<String, Object> live = stats(
-            statsService.getRequestLogStats(unalignedStart, END, 24, null, null));
+            statsService.getRequestLogStats(unalignedStart, end(), 24, null, null));
 
         populateRollup();
         Map<String, Object> merged = stats(
-            statsService.getRequestLogStats(unalignedStart, END, 24, null, null));
+            statsService.getRequestLogStats(unalignedStart, end(), 24, null, null));
 
         assertThat(merged.get("totals")).isEqualTo(live.get("totals"));
-        // Five of six: roll-001 sits at the top of that hour, before the start.
+        // Six of seven: roll-001 sits at the top of that hour, before the start.
         Map<String, Object> totals = (Map<String, Object>) merged.get("totals");
-        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(5L);
+        assertThat(((Number) totals.get("requests")).longValue()).isEqualTo(6L);
+    }
+
+    @Test
+    void a_request_still_running_when_the_refresh_lands_is_not_frozen_by_it() {
+        // The reason the rollup stops six hours short of now. A row whose hour
+        // has closed can still be written to: the orchestrator fills in status,
+        // response time, tokens and settled cost when the request finishes. If
+        // such a row were rolled up, the live branch would no longer cover it
+        // and the finished request would keep showing as unfinished.
+        jdbc.update("""
+            INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                                   timestamp_request, timestamp_forwarding, timestamp_response,
+                                   was_cold_start, user_id, team_id)
+            VALUES (9408, 'roll-inflight', 3001, 5001, 6001, NULL,
+                    date_trunc('hour', NOW()) - INTERVAL '2 hours',
+                    date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '1 second',
+                    NULL, false, 1001, 2001)
+            """);
+        try {
+            populateRollup();
+            Map<String, Object> counts = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
+            assertThat(((Number) counts.get("unknown")).intValue()).isEqualTo(1);
+
+            // It finishes after the refresh. No refresh in between.
+            jdbc.update("""
+                UPDATE log_entry
+                   SET result_status = 'success',
+                       timestamp_response = date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '30 seconds'
+                 WHERE id = 9408
+                """);
+
+            Map<String, Object> after = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
+            assertThat(after.get("unknown")).isNull();
+            assertThat(((Number) after.get("success")).intValue()).isEqualTo(6);
+        } finally {
+            jdbc.update("DELETE FROM log_entry WHERE id = 9408");
+        }
+    }
+
+    @Test
+    void the_scheduled_entry_point_refreshes_through_the_transaction_proxy() {
+        // The scheduler calls refreshHourlyStats(), not refreshNow(). Spring
+        // applies @Transactional through a proxy, so if the transactional work
+        // lived on this same bean the scheduled path would reach the refresh
+        // with no transaction and the transaction-scoped advisory lock would
+        // guard nothing. Driving the scheduled entry point is what covers that.
+        assertRollupIsEmpty();
+        refreshService.refreshHourlyStats();
+        assertThat(rollupRowCount()).isGreaterThan(0);
     }
 
     @Test

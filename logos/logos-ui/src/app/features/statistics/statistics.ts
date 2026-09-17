@@ -13,6 +13,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
+import type { Subscription } from 'rxjs';
 
 import { StatsWebsocketService } from './services/stats-websocket.service';
 
@@ -58,7 +59,7 @@ import type {
 import { ChartPanel } from './components/chart-panel/chart-panel';
 import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
-import { LaneVramPieComponent } from './components/lane-vram-pie/lane-vram-pie';
+import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
 import { StatisticsService } from './services/statistics.service';
@@ -81,7 +82,7 @@ const RAW_VRAM_SAMPLE_CAP = 720;
     ChartPanel,
     EmptyState,
     LaneHealthPanel,
-    LaneVramPieComponent,
+    LaneMemoryPieComponent,
     SelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
@@ -105,32 +106,40 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
   /**
-   * The page carries two sections that share nothing but a websocket: request
-   * traffic over a chosen period, and the current state of the hardware. They
-   * are split because reading them together invites the wrong conclusion — the
-   * time range in the header narrows the request panels and has no bearing at
-   * all on the VRAM, lane and GPU panels, which always show the latest sample.
+   * The page carries two sections that share nothing but a websocket: the state
+   * of the local providers right now, and request traffic over a chosen period.
+   * They are split because reading them together invites the wrong conclusion —
+   * the time range in the header narrows the request panels and has no bearing
+   * at all on the VRAM, RAM, lane and GPU panels, which always show the latest
+   * sample.
    *
-   * The active tab is mirrored into ?tab= so a link points at the section it
-   * was copied from, and the browser's back button steps between them.
+   * The active tab is mirrored into ?tab= so a link points at the section it was
+   * copied from, and each switch is a history entry so Back returns to the tab
+   * it came from.
    */
   readonly TABS: ReadonlyArray<{ id: StatsTab; label: string }> = [
+    { id: 'local-providers', label: 'Local Providers' },
     { id: 'requests', label: 'Requests' },
-    { id: 'infrastructure', label: 'Infrastructure' },
   ];
-  readonly activeTab = signal<StatsTab>('requests');
+  readonly activeTab = signal<StatsTab>('local-providers');
 
   setActiveTab(tab: StatsTab): void {
     if (this.activeTab() === tab) return;
-    this.activeTab.set(tab);
+    // The signal is not set here: the query-parameter subscription below owns
+    // it, so a tab reached by Back, by a pasted link or by this click all take
+    // the same path and cannot disagree.
     this.router.navigate([], {
       relativeTo: this.route,
-      // 'requests' is the default, so it stays out of the URL rather than
-      // decorating every link with a parameter that changes nothing.
-      queryParams: { tab: tab === 'requests' ? null : tab },
+      // The default stays out of the URL rather than decorating every link with
+      // a parameter that changes nothing.
+      queryParams: { tab: tab === 'local-providers' ? null : tab },
       queryParamsHandling: 'merge',
-      replaceUrl: true,
     });
+  }
+
+  /** Resolves a ?tab= value, falling back to the default for anything unknown. */
+  private tabFromParam(raw: string | null): StatsTab {
+    return this.TABS.some((t) => t.id === raw) ? (raw as StatsTab) : 'local-providers';
   }
 
   /** Filter options, loaded once on init. */
@@ -306,6 +315,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Ticker ────────────────────────────────────────────────────────────────────
   private nowInterval: ReturnType<typeof setInterval> | null = null;
+  private routeSub: Subscription | null = null;
 
   // ── wsTimelineConfig ─────────────────────────────────────────────────────────
   readonly wsTimelineConfig = computed(() => {
@@ -501,6 +511,28 @@ export class Statistics implements OnInit, OnDestroy {
     if (!prov) return 0;
     return extractProviderVramMb(this.latestSampleByProvider()[prov]).freeMb;
   });
+
+  /**
+   * Host RAM of the selected provider, the counterpart to the two above.
+   *
+   * `reported` rather than a total of 0 for the missing case: a worker that
+   * predates the field or cannot read the host's memory reports nothing, and
+   * drawing that as a fully free host would be worse than drawing nothing.
+   */
+  readonly selectedProviderRamMb = computed(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return { reported: false, totalMb: 0, freeMb: 0, usedMb: 0 };
+    return extractProviderHostRamMb(this.latestSampleByProvider()[prov]);
+  });
+
+  /**
+   * Whether any lane of the selected provider reports its host-RAM footprint.
+   * The per-model breakdown needs it; without it the panel can still show the
+   * host total, but not who is holding it.
+   */
+  readonly hasSelectedProviderLaneRam = computed(() =>
+    Object.values(this.selectedProviderLanes()).some((l) => typeof l.host_ram_mb === 'number'),
+  );
 
   /**
    * Badge text for the selected provider's free VRAM, or null when there is no
@@ -891,10 +923,12 @@ export class Statistics implements OnInit, OnDestroy {
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
   ngOnInit(): void {
-    const tabParam = this.route.snapshot.queryParamMap.get('tab');
-    if (tabParam && this.TABS.some((t) => t.id === tabParam)) {
-      this.activeTab.set(tabParam as StatsTab);
-    }
+    // Subscribed, not read once: Angular reuses this component for a
+    // query-parameter navigation, so a snapshot read in ngOnInit would leave
+    // the URL naming one tab while the page still showed the other.
+    this.routeSub = this.route.queryParamMap.subscribe((params) => {
+      this.activeTab.set(this.tabFromParam(params.get('tab')));
+    });
 
     const cfg = this.wsTimelineConfig();
     this.statsWs.connect({
@@ -1012,6 +1046,8 @@ export class Statistics implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.statsWs.disconnect();
+    this.routeSub?.unsubscribe();
+    this.routeSub = null;
     if (this.nowInterval !== null) {
       clearInterval(this.nowInterval);
       this.nowInterval = null;

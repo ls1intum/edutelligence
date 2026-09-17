@@ -32,11 +32,14 @@
          and the short presets (last hour, today) cheap, which is exactly the
          selectivity range where an index does win.
 
-         Freshness: the view holds only *complete* hours, so a partial head hour
-         and everything newer than the last refresh are read from log_entry and
-         merged on top. Correctness therefore never depends on the refresh having
-         run - a stale or lagging view only shifts work back to the base table.
-         RequestLogStatsRefreshService refreshes it hourly. -->
+         Freshness: the view stops six hours short of now, so the partial head
+         hour, the last six hours and everything newer than the last refresh are
+         read from log_entry and merged on top. A stale or lagging view shifts
+         work back to the base table without changing the numbers, because the
+         split between the two is a function of time alone and partitions the
+         range exactly once. The six-hour gap is what keeps rows that are still
+         being written out of the rollup in the first place - see the changeSet
+         below. RequestLogStatsRefreshService refreshes it hourly. -->
 
     <!-- log_entry_cost calls logos_price_usage, which reaches for `providers`
          without a schema. CREATE and REFRESH MATERIALIZED VIEW run with a
@@ -111,9 +114,26 @@
          Averages are stored as sum plus count, never as an average: averaging
          pre-averaged hours would weight a quiet hour like a busy one.
 
-         Only complete hours are included (now() is re-evaluated on every
-         refresh), which is what lets the reader treat max(bucket_hour) + 1 hour
-         as a watermark it can trust and read anything above it live.
+         The cutoff is the start of the hour six hours ago, not the start of the
+         current hour, and the six hours are the point. A closed hour does not
+         make its rows immutable: a request forwarded at 04:59 and still running
+         when the 05:05 refresh lands would be rolled up with no status, no
+         duration, no tokens and no settled cost, and because its effective
+         timestamp sits below the watermark the live branch would not correct it
+         either. Production has 1,050 such rows in closed hours right now. Six
+         hours clears the p99.9 request duration of 20 minutes by a wide margin,
+         and a row that still changes after it is picked up by the next refresh
+         rather than never.
+
+         The boundary stays purely a function of time on purpose. Excluding rows
+         by a mutable flag instead would look tighter and be wrong: the rollup
+         would hold what the flag said at refresh time while the reader tested
+         what it says now, and a row that settled in between would belong to
+         neither branch. A time boundary partitions the range exactly once, no
+         matter what any row does afterwards.
+
+         max(bucket_hour) + 1 hour is therefore a watermark the reader can trust,
+         and it reads everything above it from log_entry.
 
          Created WITH DATA: an unpopulated materialized view raises on SELECT
          rather than returning nothing, so the reader could not fall back. The
@@ -164,7 +184,7 @@
             ) tok ON TRUE
             LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
-                  < date_trunc('hour', now())
+                  < date_trunc('hour', now()) - interval '6 hours'
             GROUP BY 1, 2, 3, 4, 5, 6, 7;
         ]]></sql>
         <!-- REFRESH MATERIALIZED VIEW CONCURRENTLY requires a unique index over

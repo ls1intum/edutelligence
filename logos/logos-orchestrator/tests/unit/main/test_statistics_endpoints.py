@@ -156,6 +156,8 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
                                 "runtime_state": "running",
                                 "active_requests": 2,
                                 "effective_vram_mb": 6144,
+                                "host_ram_mb": 18432.0,
+                                "host_ram_source": "pss",
                                 "backend_metrics": {
                                     "engine": "vllm",
                                     "queue_waiting": 3,
@@ -225,6 +227,12 @@ async def test_get_ollama_vram_stats_returns_live_worker_inventory(monkeypatch):
     assert scheduler_signals["lanes"]["qwen-a"]["gpu_cache_usage_percent"] == 66.0
     assert scheduler_signals["lanes"]["qwen-a"]["prefix_cache_hit_rate"] == 0.42
     assert scheduler_signals["lanes"]["qwen-a"]["mtp_acceptance_rate"] == 0.61
+    # Per-lane host RAM travels with the lane the same way its VRAM does, so the
+    # statistics page can break the host's memory down by model instead of only
+    # showing the provider total above.
+    assert scheduler_signals["lanes"]["qwen-a"]["host_ram_mb"] == 18432.0
+    assert scheduler_signals["lanes"]["qwen-a"]["host_ram_source"] == "pss"
+    assert scheduler_signals["models"]["Qwen/Qwen3-8B"]["host_ram_mb"] == 18432.0
 
     offline_provider = payload["providers"][1]
     assert offline_provider["connected"] is False

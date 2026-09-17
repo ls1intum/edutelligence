@@ -28,9 +28,9 @@ export type RequestLogResponse = {
 };
 
 /**
- * The statistics tabs. 'requests' is the default and stays out of the URL.
+ * The statistics tabs. 'local-providers' is the default and stays out of the URL.
  */
-export type StatsTab = 'requests' | 'infrastructure';
+export type StatsTab = 'local-providers' | 'requests';
 
 // RequestLogStats from logos-ui-old/components/statistics/types.ts
 export type RequestLogStats = {
@@ -108,6 +108,14 @@ export type LaneSignalData = {
   num_parallel: number | null;
   active_requests: number;
   effective_vram_mb: number;
+  /**
+   * Host RAM of the lane's process tree (MiB), the counterpart to
+   * effective_vram_mb. Optional: workers that predate the field, and hosts whose
+   * runtime cannot read process memory, report nothing rather than 0 — the page
+   * has to tell "no lane RAM reported" apart from "a lane using no RAM".
+   */
+  host_ram_mb?: number;
+  host_ram_source?: string | null;
   gpu_cache_usage_percent: number | null;
   ttft_p95_seconds: number | null;
   queue_waiting: number | null;

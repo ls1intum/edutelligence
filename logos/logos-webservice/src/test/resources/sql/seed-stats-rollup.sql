@@ -32,26 +32,26 @@ INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result
 VALUES
   -- ── Completed hours: these end up in the rollup ──────────────────────────
   (9401, 'roll-001', 3001, 5001, 6001, 'success',
-   date_trunc('hour', NOW()) - INTERVAL '5 hours',
-   date_trunc('hour', NOW()) - INTERVAL '5 hours' + INTERVAL '2 seconds',
-   date_trunc('hour', NOW()) - INTERVAL '5 hours' + INTERVAL '12 seconds',
+   date_trunc('hour', NOW()) - INTERVAL '13 hours',
+   date_trunc('hour', NOW()) - INTERVAL '13 hours' + INTERVAL '2 seconds',
+   date_trunc('hour', NOW()) - INTERVAL '13 hours' + INTERVAL '12 seconds',
    false, NULL, 1001, 2001),
   (9402, 'roll-002', 3001, 5001, 6001, 'success',
-   date_trunc('hour', NOW()) - INTERVAL '5 hours' + INTERVAL '30 minutes',
-   date_trunc('hour', NOW()) - INTERVAL '5 hours' + INTERVAL '30 minutes 1 second',
-   date_trunc('hour', NOW()) - INTERVAL '5 hours' + INTERVAL '30 minutes 20 seconds',
+   date_trunc('hour', NOW()) - INTERVAL '13 hours' + INTERVAL '30 minutes',
+   date_trunc('hour', NOW()) - INTERVAL '13 hours' + INTERVAL '30 minutes 1 second',
+   date_trunc('hour', NOW()) - INTERVAL '13 hours' + INTERVAL '30 minutes 20 seconds',
    true, NULL, 1001, 2001),
   (9403, 'roll-003', 3001, 5001, 6401, 'error',
-   date_trunc('hour', NOW()) - INTERVAL '3 hours',
-   date_trunc('hour', NOW()) - INTERVAL '3 hours' + INTERVAL '1 second',
-   date_trunc('hour', NOW()) - INTERVAL '3 hours' + INTERVAL '4 seconds',
+   date_trunc('hour', NOW()) - INTERVAL '11 hours',
+   date_trunc('hour', NOW()) - INTERVAL '11 hours' + INTERVAL '1 second',
+   date_trunc('hour', NOW()) - INTERVAL '11 hours' + INTERVAL '4 seconds',
    false, 'upstream exploded', NULL, NULL),
   -- No timestamp_forwarding: the effective timestamp falls back to
   -- timestamp_request, in the rollup and in the live tail alike.
   (9404, 'roll-004', 3001, 5001, 6001, 'success',
-   date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '15 minutes',
+   date_trunc('hour', NOW()) - INTERVAL '10 hours' + INTERVAL '15 minutes',
    NULL,
-   date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '15 minutes 5 seconds',
+   date_trunc('hour', NOW()) - INTERVAL '10 hours' + INTERVAL '15 minutes 5 seconds',
    false, NULL, 1001, 2001),
 
   -- ── Running hour: only the live tail can contribute these ────────────────
@@ -66,6 +66,18 @@ VALUES
    date_trunc('hour', NOW()) + INTERVAL '2 minutes 3 seconds',
    true, 'timed out', NULL, NULL);
 
+-- Inside the six-hour lag: its hour is closed, but the rollup deliberately
+-- stops short of it because a row this recent can still be written to.
+INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                       timestamp_request, timestamp_forwarding, timestamp_response,
+                       was_cold_start, error_message, user_id, team_id)
+VALUES
+  (9407, 'roll-007', 3001, 5001, 6001, 'success',
+   date_trunc('hour', NOW()) - INTERVAL '2 hours',
+   date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '1 second',
+   date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '7 seconds',
+   false, NULL, 1001, 2001);
+
 -- Token counts on both sides of the watermark, so the totals card's token sum is
 -- covered by the rollup column and by the live LATERAL that mirrors it.
 INSERT INTO usage_tokens (id, log_entry_id, type_id, token_count)
@@ -75,4 +87,5 @@ VALUES
   (9413, 9403, 91401, 300),
   (9414, 9404, 91401, 400),
   (9415, 9405, 91401, 500),
-  (9416, 9406, 91401, 600);
+  (9416, 9406, 91401, 600),
+  (9417, 9407, 91401, 700);
