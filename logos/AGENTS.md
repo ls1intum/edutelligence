@@ -312,6 +312,20 @@ seeded users (see below), and attach the images to the PR description.
 **Screenshots go into the PR description only — never commit them to the
 repository.** Host them in a public gist and embed the raw URLs.
 
+**Every screenshot must show the FULL page — a clipped viewport is not
+acceptable.** A shot that starts mid-view, omits the page header / tab bar, or
+cuts off the last table row is not acceptable: reviewers must see the page
+header, the tab bar, and the entire scrollable content (on mobile: top to
+bottom). The Logos UI scrolls inside an inner container, not the document, so
+a plain full-page browser screenshot only ever captures the first viewport.
+When scripting this (Playwright), first unlock the scroll containers — set
+`height: auto`, `max-height: none` and `overflow: visible` (all `!important`)
+on the content root's ancestors up to `<html>`/`<body>` **and** on every
+element whose computed `overflow-y` is `auto`/`scroll` — then take the
+screenshot with `fullPage: true`. Verify the result: the image must be at
+least as tall as the scrolled content (taller than the viewport when the page
+overflows).
+
 #### Hosting screenshots in a gist (do it this way or the images won't render)
 
 ⚠️ The Gist REST API stores file `content` **literally** (it does NOT
