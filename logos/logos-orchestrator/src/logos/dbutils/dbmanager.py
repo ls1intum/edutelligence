@@ -4171,6 +4171,7 @@ class DBManager:
         policy_id=-1,
         classified=None,
         service_tier=None,
+        set_first_token: bool = False,
         **kwargs,
     ):
         # Hole Privacy-Level
@@ -4191,29 +4192,67 @@ class DBManager:
         if result[0] != "FULL":
             payload = None
 
+        # Token-type bookkeeping in two roundtrips instead of a SELECT +
+        # (INSERT + commit) per token type (#980): one lookup for every name,
+        # one multi-row upsert for the missing ones (auto-creation is
+        # preserved, e.g. Whisper's audio_milliseconds), then one multi-row
+        # upsert for the non-zero usage rows. token_types.name is UNIQUE, so
+        # the upsert is race-safe: a concurrent creator wins, this side sees
+        # the row on the refetch below.
         type_ids = dict()
-        for token_type, token_count in usage.items() if usage is not None else dict().items():
-            r, c = self.add_token_type(token_type, "")
-            if "error" in r:
-                return r, c
-            type_ids[token_type] = r["token-type-id"]
+        if usage:
+            names = list(usage)
+            type_ids.update(
+                {row.name: row.id for row in self.session.execute(
+                    text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                    {"names": names},
+                ).fetchall()}
+            )
+            missing = [name for name in names if name not in type_ids]
+            if missing:
+                type_ids.update(
+                    {row.name: row.id for row in self.session.execute(
+                        text(
+                            """
+                            INSERT INTO token_types (name, description)
+                            SELECT v.name, v.description
+                            FROM unnest(:names, :descriptions) AS v(name, description)
+                            ON CONFLICT (name) DO NOTHING
+                            RETURNING id, name
+                            """
+                        ),
+                        {"names": missing, "descriptions": ["" for _ in missing]},
+                    ).fetchall()}
+                )
+                still_missing = [name for name in missing if name not in type_ids]
+                if still_missing:
+                    type_ids.update(
+                        {row.name: row.id for row in self.session.execute(
+                            text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                            {"names": still_missing},
+                        ).fetchall()}
+                    )
 
-        for token_type in type_ids:
-            if usage[token_type]:
+            positive = {name: count for name, count in usage.items() if count}
+            if positive:
+                value_clauses = ", ".join(
+                    f"(:log_entry_id, :type_id_{index}, :token_count_{index})"
+                    for index in range(len(positive))
+                )
+                usage_params = {"log_entry_id": log_id}
+                for index, (name, count) in enumerate(positive.items()):
+                    usage_params[f"type_id_{index}"] = type_ids[name]
+                    usage_params[f"token_count_{index}"] = count
                 self.session.execute(
                     text(
-                        """
+                        f"""
                         INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
-                        VALUES (:log_entry_id, :type_id, :token_count)
+                        VALUES {value_clauses}
                         ON CONFLICT (log_entry_id, type_id)
                         DO UPDATE SET token_count = EXCLUDED.token_count
                         """
                     ),
-                    {
-                        "log_entry_id": log_id,
-                        "type_id": type_ids[token_type],
-                        "token_count": usage[token_type],
-                    },
+                    usage_params,
                 )
 
         sql = text(
@@ -4228,7 +4267,8 @@ class DBManager:
                        request_id = COALESCE(:request_id, request_id),
                        queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
                        utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival),
-                       service_tier = COALESCE(:service_tier, service_tier)
+                       service_tier = COALESCE(:service_tier, service_tier),
+                       time_at_first_token = COALESCE(:first_token, time_at_first_token)
                    WHERE id = :log_id
                    """
         )
@@ -4246,6 +4286,7 @@ class DBManager:
                 "queue_depth": kwargs.get("queue_depth_at_arrival"),
                 "utilization": kwargs.get("utilization_at_arrival"),
                 "service_tier": service_tier,
+                "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
             },
         )
         self.session.commit()

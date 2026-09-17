@@ -2381,8 +2381,6 @@ async def _sync_response(
         if log_id:
             with perf_trace.phase(request_id, "db.response_block"):
                 with DBManager() as db:
-                    if exec_result.success:
-                        db.set_time_at_first_token(log_id)
                     db.set_response_payload(
                         log_id,
                         response_payload,
@@ -2392,6 +2390,7 @@ async def _sync_response(
                         policy_id,
                         classification_stats,
                         service_tier=extract_service_tier(response_payload),
+                        set_first_token=exec_result.success,
                         request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                         queue_depth_at_arrival=(
                             scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -2674,8 +2673,6 @@ async def _proxy_sync_response(
         )
 
         with DBManager() as db:
-            if exec_result.success:
-                db.set_time_at_first_token(log_id)
             db.set_response_payload(
                 log_id,
                 response_payload,
@@ -2685,6 +2682,7 @@ async def _proxy_sync_response(
                 policy_id,
                 classified,
                 service_tier=extract_service_tier(response_payload),
+                set_first_token=exec_result.success,
             )
             db.update_log_entry_metrics(
                 log_id=log_id,

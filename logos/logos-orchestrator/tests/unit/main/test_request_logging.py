@@ -964,6 +964,7 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     assert response.status_code == 500
     assert response.headers["x-request-id"] == "req-sync-error"
     assert dummy_db.ttft_calls == []
+    assert dummy_db.payload_calls[0]["kwargs"]["set_first_token"] is False
     assert dummy_db.payload_calls[0]["payload"] == {"error": "bad request"}
     assert completion_calls == [
         {
@@ -1028,7 +1029,10 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     )
 
     assert result["status_code"] == 200
-    assert dummy_db.ttft_calls == [56]
+    # The first-token timestamp merged into the response write (#980), so the
+    # sync path no longer issues its own UPDATE for it.
+    assert dummy_db.ttft_calls == []
+    assert dummy_db.payload_calls[0]["kwargs"]["set_first_token"] is True
     assert dummy_db.payload_calls[0]["usage"] == {
         "prompt_tokens": 11,
         "completion_tokens": 13,
