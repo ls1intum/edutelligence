@@ -13,6 +13,21 @@ function formatGermanDate(d: Date): string {
 }
 
 /**
+ * "DD.MM.YYYY" for the calendar date an ISO timestamp is valid on; "—" when
+ * the value is missing/invalid.
+ *
+ * Catalogue `valid_from` values are UTC midnight: the first ten characters
+ * are the effective date. Routing them through `new Date` would shift the
+ * date by a day in UTC-negative time zones, so only the date part is read.
+ */
+export function formatIsoDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!match) return '—';
+  return `${match[3]}.${match[2]}.${match[1]}`;
+}
+
+/**
  * "Last used" display for an ISO timestamp: "Never", "Today" or the German
  * date with the age in brackets, e.g. "24.08.2026 (2 days ago)".
  */

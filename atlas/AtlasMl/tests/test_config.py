@@ -376,8 +376,6 @@ class TestWeaviateSettings:
         assert settings.port == 9090
 
         # Test with domain name
-        settings = WeaviateSettings(
-            host="weaviate.example.com", port=443
-        )
+        settings = WeaviateSettings(host="weaviate.example.com", port=443)
         assert settings.host == "weaviate.example.com"
         assert settings.port == 443

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 class APIKeyConfig(BaseModel):
     """Single API key token definition used for header-based authentication."""
+
     token: str
 
 
@@ -36,6 +37,7 @@ class WeaviateSettings(BaseModel):
     Supports both REST and gRPC connections. gRPC is required by the Weaviate
     Python client v4 for optimal performance.
     """
+
     host: str
     port: int
     grpc_port: int = 50051
@@ -52,6 +54,7 @@ class Settings(BaseModel):
         sentry_dsn: Optional Sentry DSN (used when `env` is production)
         env: Current environment label (e.g., dev, production)
     """
+
     api_keys: list[APIKeyConfig]
     weaviate: WeaviateSettings
     sentry_dsn: str | None = None
@@ -69,11 +72,14 @@ class Settings(BaseModel):
         )
 
         default_api_keys = [APIKeyConfig(token="default-test-token")]
-        default_weaviate = WeaviateSettings(
-            host="localhost", port=8080
-        )
+        default_weaviate = WeaviateSettings(host="localhost", port=8080)
 
-        return cls(api_keys=default_api_keys, weaviate=default_weaviate, sentry_dsn=None, env="dev")
+        return cls(
+            api_keys=default_api_keys,
+            weaviate=default_weaviate,
+            sentry_dsn=None,
+            env="dev",
+        )
 
     @classmethod
     def get_settings(cls, use_defaults: bool = False):
@@ -167,7 +173,7 @@ class Settings(BaseModel):
             port=weaviate_port,
             grpc_port=weaviate_grpc_port,
             api_key=weaviate_api_key,
-            scheme=weaviate_scheme
+            scheme=weaviate_scheme,
         )
 
         # Get Sentry DSN from environment (optional)
@@ -179,7 +185,12 @@ class Settings(BaseModel):
             f"Sentry: {'configured' if sentry_dsn else 'not configured'}"
         )
 
-        return cls(api_keys=api_keys, weaviate=weaviate_settings, sentry_dsn=sentry_dsn, env=env)
+        return cls(
+            api_keys=api_keys,
+            weaviate=weaviate_settings,
+            sentry_dsn=sentry_dsn,
+            env=env,
+        )
 
     @classmethod
     def get_api_keys(cls):
@@ -215,6 +226,7 @@ def reset_settings():
 # For backward compatibility, create a property-like access
 class SettingsProxy:
     """Lazy proxy to access resolved settings without re-parsing env vars."""
+
     @property
     def api_keys(self):
         return get_settings().api_keys
@@ -226,7 +238,7 @@ class SettingsProxy:
     @property
     def sentry_dsn(self):
         return get_settings().sentry_dsn
-    
+
     @property
     def env(self):
         return get_settings().env

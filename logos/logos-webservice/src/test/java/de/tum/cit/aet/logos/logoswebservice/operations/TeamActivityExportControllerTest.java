@@ -20,7 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 /**
- * The request trace export (issue #667).
+ * The request trace export.
  *
  * The export seed adds two rows and one key to the shared operations seed.
  * Both rows sit in team 2001 within the window: 9003 was recorded at FULL

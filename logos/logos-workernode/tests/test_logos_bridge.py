@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from logos_worker_node.logos_bridge import LogosBridgeClient, _CalibrationSession
@@ -119,6 +121,194 @@ async def test_authenticate_accepts_explicit_ws_url(monkeypatch):
     )
     auth = await client._authenticate()  # noqa: SLF001
     assert auth["ws_url"] == "wss://logos.example/ws"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_applies_central_hf_token(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_keeps_local_hf_token_when_server_sends_none(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "local-token")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": ""}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "local-token"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_reverts_when_central_hf_token_is_removed(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "local-token")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    hf_token_by_call = ["central-token", ""]
+
+    class _Resp:
+        def __init__(self, hf_token: str) -> None:
+            self._hf_token = hf_token
+            self.status_code = 200
+            self.content = b"{}"
+
+        def json(self):
+            return {"ws_url": "wss://logos.example/ws", "hf_token": self._hf_token}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp(hf_token_by_call.pop(0))
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "local-token"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_applies_central_token_before_startup(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client.bootstrap_hf_token()
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_swallows_auth_failures(monkeypatch):
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client.bootstrap_hf_token()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_noop_when_disabled(monkeypatch):
+    cfg = LogosConfig(enabled=False)
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    async def _fail_authenticate():
+        raise AssertionError("bootstrap_hf_token must not authenticate when disabled")
+
+    monkeypatch.setattr(client, "_authenticate", _fail_authenticate)
+    await client.bootstrap_hf_token()
 
 
 @pytest.mark.asyncio
@@ -769,7 +959,7 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     lane_manager._MAX_EVENT_LOG = 500
     lane_manager._mark_status_dirty = lambda: None
     lane_manager.destroy_all = AsyncMock(return_value=None)
-    # Calibration-session GPU-slice guard (issue #592): the session holds a
+    # Calibration-session GPU-slice guard: the session holds a
     # power-of-two slice and frees only the lanes on it, keeping leftover lanes.
     lane_manager.begin_calibration_session = MagicMock(return_value=frozenset({0, 1}))
     lane_manager.destroy_lanes_on_gpus = AsyncMock(return_value=1)
@@ -1141,7 +1331,7 @@ async def test_nosleep_model_with_profile_is_not_recalibrated(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_session_frees_calibrating_slice_before_calibrating(tmp_path, monkeypatch):
     """Live lanes on the calibration's GPU slice hold VRAM. The session must
-    free that slice up front (issue #592) or the kv-cache search OOMs and
+    free that slice up front or the kv-cache search OOMs and
     blacklists every probe size — but it must NOT free the whole node: lanes
     on the leftover GPUs keep serving during the session."""
     from logos_worker_node import config as _wcfg
@@ -2710,7 +2900,7 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Cancelling an abandoned request (#735)
+# Cancelling an abandoned request
 #
 # Every request to a worker is multiplexed over one WebSocket, so there is no
 # per-request connection whose close tells vLLM to stop. When the client

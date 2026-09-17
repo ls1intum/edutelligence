@@ -359,7 +359,7 @@ def _write_calibrated_profile(tmp_path, tp: int) -> ModelProfileRegistry:
 
 def test_calibrated_tp_not_clobbered_by_mismatched_lane(tmp_path):
     """A serving lane that ran at a TP different from the calibrated TP must
-    not overwrite the profile (issue #616): the calibrated TP is the single
+    not overwrite the profile: the calibrated TP is the single
     source of truth, and the lane's measurements describe a different
     configuration. The whole profile — tp, residency, KV data — stays intact.
     """

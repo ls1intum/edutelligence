@@ -13,6 +13,12 @@
       @if (laneCount > 0) {
         <span class="chip chip--info">{{ activeLanes }} active / {{ loadedLanes }} loaded / {{ laneCount }} total lanes</span>
       }
+      @if (workerUptimeLabel) {
+        <span class="chip chip--info">worker uptime {{ workerUptimeLabel }}</span>
+      }
+      @if (wsUptimeLabel) {
+        <span class="chip chip--info">ws uptime {{ wsUptimeLabel }}</span>
+      }
       @if (canCalibrate) {
         <button
           class="btn-calibrate"

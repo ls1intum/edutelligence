@@ -112,7 +112,7 @@ class LiquibaseBaselineTest {
     @Test
     void migration030_allowsStartWithoutOllamaTypedProviders() {
         // The 030 gate must be a no-op on a clean schema (the provider_type
-        // enum makes 'ollama' rows impossible) — reaching this test already
+        // enum makes legacy local-provider rows impossible) — reaching this test already
         // proves the changelog ran to the end.
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();
     }

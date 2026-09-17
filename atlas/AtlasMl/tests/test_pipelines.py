@@ -8,6 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import copy
 
+
 @pytest.fixture
 def workflows():
     wf = PipelineWorkflows(weaviate_client=FakeWeaviateClient())
@@ -61,6 +62,7 @@ def fake_hdbscan(embeddings_list, *args, **kwargs):
     medoids = [np.array([0.1, 0.2, 0.3])]
     return labels, centroids, medoids
 
+
 def test_newTextPipeline_integration(workflows):
     with patch("atlasml.ml.pipeline_workflows.apply_hdbscan", side_effect=fake_hdbscan):
         competencies = [
@@ -93,8 +95,8 @@ def test_newTextPipeline_integration(workflows):
                 "description": "Fake Competency Description",
                 "cluster_id": "fake-cluster-id",
                 "cluster_similarity_score": 0.9,
-                "course_id": "1"
-             },
+                "course_id": "1",
+            },
         )
         titles = [
             "Lists",
@@ -120,7 +122,9 @@ def test_newTextPipeline_integration(workflows):
         ]
         workflows.initial_exercises(texts)
         # Ensure at least one cluster exists for downstream code
-        fake_cluster_id = workflows.weaviate_client.get_all_embeddings(CollectionNames.COMPETENCY.value)[3]["properties"]["cluster_id"]
+        fake_cluster_id = workflows.weaviate_client.get_all_embeddings(
+            CollectionNames.COMPETENCY.value
+        )[3]["properties"]["cluster_id"]
         workflows.weaviate_client.add_embeddings(
             "SemanticCluster",
             [0.1, 0.2, 0.3],  # match your embedding size
@@ -132,7 +136,9 @@ def test_newTextPipeline_integration(workflows):
 
     def test_suggest_competency_relations_integration(workflows):
         """Test the suggest_competency_relations pipeline method"""
-        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+        with patch(
+            "atlasml.ml.pipeline_workflows.generate_competency_relationship"
+        ) as mock_generate:
             # Setup test competencies
             competencies = [
                 Competency(
@@ -152,7 +158,7 @@ def test_newTextPipeline_integration(workflows):
                     title="Algorithm Design",
                     description="Ability to design and analyze algorithms for problem solving",
                     course_id=1,
-                )
+                ),
             ]
 
             # Add competencies to workflows
@@ -160,28 +166,33 @@ def test_newTextPipeline_integration(workflows):
 
             # Mock the relationship generation to return a predictable matrix
             # 3x3 matrix with different relation types
-            mock_relationship_matrix = np.array([
-                ["NONE", "REQUIRES", "EXTENDS"],
-                ["MATCH", "NONE", "REQUIRES"],
-                ["NONE", "EXTENDS", "NONE"]
-            ])
+            mock_relationship_matrix = np.array(
+                [
+                    ["NONE", "REQUIRES", "EXTENDS"],
+                    ["MATCH", "NONE", "REQUIRES"],
+                    ["NONE", "EXTENDS", "NONE"],
+                ]
+            )
             mock_generate.return_value = mock_relationship_matrix
 
             # Test the suggest_competency_relations method
             result = workflows.suggest_competency_relations(course_id=1)
 
             # Verify the result structure
-            assert hasattr(result, 'relations'), "Result should have relations attribute"
+            assert hasattr(
+                result, "relations"
+            ), "Result should have relations attribute"
             assert isinstance(result.relations, list), "Relations should be a list"
 
             # Should have 5 relations (excluding NONE diagonal and NONE entries)
             # REQUIRES: (0,1), EXTENDS: (0,2), MATCH: (1,0), REQUIRES: (1,2), EXTENDS: (2,1)
-            assert len(result.relations) == 5, f"Expected 5 relations, got {len(result.relations)}"
+            assert (
+                len(result.relations) == 5
+            ), f"Expected 5 relations, got {len(result.relations)}"
 
             # Verify specific relations
             relation_dict = {
-                (r.tail_id, r.head_id): r.relation_type.value
-                for r in result.relations
+                (r.tail_id, r.head_id): r.relation_type.value for r in result.relations
             }
 
             # Check expected relations based on our mock matrix
@@ -194,9 +205,13 @@ def test_newTextPipeline_integration(workflows):
             }
 
             for (tail, head), expected_type in expected_relations.items():
-                assert (tail, head) in relation_dict, f"Missing relation {tail} -> {head}"
-                assert relation_dict[(tail, head)] == expected_type, \
-                    f"Expected {expected_type} for {tail}->{head}, got {relation_dict[(tail, head)]}"
+                assert (
+                    tail,
+                    head,
+                ) in relation_dict, f"Missing relation {tail} -> {head}"
+                assert (
+                    relation_dict[(tail, head)] == expected_type
+                ), f"Expected {expected_type} for {tail}->{head}, got {relation_dict[(tail, head)]}"
 
             # Verify generate_competency_relationship was called correctly
             mock_generate.assert_called_once()
@@ -210,21 +225,29 @@ def test_newTextPipeline_integration(workflows):
 
     def test_suggest_competency_relations_empty_course(workflows):
         """Test suggest_competency_relations with no competencies"""
-        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+        with patch(
+            "atlasml.ml.pipeline_workflows.generate_competency_relationship"
+        ) as mock_generate:
             # Test with non-existent course_id
             result = workflows.suggest_competency_relations(course_id=999)
 
             # Should return empty relations
-            assert hasattr(result, 'relations'), "Result should have relations attribute"
+            assert hasattr(
+                result, "relations"
+            ), "Result should have relations attribute"
             assert isinstance(result.relations, list), "Relations should be a list"
-            assert len(result.relations) == 0, "Should return empty relations for non-existent course"
+            assert (
+                len(result.relations) == 0
+            ), "Should return empty relations for non-existent course"
 
             # generate_competency_relationship should not be called
             mock_generate.assert_not_called()
 
     def test_suggest_competency_relations_single_competency(workflows):
         """Test suggest_competency_relations with only one competency"""
-        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+        with patch(
+            "atlasml.ml.pipeline_workflows.generate_competency_relationship"
+        ) as mock_generate:
             # Setup single competency
             single_competency = [
                 Competency(
@@ -243,14 +266,18 @@ def test_newTextPipeline_integration(workflows):
             result = workflows.suggest_competency_relations(course_id=2)
 
             # Should return empty relations (no relations for single competency)
-            assert len(result.relations) == 0, "Single competency should result in no relations"
+            assert (
+                len(result.relations) == 0
+            ), "Single competency should result in no relations"
 
             # generate_competency_relationship should still be called
             mock_generate.assert_called_once()
 
     def test_suggest_competency_relations_two_competencies(workflows):
         """Test suggest_competency_relations with exactly two competencies"""
-        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+        with patch(
+            "atlasml.ml.pipeline_workflows.generate_competency_relationship"
+        ) as mock_generate:
             # Setup two competencies
             two_competencies = [
                 Competency(
@@ -264,32 +291,39 @@ def test_newTextPipeline_integration(workflows):
                     title="Second Competency",
                     description="Second competency description",
                     course_id=3,
-                )
+                ),
             ]
 
             workflows.initial_competencies(two_competencies)
 
             # Mock 2x2 matrix
-            mock_generate.return_value = np.array([
-                ["NONE", "REQUIRES"],
-                ["EXTENDS", "NONE"]
-            ])
+            mock_generate.return_value = np.array(
+                [["NONE", "REQUIRES"], ["EXTENDS", "NONE"]]
+            )
 
             result = workflows.suggest_competency_relations(course_id="3")
 
             # Should have 2 relations
-            assert len(result.relations) == 2, f"Expected 2 relations, got {len(result.relations)}"
+            assert (
+                len(result.relations) == 2
+            ), f"Expected 2 relations, got {len(result.relations)}"
 
             # Verify the specific relations
-            relation_types = [(r.tail_id, r.head_id, r.relation_type.value) for r in result.relations]
+            relation_types = [
+                (r.tail_id, r.head_id, r.relation_type.value) for r in result.relations
+            ]
             expected = [("30", "31", "REQUIRES"), ("31", "30", "EXTENDS")]
 
             for expected_relation in expected:
-                assert expected_relation in relation_types, f"Missing expected relation: {expected_relation}"
+                assert (
+                    expected_relation in relation_types
+                ), f"Missing expected relation: {expected_relation}"
 
     def test_suggest_competency_relations_all_none_matrix(workflows):
         """Test suggest_competency_relations when all relations are NONE"""
-        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+        with patch(
+            "atlasml.ml.pipeline_workflows.generate_competency_relationship"
+        ) as mock_generate:
             # Setup competencies
             competencies = [
                 Competency(
@@ -303,25 +337,26 @@ def test_newTextPipeline_integration(workflows):
                     title="Independent Competency 2",
                     description="Second independent competency",
                     course_id=4,
-                )
+                ),
             ]
 
             workflows.initial_competencies(competencies)
 
             # Mock matrix with all NONE values
-            mock_generate.return_value = np.array([
-                ["NONE", "NONE"],
-                ["NONE", "NONE"]
-            ])
+            mock_generate.return_value = np.array([["NONE", "NONE"], ["NONE", "NONE"]])
 
             result = workflows.suggest_competency_relations(course_id="4")
 
             # Should return empty relations (all NONE filtered out)
-            assert len(result.relations) == 0, "All NONE relations should result in empty list"
+            assert (
+                len(result.relations) == 0
+            ), "All NONE relations should result in empty list"
 
     def test_suggest_competency_relations_large_course(workflows):
         """Test suggest_competency_relations with many competencies"""
-        with patch("atlasml.ml.pipeline_workflows.generate_competency_relationship") as mock_generate:
+        with patch(
+            "atlasml.ml.pipeline_workflows.generate_competency_relationship"
+        ) as mock_generate:
             # Setup 5 competencies
             many_competencies = [
                 Competency(
@@ -348,12 +383,16 @@ def test_newTextPipeline_integration(workflows):
             result = workflows.suggest_competency_relations(course_id="5")
 
             # Should have 5 non-NONE relations
-            assert len(result.relations) == 5, f"Expected 5 relations, got {len(result.relations)}"
+            assert (
+                len(result.relations) == 5
+            ), f"Expected 5 relations, got {len(result.relations)}"
 
             # Verify all relation types are represented
             relation_types = {r.relation_type.value for r in result.relations}
             expected_types = {"REQUIRES", "EXTENDS", "MATCH"}
-            assert relation_types == expected_types, f"Expected {expected_types}, got {relation_types}"
+            assert (
+                relation_types == expected_types
+            ), f"Expected {expected_types}, got {relation_types}"
 
 
 def test_map_new_competency_to_exercise_success(workflows):
@@ -368,7 +407,7 @@ def test_map_new_competency_to_exercise_success(workflows):
             "description": "Test Description",
             "competency_ids": [],
             "course_id": 1,
-        }
+        },
     )
 
     # Add competency
@@ -380,7 +419,7 @@ def test_map_new_competency_to_exercise_success(workflows):
             "title": "Test Competency",
             "description": "Test Competency Description",
             "course_id": 1,
-        }
+        },
     )
 
     # Act
@@ -405,7 +444,7 @@ def test_map_new_competency_to_exercise_duplicate_prevention(workflows):
             "description": "Test Description",
             "competency_ids": [104],
             "course_id": 1,
-        }
+        },
     )
 
     workflows.weaviate_client.add_embeddings(
@@ -416,7 +455,7 @@ def test_map_new_competency_to_exercise_duplicate_prevention(workflows):
             "title": "Test Competency",
             "description": "Test Competency Description",
             "course_id": 1,
-        }
+        },
     )
 
     workflows.map_new_competency_to_exercise(exercise_id=103, competency_id=104)
@@ -434,7 +473,6 @@ def test_map_new_competency_to_exercise_nonexistent_raises_error(workflows):
         workflows.map_new_competency_to_exercise(exercise_id=999, competency_id=999)
 
 
-
 def test_map_competency_to_competency_bidirectional(workflows):
     """Test bidirectional relationship creation"""
     workflows.weaviate_client.add_embeddings(
@@ -446,7 +484,7 @@ def test_map_competency_to_competency_bidirectional(workflows):
             "description": "Description 201",
             "course_id": 1,
             "related_competencies": [],
-        }
+        },
     )
 
     workflows.weaviate_client.add_embeddings(
@@ -458,10 +496,12 @@ def test_map_competency_to_competency_bidirectional(workflows):
             "description": "Description 202",
             "course_id": 1,
             "related_competencies": [],
-        }
+        },
     )
 
-    workflows.map_competency_to_competency(source_competency_id=201, target_competency_id=202)
+    workflows.map_competency_to_competency(
+        source_competency_id=201, target_competency_id=202
+    )
 
     source_data = workflows.weaviate_client.get_embeddings_by_property(
         CollectionNames.COMPETENCY.value, "competency_id", 201
@@ -485,7 +525,7 @@ def test_map_competency_to_competency_preserves_existing(workflows):
             "description": "Description 203",
             "course_id": 1,
             "related_competencies": [205],
-        }
+        },
     )
 
     workflows.weaviate_client.add_embeddings(
@@ -497,10 +537,12 @@ def test_map_competency_to_competency_preserves_existing(workflows):
             "description": "Description 204",
             "course_id": 1,
             "related_competencies": [],
-        }
+        },
     )
 
-    workflows.map_competency_to_competency(source_competency_id=203, target_competency_id=204)
+    workflows.map_competency_to_competency(
+        source_competency_id=203, target_competency_id=204
+    )
 
     source_data = workflows.weaviate_client.get_embeddings_by_property(
         CollectionNames.COMPETENCY.value, "competency_id", 203
@@ -522,7 +564,7 @@ def test_map_competency_to_competency_duplicate_prevention(workflows):
             "description": "Description 206",
             "course_id": 1,
             "related_competencies": [207],
-        }
+        },
     )
 
     workflows.weaviate_client.add_embeddings(
@@ -534,10 +576,12 @@ def test_map_competency_to_competency_duplicate_prevention(workflows):
             "description": "Description 207",
             "course_id": 1,
             "related_competencies": [206],
-        }
+        },
     )
 
-    workflows.map_competency_to_competency(source_competency_id=206, target_competency_id=207)
+    workflows.map_competency_to_competency(
+        source_competency_id=206, target_competency_id=207
+    )
 
     source_data = workflows.weaviate_client.get_embeddings_by_property(
         CollectionNames.COMPETENCY.value, "competency_id", 206
@@ -562,11 +606,13 @@ def test_map_competency_to_competency_nonexistent_source(workflows):
             "description": "Description 208",
             "course_id": 1,
             "related_competencies": [],
-        }
+        },
     )
 
     with pytest.raises(ValueError):
-        workflows.map_competency_to_competency(source_competency_id=999, target_competency_id=208)
+        workflows.map_competency_to_competency(
+            source_competency_id=999, target_competency_id=208
+        )
 
 
 def test_map_competency_to_competency_nonexistent_target(workflows):
@@ -580,11 +626,14 @@ def test_map_competency_to_competency_nonexistent_target(workflows):
             "description": "Description 209",
             "course_id": 1,
             "related_competencies": [],
-        }
+        },
     )
 
     with pytest.raises(ValueError):
-        workflows.map_competency_to_competency(source_competency_id=209, target_competency_id=999)
+        workflows.map_competency_to_competency(
+            source_competency_id=209, target_competency_id=999
+        )
+
 
 class FakeWeaviateClient:
     def __init__(self):

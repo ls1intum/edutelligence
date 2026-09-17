@@ -67,7 +67,7 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         self._metal_config = metal_config or MetalConfig()
 
     # ------------------------------------------------------------------
-    # Preflight guards that do not apply to this backend
+    # Preflight guards that do not apply to this engine
     # ------------------------------------------------------------------
 
     def _require_c_compiler(self) -> None:
@@ -345,12 +345,12 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             env["HF_HOME"] = self._resolve_hf_home(cache_root_dir)
 
         # vLLM's own cache root still applies (tokenizer/config artifacts),
-        # even though nothing torch-compiles on this backend.
+        # even though nothing torch-compiles on this engine.
         if "VLLM_CACHE_ROOT" not in os.environ:
             env["VLLM_CACHE_ROOT"] = os.path.join(cache_root_dir, ".cache", "vllm")
 
         # server_dev_mode is honoured; sleep mode never sets it here because
-        # the sleep endpoints are unavailable on this backend anyway.
+        # the sleep endpoints are unavailable on this engine anyway.
         if vc.server_dev_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
@@ -398,7 +398,7 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         return process_env
 
     # ------------------------------------------------------------------
-    # Sleep / wake — unsupported on this backend
+    # Sleep / wake — unsupported on this engine
     # ------------------------------------------------------------------
 
     def _ensure_sleep_mode_ready(self) -> None:

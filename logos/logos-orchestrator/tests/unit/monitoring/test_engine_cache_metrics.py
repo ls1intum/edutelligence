@@ -1,4 +1,4 @@
-"""Tests for the per-(model, provider) engine-cache gauges (issue 819).
+"""Tests for the per-(model, provider) engine-cache gauges.
 
 ``update_engine_cache_metrics`` publishes the prefix-cache hit rate and the
 MTP acceptance rate to Prometheus. The gauges are replaced with recording
