@@ -328,6 +328,9 @@ async def collect_runtime_samples(
                 if isinstance(providers, dict):
                     provider_ids = [int(provider_id) for provider_id in providers.keys() if str(provider_id).isdigit()]
 
+            # provider status uses a different credential than scheduler_state:
+            # a root logos_key (`headers`), not the internal secret — a
+            # non-root key here yields scheduler data but no provider snapshots.
             provider_status: dict[str, object] = {}
             for provider_id in provider_ids:
                 try:
