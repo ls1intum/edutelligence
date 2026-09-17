@@ -24,7 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos import perf_trace
+from logos import perf_trace, refcache
 from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
@@ -2746,8 +2746,7 @@ async def _execute_proxy_mode(
         model_name = requested_model_name if model_id is not None else None
     else:
         with perf_trace.phase(request_id, "mode.resolve_model"):
-            with DBManager() as db:
-                resolved = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
+            resolved = _cached_resolve_model(auth.api_key_id, requested_model_name)
             if resolved is None:
                 raise HTTPException(
                     status_code=404,
@@ -3523,6 +3522,38 @@ async def handle_sync_request(path: str, request: Request):
         perf_trace.finish(request_id)
 
 
+def _cached_team(team_id: Optional[int]) -> Optional[dict]:
+    """Team row (rate-limit defaults) from the short-TTL ref cache (#980 O12)."""
+    if team_id is None:
+        return None
+
+    def _load():
+        with DBManager() as db:
+            return db.get_team(team_id)
+
+    return refcache.get_ref_cache().load(("team", team_id), _load)
+
+
+def _cached_deployments(api_key_id: int) -> list:
+    """The key's deployment rows from the short-TTL ref cache (#980 O12)."""
+
+    def _load():
+        with DBManager() as db:
+            return db.get_deployments_for_api_key(api_key_id)
+
+    return refcache.get_ref_cache().load(("deployments", api_key_id), _load)
+
+
+def _cached_resolve_model(api_key_id: int, requested_name: str):
+    """resolve_proxy_model result from the short-TTL ref cache (#980 O12)."""
+
+    def _load():
+        with DBManager() as db:
+            return db.resolve_proxy_model(api_key_id, requested_name)
+
+    return refcache.get_ref_cache().load(("resolve_model", api_key_id, requested_name), _load)
+
+
 async def auth_parse_log(request: Request, use_profile_auth: bool = False, request_id: Optional[str] = None):
     """
     Authenticate, parse, and log incoming requests.
@@ -3540,10 +3571,10 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         If use_profile_auth=True:
             (headers, auth_context, body, client_ip, log_id, raw_deployments)
 
-        The deployment lookup runs in the same DB session as the log insert
-        (one pool checkout instead of two), so the log row already carries
-        request_id and timeout_s when this returns — no follow-up metrics
-        UPDATE is needed.
+        The team row and deployment rows come from the short-TTL ref cache
+        (#980 O12), so the only pool checkout here is the log insert itself,
+        and the log row already carries request_id and timeout_s — no
+        follow-up metrics UPDATE is needed.
 
     Raises:
         HTTPException(400): Invalid JSON body
@@ -3573,37 +3604,40 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
 
     if use_profile_auth:
         log_id: Optional[int] = None
+
+        # Rate limits apply to every key, including those owned by
+        # logos_admins. Admin keys derive their limits from their team /
+        # key settings exactly like any other key. Budget is checked later,
+        # once permitted deployments are known (see _check_budget_if_cloud).
+        s = auth.settings or {}
+        with perf_trace.phase(request_id, "auth.team_lookup"):
+            # The team row (rate-limit defaults) is reference data — the
+            # short-TTL ref cache serves it instead of a per-request checkout
+            # (#980 O12).
+            team_info = _cached_team(auth.team_id)
+
+        generic_rpm = s.get("rpm_limit")
+        generic_tpm = s.get("tpm_limit")
+
+        cloud_rpm = (
+            s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+        )
+        cloud_tpm = (
+            s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+        )
+        local_rpm = (
+            s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+        )
+        local_tpm = (
+            s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
+        )
+
+        if cloud_rpm is not None or cloud_tpm is not None:
+            auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
+        if local_rpm is not None or local_tpm is not None:
+            auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
+
         with DBManager() as db:
-
-            # Rate limits apply to every key, including those owned by
-            # logos_admins. Admin keys derive their limits from their team /
-            # key settings exactly like any other key. Budget is checked later,
-            # once permitted deployments are known (see _check_budget_if_cloud).
-            s = auth.settings or {}
-            with perf_trace.phase(request_id, "auth.team_lookup"):
-                team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
-
-            generic_rpm = s.get("rpm_limit")
-            generic_tpm = s.get("tpm_limit")
-
-            cloud_rpm = (
-                s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
-            )
-            cloud_tpm = (
-                s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
-            )
-            local_rpm = (
-                s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
-            )
-            local_tpm = (
-                s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
-            )
-
-            if cloud_rpm is not None or cloud_tpm is not None:
-                auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
-            if local_rpm is not None or local_tpm is not None:
-                auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
-
             with perf_trace.phase(request_id, "auth.log_usage_insert"):
                 r_log, c_log = db.log_usage(
                     api_key_id=auth.api_key_id,
@@ -3617,11 +3651,17 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
                     request_id=request_id,
                     timeout_s=body.get("timeout_s"),
                 )
-            if c_log == 200:
-                log_id = int(r_log["log-id"])
+        if c_log == 200:
+            log_id = int(r_log["log-id"])
 
-            with perf_trace.phase(request_id, "setup.deployments"):
-                raw_deployments, _ = request_setup(headers, auth.api_key_id, db=db)
+        with perf_trace.phase(request_id, "setup.deployments"):
+            # Deployment rows are reference data too (#980 O12): the ref
+            # cache fronts them, so this phase is DB-free on a cache hit.
+            raw_deployments, _ = request_setup(
+                headers,
+                auth.api_key_id,
+                raw_deployments=_cached_deployments(auth.api_key_id),
+            )
 
         return headers, auth, body, client_ip, log_id, raw_deployments
 
@@ -3763,7 +3803,11 @@ async def execute_proxy_job(
                         request_id=request_id,
                         timeout_s=json_data.get("timeout_s"),
                     )
-                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            raw_deployments, allowed_models = request_setup(
+                headers,
+                auth.api_key_id,
+                raw_deployments=_cached_deployments(auth.api_key_id),
+            )
             deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
         except PermissionError as e:
             _record_log_failure(log_id, request_id, str(e), result_status="error")

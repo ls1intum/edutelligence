@@ -38,7 +38,7 @@ def _request(body: dict) -> Request:
 class _RecordingDB:
     def __init__(self):
         self.log_usage_kwargs = None
-        self.deployments_db = "not-called"
+        self.deployments_calls = 0
 
     def __enter__(self):
         return self
@@ -52,6 +52,10 @@ class _RecordingDB:
     def log_usage(self, **kwargs):
         self.log_usage_kwargs = kwargs
         return {"log-id": 42}, 200
+
+    def get_deployments_for_api_key(self, api_key_id):
+        self.deployments_calls += 1
+        return [{"model_id": 1, "provider_id": 2}]
 
 
 @pytest.fixture
@@ -70,9 +74,8 @@ def _profile_auth(monkeypatch):
     )
     monkeypatch.setattr(main, "authenticate_api_key", lambda headers: auth)
 
-    def fake_request_setup(headers, api_key_id, db=None):
-        db.deployments_db = db
-        return ([{"model_id": 1, "provider_id": 2}], [1])
+    def fake_request_setup(headers, api_key_id, db=None, raw_deployments=None):
+        return (raw_deployments, [1])
 
     monkeypatch.setattr(main, "request_setup", fake_request_setup)
     return db
@@ -98,13 +101,20 @@ async def test_missing_timeout_defaults_to_none(_profile_auth):
 
 
 @pytest.mark.asyncio
-async def test_deployments_comes_from_the_same_session(_profile_auth):
+async def test_deployments_comes_from_the_ref_cache(_profile_auth):
+    """#980 O12: deployment rows are served by the short-TTL ref cache. The
+    DB is queried once per (test, key) — the second call is a cache hit."""
     _, _, _, _, _, raw_deployments = await main.auth_parse_log(
         _request({"model": "m"}), use_profile_auth=True, request_id="req-1"
     )
-
     assert raw_deployments == [{"model_id": 1, "provider_id": 2}]
-    assert _profile_auth.deployments_db is _profile_auth
+    assert _profile_auth.deployments_calls == 1
+
+    _, _, _, _, _, raw_deployments_again = await main.auth_parse_log(
+        _request({"model": "m"}), use_profile_auth=True, request_id="req-2"
+    )
+    assert raw_deployments_again == [{"model_id": 1, "provider_id": 2}]
+    assert _profile_auth.deployments_calls == 1  # second call served from cache
 
 
 @pytest.mark.asyncio

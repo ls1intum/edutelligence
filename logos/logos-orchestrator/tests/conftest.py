@@ -300,3 +300,21 @@ _make_submodule(
         "disable_progress_bar": _noop,
     },
 )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _clear_ref_cache():
+    """The short-TTL ref cache (#980 O12) is process-global: clear it around
+    every test so one test's cached rows never leak into the next."""
+    from logos import refcache
+
+    refcache.get_ref_cache().clear()
+    yield
+    refcache.get_ref_cache().clear()

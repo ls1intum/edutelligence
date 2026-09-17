@@ -116,18 +116,26 @@ def parse_provider_config(name: str) -> dict:
     }
 
 
-def request_setup(headers: dict, api_key_id: int, db: "DBManager | None" = None):
+def request_setup(
+    headers: dict,
+    api_key_id: int,
+    db: "DBManager | None" = None,
+    raw_deployments: "list | None" = None,
+):
     """
     Get available models for the user and normalize provider types.
 
     Pass an already-open `db` to reuse the caller's session/connection
-    instead of checking out a new one from the pool.
+    instead of checking out a new one from the pool, or `raw_deployments`
+    when the caller already has the rows (e.g. from the short-TTL ref
+    cache, #980 O12) and no database work is needed at all.
     """
-    if db is not None:
-        raw_deployments = db.get_deployments_for_api_key(api_key_id)
-    else:
-        with DBManager() as owned_db:
-            raw_deployments = owned_db.get_deployments_for_api_key(api_key_id)
+    if raw_deployments is None:
+        if db is not None:
+            raw_deployments = db.get_deployments_for_api_key(api_key_id)
+        else:
+            with DBManager() as owned_db:
+                raw_deployments = owned_db.get_deployments_for_api_key(api_key_id)
 
     deployments = []
     for deployment in raw_deployments:
