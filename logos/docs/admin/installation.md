@@ -66,6 +66,9 @@ from the Dockerfiles the workflow uses and tag them for a registry the host
 can pull from (e.g. a local registry):
 
 ```bash
+# The build contexts below are repository-root relative — return there
+# first (the guide's working directory is edutelligence/logos):
+cd ..
 REGISTRY=localhost:5000
 IMAGE_TAG=latest
 docker build -t "$REGISTRY/logos:$IMAGE_TAG" -f logos/logos-orchestrator/Dockerfile .
@@ -81,6 +84,7 @@ Set the same `REGISTRY` and `IMAGE_TAG` in `.env`, then start the stack
 node guide):
 
 ```bash
+cd logos
 docker compose --env-file .env up -d
 ```
 
