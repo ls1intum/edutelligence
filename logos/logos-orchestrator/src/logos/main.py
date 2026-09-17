@@ -24,7 +24,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
+from logos.anthropic_compat import (
+    MessagesStreamTranslator,
+    UpstreamDialect,
+    from_message,
+    stream_translator,
+    translate_error,
+    translate_response,
+)
 from logos.auth import AuthContext, authenticate_api_key
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
 from logos.batch_local import local_batch_runner_loop
@@ -2001,12 +2008,12 @@ async def _streaming_response(
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-    # A translated response is an Anthropic event stream regardless of how the
-    # upstream labelled its own, so the client is told what it is actually
-    # about to parse rather than what the upstream sent.
-    translating_messages = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+    # A translated response is an event stream in the client's own dialect
+    # regardless of how the upstream labelled its own, so the client is told
+    # what it is actually about to parse rather than what the upstream sent.
+    translating = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE) or context.messages_upstream
     response_headers["content-type"] = (
-        "text/event-stream" if translating_messages else (upstream_content_type or "text/event-stream")
+        "text/event-stream" if translating else (upstream_content_type or "text/event-stream")
     )
 
     async def http_streamer():
@@ -2016,14 +2023,15 @@ async def _streaming_response(
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
             else None
         )
-        # A Messages request forwarded to an upstream without a Messages route
-        # comes back as a chat/completions or Responses event stream; the
-        # client's SSE parser only understands the Anthropic one.
-        anthropic_stream = (
-            stream_translator(context.anthropic_dialect, model_name=context.model_name)
-            if context.anthropic_dialect is not None
-            else None
-        )
+        # A request forwarded to an upstream that speaks the other dialect
+        # comes back as the other dialect's event stream, and the client's SSE
+        # parser only understands its own.
+        if context.messages_upstream:
+            translated_stream = MessagesStreamTranslator(context.model_name)
+        elif context.anthropic_dialect is not None:
+            translated_stream = stream_translator(context.anthropic_dialect, model_name=context.model_name)
+        else:
+            translated_stream = None
         error_message = None
         ttft_recorded = False
 
@@ -2038,7 +2046,7 @@ async def _streaming_response(
             the bytes on the wire change shape.
             """
             stream_log.feed(chunk)
-            return anthropic_stream.feed(chunk) if anthropic_stream else [chunk]
+            return translated_stream.feed(chunk) if translated_stream else [chunk]
 
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
@@ -2071,11 +2079,26 @@ async def _streaming_response(
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
                         yield client_chunk
-            if anthropic_stream:
-                # Idempotent: a stream that already ended on [DONE] (or on the
-                # Responses API's terminal event) has emitted its message_stop,
-                # and this closes one that simply ran out of bytes.
-                for client_chunk in anthropic_stream.finish():
+            if translated_stream:
+                # A mid-stream failure the executor caught after the first byte
+                # ends the iterator without raising, so it reaches here rather
+                # than the except branch below — and closing the translated
+                # stream normally would hand the client a terminal event, i.e.
+                # a truncated answer that reads as a complete one. On an SSE
+                # upstream the executor also appends an error frame, which the
+                # translator has already turned into one of its own; both calls
+                # are idempotent, so whichever ran first wins.
+                #
+                # Otherwise this is the ordinary close: idempotent again, since
+                # a stream that ended on its protocol's terminal event ([DONE],
+                # response.completed, message_stop) has emitted its own, and
+                # this closes one that simply ran out of bytes.
+                terminal_chunks = (
+                    translated_stream.error(stream_status.error)
+                    if stream_status.error is not None
+                    else translated_stream.finish()
+                )
+                for client_chunk in terminal_chunks:
                     yield client_chunk
         except Exception as exc:
             error_message = str(exc)
@@ -2084,11 +2107,11 @@ async def _streaming_response(
                     for client_chunk in client_chunks(outgoing_chunk):
                         yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
-            # synthetic error frame without corrupting its protocol — in the
-            # dialect the client is reading, which is Anthropic's whenever the
-            # response was being translated.
-            if anthropic_stream:
-                for client_chunk in anthropic_stream.error(str(exc)):
+            # synthetic error frame without corrupting its protocol — and it
+            # has to be in the dialect the client is reading, which the
+            # translator knows and the raw upstream stream does not.
+            if translated_stream:
+                for client_chunk in translated_stream.error(str(exc)):
                     yield client_chunk
             elif upstream_media_type == "text/event-stream":
                 import json as _json
@@ -2438,6 +2461,12 @@ async def _sync_response(
                 if exec_result.success
                 else translate_error(response_payload)
             )
+        # The mirror case, and it needs no error branch: an Anthropic failure
+        # body is ``{"error": {"message", "type"}}`` under a wrapper, which is
+        # the OpenAI shape ``coerce_upstream_error`` has already unwrapped it
+        # to just above.
+        elif context.messages_upstream and exec_result.success and isinstance(response_payload, dict):
+            response_payload = from_message(response_payload, model_name=context.model_name)
 
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
