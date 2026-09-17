@@ -64,43 +64,11 @@ The entire history collapses to **12,591 rows / 3.4 MB** — a factor of 55.
 
 Properties that matter:
 
-- **Whole hours, and only ones that closed six hours ago.** A closed hour does
-  not make its rows immutable — a request forwarded at 04:59 and still running
-  at the 05:05 refresh would be rolled up with no status, duration, tokens or
-  cost, and its effective timestamp puts it below the watermark where the live
-  branch can no longer correct it. Production carries 1,050 such rows in closed
-  hours. Six hours is sized against the request timeout rather than a
-  percentile: a request cannot outlive `LOGOSNODE_INFER_TIMEOUT_SECONDS`, 600 s
-  in production, so the gap is roughly 36× the longest one can still be
-  running.
-- **The boundary is a function of time alone.** Excluding rows by a mutable flag
-  would look tighter and be worse: the rollup would hold what the flag said at
-  refresh time while the reader tested what it says now, so a row that settled
-  in between would belong to neither branch and drop out of the totals. A time
-  boundary partitions the range exactly once regardless of what any row does
-  afterwards.
-
-### What the gap does not cover
-
-Cost settlement has no timeout. It can land days after the request finished —
-production's oldest unsettled completed row is 9.5 days old — so it changes rows
-that are already inside the rollup. Those carry a stale cost until the next
-rebuild.
-
-That is bounded staleness, not a number that stays wrong: `REFRESH` recomputes
-the whole view, so at most one refresh interval separates a late correction from
-the page. `RequestLogStatsRollupTest` pins both halves — that a row past the
-cutoff really is in the rollup and does not follow a change until a refresh, and
-that a request still running is kept on the live side and does.
-
-Removing even that window means tracking mutations, so a changed row leaves the
-rollup and rejoins it. A view rebuilt whole cannot do it: it has no way to
-retract a row's stale contribution, so any "take changed rows live as well"
-rule double-counts them. It needs incremental maintenance over a real table —
-listed under *Still open* below.
+- **Whole hours only.** The partial current hour is never rolled up, so the
+  reader always has the live branch for it.
 - **Ids, not derived values.** `provider_id`/`model_id` stay as ids and the
   reader joins `providers`/`models` live, so a renamed model or a changed
-  privacy level shows up without a refresh.
+  privacy level shows up without a pass.
 - **Sums and counts, never averages.** Averaging pre-averaged hours would weight
   a quiet hour like a busy one.
 
@@ -110,22 +78,52 @@ one shared split point (`logos_stats_rollup_window`). Sharing it is deliberate:
 if two aggregates disagreed by an hour about where the rollup ends, one would
 double-count the overlap and another would drop a gap.
 
-**A stale refresh costs query time, not correctness.** Because the split is
-purely temporal, a lagging or failed refresh moves work back to `log_entry`
-without changing a number. `RequestLogStatsRefreshService` refreshes hourly
-(`REFRESH ... CONCURRENTLY`, guarded by a transaction-scoped advisory lock).
-The transactional half lives in its own bean: Spring applies `@Transactional`
-through a proxy, so a scheduled method calling it on `this` would run with no
-transaction at all — and the advisory lock, being transaction-scoped, would then
-be released the moment it was taken and guard nothing.
+Both bounds are read as scalar subqueries — `(SELECT mv_lo FROM w)` — rather
+than by joining the window into the `FROM` list. That is load-bearing, not
+style. Joined, the bound is a join column and Postgres cannot make it an index
+condition: it materialises every row of the range, token `LATERAL` and cost join
+included, and filters down to the live tail afterwards. On the production
+snapshot that is **1,837 ms against 52 ms** for the same answer.
 
-Sub-hour buckets (the "last hour"/"today" presets) bypass the rollup entirely —
-it cannot express them — and are served from `log_entry` via the expression
-index, which *is* the right tool at that selectivity.
+### Freshness: why a table and not a materialized view
 
-Measured on the snapshot, the aggregates went from 1,769 ms to 22 ms; the merged
-reader answers the 30-day totals in 51 ms against 504 ms live, with a 5.7-hour
-live tail in play.
+A `log_entry` row is not immutable once its hour closes. The orchestrator fills
+in status, response time and tokens when the request finishes, and cost
+settlement can land days later — production's oldest unsettled completed row is
+9.5 days old. A rollup rebuilt wholesale cannot cope with that: it has no way to
+retract a row's stale contribution, so it keeps serving whatever was true when
+it was last built.
+
+So the rollup is a table maintained incrementally, and `log_entry` carries an
+`updated_at` stamped by a trigger. Each pass recomputes exactly the hours whose
+rows changed since the last one:
+
+| | measured on the production snapshot |
+|---|---|
+| initial backfill | 3.7 s |
+| `ALTER TABLE ADD COLUMN updated_at` | 4 ms (no rewrite — the column has no default) |
+| a pass with nothing changed | **2.9 ms** |
+| a pass after a late settlement on a 10-month-old row | **110 ms** (1 hour, 2 rows) |
+
+That is why it runs every minute rather than hourly, and why a settlement days
+after the fact is picked up as readily as a request that just finished.
+
+Two things bound what can still be stale:
+
+- **The pass interval** — a row that changes between passes is stale for about a
+  minute. A pass also holds its cutoff one `write-lag` (a minute) behind `now()`,
+  so a write transaction that started before the cutoff but commits after it
+  cannot be skipped; that costs one more pass of latency and is why the lag is a
+  parameter rather than a constant.
+- **The reader's freshness guard** — if no pass has completed within 15 minutes,
+  `logos_stats_rollup_window` returns an empty window and every aggregate reads
+  `log_entry`. A rollup nobody maintains stops being trusted: the page gets
+  slow, not wrong.
+
+`RequestLogStatsRollupTest` pins all of it — that a changed row is corrected by
+the next pass, that a row moving to a later hour leaves no count behind in the
+hour it left, and that an aged state row sends every aggregate live with
+identical numbers.
 
 ### Three queries nothing rendered
 
@@ -213,13 +211,6 @@ identical values, identical totals. Snapshot timing 4,746 ms -> 693 ms.
   415k rows. Worth a look, but it is a planner/statistics question rather than a
   missing index, and the view fix already took the query out of the "unusable"
   range.
-- **Incremental rollup refresh.** `REFRESH ... CONCURRENTLY` rebuilds all 12.5k
-  rows hourly. That is cheap today, but a real table upserted per changed hour
-  would buy two things at once: a refresh proportional to new traffic rather
-  than to history, and the ability to retract a row's contribution when it
-  changes — which is what would close the late-settlement staleness window
-  above. It needs a change marker on `log_entry` (an `updated_at` maintained by
-  a trigger would do) so the upsert knows which hours to recompute.
 - **`provider_snapshots`.** 530k rows / 10 GB for a 7-day retention window, 9.5 GB
   of it JSONB payload. Nothing on the statistics page reads the history any more
   (the VRAM-remaining chart that did has been removed), only the latest sample

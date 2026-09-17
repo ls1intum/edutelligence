@@ -44,6 +44,9 @@ import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsSe
     // so it cannot race the explicit refreshes below, while the scheduled entry
     // point stays callable for the test that drives it directly.
     "logos.stats.rollup.refresh-cron=-",
+    // Nothing else writes log_entry here, so a pass can read right up to now()
+    // and the tests see their own changes in the very next pass.
+    "logos.stats.rollup.write-lag=0",
     "logos.auth.roles.logos-admin=itg-admin",
     "logos.auth.roles.app-admin=chair-member",
     "logos.auth.sync-debounce-minutes=5"
@@ -91,6 +94,26 @@ class RequestLogStatsRollupTest {
         // nothing would silently turn the "after" run into a second live run and
         // the comparison would pass without testing anything.
         assertThat(rollupRowCount()).isGreaterThan(0);
+    }
+
+    private long totalRequests() {
+        Map<String, Object> totals = (Map<String, Object>) stats(query(24, null, null)).get("totals");
+        return ((Number) totals.get("requests")).longValue();
+    }
+
+    private int statusCount(String status) {
+        Map<String, Object> counts = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
+        Number n = (Number) counts.get(status);
+        return n == null ? 0 : n.intValue();
+    }
+
+    /** Rows the rollup holds for the hour `hoursAgo` before the current one. */
+    private int rolledUpRowsForHour(int hoursAgo) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM log_entry_hourly_stats"
+            + " WHERE bucket_hour = date_trunc('hour', NOW()) - make_interval(hours => ?)",
+            Integer.class, hoursAgo);
+        return n == null ? 0 : n;
     }
 
     private int rollupRowCount() {
@@ -204,7 +227,7 @@ class RequestLogStatsRollupTest {
         // range boundary between the seed's two oldest rows.
         String unalignedStart = Instant.now()
             .truncatedTo(ChronoUnit.HOURS)
-            .minus(13, ChronoUnit.HOURS)
+            .minus(5, ChronoUnit.HOURS)
             .plus(15, ChronoUnit.MINUTES)
             .toString();
 
@@ -223,18 +246,12 @@ class RequestLogStatsRollupTest {
     }
 
     @Test
-    void a_row_that_changes_after_the_cutoff_is_corrected_by_the_next_refresh() {
-        // What the rollup actually guarantees, pinned so it cannot quietly get
-        // worse. The six-hour cutoff keeps a *running* request out of the rollup
-        // — production's per-request timeout is 600 s, so a request cannot still
-        // be in flight six hours later. Cost settlement has no such bound: it
-        // can land days after the request finished, and a row it touches is
-        // already inside the rollup by then.
-        //
-        // So this seeds a row well past the cutoff, rolls it up, changes it, and
-        // asserts both halves of the contract: the change is not visible while
-        // the rollup is stale, and the next refresh — a full rebuild — picks it
-        // up. Bounded staleness, not a permanently wrong number.
+    void a_row_that_changes_after_it_was_rolled_up_is_corrected_by_the_next_pass() {
+        // The reason the rollup is maintained incrementally instead of rebuilt
+        // wholesale. Cost settlement has no timeout and can land days after the
+        // request finished, by which time the row is long inside the rollup. A
+        // view rebuilt from scratch would keep serving whatever it last saw; a
+        // pass that recomputes the hours whose rows changed picks it up.
         jdbc.update("""
             INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
                                    timestamp_request, timestamp_forwarding, timestamp_response,
@@ -247,74 +264,87 @@ class RequestLogStatsRollupTest {
             """);
         try {
             populateRollup();
-            Map<String, Object> rolled = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
-            assertThat(((Number) rolled.get("error")).intValue()).isEqualTo(3);
+            assertThat(statusCount("error")).isEqualTo(3);
 
-            // The row is past the cutoff, so it is in the rollup rather than the
-            // live branch — which is what makes this test test anything at all.
-            Integer inRollup = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM log_entry_hourly_stats
-                 WHERE bucket_hour = date_trunc('hour', NOW()) - INTERVAL '9 hours'
-                   AND result_status = 'error'
-                """, Integer.class);
-            assertThat(inRollup).isGreaterThan(0);
+            // It is genuinely in the rollup rather than the live branch, which is
+            // what makes the rest of this test test anything at all.
+            assertThat(rolledUpRowsForHour(9)).isGreaterThan(0);
 
             jdbc.update("UPDATE log_entry SET result_status = 'success' WHERE id = 9408");
 
-            // Stale until rebuilt: the rollup still carries the old status.
-            Map<String, Object> stale = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
-            assertThat(((Number) stale.get("error")).intValue()).isEqualTo(3);
-
-            // And the rebuild is what corrects it.
+            // One pass, and the aggregates follow — no full rebuild involved.
             assertThat(refreshService.refreshNow()).isTrue();
-            Map<String, Object> fresh = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
-            assertThat(((Number) fresh.get("error")).intValue()).isEqualTo(2);
-            assertThat(((Number) fresh.get("success")).intValue()).isEqualTo(6);
+            assertThat(statusCount("error")).isEqualTo(2);
+            assertThat(statusCount("success")).isEqualTo(6);
         } finally {
             jdbc.update("DELETE FROM log_entry WHERE id = 9408");
         }
     }
 
     @Test
-    void a_request_still_running_at_the_refresh_stays_on_the_live_side() {
-        // The case the cutoff exists for. A request forwarded inside the last six
-        // hours is not rolled up however often the view is rebuilt, so when it
-        // finishes the live branch reports it immediately — no refresh needed.
+    void a_row_that_moves_to_a_later_hour_leaves_no_count_behind() {
+        // A request enqueued at the end of one hour and forwarded in the next
+        // changes which bucket it belongs to, because the effective timestamp
+        // prefers timestamp_forwarding. The pass has to recompute the hour it
+        // left as well as the one it joined, or the old hour keeps counting it
+        // and the request shows up twice.
         jdbc.update("""
             INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
                                    timestamp_request, timestamp_forwarding, timestamp_response,
                                    was_cold_start, user_id, team_id)
-            VALUES (9409, 'roll-inflight', 3001, 5001, 6001, NULL,
-                    date_trunc('hour', NOW()) - INTERVAL '2 hours',
-                    date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '1 second',
-                    NULL, false, 1001, 2001)
+            VALUES (9410, 'roll-straddle', 3001, 5001, 6001, NULL,
+                    date_trunc('hour', NOW()) - INTERVAL '7 hours' + INTERVAL '59 minutes',
+                    NULL, NULL, false, 1001, 2001)
             """);
         try {
             populateRollup();
-            Integer inRollup = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM log_entry_hourly_stats
-                 WHERE bucket_hour = date_trunc('hour', NOW()) - INTERVAL '2 hours'
-                """, Integer.class);
-            assertThat(inRollup).isZero();
+            long before = totalRequests();
+            assertThat(rolledUpRowsForHour(7)).isGreaterThan(0);
 
-            Map<String, Object> before = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
-            assertThat(((Number) before.get("unknown")).intValue()).isEqualTo(1);
-
+            // Forwarded a minute later, which is the next hour.
             jdbc.update("""
                 UPDATE log_entry
-                   SET result_status = 'success',
-                       timestamp_response = date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '30 seconds'
-                 WHERE id = 9409
+                   SET timestamp_forwarding = date_trunc('hour', NOW()) - INTERVAL '6 hours',
+                       timestamp_response   = date_trunc('hour', NOW()) - INTERVAL '6 hours' + INTERVAL '3 seconds',
+                       result_status = 'success'
+                 WHERE id = 9410
                 """);
+            assertThat(refreshService.refreshNow()).isTrue();
 
-            // No refresh in between: the live branch owns this row.
-            Map<String, Object> after = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
-            assertThat(after.get("unknown")).isNull();
-            assertThat(((Number) after.get("success")).intValue()).isEqualTo(6);
+            // Counted once, in its new hour, and the hour it left is empty again.
+            assertThat(totalRequests()).isEqualTo(before);
+            assertThat(rolledUpRowsForHour(7)).isZero();
+            assertThat(rolledUpRowsForHour(6)).isGreaterThan(0);
         } finally {
-            jdbc.update("DELETE FROM log_entry WHERE id = 9409");
+            jdbc.update("DELETE FROM log_entry WHERE id = 9410");
         }
     }
+
+    @Test
+    void a_rollup_nobody_maintains_stops_being_used() {
+        // The freshness guard. If passes stop — the scheduler is off, the process
+        // died, the database was unreachable — the rollup silently ages, and an
+        // aged rollup is exactly the thing that would serve wrong numbers. The
+        // reader measures the state row's age and drops to log_entry instead, so
+        // the failure mode is a slow page rather than a wrong one.
+        populateRollup();
+        Map<String, Object> fresh = stats(query(24, null, null));
+
+        // Backdate the state row well past the guard without touching the data.
+        jdbc.update("UPDATE log_entry_rollup_state SET processed_through = now() - INTERVAL '2 hours'");
+        try {
+            assertThat(rollupRowCount()).isGreaterThan(0);
+            Map<String, Object> guarded = stats(query(24, null, null));
+
+            // Same numbers, now read entirely from log_entry.
+            assertThat(guarded.get("totals")).isEqualTo(fresh.get("totals"));
+            assertThat(guarded.get("statusCounts")).isEqualTo(fresh.get("statusCounts"));
+            assertThat(guarded.get("timeSeries")).isEqualTo(fresh.get("timeSeries"));
+        } finally {
+            jdbc.update("UPDATE log_entry_rollup_state SET processed_through = now()");
+        }
+    }
+
 
     @Test
     void the_scheduled_entry_point_refreshes_through_the_transaction_proxy() {

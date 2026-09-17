@@ -624,6 +624,15 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * collapses the window to empty, which makes the whole query read log_entry
      * and is how the sub-hour buckets (60s..1800s) are served.
      *
+     * Both bounds are read as scalar subqueries - (SELECT mv_lo FROM w) - and
+     * not by joining w into the FROM list, which is load-bearing rather than
+     * stylistic. Joined, the bound is a join column, so Postgres cannot turn it
+     * into an index condition: it materialises every row in the range, token
+     * LATERAL and cost join included, and only then filters down to the handful
+     * the live tail actually wants. Measured on a production snapshot that is
+     * 1837 ms against 52 ms, for the same answer. As a scalar subquery it is an
+     * InitPlan evaluated once, so idx_log_entry_effective_ts carries the tail.
+     *
      * Averages come out of the rollup as sum over count, never as an average of
      * hourly averages, which would weight a quiet hour like a busy one.
      *
@@ -640,8 +649,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    s.queue_seconds_sum, s.queue_seconds_count,
                    s.run_seconds_sum, s.run_seconds_count,
                    s.total_tokens, s.cost_micro_cents
-            FROM log_entry_hourly_stats s, w
-            WHERE s.bucket_hour >= w.mv_lo AND s.bucket_hour < w.mv_hi
+            FROM log_entry_hourly_stats s
+            WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
             UNION ALL
@@ -662,10 +671,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                 WHERE ut.log_entry_id = le.id AND tt.name = 'total_tokens'
             ) tok ON TRUE
             LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
-            CROSS JOIN w
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
-              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  w.mv_lo
-                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= w.mv_hi)
+              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
+                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         )
@@ -704,16 +712,16 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, TRUE)),
         parts AS (
             SELECT s.result_status, s.requests
-            FROM log_entry_hourly_stats s, w
-            WHERE s.bucket_hour >= w.mv_lo AND s.bucket_hour < w.mv_hi
+            FROM log_entry_hourly_stats s
+            WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
             UNION ALL
             SELECT le.result_status, 1::bigint
-            FROM log_entry le, w
+            FROM log_entry le
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
-              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  w.mv_lo
-                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= w.mv_hi)
+              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
+                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         )
@@ -737,8 +745,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         parts AS (
             SELECT s.model_id, s.provider_id, s.was_cold_start, s.requests, s.error_count,
                    s.queue_seconds_sum, s.queue_seconds_count, s.run_seconds_sum, s.run_seconds_count
-            FROM log_entry_hourly_stats s, w
-            WHERE s.bucket_hour >= w.mv_lo AND s.bucket_hour < w.mv_hi
+            FROM log_entry_hourly_stats s
+            WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
             UNION ALL
@@ -751,10 +759,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END,
                    (le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL)::int::bigint
-            FROM log_entry le, w
+            FROM log_entry le
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
-              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  w.mv_lo
-                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= w.mv_hi)
+              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
+                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         )
@@ -794,8 +802,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         parts AS (
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM s.bucket_hour) / :bucketSec) * :bucketSec) AS bucket_ts,
                    s.provider_id, s.requests, s.run_seconds_sum, s.run_seconds_count
-            FROM log_entry_hourly_stats s, w
-            WHERE s.bucket_hour >= w.mv_lo AND s.bucket_hour < w.mv_hi
+            FROM log_entry_hourly_stats s
+            WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
             UNION ALL
@@ -804,10 +812,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
                         THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END,
                    (le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL)::int::bigint
-            FROM log_entry le, w
+            FROM log_entry le
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
-              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  w.mv_lo
-                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= w.mv_hi)
+              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
+                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
         ),
@@ -851,18 +859,18 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         parts AS (
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM s.bucket_hour) / :bucketSec) * :bucketSec) AS bucket_ts,
                    s.model_id, s.requests
-            FROM log_entry_hourly_stats s, w
-            WHERE s.bucket_hour >= w.mv_lo AND s.bucket_hour < w.mv_hi
+            FROM log_entry_hourly_stats s
+            WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
               AND s.model_id IS NOT NULL
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
             UNION ALL
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)) / :bucketSec) * :bucketSec),
                    le.model_id, 1::bigint
-            FROM log_entry le, w
+            FROM log_entry le
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
-              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  w.mv_lo
-                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= w.mv_hi)
+              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
+                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
               AND le.model_id IS NOT NULL
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))

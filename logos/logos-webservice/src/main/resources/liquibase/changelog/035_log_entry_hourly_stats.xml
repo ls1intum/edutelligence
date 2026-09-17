@@ -32,24 +32,51 @@
          and the short presets (last hour, today) cheap, which is exactly the
          selectivity range where an index does win.
 
-         Freshness: the view stops six hours short of now, so the partial head
-         hour, the last six hours and everything newer than the last refresh are
-         read from log_entry and merged on top. The split is a function of time
-         alone, so it partitions the range exactly once and a lagging refresh
-         only moves work back to the base table - it cannot double-count a row
-         or drop one. The six-hour gap is what keeps rows that are still being
-         written out of the rollup at all; what it cannot cover is a late cost
-         settlement, which leaves that row's cost stale until the next rebuild.
-         Both are spelled out on the rollup changeSet below.
-         RequestLogStatsRefreshService refreshes it hourly. -->
+         FRESHNESS
+
+         A log_entry row is not immutable once its hour closes. The orchestrator
+         fills in status, response time and tokens when the request finishes, and
+         cost settlement can land days later. A rollup rebuilt wholesale cannot
+         cope with that: it has no way to retract a row's stale contribution, so
+         it would keep serving whatever was true when it was last built.
+
+         So the rollup is not a materialized view but a table maintained
+         incrementally, and log_entry carries an updated_at stamped by a trigger.
+         Each pass recomputes exactly the hours whose rows changed since the last
+         pass; everything else is left alone. A pass is therefore proportional to
+         what moved rather than to history, which is what makes running it every
+         minute affordable, and a late settlement is picked up as readily as a
+         request that just finished.
+
+         Two things bound what can still be stale:
+
+           * The pass interval. A row that changes between passes is stale until
+             the next one - about a minute.
+           * The reader's freshness guard. If no pass has completed recently
+             (RequestLogStatsRefreshService stopped, the database was down, the
+             job is disabled) logos_stats_rollup_window returns an empty window
+             and every aggregate reads log_entry directly. A rollup that stops
+             being maintained therefore stops being trusted: the page gets slow,
+             not wrong.
+
+         The partial current hour is never rolled up, so the reader always has
+         the live branch for it.
+
+         The invariant the reader leans on is that every closed hour below
+         processed_through has been through a pass. It holds because the
+         watermark is derived from a pass's own cutoff and the backfill below
+         establishes the first one, and because rows only ever arrive stamped
+         now(): the orchestrator never back-dates, so a row cannot appear inside
+         an hour that has already been rolled up. Fixtures that do back-date have
+         to age the state row, which is why the operations seed does. -->
 
     <!-- log_entry_cost calls logos_price_usage, which reaches for `providers`
-         without a schema. CREATE and REFRESH MATERIALIZED VIEW run with a
-         restricted search_path, so any rollup over that view fails with
-         "relation providers does not exist" until the functions carry their own
-         search_path. Pinning it is the fix and is worth having on its own: a
-         function whose meaning depends on the caller's search_path is a latent
-         hazard well beyond this view. -->
+         without a schema. A rollup over that view runs the function from
+         contexts with a restricted search_path, which fails with "relation
+         providers does not exist" until the functions carry their own. Pinning
+         it is the fix and is worth having on its own: a function whose meaning
+         depends on the caller's search_path is a latent hazard well beyond this
+         view. -->
     <changeSet id="035-pin-pricing-function-search-path" author="logos">
         <sql splitStatements="false"><![CDATA[
             DO $$
@@ -104,117 +131,277 @@
         </rollback>
     </changeSet>
 
-    <!-- The rollup itself.
+    <!-- The change marker the incremental rollup reads.
 
-         Grain is (hour, model, provider, team, user, status, cold start): every
-         dimension the page groups or filters by, so one view answers the totals,
-         the status counts, the model breakdown, both time series and the
-         cold/warm split. provider_id and model_id stay as ids rather than baked
-         privacy levels or names, so the reader joins providers/models live and a
-         renamed model or a changed privacy level needs no refresh to show up.
+         Deliberately a trigger rather than an application write: log_entry is
+         updated from several places in the orchestrator (forwarding, response,
+         token accounting, cost settlement) and a marker that can be forgotten in
+         one of them is worse than none, because the rollup would silently stop
+         noticing that kind of change.
 
-         Averages are stored as sum plus count, never as an average: averaging
-         pre-averaged hours would weight a quiet hour like a busy one.
-
-         The cutoff is the start of the hour six hours ago, not the start of the
-         current hour, and the gap is the point. A closed hour does not make its
-         rows immutable: a request forwarded at 04:59 and still running when the
-         05:05 refresh lands would be rolled up with no status, no duration, no
-         tokens and no cost, and its effective timestamp would put it below the
-         watermark where the live branch can no longer correct it. Production
-         carries 1,050 rows sitting in closed hours with no status.
-
-         Six hours is sized against the request timeout, not against a
-         percentile: a request cannot outlive LOGOSNODE_INFER_TIMEOUT_SECONDS,
-         which is 600 s in production, so six hours is roughly 36 times the
-         longest a request can still be running. Raise the interval if that
-         timeout is ever raised past an hour.
-
-         What the gap does not bound is cost settlement, which has no timeout and
-         can land days after the request finished - production's oldest unsettled
-         completed row is 9.5 days old. Such a row is already inside the rollup
-         when it changes, so its cost is stale until the next rebuild. That is
-         bounded staleness rather than a wrong number that stays wrong: REFRESH
-         recomputes the whole view, so at most one refresh interval separates a
-         late correction from the page. Both halves of this are pinned by
-         RequestLogStatsRollupTest.
-
-         The boundary stays purely a function of time on purpose. Excluding rows
-         by a mutable flag instead would look tighter and be worse: the rollup
-         would hold what the flag said at refresh time while the reader tested
-         what it says now, so a row that settled in between would belong to
-         neither branch and disappear from the totals outright. A time boundary
-         partitions the range exactly once, whatever any row does afterwards.
-         Tracking mutations properly - so that a changed row leaves the rollup
-         and rejoins it - needs incremental maintenance over a real table rather
-         than a view rebuilt whole; see docs/page-load-times.md.
-
-         max(bucket_hour) + 1 hour is therefore a watermark the reader can trust,
-         and it reads everything above it from log_entry.
-
-         Created WITH DATA: an unpopulated materialized view raises on SELECT
-         rather than returning nothing, so the reader could not fall back. The
-         one-off build cost is roughly a minute on production. -->
-    <changeSet id="035-log-entry-hourly-stats" author="logos">
+         The column is added without a default on purpose. A DEFAULT now() is not
+         a constant, so Postgres could not use its fast-default path and would
+         rewrite all 13 GB of the table. Existing rows are therefore left NULL,
+         which reads correctly: NULL means "not touched since the marker existed",
+         and the backfill below rolls those rows up once. -->
+    <changeSet id="035-log-entry-updated-at" author="logos">
         <preConditions onFail="MARK_RAN">
-            <sqlCheck expectedResult="0">
-                SELECT COUNT(*) FROM pg_matviews WHERE matviewname = 'log_entry_hourly_stats'
-            </sqlCheck>
+            <not><columnExists tableName="log_entry" columnName="updated_at"/></not>
         </preConditions>
         <sql splitStatements="false"><![CDATA[
-            CREATE MATERIALIZED VIEW log_entry_hourly_stats AS
-            SELECT
-                date_trunc('hour', COALESCE(le.timestamp_forwarding,
-                                            le.timestamp_request,
-                                            le.timestamp_response))          AS bucket_hour,
-                le.model_id,
-                le.provider_id,
-                le.team_id,
-                le.user_id,
-                le.result_status,
-                COALESCE(le.was_cold_start, FALSE)                           AS was_cold_start,
-                COUNT(*)                                                     AS requests,
-                SUM(CASE WHEN le.timestamp_request IS NOT NULL
-                          AND le.timestamp_forwarding IS NOT NULL
-                         THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
-                    END)                                                     AS queue_seconds_sum,
-                COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
-                                   AND le.timestamp_forwarding IS NOT NULL)  AS queue_seconds_count,
-                SUM(CASE WHEN le.timestamp_forwarding IS NOT NULL
-                          AND le.timestamp_response IS NOT NULL
-                         THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
-                    END)                                                     AS run_seconds_sum,
-                COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL
-                                   AND le.timestamp_response IS NOT NULL)    AS run_seconds_count,
-                COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
-                                    OR (le.error_message IS NOT NULL
-                                        AND le.error_message <> ''))         AS error_count,
-                COALESCE(SUM(tok.total_tokens), 0)::bigint                   AS total_tokens,
-                COALESCE(SUM(lec.cost_micro_cents), 0)::bigint               AS cost_micro_cents
-            FROM log_entry le
-            LEFT JOIN LATERAL (
-                SELECT SUM(ut.token_count) AS total_tokens
-                FROM usage_tokens ut
-                JOIN token_types tt ON tt.id = ut.type_id
-                WHERE ut.log_entry_id = le.id
-                  AND tt.name = 'total_tokens'
-            ) tok ON TRUE
-            LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
-            WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
-                  < date_trunc('hour', now()) - interval '6 hours'
-            GROUP BY 1, 2, 3, 4, 5, 6, 7;
+            ALTER TABLE log_entry ADD COLUMN updated_at timestamptz;
+
+            CREATE OR REPLACE FUNCTION logos_log_entry_stamp_updated_at()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            SET search_path = public, pg_catalog
+            AS $$
+            BEGIN
+                NEW.updated_at := now();
+                RETURN NEW;
+            END;
+            $$;
+
+            CREATE TRIGGER trg_log_entry_updated_at
+                BEFORE INSERT OR UPDATE ON log_entry
+                FOR EACH ROW
+                EXECUTE FUNCTION logos_log_entry_stamp_updated_at();
         ]]></sql>
-        <!-- REFRESH MATERIALIZED VIEW CONCURRENTLY requires a unique index over
-             the grain; it is also what keeps the grain honest. -->
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_log_entry_updated_at ON log_entry;</sql>
+            <sql>DROP FUNCTION IF EXISTS logos_log_entry_stamp_updated_at();</sql>
+            <sql>ALTER TABLE log_entry DROP COLUMN IF EXISTS updated_at;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- What each pass scans: the rows changed since the previous one. Partial,
+         because the historical rows the backfill covers are NULL here and a pass
+         never looks for them again. -->
+    <changeSet id="035-log-entry-updated-at-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_updated_at"/></not>
+        </preConditions>
         <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_updated_at
+                ON log_entry (updated_at) WHERE updated_at IS NOT NULL;
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_updated_at;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- The rollup itself, plus the two functions that maintain and read it.
+
+         Grain is (hour, model, provider, team, user, status, cold start): every
+         dimension the page groups or filters by, so one table answers the
+         totals, the status counts, the model breakdown, both time series and the
+         cold/warm split. provider_id and model_id stay as ids rather than baked
+         privacy levels or names, so the reader joins providers/models live and a
+         renamed model or a changed privacy level needs no pass to show up.
+
+         Averages are stored as sum plus count, never as an average: averaging
+         pre-averaged hours would weight a quiet hour like a busy one. -->
+    <changeSet id="035-log-entry-hourly-stats" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="log_entry_hourly_stats"/></not>
+        </preConditions>
+        <sql splitStatements="false"><![CDATA[
+            CREATE TABLE log_entry_hourly_stats (
+                bucket_hour          timestamptz NOT NULL,
+                model_id             integer,
+                provider_id          integer,
+                team_id              integer,
+                user_id              integer,
+                result_status        result_status_enum,
+                was_cold_start       boolean     NOT NULL,
+                requests             bigint      NOT NULL,
+                queue_seconds_sum    double precision,
+                queue_seconds_count  bigint      NOT NULL,
+                run_seconds_sum      double precision,
+                run_seconds_count    bigint      NOT NULL,
+                error_count          bigint      NOT NULL,
+                total_tokens         bigint      NOT NULL,
+                cost_micro_cents     bigint      NOT NULL
+            );
+
+            -- NULLS NOT DISTINCT because most of the grain is nullable: without
+            -- it two rows for the same (hour, no model, no team) would both be
+            -- allowed and the hour would silently double.
             CREATE UNIQUE INDEX ux_log_entry_hourly_stats_grain
                 ON log_entry_hourly_stats (bucket_hour, model_id, provider_id, team_id,
-                                           user_id, result_status, was_cold_start);
-        </sql>
-        <sql>
+                                           user_id, result_status, was_cold_start)
+                NULLS NOT DISTINCT;
+
             CREATE INDEX idx_log_entry_hourly_stats_bucket
                 ON log_entry_hourly_stats (bucket_hour);
-        </sql>
+
+            -- One row. processed_through is the instant the last completed pass
+            -- read up to: everything changed at or before it is reflected in the
+            -- table above, and it is what the reader's freshness guard measures.
+            CREATE TABLE log_entry_rollup_state (
+                only_row           boolean     PRIMARY KEY DEFAULT TRUE,
+                processed_through  timestamptz NOT NULL,
+                CONSTRAINT log_entry_rollup_state_single CHECK (only_row)
+            );
+        ]]></sql>
+
+        <!-- Recompute a given set of hours from scratch: delete what is there and
+             aggregate it again. Delete-then-insert rather than an upsert because
+             a recomputed hour can lose grain rows as well as gain them - a row
+             whose status moved from NULL to success leaves its old (hour, NULL)
+             group behind, and an upsert would strand it.
+
+             One function so the backfill and every incremental pass share a
+             single definition of the aggregate; two copies would drift and the
+             drift would only show as a slow disagreement between old and new
+             hours. -->
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_stats_rollup_apply(p_hours timestamptz[])
+            RETURNS bigint
+            LANGUAGE plpgsql
+            SET search_path = public, pg_catalog
+            AS $$
+            DECLARE
+                affected bigint;
+            BEGIN
+                IF p_hours IS NULL OR array_length(p_hours, 1) IS NULL THEN
+                    RETURN 0;
+                END IF;
+
+                DELETE FROM log_entry_hourly_stats s
+                 WHERE s.bucket_hour = ANY (p_hours);
+
+                INSERT INTO log_entry_hourly_stats (
+                    bucket_hour, model_id, provider_id, team_id, user_id,
+                    result_status, was_cold_start, requests,
+                    queue_seconds_sum, queue_seconds_count,
+                    run_seconds_sum, run_seconds_count,
+                    error_count, total_tokens, cost_micro_cents)
+                SELECT
+                    date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                le.timestamp_request,
+                                                le.timestamp_response)),
+                    le.model_id,
+                    le.provider_id,
+                    le.team_id,
+                    le.user_id,
+                    le.result_status,
+                    COALESCE(le.was_cold_start, FALSE),
+                    COUNT(*),
+                    SUM(CASE WHEN le.timestamp_request IS NOT NULL
+                              AND le.timestamp_forwarding IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                        END),
+                    COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
+                                       AND le.timestamp_forwarding IS NOT NULL),
+                    SUM(CASE WHEN le.timestamp_forwarding IS NOT NULL
+                              AND le.timestamp_response IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+                        END),
+                    COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL
+                                       AND le.timestamp_response IS NOT NULL),
+                    COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
+                                        OR (le.error_message IS NOT NULL
+                                            AND le.error_message <> '')),
+                    COALESCE(SUM(tok.total_tokens), 0)::bigint,
+                    COALESCE(SUM(lec.cost_micro_cents), 0)::bigint
+                FROM log_entry le
+                LEFT JOIN LATERAL (
+                    SELECT SUM(ut.token_count) AS total_tokens
+                    FROM usage_tokens ut
+                    JOIN token_types tt ON tt.id = ut.type_id
+                    WHERE ut.log_entry_id = le.id
+                      AND tt.name = 'total_tokens'
+                ) tok ON TRUE
+                LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
+                WHERE date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                  le.timestamp_request,
+                                                  le.timestamp_response)) = ANY (p_hours)
+                GROUP BY 1, 2, 3, 4, 5, 6, 7;
+
+                GET DIAGNOSTICS affected = ROW_COUNT;
+                RETURN affected;
+            END;
+            $$;
+        ]]></sql>
+
+        <!-- One incremental pass, and the only thing that writes the state row.
+
+             Dirty hours come from two places:
+
+               * the hours of every row whose updated_at moved since the last
+                 pass. Both the request hour and the effective hour are taken,
+                 and everything between: filling in timestamp_forwarding can move
+                 a row to a later bucket, and the bucket it left has to be
+                 recomputed too or its count never comes back down.
+               * the hours that closed since the last pass, which have no changed
+                 row of their own but were previously excluded as partial.
+
+             The current hour is always excluded - it is still filling, and the
+             reader has the live branch for it.
+
+             p_write_lag is what keeps a concurrent writer from being missed.
+             updated_at is a transaction timestamp, so a transaction that started
+             before this pass's cutoff but commits after it would be invisible to
+             the pass's snapshot and yet stamped at or below the cutoff - the pass
+             would advance past a row it never saw, and no later pass would look
+             at it again. Holding the cutoff a lag behind now() closes that as
+             long as the lag exceeds the longest write transaction on log_entry,
+             which the orchestrator keeps to single-row inserts and updates. The
+             cost is that a change is picked up one lag later, which is why the
+             lag is a parameter: tests pass zero, production a minute. -->
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_stats_rollup_pass(p_write_lag interval)
+            RETURNS TABLE (hours_rebuilt bigint, rows_written bigint)
+            LANGUAGE plpgsql
+            SET search_path = public, pg_catalog
+            AS $$
+            DECLARE
+                v_last    timestamptz;
+                v_cutoff  timestamptz := now() - p_write_lag;
+                v_open    timestamptz := date_trunc('hour', now());
+                v_hours   timestamptz[];
+                v_written bigint;
+            BEGIN
+                SELECT processed_through INTO v_last FROM log_entry_rollup_state;
+                IF v_last IS NULL THEN
+                    RAISE EXCEPTION 'log_entry_rollup_state is empty; the rollup was never initialised';
+                END IF;
+
+                SELECT COALESCE(array_agg(DISTINCT h), '{}')
+                  INTO v_hours
+                  FROM (
+                        SELECT generate_series(
+                                   LEAST(date_trunc('hour', le.timestamp_request),
+                                         date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                     le.timestamp_request,
+                                                                     le.timestamp_response))),
+                                   GREATEST(date_trunc('hour', le.timestamp_request),
+                                            date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                        le.timestamp_request,
+                                                                        le.timestamp_response))),
+                                   interval '1 hour') AS h
+                          FROM log_entry le
+                         WHERE le.updated_at > v_last
+                           AND le.updated_at <= v_cutoff
+                        UNION
+                        SELECT generate_series(date_trunc('hour', v_last), v_open - interval '1 hour',
+                                               interval '1 hour')
+                       ) dirty
+                 WHERE h IS NOT NULL
+                   AND h < v_open;
+
+                v_written := logos_stats_rollup_apply(v_hours);
+
+                UPDATE log_entry_rollup_state SET processed_through = v_cutoff;
+
+                hours_rebuilt := COALESCE(array_length(v_hours, 1), 0);
+                rows_written  := v_written;
+                RETURN NEXT;
+            END;
+            $$;
+        ]]></sql>
+
         <!-- The single split point between "read the rollup" and "read
              log_entry", shared by every statistics aggregate.
 
@@ -228,19 +415,30 @@
                       03:43 must not pull in all of the 03:00 bucket, so that
                       partial head hour stays with the live side.
                mv_hi  exclusive upper bound: the last hour the range covers,
-                      capped at the rollup watermark (max bucket + 1h). Floored
-                      at mv_lo so that an empty or lagging rollup yields an empty
-                      window rather than an inverted one - which is what makes
-                      "live covers everything below mv_lo or at/above mv_hi"
-                      exactly a partition, with no overlap and no gap.
+                      capped at the rollup watermark. Floored at mv_lo so that an
+                      empty or lagging rollup yields an empty window rather than
+                      an inverted one - which is what makes "live covers
+                      everything below mv_lo or at/above mv_hi" exactly a
+                      partition, with no overlap and no gap.
 
-             p_use_rollup = false collapses the window to empty and sends the
-             whole query to log_entry; that is how sub-hour buckets are served. -->
+             The watermark is the last pass's cutoff hour, not max(bucket_hour):
+             an hour with no traffic writes no row, and reading the maximum would
+             silently hand every later hour back to the live branch.
+
+             The freshness guard is the second half of the story. If no pass has
+             completed within p_max_staleness the window collapses to empty and
+             the whole query reads log_entry. A rollup nobody maintains is a
+             rollup nobody should trust, and this is what turns "the refresher
+             died" into a slow page rather than a wrong one.
+
+             p_use_rollup = false collapses the window the same way; that is how
+             sub-hour buckets are served. -->
         <sql splitStatements="false"><![CDATA[
             CREATE OR REPLACE FUNCTION logos_stats_rollup_window(
                 p_start timestamptz,
                 p_end timestamptz,
-                p_use_rollup boolean
+                p_use_rollup boolean,
+                p_max_staleness interval DEFAULT interval '15 minutes'
             )
             RETURNS TABLE (mv_lo timestamptz, mv_hi timestamptz)
             LANGUAGE sql
@@ -252,24 +450,52 @@
                                 THEN p_start
                                 ELSE date_trunc('hour', p_start) + interval '1 hour'
                            END AS mv_lo
+                ),
+                watermark AS (
+                    SELECT CASE
+                               WHEN NOT p_use_rollup THEN '-infinity'::timestamptz
+                               WHEN s.processed_through IS NULL THEN '-infinity'::timestamptz
+                               WHEN now() - s.processed_through > p_max_staleness
+                                   THEN '-infinity'::timestamptz
+                               ELSE date_trunc('hour', s.processed_through)
+                           END AS ts
+                    FROM (SELECT processed_through FROM log_entry_rollup_state) s
+                    RIGHT JOIN (SELECT 1) one ON TRUE
                 )
                 SELECT lo.mv_lo,
-                       CASE WHEN p_use_rollup THEN
-                           GREATEST(
-                               LEAST(
-                                   date_trunc('hour', p_end + interval '1 microsecond'),
-                                   (SELECT COALESCE(max(bucket_hour) + interval '1 hour',
-                                                    '-infinity'::timestamptz)
-                                      FROM log_entry_hourly_stats)
-                               ),
-                               lo.mv_lo)
-                       ELSE lo.mv_lo END
+                       GREATEST(
+                           LEAST(date_trunc('hour', p_end + interval '1 microsecond'),
+                                 (SELECT ts FROM watermark)),
+                           lo.mv_lo)
                 FROM lo;
             $$;
         ]]></sql>
+
+        <!-- Initialise: every closed hour in one go, and a state row dated to
+             the start so the first pass has a floor to work from. Roughly a
+             minute on production; every pass after it touches only what moved. -->
+        <sql splitStatements="false"><![CDATA[
+            INSERT INTO log_entry_rollup_state (only_row, processed_through)
+            VALUES (TRUE, now());
+
+            SELECT logos_stats_rollup_apply(ARRAY(
+                SELECT DISTINCT date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                            le.timestamp_request,
+                                                            le.timestamp_response))
+                FROM log_entry le
+                WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
+                      < date_trunc('hour', now())
+            ));
+
+            ANALYZE log_entry_hourly_stats;
+        ]]></sql>
+
         <rollback>
-            <sql>DROP FUNCTION IF EXISTS logos_stats_rollup_window(timestamptz, timestamptz, boolean);</sql>
-            <sql>DROP MATERIALIZED VIEW IF EXISTS log_entry_hourly_stats;</sql>
+            <sql>DROP FUNCTION IF EXISTS logos_stats_rollup_window(timestamptz, timestamptz, boolean, interval);</sql>
+            <sql>DROP FUNCTION IF EXISTS logos_stats_rollup_pass(interval);</sql>
+            <sql>DROP FUNCTION IF EXISTS logos_stats_rollup_apply(timestamptz[]);</sql>
+            <sql>DROP TABLE IF EXISTS log_entry_rollup_state;</sql>
+            <sql>DROP TABLE IF EXISTS log_entry_hourly_stats;</sql>
         </rollback>
     </changeSet>
 
