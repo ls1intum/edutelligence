@@ -194,9 +194,17 @@ public class ProviderService {
      * writes the resulting models and links itself, so nothing is stored here.
      * Not transactional — there is no write to defer the notification past,
      * which is exactly what lets the pass start at once.
+     *
+     * <p>Unlike the provider mutations, this waits for the orchestrator to
+     * accept the refresh and reports the outcome: an operator who pressed
+     * refresh must not be told "triggered" when the pass never started. The
+     * fire-and-forget path would swallow exactly that failure.
      */
     public Map<String, Object> refreshModels() {
-        orchestratorNotificationService.notifyRefresh(false, true);
+        if (!orchestratorNotificationService.sendRefreshSync(false, true)) {
+            throw new IllegalStateException(
+                "The orchestrator could not be reached; the model refresh was not triggered.");
+        }
         return Map.of("result", "Model refresh triggered.");
     }
 

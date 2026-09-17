@@ -28,8 +28,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
@@ -60,6 +62,8 @@ class ProviderControllerTest {
     // Mocked so tests can assert what the endpoint announces to the
     // orchestrator instead of sending nothing (no orchestrator URL in tests).
     @MockitoBean OrchestratorNotificationService orchestratorNotificationService;
+    // Mocked so the status endpoint is testable without an orchestrator URL.
+    @MockitoBean OrchestratorModelSyncClient modelSyncClient;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -325,6 +329,8 @@ class ProviderControllerTest {
 
     @Test
     void refreshModels_triggersCloudModelSync() throws Exception {
+        when(orchestratorNotificationService.sendRefreshSync(false, true)).thenReturn(true);
+
         mvc.perform(post("/logosdb/refresh_models")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
@@ -334,7 +340,40 @@ class ProviderControllerTest {
 
         // syncCloudModels must be true: a plain pipeline refresh would leave
         // the upstream listings unread until the next 15-minute interval.
-        verify(orchestratorNotificationService).notifyRefresh(false, true);
+        verify(orchestratorNotificationService).sendRefreshSync(false, true);
+    }
+
+    @Test
+    void refreshModels_reports503WhenTheOrchestratorCouldNotBeReached() throws Exception {
+        // The mock's default false: the pass was never handed over, so a 200
+        // would leave the UI polling a completion status that can never come.
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isServiceUnavailable())
+           .andExpect(jsonPath("$.error").value(containsString("orchestrator")));
+    }
+
+    @Test
+    void modelSyncStatus_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void modelSyncStatus_reportsTheOrchestratorState() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(true);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(true));
     }
 
     @Test

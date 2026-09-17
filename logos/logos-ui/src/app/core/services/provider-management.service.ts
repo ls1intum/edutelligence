@@ -49,11 +49,17 @@ export class ProviderManagementService {
 
   /**
    * Trigger the orchestrator to re-read every cloud provider's /v1/models
-   * listing now. The sync pass itself runs asynchronously on the
-   * orchestrator; this resolves as soon as it has been scheduled.
+   * listing now. Resolves only once the orchestrator has accepted the
+   * refresh (503 when it could not be reached); the sync pass itself runs
+   * asynchronously there — see modelSyncStatus() for its completion state.
    */
   refreshModels(): Promise<{ result: string }> {
     return firstValueFrom(this.http.post<{ result: string }>('/api/logosdb/refresh_models', {}));
+  }
+
+  /** Whether a cloud model sync pass is currently running or queued. */
+  modelSyncStatus(): Promise<{ running: boolean }> {
+    return firstValueFrom(this.http.post<{ running: boolean }>('/api/logosdb/model_sync_status', {}));
   }
 
   getProviderModels(providerId: number): Promise<ModelConnection[]> {

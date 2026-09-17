@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpEntity;
@@ -18,6 +19,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionSynchronizationUtils;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 /**
@@ -105,6 +107,28 @@ class OrchestratorNotificationServiceTest {
         service.notifyRefresh(false, true);
 
         verify(restTemplate, never()).postForEntity(any(String.class), any(), any());
+    }
+
+    @Test
+    void syncSendReportsDeliveryOnSuccess() {
+        assertThat(service.sendRefreshSync(false, true)).isTrue();
+        verify(restTemplate).postForEntity(eq("http://orchestrator:8000/internal/refresh_pipeline"), any(), any());
+    }
+
+    @Test
+    void syncSendReportsFalseWhenNoOrchestratorIsConfigured() {
+        ReflectionTestUtils.setField(service, "orchestratorUrl", "");
+
+        assertThat(service.sendRefreshSync(false, true)).isFalse();
+        verify(restTemplate, never()).postForEntity(any(String.class), any(), any());
+    }
+
+    @Test
+    void syncSendReportsFalseWhenTheOrchestratorIsUnreachable() {
+        when(restTemplate.postForEntity(any(String.class), any(), any()))
+            .thenThrow(new ResourceAccessException("connection refused"));
+
+        assertThat(service.sendRefreshSync(false, true)).isFalse();
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

@@ -296,14 +296,18 @@ export class Providers implements OnInit, OnDestroy {
 
   // ── Model refresh ─────────────────────────────────────────────────────────
   // The orchestrator's cloud model sync is scheduled, not awaited: after the
-  // trigger returns it scrapes every cloud upstream in turn and writes models
-  // and links per provider. One refetch right after the trigger would mostly
-  // miss the pass, so the page keeps refetching the model lists until they
-  // stop changing (two identical snapshots in a row) or the rounds run out.
-  private static readonly REFRESH_SETTLE_INTERVAL_MS = 2000;
-  private static readonly REFRESH_SETTLE_MAX_ROUNDS = 8;
+  // trigger returns it scrapes every cloud upstream in turn, so the trigger
+  // answer is not completion. Neither is an unchanged model list — the
+  // first write of a pass can land at any moment, and a mid-pass snapshot
+  // can look stable while a later provider is still ahead. The explicit
+  // signal is the orchestrator's pass-in-flight status: poll it while
+  // refetching the model lists, and stop once the pass reports done. The
+  // rounds cap bounds a stuck upstream (one provider may hold the pass for
+  // its full 30 s request timeout).
+  private static readonly REFRESH_POLL_INTERVAL_MS = 2000;
+  private static readonly REFRESH_POLL_MAX_ROUNDS = 45;
 
-  private refreshSettleTimer: ReturnType<typeof setTimeout> | null = null;
+  private refreshPollTimer: ReturnType<typeof setTimeout> | null = null;
 
   async refreshModels(): Promise<void> {
     if (this.refreshing()) return;
@@ -311,48 +315,60 @@ export class Providers implements OnInit, OnDestroy {
     this.refreshError.set(false);
     try {
       await this.providerService.refreshModels();
-      await this.waitForSyncToSettle();
+      await this.waitForSyncToFinish();
     } catch {
       this.refreshError.set(true);
     } finally {
-      this.refreshSettleTimer = null;
+      this.refreshPollTimer = null;
       this.refreshing.set(false);
     }
   }
 
   ngOnDestroy(): void {
-    if (this.refreshSettleTimer !== null) clearTimeout(this.refreshSettleTimer);
+    if (this.refreshPollTimer !== null) clearTimeout(this.refreshPollTimer);
   }
 
-  private async waitForSyncToSettle(): Promise<void> {
-    let previous = await this.snapshotModelLists();
-    for (let round = 0; round < Providers.REFRESH_SETTLE_MAX_ROUNDS; round++) {
+  private async waitForSyncToFinish(): Promise<void> {
+    for (let round = 0; round < Providers.REFRESH_POLL_MAX_ROUNDS; round++) {
+      // Status first: when the pass is already done (e.g. there are no
+      // cloud providers at all), the refetch below is the final state and
+      // no further rounds are needed.
+      const running = await this.syncRunning();
+      await this.refetchModelLists();
+      if (!running) return;
       await new Promise<void>((resolve) => {
-        this.refreshSettleTimer = setTimeout(resolve, Providers.REFRESH_SETTLE_INTERVAL_MS);
+        this.refreshPollTimer = setTimeout(resolve, Providers.REFRESH_POLL_INTERVAL_MS);
       });
-      const snapshot = await this.snapshotModelLists();
-      if (snapshot === previous) return;
-      previous = snapshot;
+    }
+    // The cap ran out with the pass still running (a stuck upstream): stop
+    // waiting and release the button — the next interval pass catches up.
+  }
+
+  private async syncRunning(): Promise<boolean> {
+    try {
+      return (await this.providerService.modelSyncStatus()).running;
+    } catch {
+      // An unreachable status reads as done: the wait ends early instead of
+      // hanging (a rolling deploy may still run an orchestrator without the
+      // endpoint), and the model lists were refetched either way.
+      return false;
     }
   }
 
   /**
    * Refetch the model lists this page shows — the global model catalogue and,
-   * for an expanded row, that provider's connections — and return a string
-   * the settle loop can compare. Both lists move independently: the sync
-   * writes per provider, preserving links the operator configured by hand.
+   * for an expanded row, that provider's connections. Both move
+   * independently: the sync writes per provider, preserving the links the
+   * operator configured by hand.
    */
-  private async snapshotModelLists(): Promise<string> {
+  private async refetchModelLists(): Promise<void> {
     const models = await this.modelService.getModels();
     this.allModels.set(models);
-    let connections = '';
     const expanded = this.expandedId();
     if (expanded !== null) {
       const conns = await this.providerService.getProviderModels(expanded);
       this.providerModels.update((m) => ({ ...m, [expanded]: conns }));
-      connections = JSON.stringify(conns.map((c) => c.model_id).sort((a, b) => a - b));
     }
-    return JSON.stringify(models.map((m) => m.id).sort((a, b) => a - b)) + '|' + connections;
   }
 
   formatPrivacy(level: PrivacyLevel): string {

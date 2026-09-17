@@ -29,6 +29,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
 
 @RestController
@@ -38,12 +39,14 @@ public class ProviderController {
     private final ProviderService providerService;
     private final PriceUpdaterService priceUpdaterService;
     private final OrchestratorWorkerAdminClient workerAdminClient;
+    private final OrchestratorModelSyncClient modelSyncClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
         this.priceUpdaterService = priceUpdaterService;
         this.workerAdminClient = workerAdminClient;
+        this.modelSyncClient = modelSyncClient;
         this.objectMapper = objectMapper;
     }
 
@@ -115,7 +118,19 @@ public class ProviderController {
     @PostMapping("/refresh_models")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> refreshModels() {
-        return ResponseEntity.ok(providerService.refreshModels());
+        try {
+            return ResponseEntity.ok(providerService.refreshModels());
+        } catch (IllegalStateException e) {
+            // The sync was never handed to the orchestrator — reporting 200
+            // would leave the UI polling a status that can never arrive.
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/model_sync_status")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> modelSyncStatus() {
+        return ResponseEntity.ok(Map.of("running", modelSyncClient.isSyncRunning()));
     }
 
     @PostMapping("/get_provider_models")
