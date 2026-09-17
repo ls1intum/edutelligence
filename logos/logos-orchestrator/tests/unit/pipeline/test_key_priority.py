@@ -9,6 +9,7 @@ the historical policy-only behaviour.
 
 from logos import PipelineRequest, RequestPipeline, SchedulingResult
 from logos.pipeline.pipeline import queue_role_rank, resolve_queue_priority
+from logos.queue import Priority
 
 
 def test_resolve_queue_priority_key_wins_when_set():
@@ -34,9 +35,23 @@ def test_resolve_queue_priority_unset_key_falls_back_to_team():
 def test_resolve_queue_priority_unset_team_falls_back_to_policy():
     assert resolve_queue_priority(0, None, 5) == 5
     assert resolve_queue_priority(0, 0, 10) == 10
-    # All unset: 0 (ProxyPolicy default), which Priority.from_int maps to NORMAL.
-    assert resolve_queue_priority(0, 0, 0) == 0
-    assert resolve_queue_priority(0, None, None) == 0
+    # All unset: resolves to the default level, NORMAL (see the regression
+    # below) — not 0, which would rank below explicit NORMAL in the queue.
+    assert resolve_queue_priority(0, 0, 0) == int(Priority.NORMAL)
+    assert resolve_queue_priority(0, None, None) == int(Priority.NORMAL)
+
+
+def test_all_unset_resolves_to_normal_raw_not_zero():
+    """Regression: with key, team and policy all unset the resolved priority
+    must be NORMAL's raw value (5), not 0. 0 lands in the NORMAL bucket via
+    ``Priority.from_int`` but, as ``raw_priority=0``, would rank below
+    explicit NORMAL (5) traffic inside that bucket and skip the role-rank
+    tiebreak between the two."""
+    resolved = resolve_queue_priority(0, 0, 0)
+    assert resolved == int(Priority.NORMAL)
+    # The raw value matches the bucket it maps to — no 0/5 mismatch.
+    assert Priority.from_int(resolved) is Priority.NORMAL
+    assert resolved == int(Priority.from_int(resolved))
 
 
 def test_queue_role_rank_application_keys_rank_highest():
@@ -189,13 +204,15 @@ async def test_unset_key_and_team_fall_back_to_policy_priority():
     assert [prio for _, _, prio in scheduler.last_request.classified_models] == [5]
 
 
-async def test_unset_key_without_policy_keeps_prior_behavior():
-    """No key priority and no policy: priority stays 0 (→ NORMAL) as before."""
+async def test_unset_key_and_team_resolve_to_normal_raw():
+    """No key, team or policy priority: resolves to NORMAL's raw value (5), so
+    the entry's raw_priority matches its bucket and default traffic ranks
+    level with explicit NORMAL in the queue (regression)."""
     pipeline, scheduler, _monitoring = _build_pipeline()
 
     await pipeline.process(_request(policy=None, default_priority=0))
 
-    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [0]
+    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [5]
 
 
 async def test_enqueue_monitoring_uses_effective_priority():

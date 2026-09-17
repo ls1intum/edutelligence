@@ -82,7 +82,12 @@ def resolve_queue_priority(
         policy_priority: The policy's ``priority`` value (may be 0/None).
 
     Returns:
-        The effective integer priority for the request's queue entry.
+        The effective integer priority for the request's queue entry. When
+        nothing is set this is ``Priority.NORMAL`` (5) — not 0 — so the
+        entry's ``raw_priority`` matches the bucket ``from_int`` already
+        chooses for it. A raw 0 would still land in the NORMAL bucket but
+        rank below explicit NORMAL (5) traffic in that bucket, and the
+        role-rank tiebreak would never apply between the two.
     """
     if default_priority:
         return int(default_priority)
@@ -90,7 +95,7 @@ def resolve_queue_priority(
         return int(team_priority)
     if policy_priority:
         return int(policy_priority)
-    return 0
+    return int(Priority.NORMAL)
 
 
 def queue_role_rank(key_type: Optional[str], user_role: Optional[str]) -> int:

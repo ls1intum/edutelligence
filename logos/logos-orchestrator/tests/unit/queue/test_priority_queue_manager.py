@@ -147,6 +147,29 @@ def test_raw_priority_refines_ordering_inside_a_bucket():
     assert mgr.dequeue(5).get_id() == 1
 
 
+def test_default_priority_ranks_with_explicit_normal_by_role_rank():
+    """Regression: a request with everything unset resolves to NORMAL's raw
+    value (5), so it sits level with explicit NORMAL (5) traffic in the same
+    bucket and the role-rank tiebreak applies between them. With the old
+    raw_priority=0 the default entry ranked *below* explicit NORMAL and a
+    higher role rank on it could never win."""
+    mgr = PriorityQueueManager()
+    # Default caller (application key, rank 2) resolved to NORMAL's raw 5 ...
+    mgr.enqueue(
+        DummyTask(1),
+        model_id=5,
+        priority=Priority.from_int(int(Priority.NORMAL)),
+        raw_priority=int(Priority.NORMAL),
+        role_rank=2,
+    )
+    # ... next to an explicit NORMAL (raw 5) developer request (rank 0).
+    mgr.enqueue(DummyTask(2), model_id=5, priority=Priority.NORMAL, raw_priority=5, role_rank=0)
+
+    # Same bucket, same raw: the higher role rank dequeues first.
+    assert mgr.dequeue(5).get_id() == 1
+    assert mgr.dequeue(5).get_id() == 2
+
+
 def test_bucket_still_dominates_raw_priority_and_role():
     """A HIGH entry (raw 10) dequeues before any NORMAL entry, whatever its
     raw value or role rank; the bucket comes first."""
