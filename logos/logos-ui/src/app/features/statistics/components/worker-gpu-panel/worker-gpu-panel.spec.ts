@@ -318,7 +318,7 @@ describe('WorkerGpuPanel stop calibration', () => {
 });
 
 /**
- * Worker-uptime and ws-uptime chips (issue #991): worker_started_at and
+ * Worker-uptime and ws-uptime chips: worker_started_at and
  * connected_at are two independent clocks — a bridge reconnect resets the
  * latter without restarting the worker process, so the labels must track
  * their own timestamp rather than collapsing into one "uptime" value.

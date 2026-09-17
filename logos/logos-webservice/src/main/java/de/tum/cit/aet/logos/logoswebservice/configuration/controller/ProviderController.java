@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -30,6 +31,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
 
 @RestController
@@ -39,12 +41,14 @@ public class ProviderController {
     private final ProviderService providerService;
     private final PriceUpdaterService priceUpdaterService;
     private final OrchestratorWorkerAdminClient workerAdminClient;
+    private final OrchestratorModelSyncClient modelSyncClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
         this.priceUpdaterService = priceUpdaterService;
         this.workerAdminClient = workerAdminClient;
+        this.modelSyncClient = modelSyncClient;
         this.objectMapper = objectMapper;
     }
 
@@ -111,6 +115,28 @@ public class ProviderController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @PostMapping("/refresh_models")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> refreshModels() {
+        try {
+            return ResponseEntity.ok(providerService.refreshModels());
+        } catch (IllegalStateException e) {
+            // The sync was never handed to the orchestrator — reporting 200
+            // would leave the UI polling a status that can never arrive.
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/model_sync_status")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> modelSyncStatus() {
+        // null means "could not be read" and keeps the UI polling; Map.of
+        // rejects null values.
+        Map<String, Object> body = new HashMap<>();
+        body.put("running", modelSyncClient.isSyncRunning());
+        return ResponseEntity.ok(body);
     }
 
     @PostMapping("/get_provider_models")

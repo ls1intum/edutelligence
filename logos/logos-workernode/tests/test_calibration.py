@@ -713,7 +713,7 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
 
 def test_escalation_pins_plan_to_gpu_slice_on_heterogeneous_node(tmp_path):
     """On a 3-GPU host the probe is pinned to the power-of-two slice "0,1", so
-    GPU 2 stays free for production and the baseline never sums it (#592). The
+    GPU 2 stays free for production and the baseline never sums it. The
     TP escalation itself is unchanged: max-first from tp=2, then down to tp=1.
     """
     config_path = _write_config(tmp_path, ["big-model"])
@@ -3232,7 +3232,7 @@ def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> N
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Group 10 — Wake verification (Phase 5.5, issue #702)
+# Group 10 — Wake verification (Phase 5.5)
 #
 # The calibration sequence is: test request 1 (Phase 2.5 warmup) → sleep
 # (Phase 4) → sleeping measurement (Phase 5) → wake (Phase 5.5) → test
@@ -3709,7 +3709,7 @@ def test_calibrate_operator_model_kind_override_wins_over_detected_kind():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Cold-load & wake-from-sleep timing (issue #627)
+# Cold-load & wake-from-sleep timing
 # ═══════════════════════════════════════════════════════════════════════
 
 

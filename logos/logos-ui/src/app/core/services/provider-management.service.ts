@@ -47,6 +47,27 @@ export class ProviderManagementService {
     return firstValueFrom(this.http.post<void>('/api/logosdb/delete_provider', { provider_id: id }));
   }
 
+  /**
+   * Trigger the orchestrator to re-read every cloud provider's /v1/models
+   * listing now. Resolves only once the orchestrator has accepted the
+   * refresh (503 when it could not be reached); the sync pass itself runs
+   * asynchronously there — see modelSyncStatus() for its completion state.
+   */
+  refreshModels(): Promise<{ result: string }> {
+    return firstValueFrom(this.http.post<{ result: string }>('/api/logosdb/refresh_models', {}));
+  }
+
+  /**
+   * A cloud model sync's in-flight state: `true` while a pass is running or
+   * queued, `false` once the orchestrator explicitly reports none in flight,
+   * and `null` when its status could not be read (timeout, rolling deploy).
+   * Only an explicit `false` ends the refresh wait — a `null` is unknown,
+   * not done.
+   */
+  modelSyncStatus(): Promise<{ running: boolean | null }> {
+    return firstValueFrom(this.http.post<{ running: boolean | null }>('/api/logosdb/model_sync_status', {}));
+  }
+
   getProviderModels(providerId: number): Promise<ModelConnection[]> {
     return firstValueFrom(this.http.post<ModelConnection[]>('/api/logosdb/get_provider_models', { provider_id: providerId }));
   }

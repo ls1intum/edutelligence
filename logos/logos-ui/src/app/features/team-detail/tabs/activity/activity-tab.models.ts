@@ -1,7 +1,7 @@
 import { RequestItem } from '../../../statistics/statistics.models';
 
 /**
- * What one team is doing and has spent (issue #776).
+ * What one team is doing and has spent.
  *
  * Lives in the team's own detail view rather than a page of its own: it is one
  * more thing you look at about a team, next to its members, keys and cloud
@@ -51,7 +51,7 @@ export interface TeamActivityPayload {
   /**
    * Whether any key of the team is opted into FULL logging — the only switch
    * under which request and response content is stored at all, so the view
-   * can hint at an empty export before the download is started (issue #667).
+   * can hint at an empty export before the download is started.
    */
   full_logging_enabled: boolean;
   live: TeamLiveCounts;
@@ -65,7 +65,7 @@ export interface TeamActivityPayload {
   requests_next_cursor: RequestCursor | null;
 }
 
-// ── Trace export (issue #667) ────────────────────────────────────────────────
+// ── Trace export ─────────────────────────────────────────────────
 
 /**
  * One request trace of the team export. Every row carries the lifecycle

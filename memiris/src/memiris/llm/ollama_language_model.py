@@ -56,8 +56,7 @@ class OllamaLanguageModel(AbstractLanguageModel):
         options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> WrappedChatResponse:
-        with self._langfuse.start_as_current_observation(
-            as_type="generation",
+        with self._langfuse.start_as_current_generation(
             name="ollama-chat",
             model=self._model,
             input=messages,

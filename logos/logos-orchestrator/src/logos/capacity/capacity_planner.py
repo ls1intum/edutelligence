@@ -4057,7 +4057,7 @@ class CapacityPlanner:
                     # clear the floor and the bypass deadlocked the sequential
                     # switchover: model A's benchmark ends, model B is requested
                     # one at a time, B's request waits until it times out, and
-                    # A's lane sticks (#827). Victims are idle by construction,
+                    # A's lane sticks. Victims are idle by construction,
                     # so reclaiming them preempts no real work.
                     #
                     # Phase 3.2: under v2, branch (a) only fires when the
@@ -4349,7 +4349,7 @@ class CapacityPlanner:
             else:
                 # Contention. Same two-regime logic as the wake path (see the
                 # regime comment there, including why has_queued alone is the
-                # real-demand signal — #827): real queued requests bypass the
+                # real-demand signal — ): real queued requests bypass the
                 # ratio (victims are already idle by construction); speculative
                 # score is gated by LOAD_COMPETITIVE_RATIO to avoid thrashing
                 # on a model that *might* become popular.
@@ -6995,7 +6995,7 @@ class CapacityPlanner:
         TP=1: inferring off the calibrated base_residency (the full awake
         footprint, often most of a GPU) would escalate it to a higher TP and
         overwrite the calibrated verdict with data measured at a different
-        parallelism (issue #616).
+        parallelism.
         """
         import math
 

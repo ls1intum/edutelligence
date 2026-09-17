@@ -294,7 +294,7 @@ class CalibrationOrchestrator:
         return not bool(node_health.get("healthy", True))
 
     def _calibration_gpu_subset(self, provider_id: int) -> frozenset[int]:
-        """GPUs the calibration holds on *provider_id* (issue #592).
+        """GPUs the calibration holds on *provider_id*.
 
         Derived from the worker's nvidia GPU count as the largest power-of-two
         slice — the same slice the worker's lane manager holds and the probe is
@@ -347,8 +347,8 @@ class CalibrationOrchestrator:
         """Return True if the provider has active requests on the calibration slice.
 
         A lane busy only on the leftover GPUs (outside the calibration's
-        power-of-two slice) no longer blocks scheduling a calibration
-        (issue #592) — the probe only uses the slice, so a busy leftover GPU is
+        power-of-two slice) no longer blocks scheduling a calibration — the probe
+        only uses the slice, so a busy leftover GPU is
         irrelevant. When the slice cannot be determined, any busy lane blocks
         (the previous, conservative behaviour).
         """

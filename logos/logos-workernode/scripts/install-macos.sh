@@ -46,7 +46,6 @@ export LOGOS_METAL_VENV="$METAL_VENV"
 # checkpoints: those ship their backbone weights flat (`embed_tokens.weight`,
 # `layers.0.…`) while mlx-lm's Qwen3 wraps them under `model.`, so on v0.28.0
 # every tensor was rejected with "Received 398 parameters not in model"
-# (vllm-metal#730, fixed by a key remap in #736). The MLX re-quantizations of
 # the same model failed differently and just as fatally — the generation
 # loader demanded an `lm_head.weight` an embedder does not carry. Verified on
 # an M2 Pro: `Qwen/Qwen3-Embedding-8B` with `--runner pooling` now serves

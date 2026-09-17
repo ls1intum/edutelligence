@@ -1145,7 +1145,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await logos_bridge.bootstrap_hf_token()
 
     # Device telemetry. Both collectors expose the same surface, so everything
-    # downstream (LaneManager, runtime status) is backend-agnostic.
+    # downstream (LaneManager, runtime status) is engine-agnostic.
     if is_metal_backend():
         gpu_collector = MetalMetricsCollector(
             poll_interval=cfg.worker.gpu_poll_interval,

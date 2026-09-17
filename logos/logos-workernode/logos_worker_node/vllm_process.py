@@ -1570,7 +1570,7 @@ class VllmProcessHandle:
         constant in TP instead of growing linearly. Any failure leaves it
         ``None`` and the lane loads the full checkpoint exactly as before.
 
-        This is the spawn-time half of issue #615; the calibration trigger
+        At spawn time, the calibration trigger
         (logos_bridge) pre-builds most checkpoints, so the common case here is
         just the readiness check below.
         """
@@ -1782,7 +1782,7 @@ class VllmProcessHandle:
         # kernels under TP>1.
         if vc.enforce_eager or lane_config.flash_attention is False:
             cmd.append("--enforce-eager")
-        # Attention backend: explicit config wins, otherwise auto-detect.
+        # Attention application server: explicit config wins, otherwise auto-detect.
         # FlashInfer JIT crashes drivers on pre-Ampere (compute < 8.0).
         attn_backend = vc.attention_backend or self._auto_attention_backend()
         if attn_backend:
@@ -1793,7 +1793,7 @@ class VllmProcessHandle:
         # this server flag is set — its default is off, so without it local
         # lanes omit the prefix-cache hit count that cloud providers include
         # in usage natively, and consumers can't optimise cached-token usage
-        # per request (#813).
+        # per request.
         if vc.enable_prompt_tokens_details:
             cmd.append("--enable-prompt-tokens-details")
         if vc.disable_custom_all_reduce:

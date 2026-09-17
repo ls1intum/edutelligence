@@ -959,7 +959,7 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     lane_manager._MAX_EVENT_LOG = 500
     lane_manager._mark_status_dirty = lambda: None
     lane_manager.destroy_all = AsyncMock(return_value=None)
-    # Calibration-session GPU-slice guard (issue #592): the session holds a
+    # Calibration-session GPU-slice guard: the session holds a
     # power-of-two slice and frees only the lanes on it, keeping leftover lanes.
     lane_manager.begin_calibration_session = MagicMock(return_value=frozenset({0, 1}))
     lane_manager.destroy_lanes_on_gpus = AsyncMock(return_value=1)
@@ -1377,7 +1377,7 @@ async def test_nosleep_model_with_profile_is_not_recalibrated(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_session_frees_calibrating_slice_before_calibrating(tmp_path, monkeypatch):
     """Live lanes on the calibration's GPU slice hold VRAM. The session must
-    free that slice up front (issue #592) or the kv-cache search OOMs and
+    free that slice up front or the kv-cache search OOMs and
     blacklists every probe size — but it must NOT free the whole node: lanes
     on the leftover GPUs keep serving during the session."""
     from logos_worker_node import config as _wcfg
@@ -3058,7 +3058,7 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Cancelling an abandoned request (#735)
+# Cancelling an abandoned request
 #
 # Every request to a worker is multiplexed over one WebSocket, so there is no
 # per-request connection whose close tells vLLM to stop. When the client
