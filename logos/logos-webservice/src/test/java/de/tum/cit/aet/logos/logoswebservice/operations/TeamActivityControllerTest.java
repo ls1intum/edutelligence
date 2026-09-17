@@ -18,7 +18,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 /**
- * One team's activity view (issue #776).
+ * One team's activity view.
  *
  * The seed has team 2001 with one completed request (9001) on key 3001, and a
  * second request (9002) belonging to no team at all — which is what makes the

@@ -19,6 +19,9 @@ assessment_module_manager = { path = "../assessment_module_manager", develop = t
 module_text_llm = { path = "../modules/text/module_text_llm", develop = true }
 module_modeling_llm = { path = "../modules/modeling/module_modeling_llm", develop = true }
 
+# Security floor for a package that is otherwise transitive only.
+starlette = ">=1.3.1"
+
 [tool.poetry.group.dev.dependencies]
 prospector = "^1.17.3"
 

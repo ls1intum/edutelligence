@@ -7,7 +7,7 @@ import { ActivityTabComponent, TRACE_CSV_COLUMNS, traceCsvCell, tracesToCsv } fr
 import { ActivityFilter, TeamActivityService } from './activity-tab.service';
 
 /**
- * The team activity view app administrators asked for (issue #776).
+ * The team activity view for app administrators.
  *
  * The numbers it shows are load-bearing in both directions: the live tiles
  * tell an owner whether the cluster is working for them right now, and the
@@ -386,7 +386,7 @@ function makePending(): Pending {
  * was still on screen. Press next while a page is loading and every extra
  * press advanced the index on that stale answer's strength — `has_more` and
  * the cursor both pointed at the page behind — until the page walked past
- * the last one (issue #799).
+ * the last one.
  *
  * These tests hold the service's answers in flight and turn the pages faster
  * than they land.

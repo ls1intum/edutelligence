@@ -64,6 +64,26 @@ export function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+/**
+ * "Uptime since" label for a timestamp, e.g. "3d 4h", "5h 12m", "42m", "<1m".
+ */
+export function formatUptime(ts: string | null | undefined, nowMs: number): string | null {
+  if (!ts) return null;
+  const startMs = new Date(ts).getTime();
+  if (Number.isNaN(startMs)) return null;
+  const diffS = Math.floor((nowMs - startMs) / 1000);
+  // Negative = clock skew between worker/orchestrator/browser; hide rather
+  // than show a nonsense duration.
+  if (diffS < 0) return null;
+  const days = Math.floor(diffS / 86400);
+  const hours = Math.floor((diffS % 86400) / 3600);
+  const minutes = Math.floor((diffS % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
+}
+
 // ── Recent-requests state filter ──────────────────────────────────────────────
 
 /**

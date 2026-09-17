@@ -216,6 +216,10 @@ def _logosnode_insecure_dev_mode_enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _central_hf_token() -> str:
+    return os.getenv("HF_TOKEN", "").strip()
+
+
 def _is_tls_request(request: Request) -> bool:
     if _logosnode_insecure_dev_mode_enabled():
         return True
@@ -341,6 +345,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         "ws_url": _build_logosnode_ws_url(request, token),
         "worker_id": worker_id,
         "expires_in_seconds": 60,
+        "hf_token": _central_hf_token(),
     }
 
 
