@@ -50,7 +50,9 @@ if settings.env == "production" and settings.sentry_dsn:
     )
     logger.info("Sentry initialized for production environment")
 else:
-    logger.info(f"Sentry not initialized - ENV: {settings.env}, Sentry DSN configured: {bool(settings.sentry_dsn)}")
+    logger.info(
+        f"Sentry not initialized - ENV: {settings.env}, Sentry DSN configured: {bool(settings.sentry_dsn)}"
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     bodies for POST requests, then logs response status codes and total latency.
     This is useful for debugging and observability in non-production setups.
     """
+
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
 

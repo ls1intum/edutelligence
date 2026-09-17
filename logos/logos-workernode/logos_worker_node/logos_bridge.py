@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -66,14 +67,42 @@ class _CalibrationSession:
     RPCs and consumes calibration_* events back from the worker.
     """
 
-    def __init__(self, sleep_level: int) -> None:
+    def __init__(self, sleep_level: int, skip_models: frozenset[str] = frozenset()) -> None:
         self.sleep_level: int = sleep_level
         self.cancel_event: threading.Event = threading.Event()
         self.task: asyncio.Task | None = None
         self.started_at: float = time.time()
+        # Models the orchestrator already knows can't fit on this node
+        # (cross-node capacity evidence) — excluded from this session's
+        # model list without a wasted probe attempt.
+        self.skip_models: frozenset[str] = skip_models
         # Updated by the session driver as it walks the model list — surfaced
         # so a future status RPC could inspect what's running without polling.
         self.current_model: str | None = None
+        # The live probe subprocess, set by the session driver right after
+        # each spawn. warmup_inference has no cancel_event support — it's a
+        # plain blocking HTTP call — so this is stop_calibration_session's
+        # only way to unblock one once its grace period elapses.
+        self._current_proc: subprocess.Popen[str] | None = None
+        self._proc_lock = threading.Lock()
+
+    def set_current_proc(self, proc: subprocess.Popen[str] | None) -> None:
+        with self._proc_lock:
+            self._current_proc = proc
+
+    def kill_current_proc(self) -> None:
+        """Force-stop the running probe subprocess, if any.
+
+        Makes a blocking warmup/probe HTTP call fail immediately with a
+        connection error instead of waiting out its full 600s/120s timeout.
+        """
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc is None:
+            return
+        from logos_worker_node.calibration import stop_vllm  # noqa: PLC0415
+
+        stop_vllm(proc)
 
 
 # ANSI color codes for structured log output
@@ -130,6 +159,7 @@ class LogosBridgeClient:
         # restarts this process anyway, so caching for its lifetime is
         # exact, not an approximation. None means "not fetched yet".
         self._vllm_quant_methods: list[str] | None = None
+        self._local_hf_token: str = os.environ.get("HF_TOKEN", "")
 
     @property
     def worker_id(self) -> str:
@@ -143,6 +173,19 @@ class LogosBridgeClient:
             last_status_sent_at=self._last_status_sent_at,
             consecutive_failures=self._consecutive_failures,
         )
+
+    async def bootstrap_hf_token(self) -> None:
+        if not self._cfg.enabled:
+            return
+        try:
+            await self._authenticate()
+        except Exception:
+            logger.warning(
+                "Could not reach Logos to fetch a centrally configured HF_TOKEN "
+                "before startup model operations; falling back to the locally "
+                "configured HF_TOKEN",
+                exc_info=True,
+            )
 
     async def start(self) -> None:
         if not self._cfg.enabled:
@@ -291,6 +334,14 @@ class LogosBridgeClient:
         # Pick up server-resolved worker identity
         if "worker_id" in data:
             self._resolved_worker_id = str(data["worker_id"])
+
+        central_hf_token = str(data.get("hf_token", "")).strip()
+        if central_hf_token:
+            os.environ["HF_TOKEN"] = central_hf_token
+        elif self._local_hf_token:
+            os.environ["HF_TOKEN"] = self._local_hf_token
+        else:
+            os.environ.pop("HF_TOKEN", None)
 
         ws_url = str(data.get("ws_url", "")).strip()
         if not ws_url:
@@ -945,25 +996,6 @@ class LogosBridgeClient:
 
         ``persist=False`` skips the model_profiles write. Never raises.
         """
-        if is_metal_backend():
-            # No nvidia-smi here, so the VRAM-fit half could never run
-            # anyway — skip up front rather than fall through that
-            # exception. Metal profiles come from model_profile_overrides,
-            # not this precheck.
-            return {
-                "model": model_name,
-                "hf_source": "skipped:metal-backend",
-                "weight_bytes": None,
-                "kv_per_token_bytes": None,
-                "max_context_length": None,
-                "quantization_method": None,
-                "per_gpu_total_mb": None,
-                "per_gpu_free_mb": None,
-                "hardware_max_tp": None,
-                "fit_tp_idle": None,
-                "fit_tp_current": None,
-                "unsupported_reason": None,
-            }
         from logos_worker_node.calibration import (  # noqa: PLC0415
             _max_tp_for_plan,
             calibration_gpu_slice,
@@ -976,6 +1008,7 @@ class LogosBridgeClient:
             REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
             REASON_MODEL_GATED,
             REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
+            classify_model_kind,
             fetch_hf_model_metadata,
             kv_bytes_for_dtype,
             min_feasible_tp,
@@ -1027,6 +1060,11 @@ class LogosBridgeClient:
             "fit_tp_idle": None,
             "fit_tp_current": None,
             "unsupported_reason": None,
+            "model_kind": (
+                classify_model_kind(hf_meta.pipeline_tag, hf_meta.architectures, hf_meta.model_type)
+                if hf_meta is not None
+                else "generative"
+            ),
         }
 
         # A repo that doesn't exist and a private one this token can't see
@@ -1065,6 +1103,17 @@ class LogosBridgeClient:
                     )
 
         if hf_meta is None or not hf_meta.weight_bytes:
+            return result
+
+        if is_metal_backend():
+            # No nvidia-smi here, so the VRAM-fit half below could never
+            # run anyway — skip it, but only it. HF metadata and
+            # model_kind are already resolved above and backend-
+            # independent (a pure Hub/config.json lookup), so a Metal
+            # pooling/transcription model must still get its real
+            # classification instead of silently defaulting to generative.
+            # Metal profiles themselves come from model_profile_overrides,
+            # not this precheck.
             return result
 
         try:
@@ -1242,32 +1291,12 @@ class LogosBridgeClient:
         back to the server. The server does not poll status and does not
         choose models; it only sends start/stop session RPCs.
         """
-        # Refuse up front on the Metal backend: calibration.py measures
-        # against nvidia-smi and samples /proc/meminfo, neither of which
-        # exists on macOS, so no probe here can ever succeed. Capacity
-        # profiles on this backend come from model_profile_overrides
-        # (config.example.mlx.yml) — no flag is needed to keep the worker
-        # away from a dead measurement path.
-        if is_metal_backend():
-            logger.info(
-                "[Calibration] refusing start_calibration_session: calibration is "
-                "unavailable on the Metal backend (nvidia-smi / /proc/meminfo "
-                "do not exist on macOS) — profiles must come from "
-                "model_profile_overrides"
-            )
-            return {
-                "ok": False,
-                "error": (
-                    "calibration is unavailable on the Metal backend: it measures "
-                    "against nvidia-smi and /proc/meminfo, which do not exist on "
-                    "macOS. Supply capacity profiles via model_profile_overrides "
-                    "instead."
-                ),
-                "calibration_unavailable": True,
-                "reason_code": "metal-backend",
-            }
-
         sleep_level = int(params.get("sleep_level", 1))
+        # Sleep is unsupported on Metal regardless of config (CuMemAllocator
+        # is CUDA-only) — force it off rather than let the probe fail at
+        # a /sleep call that can never succeed on this backend.
+        if is_metal_backend():
+            sleep_level = 0
 
         # Refuse start when a session is already running — caller should
         # have stopped the previous session first. The event channel told
@@ -1306,7 +1335,8 @@ class LogosBridgeClient:
         except Exception:  # noqa: BLE001
             logger.debug("[Calibration] node_health evaluation failed", exc_info=True)
 
-        session = _CalibrationSession(sleep_level=sleep_level)
+        skip_models = frozenset(str(m) for m in (params.get("skip_models") or []))
+        session = _CalibrationSession(sleep_level=sleep_level, skip_models=skip_models)
         session.task = asyncio.create_task(
             self._run_calibration_session(session),
             name="calibration-session",
@@ -1328,7 +1358,9 @@ class LogosBridgeClient:
         Sets the cancel_event so the calibration's wait_ready polling kills
         the running vLLM probe within ~2s, then awaits the session task
         briefly so the terminal ``calibration_session_cancelled`` event is
-        emitted before the RPC reply.
+        emitted before the RPC reply. If that grace period elapses with the
+        probe stuck inside a blocking warmup call instead, kills the probe
+        subprocess directly so the RPC reply doesn't outlive it by minutes.
         """
         session = self._active_calibration_session
         if session is None:
@@ -1340,10 +1372,13 @@ class LogosBridgeClient:
             try:
                 await asyncio.wait_for(asyncio.shield(session.task), timeout=15.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
-                # Session is still wrapping up (subprocess teardown). The
-                # terminal event will arrive on the event channel when it
-                # does. Don't block the RPC longer than 15s.
-                pass
+                # Session is still wrapping up. A blocking warmup/probe HTTP
+                # call has no cancel_event support and can otherwise hold
+                # the subprocess for up to its 600s/120s timeout — kill it
+                # directly so that call fails fast and the session unwinds
+                # promptly. The terminal event still arrives on the event
+                # channel once it does; don't block the RPC longer than 15s.
+                session.kill_current_proc()
         logger.info(
             "[Calibration] stop_calibration_session received — cancelled (current_model=%s)",
             current_model or "<none>",
@@ -1511,8 +1546,21 @@ class LogosBridgeClient:
             self._active_calibration_session.sleep_level if self._active_calibration_session is not None else 1
         )
 
+        session_skip_models = (
+            self._active_calibration_session.skip_models
+            if self._active_calibration_session is not None
+            else frozenset()
+        )
+
         ordered: list[str] = []
         for model_name in candidates:
+            if model_name in session_skip_models:
+                logger.info(
+                    "[Calibration] skipping %s — orchestrator flagged it as "
+                    "too large for this node's known capacity",
+                    model_name,
+                )
+                continue
             profile = model_profiles.get_profile(model_name)
             if profile is not None and profile.calibration_unsupported:
                 continue
@@ -1587,7 +1635,9 @@ class LogosBridgeClient:
                 _CALIBRATION_PORT,
                 _DEFAULT_VLLM,
                 _READY_TIMEOUT_S,
+                CalibrationResult,
                 ProfileStoreUnreadableError,
+                _plan_needs_gpu_pin,
                 calibrate_with_tp_escalation,
                 extract_revision_arg,
                 is_model_unsupported,
@@ -1597,6 +1647,7 @@ class LogosBridgeClient:
                 result_to_profile_dict,
                 save_profiles,
             )
+            from logos_worker_node.calibration_metal import calibrate_model_metal  # noqa: PLC0415
             from logos_worker_node.config import get_state_dir  # noqa: PLC0415
 
             cfg = self._app.state.config
@@ -1632,13 +1683,14 @@ class LogosBridgeClient:
             plan_by_model = {p["model"]: p for p in all_plans}
 
             # Free the calibration's GPU slice up front — but only that slice
-            # (issue #592). The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
+            # The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
             # so it only competes for the slice's VRAM; lanes on the leftover
             # GPUs keep serving for the rest of the session instead of sitting
             # idle. Without the pin the kv-cache search would start against an
             # already-loaded model on the measured GPUs and OOM at sizes that
             # would otherwise fit. The Logos server re-spawns the stopped slice
             # lanes via the normal apply_lanes path once the session ends.
+            calibration_gpus: frozenset[int] = frozenset()
             if lane_manager is not None:
                 try:
                     calibration_gpus = lane_manager.begin_calibration_session()
@@ -1658,6 +1710,20 @@ class LogosBridgeClient:
                     break
 
                 session.current_model = model_name
+                plan = plan_by_model.get(model_name) or {"model": model_name}
+
+                # Pin to the slice begin_calibration_session actually freed
+                # (which may prefer idle GPUs over 0..slice_size-1 — see
+                # select_calibration_gpus) rather than leaving gpu_devices
+                # blank/"all": calibrate_with_tp_escalation's own
+                # pin_plan_gpu_devices would otherwise recompute the naive
+                # slice independently and probe GPUs that were never freed.
+                # An explicit operator pin in config.yml is left untouched.
+                if calibration_gpus and _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
+                    plan = {
+                        **plan,
+                        "gpu_devices": ",".join(str(i) for i in sorted(calibration_gpus)),
+                    }
 
                 # Pre-flight: persistent unsupported flag.
                 _unsupported = None
@@ -1676,6 +1742,22 @@ class LogosBridgeClient:
                         "calibration_model_skipped",
                         model=model_name,
                         details=f"unsupported reason={_unsupported.reason_code}",
+                    )
+                    # No probe ran, but the reason is worth keeping queryable
+                    # in calibration_probe_logs (not just the live event feed)
+                    # — see calibration_probe_log's own DB writer for why a
+                    # pre-flight skip previously left no row there at all.
+                    self._record_calibration_probe_log(
+                        model_name,
+                        CalibrationResult(
+                            model=model_name,
+                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+                            gpu_devices=str(plan.get("gpu_devices") or ""),
+                            kv_cache_sent_mb=0.0,
+                            success=False,
+                            unsupported_reason=_unsupported.reason_code,
+                        ),
+                        None,
                     )
                     continue
 
@@ -1703,8 +1785,6 @@ class LogosBridgeClient:
                     # config flip (true → false) is picked up immediately.
                     model_profiles.mark_sleep_mode_disabled(model_name, False)
 
-                plan = plan_by_model.get(model_name) or {"model": model_name}
-
                 # Pre-flight: HF compatibility precheck (see
                 # _run_hf_compatibility_precheck's docstring for the rules).
                 precheck = await self._run_hf_compatibility_precheck(
@@ -1726,7 +1806,28 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"unsupported reason={precheck['unsupported_reason']}",
                     )
+                    # Same reasoning as the unsupported-list skip above: no
+                    # probe ran, but the HF precheck's verdict (e.g. weights
+                    # too large for this node's VRAM) is exactly what an
+                    # operator looking at calibration_probe_logs wants to see.
+                    self._record_calibration_probe_log(
+                        model_name,
+                        CalibrationResult(
+                            model=model_name,
+                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+                            gpu_devices=str(plan.get("gpu_devices") or ""),
+                            kv_cache_sent_mb=0.0,
+                            success=False,
+                            unsupported_reason=precheck["unsupported_reason"],
+                        ),
+                        None,
+                    )
                     continue
+                # Auto-classification — routes the functional probe to
+                # the model's real serving endpoint. An operator override
+                # (plan["model_kind"], via engines.vllm.model_overrides)
+                # takes precedence; see _calibrate_model_probe.
+                plan = {**plan, "_detected_model_kind": precheck["model_kind"]}
                 if precheck["fit_tp_idle"] is not None:
                     plan = {
                         **plan,
@@ -1803,21 +1904,39 @@ class LogosBridgeClient:
                         return False
 
                 try:
-                    result = await loop.run_in_executor(
-                        None,
-                        lambda p=plan, sl=model_sleep_level: calibrate_with_tp_escalation(
-                            p,
-                            vllm_binary=_DEFAULT_VLLM,
-                            port=_CALIBRATION_PORT,
-                            log_dir=log_dir,
-                            sleep_level=sl,
-                            ready_timeout_s=_READY_TIMEOUT_S,
-                            nccl_p2p_available=nccl_p2p,
-                            model_cache=_mc,
-                            cancel_event=session.cancel_event,
-                            establish_host_ram_floor=_establish_host_ram_floor_for_probe,
-                        ),
-                    )
+                    if is_metal_backend():
+                        # No TP escalation, no KV sweep, no sleep/wake — see
+                        # calibration_metal's module docstring for why.
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda p=plan: calibrate_model_metal(
+                                p,
+                                vllm_binary=_DEFAULT_VLLM,
+                                port=_CALIBRATION_PORT,
+                                log_dir=log_dir,
+                                ready_timeout_s=_READY_TIMEOUT_S,
+                                cancel_event=session.cancel_event,
+                                worker_metal_config=cfg.engines.metal,
+                                proc_callback=session.set_current_proc,
+                            ),
+                        )
+                    else:
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda p=plan, sl=model_sleep_level: calibrate_with_tp_escalation(
+                                p,
+                                vllm_binary=_DEFAULT_VLLM,
+                                port=_CALIBRATION_PORT,
+                                log_dir=log_dir,
+                                sleep_level=sl,
+                                ready_timeout_s=_READY_TIMEOUT_S,
+                                nccl_p2p_available=nccl_p2p,
+                                model_cache=_mc,
+                                cancel_event=session.cancel_event,
+                                establish_host_ram_floor=_establish_host_ram_floor_for_probe,
+                                proc_callback=session.set_current_proc,
+                            ),
+                        )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("[Calibration] Unexpected error for model=%s", model_name)
                     self._record_calibration_event(
@@ -1903,7 +2022,7 @@ class LogosBridgeClient:
                         except Exception:  # noqa: BLE001
                             logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
 
-                    # Issue #615: when the calibrated TP is >1, pre-shard the
+                    # When the calibrated TP is >1, pre-shard the
                     # checkpoint now while the GPU is free, so the lane that
                     # serves this model later loads each rank's shard directly
                     # instead of every rank re-reading the full checkpoint.
@@ -1920,6 +2039,13 @@ class LogosBridgeClient:
                             "[Calibration] %s marked calibration_unsupported (reason=%s)",
                             model_name,
                             result.unsupported_reason,
+                        )
+                    if getattr(result, "metal_capacity_floor_mb", None):
+                        model_profiles.mark_capacity_floor(model_name, result.metal_capacity_floor_mb)
+                        logger.warning(
+                            "[Calibration] %s recorded capacity floor = %.0f MB on this node",
+                            model_name,
+                            result.metal_capacity_floor_mb,
                         )
                     self._record_calibration_event(
                         "calibration_model_failed",
@@ -1977,7 +2103,7 @@ class LogosBridgeClient:
         Runs the (blocking, GPU-loading) conversion on the thread executor with
         the session's cancel_event wired through, so stop_calibration_session
         tears it down within ~2s. Best-effort: any failure is logged and the
-        model still serves from its full checkpoint. See issue #615.
+        model still serves from its full checkpoint.
         """
         try:
             from pathlib import Path  # noqa: PLC0415

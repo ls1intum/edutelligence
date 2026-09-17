@@ -1,0 +1,12 @@
+INFO 03-10 14:31:02 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 03-10 14:31:02 [utils.py:233] non-default args: {'model': 'Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8', 'tensor_parallel_size': 1}
+INFO 03-10 14:31:04 [core.py:200] Initializing a V1 LLM engine with config: dtype=torch.bfloat16
+ERROR 03-10 14:31:06 [core.py:712] EngineCore failed to start.
+ERROR 03-10 14:31:06 [core.py:712] Traceback (most recent call last):
+ERROR 03-10 14:31:06 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/v1/engine/core.py", line 703, in run_engine_core
+ERROR 03-10 14:31:06 [core.py:712]     engine_core = EngineCoreProc(*args, **kwargs)
+ERROR 03-10 14:31:06 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/v1/worker/gpu_worker.py", line 148, in init_device
+ERROR 03-10 14:31:06 [core.py:712]     torch.cuda.set_device(self.device)
+ERROR 03-10 14:31:06 [core.py:712] RuntimeError: CUDA error: all CUDA-capable devices are busy or unavailable
+ERROR 03-10 14:31:06 [core.py:712] CUDA kernel errors might be asynchronously reported at some other API call.
+Process EngineCore_DP0: exited with code 1

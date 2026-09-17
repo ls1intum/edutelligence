@@ -13,6 +13,12 @@
       @if (laneCount > 0) {
         <span class="chip chip--info">{{ activeLanes }} active / {{ loadedLanes }} loaded / {{ laneCount }} total lanes</span>
       }
+      @if (workerUptimeLabel) {
+        <span class="chip chip--info">worker uptime {{ workerUptimeLabel }}</span>
+      }
+      @if (wsUptimeLabel) {
+        <span class="chip chip--info">ws uptime {{ wsUptimeLabel }}</span>
+      }
       @if (canCalibrate) {
         <button
           class="btn-calibrate"
@@ -20,6 +26,15 @@
           (click)="handleCalibrateUncalibrated()"
         >
           {{ calibrateState().kind === 'loading' ? 'Calibrating…' : 'Calibrate uncalibrated' }}
+        </button>
+      }
+      @if (canStop) {
+        <button
+          class="btn-stop"
+          [disabled]="stopState().kind === 'loading'"
+          (click)="handleStopCalibration()"
+        >
+          {{ stopState().kind === 'loading' ? 'Stopping…' : 'Stop calibration' }}
         </button>
       }
     </div>
@@ -30,6 +45,14 @@
     }
     @if (calibrateState().kind === 'error') {
       <div class="action-error">{{ $any(calibrateState()).message }}</div>
+    }
+
+    <!-- Stop feedback -->
+    @if (stopState().kind === 'success') {
+      <div class="action-success">{{ $any(stopState()).message }}</div>
+    }
+    @if (stopState().kind === 'error') {
+      <div class="action-error">{{ $any(stopState()).message }}</div>
     }
 
     <!-- GPU cards -->
