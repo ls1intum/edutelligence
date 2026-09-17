@@ -27,7 +27,7 @@
     "@fortawesome/free-solid-svg-icons": "7.3.1",
     "@tumaet/ui-angular": "file:./vendor/tumaet-ui-angular",
     "keycloak-js": "^26.2.4",
-    "primeicons": "^7.0.0",
+    "primeicons": "^8.0.1",
     "rxjs": "7.8.2",
     "tslib": "^2.3.0"
   },
@@ -37,12 +37,12 @@
     "@angular/compiler-cli": "22.1.6",
     "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4.3.1",
-    "jsdom": "^28.0.0",
+    "jsdom": "^30.0.1",
     "postcss": "^8.5.15",
     "prettier": "^3.8.1",
     "tailwindcss": "^4.3.1",
-    "typescript": "~6.0.3",
-    "vitest": "^4.0.8"
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.0"
   },
   "allowScripts": {
     "@parcel/watcher@2.6.0": true,
