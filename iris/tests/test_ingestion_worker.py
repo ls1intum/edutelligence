@@ -74,6 +74,51 @@ class TestDiscovery:
         ]  # pylint: disable=protected-access
 
 
+class TestUpstreamValidation:
+    """register_upstream rejects a URL an allowlist or a plain scheme check would refuse,
+    and the outbound requests never follow a redirect away from a validated upstream."""
+
+    def test_rejects_a_url_with_no_http_scheme(self):
+        worker = IngestionWorker()
+        worker.register_upstream("ftp://a:8080", "key-a")
+        assert worker._fresh_upstreams() == []  # pylint: disable=protected-access
+
+    def test_accepts_any_http_url_when_no_allowlist_is_configured(self):
+        worker = IngestionWorker()
+        worker.register_upstream("http://a:8080", "key-a")
+        assert len(worker._fresh_upstreams()) == 1  # pylint: disable=protected-access
+
+    def test_allowlist_rejects_a_host_not_on_it(self):
+        worker = IngestionWorker()
+        # patch.object restores the shared settings singleton afterward: worker._config IS
+        # settings.ingestion_worker, not a per-instance copy, so a plain assignment here would
+        # leak the allowlist into every worker built by every later test in this process.
+        with patch.object(
+            worker._config, "allowed_upstream_hosts", ["a"]
+        ):  # pylint: disable=protected-access
+            worker.register_upstream("http://evil:8080", "key-evil")
+        assert worker._fresh_upstreams() == []  # pylint: disable=protected-access
+
+    def test_allowlist_accepts_a_listed_host_regardless_of_port(self):
+        worker = IngestionWorker()
+        with patch.object(
+            worker._config, "allowed_upstream_hosts", ["a"]
+        ):  # pylint: disable=protected-access
+            worker.register_upstream("http://a:9999", "key-a")
+        assert len(worker._fresh_upstreams()) == 1  # pylint: disable=protected-access
+
+    def test_outbound_claim_never_follows_a_redirect(self):
+        worker = IngestionWorker()
+        worker.register_upstream("http://a:8080", "key-a")
+        with patch.object(worker, "_start_job"):
+            with patch(
+                "iris.ingestion.worker.http_requests.post",
+                return_value=_response(body={"jobs": []}),
+            ) as post:
+                worker._claim_once()  # pylint: disable=protected-access
+        assert post.call_args.kwargs["allow_redirects"] is False
+
+
 class TestClaim:
     """Claiming: capacity accounting, per-upstream token, and slot flow."""
 
@@ -137,6 +182,31 @@ class TestClaim:
             == worker._config.capacity  # pylint: disable=protected-access
         )
         assert "done" not in worker._active  # pylint: disable=protected-access
+
+    def test_a_duplicate_skip_does_not_starve_the_next_upstream_of_its_own_capacity(
+        self,
+    ):
+        # upstream a hands back one job that _start_job skips as a duplicate (no thread
+        # started); upstream b must still be offered the full, unspent capacity.
+        worker = IngestionWorker()
+        worker.register_upstream("http://a:8080", "key-a")
+        worker.register_upstream("http://b:8080", "key-b")
+        with patch.object(worker, "_start_job", side_effect=[False]):
+            with patch(
+                "iris.ingestion.worker.http_requests.post",
+                side_effect=[
+                    _response(body={"jobs": [{"a": 1}]}),
+                    _response(body={"jobs": []}),
+                ],
+            ) as post:
+                worker._claim_once()  # pylint: disable=protected-access
+        first, second = post.call_args_list
+        assert (
+            first.kwargs["json"]["maxJobs"] == worker._config.capacity
+        )  # pylint: disable=protected-access
+        assert (
+            second.kwargs["json"]["maxJobs"] == worker._config.capacity
+        )  # pylint: disable=protected-access
 
 
 class TestHeartbeat:
@@ -234,6 +304,29 @@ class TestStartJob:
         worker = IngestionWorker()
         self._start_job(worker, "http://a:8080", add_job_started=False)
         assert "tok-12345678" not in worker._active  # pylint: disable=protected-access
+
+    def test_return_value_reports_whether_a_thread_actually_started(self):
+        worker = IngestionWorker()
+        dto = SimpleNamespace(
+            settings=SimpleNamespace(authentication_token="tok-a"),
+            lecture_unit=SimpleNamespace(course_id=1, lecture_id=2, lecture_unit_id=3),
+        )
+        upstream = SimpleNamespace(url="http://a:8080")
+        for add_job_started in (True, False):
+            handler = MagicMock()
+            handler.add_job.return_value = add_job_started
+            with (
+                patch(
+                    "iris.domain.ingestion.ingestion_pipeline_execution_dto"
+                    ".IngestionPipelineExecutionDto.model_validate",
+                    return_value=dto,
+                ),
+                patch("iris.web.utils.validate_pipeline_variant", return_value="v"),
+                patch("iris.web.routers.webhooks.ingestion_job_handler", handler),
+                patch("iris.web.routers.webhooks.run_lecture_update_pipeline_worker"),
+            ):
+                # pylint: disable-next=protected-access
+                assert worker._start_job({"job": 1}, upstream) is add_job_started
 
     def test_repeated_dedup_skips_escalate_to_a_warning_and_reset_on_start(
         self, caplog

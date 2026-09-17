@@ -27,6 +27,7 @@ client derives liveness from the same renewals.
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import requests as http_requests
 
@@ -98,11 +99,18 @@ class IngestionWorker:
         announcement header. Idempotent and cheap: an existing entry only gets
         its freshness and token refreshed.
 
+        Rejects anything that is not a well-formed http(s) URL, and, when
+        ``allowed_upstream_hosts`` is configured, anything whose host does not
+        match it. A caller that presents a valid API key can otherwise point
+        the worker's authenticated outbound requests (claim, heartbeat) at any
+        address Iris can reach; this is what stops that without breaking the
+        zero-config discovery every unconfigured deployment relies on today.
+
         :param base_url: the announcing installation's own base URL
         :param auth_token: the api key the announcement authenticated with
         """
         url = base_url.rstrip("/")
-        if not url:
+        if not url or not self._is_allowed_upstream(url):
             return
         with self._lock:
             existing = self._upstreams.get(url)
@@ -116,6 +124,25 @@ class IngestionWorker:
             else:
                 existing.auth_token = auth_token
                 existing.last_announced_monotonic = time.monotonic()
+
+    def _is_allowed_upstream(self, url: str) -> bool:
+        """Whether ``url`` is a well-formed http(s) URL and, when an allowlist is configured,
+        whose host is in it. Host comparison is case-insensitive and ignores the port, so one
+        allowlist entry covers an installation regardless of which port it announces."""
+        parsed = urlsplit(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            logger.warning(
+                "Rejected upstream announcement with an invalid URL: %s", url
+            )
+            return False
+        allowed = self._config.allowed_upstream_hosts
+        if allowed and parsed.hostname.lower() not in {h.lower() for h in allowed}:
+            logger.warning(
+                "Rejected upstream announcement from a host not in the allowlist: %s",
+                url,
+            )
+            return False
+        return True
 
     def _fresh_upstreams(self) -> list[_Upstream]:
         """Upstreams announced recently, rotated each tick so none starves another.
@@ -158,6 +185,9 @@ class IngestionWorker:
             headers={"Authorization": upstream.auth_token},
             json=payload,
             timeout=_REQUEST_TIMEOUT_SECONDS,
+            # Artemis never redirects this endpoint; disabled so a validated upstream cannot be
+            # used to reach an address that would not itself have passed _is_allowed_upstream.
+            allow_redirects=False,
         )
 
     # -------------------------------------------------------------- lifecycle
@@ -218,7 +248,13 @@ class IngestionWorker:
             slots -= self._claim_from(upstream, slots)
 
     def _claim_from(self, upstream: _Upstream, slots: int) -> int:
-        """Claim up to ``slots`` jobs from one upstream; returns how many started."""
+        """Claim up to ``slots`` jobs from one upstream; returns how many actually started.
+
+        Not the same as how many Artemis handed back: a job that ``_start_job`` skips as a
+        per-unit duplicate frees no thread and must not be counted as having consumed a slot,
+        or a duplicate in one upstream's response can make this tick under-claim from the next
+        upstream even though real capacity was never spent.
+        """
         try:
             response = self._post(
                 upstream, "claim", {"bootId": BOOT_ID, "maxJobs": slots}
@@ -229,11 +265,9 @@ class IngestionWorker:
             return 0
         upstream.claim_failures = 0
         jobs = (response.json() or {}).get("jobs") or []
-        for job in jobs:
-            self._start_job(job, upstream)
-        return len(jobs)
+        return sum(1 for job in jobs if self._start_job(job, upstream))
 
-    def _start_job(self, job: dict, upstream: _Upstream) -> None:
+    def _start_job(self, job: dict, upstream: _Upstream) -> bool:
         # Import here: the webhooks router pulls in the full pipeline stack, and
         # importing it at module load time would create a cycle through main.
         # pylint: disable=import-outside-toplevel
@@ -284,26 +318,24 @@ class IngestionWorker:
             if skips >= _WEDGED_UNIT_SKIP_THRESHOLD:
                 logger.warning(
                     "Unit %d skipped %d times: a prior run's thread is still alive; the unit stays "
-                    "blocked until that thread exits (token %s...)",
+                    "blocked until that thread exits",
                     unit_id,
                     skips,
-                    token[:8],
                 )
             else:
                 logger.info(
                     "Duplicate ingestion job for unit %d from %s already running; leaving the claim "
-                    "for Artemis to reclaim (token %s...)",
+                    "for Artemis to reclaim",
                     unit_id,
                     upstream.url,
-                    token[:8],
                 )
-            return
+            return False
         logger.info(
-            "Claimed ingestion job for unit %d from %s (token %s...)",
+            "Claimed ingestion job for unit %d from %s",
             unit_id,
             upstream.url,
-            token[:8],
         )
+        return True
 
     # -------------------------------------------------------- heartbeat loop
 
@@ -350,10 +382,12 @@ class IngestionWorker:
             # and stays harmless: its status callbacks are rejected by the token
             # check and its vector writes are superseded by the run-id sweep of
             # whichever run owns the unit next.
+            run = self._active.get(token)
+            unit_id = run.lecture_unit_id if run is not None else "unknown"
             logger.warning(
-                "%s revoked run %s... — it was reclaimed, letting the local thread drain",
+                "%s revoked the run for unit %s — it was reclaimed, letting the local thread drain",
                 upstream.url,
-                token[:8],
+                unit_id,
             )
 
     # ------------------------------------------------------------- logging

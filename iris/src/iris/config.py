@@ -168,6 +168,12 @@ class IngestionWorkerSettings(BaseModel):
     capacity: int = Field(default=2)
     poll_interval_seconds: float = Field(default=2.0)
     heartbeat_interval_seconds: float = Field(default=5.0)
+    # Hostnames (case-insensitive, port ignored) an announced upstream must match to be
+    # registered. Empty (the default) accepts any http(s) URL, matching today's zero-config
+    # discovery for local and single-tenant deployments. Set this where Iris is reachable by
+    # parties other than its own Artemis installations, so a valid API key cannot point the
+    # worker's authenticated outbound requests at an arbitrary internal or external address.
+    allowed_upstream_hosts: list[str] = Field(default_factory=list)
 
 
 class Settings(BaseModel):
