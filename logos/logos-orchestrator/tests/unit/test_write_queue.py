@@ -73,7 +73,8 @@ def test_shutdown_is_a_no_op_when_never_used():
 def test_shutdown_timeout_keeps_a_stalled_worker_registered():
     """A worker that outlives the shutdown deadline must stay registered so a
     later enqueue cannot start a second drain thread (which would break the
-    per-request FIFO ordering)."""
+    per-request FIFO ordering). Once the stall clears, a follow-up shutdown
+    delivers the sentinel and the worker exits cleanly."""
     q = write_queue.WriteQueue(sync=False, maxsize=2)
     started = threading.Event()
     gate = threading.Event()
@@ -93,8 +94,9 @@ def test_shutdown_timeout_keeps_a_stalled_worker_registered():
     assert thread is q._thread  # noqa: SLF001 — still registered, not replaced
     assert thread.is_alive()
     gate.set()
-    thread.join(2.0)  # worker finishes the buffered writes + sentinel
-    assert thread is q._thread  # noqa: SLF001 — still owned (now exited)
+    q.shutdown(timeout=2.0)  # sentinel fits now; worker drains + exits
+    assert q._thread is None  # noqa: SLF001 — cleared once the worker is gone
+    assert not thread.is_alive()
 
 
 def test_global_singleton_round_trip():
