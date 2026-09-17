@@ -441,6 +441,11 @@ class ModelProfile:
     # reason code (e.g. "invalid-repo-id") for ops visibility.
     calibration_unsupported: Optional[bool] = None
     calibration_unsupported_reason: Optional[str] = None
+    # Metal only: this node's working-set budget (MB) when this model last
+    # failed calibration with a capacity-like error. The calibration
+    # orchestrator takes the max of this across every provider's profile for
+    # the model to decide which nodes are still worth attempting.
+    metal_capacity_floor_mb: Optional[float] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
