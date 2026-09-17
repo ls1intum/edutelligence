@@ -1,0 +1,11 @@
+:root {
+  --ifm-color-primary: #3578e5;
+  --ifm-color-primary-dark: #2868d1;
+  --ifm-code-font-size: 95%;
+}
+
+/* Keep the square navbar logo at a readable size (navbar height is 80px). */
+.navbar .navbar__brand img {
+  height: 36px;
+  width: 36px;
+}
