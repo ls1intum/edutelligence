@@ -10,9 +10,9 @@ rule or its own TLS certificate.
 
 1. Register the provider with the Logos API and save its `provider_id` and
    `shared_key`.
-2. On the worker host, work in the worker directory
-   (`logos/logos-workernode/` in a repository checkout) and set
-   `LOGOS_URL` and `LOGOS_API_KEY` in its `.env`.
+2. On the worker host, enter the worker directory — from a repository
+   checkout, `cd logos/logos-workernode` — and set `LOGOS_URL` and
+   `LOGOS_API_KEY` in its `.env`.
 3. List the models and hardware in `config.yml`; keep credentials out of it.
 4. Start the worker from that directory with `docker compose up -d`.
 5. Check that `http://localhost:80/` returns the worker's service info, and
