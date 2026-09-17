@@ -1,0 +1,8 @@
+{
+  "name": "NVIDIA GeForce RTX 2080 Ti",
+  "compute_cap": "7.5",
+  "memory_total_mb": 11264,
+  "idle_power_w": 22.0,
+  "idle_temp_c": 33.0,
+  "fan_speed": "31"
+}
