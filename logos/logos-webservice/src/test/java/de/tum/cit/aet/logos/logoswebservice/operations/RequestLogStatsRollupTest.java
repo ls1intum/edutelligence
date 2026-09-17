@@ -223,39 +223,96 @@ class RequestLogStatsRollupTest {
     }
 
     @Test
-    void a_request_still_running_when_the_refresh_lands_is_not_frozen_by_it() {
-        // The reason the rollup stops six hours short of now. A row whose hour
-        // has closed can still be written to: the orchestrator fills in status,
-        // response time, tokens and settled cost when the request finishes. If
-        // such a row were rolled up, the live branch would no longer cover it
-        // and the finished request would keep showing as unfinished.
+    void a_row_that_changes_after_the_cutoff_is_corrected_by_the_next_refresh() {
+        // What the rollup actually guarantees, pinned so it cannot quietly get
+        // worse. The six-hour cutoff keeps a *running* request out of the rollup
+        // — production's per-request timeout is 600 s, so a request cannot still
+        // be in flight six hours later. Cost settlement has no such bound: it
+        // can land days after the request finished, and a row it touches is
+        // already inside the rollup by then.
+        //
+        // So this seeds a row well past the cutoff, rolls it up, changes it, and
+        // asserts both halves of the contract: the change is not visible while
+        // the rollup is stale, and the next refresh — a full rebuild — picks it
+        // up. Bounded staleness, not a permanently wrong number.
         jdbc.update("""
             INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
                                    timestamp_request, timestamp_forwarding, timestamp_response,
                                    was_cold_start, user_id, team_id)
-            VALUES (9408, 'roll-inflight', 3001, 5001, 6001, NULL,
+            VALUES (9408, 'roll-late-settle', 3001, 5001, 6001, 'error',
+                    date_trunc('hour', NOW()) - INTERVAL '9 hours',
+                    date_trunc('hour', NOW()) - INTERVAL '9 hours' + INTERVAL '1 second',
+                    date_trunc('hour', NOW()) - INTERVAL '9 hours' + INTERVAL '4 seconds',
+                    false, 1001, 2001)
+            """);
+        try {
+            populateRollup();
+            Map<String, Object> rolled = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
+            assertThat(((Number) rolled.get("error")).intValue()).isEqualTo(3);
+
+            // The row is past the cutoff, so it is in the rollup rather than the
+            // live branch — which is what makes this test test anything at all.
+            Integer inRollup = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM log_entry_hourly_stats
+                 WHERE bucket_hour = date_trunc('hour', NOW()) - INTERVAL '9 hours'
+                   AND result_status = 'error'
+                """, Integer.class);
+            assertThat(inRollup).isGreaterThan(0);
+
+            jdbc.update("UPDATE log_entry SET result_status = 'success' WHERE id = 9408");
+
+            // Stale until rebuilt: the rollup still carries the old status.
+            Map<String, Object> stale = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
+            assertThat(((Number) stale.get("error")).intValue()).isEqualTo(3);
+
+            // And the rebuild is what corrects it.
+            assertThat(refreshService.refreshNow()).isTrue();
+            Map<String, Object> fresh = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
+            assertThat(((Number) fresh.get("error")).intValue()).isEqualTo(2);
+            assertThat(((Number) fresh.get("success")).intValue()).isEqualTo(6);
+        } finally {
+            jdbc.update("DELETE FROM log_entry WHERE id = 9408");
+        }
+    }
+
+    @Test
+    void a_request_still_running_at_the_refresh_stays_on_the_live_side() {
+        // The case the cutoff exists for. A request forwarded inside the last six
+        // hours is not rolled up however often the view is rebuilt, so when it
+        // finishes the live branch reports it immediately — no refresh needed.
+        jdbc.update("""
+            INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                                   timestamp_request, timestamp_forwarding, timestamp_response,
+                                   was_cold_start, user_id, team_id)
+            VALUES (9409, 'roll-inflight', 3001, 5001, 6001, NULL,
                     date_trunc('hour', NOW()) - INTERVAL '2 hours',
                     date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '1 second',
                     NULL, false, 1001, 2001)
             """);
         try {
             populateRollup();
-            Map<String, Object> counts = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
-            assertThat(((Number) counts.get("unknown")).intValue()).isEqualTo(1);
+            Integer inRollup = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM log_entry_hourly_stats
+                 WHERE bucket_hour = date_trunc('hour', NOW()) - INTERVAL '2 hours'
+                """, Integer.class);
+            assertThat(inRollup).isZero();
 
-            // It finishes after the refresh. No refresh in between.
+            Map<String, Object> before = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
+            assertThat(((Number) before.get("unknown")).intValue()).isEqualTo(1);
+
             jdbc.update("""
                 UPDATE log_entry
                    SET result_status = 'success',
                        timestamp_response = date_trunc('hour', NOW()) - INTERVAL '2 hours' + INTERVAL '30 seconds'
-                 WHERE id = 9408
+                 WHERE id = 9409
                 """);
 
+            // No refresh in between: the live branch owns this row.
             Map<String, Object> after = (Map<String, Object>) stats(query(24, null, null)).get("statusCounts");
             assertThat(after.get("unknown")).isNull();
             assertThat(((Number) after.get("success")).intValue()).isEqualTo(6);
         } finally {
-            jdbc.update("DELETE FROM log_entry WHERE id = 9408");
+            jdbc.update("DELETE FROM log_entry WHERE id = 9409");
         }
     }
 

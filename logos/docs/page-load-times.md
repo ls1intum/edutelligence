@@ -67,15 +67,37 @@ Properties that matter:
 - **Whole hours, and only ones that closed six hours ago.** A closed hour does
   not make its rows immutable — a request forwarded at 04:59 and still running
   at the 05:05 refresh would be rolled up with no status, duration, tokens or
-  settled cost, and its effective timestamp puts it below the watermark where
-  the live branch can no longer correct it. Production carries 1,050 such rows
-  in closed hours. Six hours clears the p99.9 request duration of 20 minutes by
-  a wide margin.
+  cost, and its effective timestamp puts it below the watermark where the live
+  branch can no longer correct it. Production carries 1,050 such rows in closed
+  hours. Six hours is sized against the request timeout rather than a
+  percentile: a request cannot outlive `LOGOSNODE_INFER_TIMEOUT_SECONDS`, 600 s
+  in production, so the gap is roughly 36× the longest one can still be
+  running.
 - **The boundary is a function of time alone.** Excluding rows by a mutable flag
-  would look tighter and be wrong: the rollup would hold what the flag said at
+  would look tighter and be worse: the rollup would hold what the flag said at
   refresh time while the reader tested what it says now, so a row that settled
-  in between would belong to neither branch. A time boundary partitions the
-  range exactly once regardless of what any row does afterwards.
+  in between would belong to neither branch and drop out of the totals. A time
+  boundary partitions the range exactly once regardless of what any row does
+  afterwards.
+
+### What the gap does not cover
+
+Cost settlement has no timeout. It can land days after the request finished —
+production's oldest unsettled completed row is 9.5 days old — so it changes rows
+that are already inside the rollup. Those carry a stale cost until the next
+rebuild.
+
+That is bounded staleness, not a number that stays wrong: `REFRESH` recomputes
+the whole view, so at most one refresh interval separates a late correction from
+the page. `RequestLogStatsRollupTest` pins both halves — that a row past the
+cutoff really is in the rollup and does not follow a change until a refresh, and
+that a request still running is kept on the live side and does.
+
+Removing even that window means tracking mutations, so a changed row leaves the
+rollup and rejoins it. A view rebuilt whole cannot do it: it has no way to
+retract a row's stale contribution, so any "take changed rows live as well"
+rule double-counts them. It needs incremental maintenance over a real table —
+listed under *Still open* below.
 - **Ids, not derived values.** `provider_id`/`model_id` stay as ids and the
   reader joins `providers`/`models` live, so a renamed model or a changed
   privacy level shows up without a refresh.
@@ -192,9 +214,12 @@ identical values, identical totals. Snapshot timing 4,746 ms -> 693 ms.
   missing index, and the view fix already took the query out of the "unusable"
   range.
 - **Incremental rollup refresh.** `REFRESH ... CONCURRENTLY` rebuilds all 12.5k
-  rows hourly. That is cheap today. If `log_entry` grows an order of magnitude,
-  replacing the materialized view with a table upserted for recent hours only
-  would keep the refresh proportional to new traffic rather than to history.
+  rows hourly. That is cheap today, but a real table upserted per changed hour
+  would buy two things at once: a refresh proportional to new traffic rather
+  than to history, and the ability to retract a row's contribution when it
+  changes — which is what would close the late-settlement staleness window
+  above. It needs a change marker on `log_entry` (an `updated_at` maintained by
+  a trigger would do) so the upsert knows which hours to recompute.
 - **`provider_snapshots`.** 530k rows / 10 GB for a 7-day retention window, 9.5 GB
   of it JSONB payload. Nothing on the statistics page reads the history any more
   (the VRAM-remaining chart that did has been removed), only the latest sample

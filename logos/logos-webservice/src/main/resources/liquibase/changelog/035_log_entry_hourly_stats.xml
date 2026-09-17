@@ -34,12 +34,14 @@
 
          Freshness: the view stops six hours short of now, so the partial head
          hour, the last six hours and everything newer than the last refresh are
-         read from log_entry and merged on top. A stale or lagging view shifts
-         work back to the base table without changing the numbers, because the
-         split between the two is a function of time alone and partitions the
-         range exactly once. The six-hour gap is what keeps rows that are still
-         being written out of the rollup in the first place - see the changeSet
-         below. RequestLogStatsRefreshService refreshes it hourly. -->
+         read from log_entry and merged on top. The split is a function of time
+         alone, so it partitions the range exactly once and a lagging refresh
+         only moves work back to the base table - it cannot double-count a row
+         or drop one. The six-hour gap is what keeps rows that are still being
+         written out of the rollup at all; what it cannot cover is a late cost
+         settlement, which leaves that row's cost stale until the next rebuild.
+         Both are spelled out on the rollup changeSet below.
+         RequestLogStatsRefreshService refreshes it hourly. -->
 
     <!-- log_entry_cost calls logos_price_usage, which reaches for `providers`
          without a schema. CREATE and REFRESH MATERIALIZED VIEW run with a
@@ -115,22 +117,37 @@
          pre-averaged hours would weight a quiet hour like a busy one.
 
          The cutoff is the start of the hour six hours ago, not the start of the
-         current hour, and the six hours are the point. A closed hour does not
-         make its rows immutable: a request forwarded at 04:59 and still running
-         when the 05:05 refresh lands would be rolled up with no status, no
-         duration, no tokens and no settled cost, and because its effective
-         timestamp sits below the watermark the live branch would not correct it
-         either. Production has 1,050 such rows in closed hours right now. Six
-         hours clears the p99.9 request duration of 20 minutes by a wide margin,
-         and a row that still changes after it is picked up by the next refresh
-         rather than never.
+         current hour, and the gap is the point. A closed hour does not make its
+         rows immutable: a request forwarded at 04:59 and still running when the
+         05:05 refresh lands would be rolled up with no status, no duration, no
+         tokens and no cost, and its effective timestamp would put it below the
+         watermark where the live branch can no longer correct it. Production
+         carries 1,050 rows sitting in closed hours with no status.
+
+         Six hours is sized against the request timeout, not against a
+         percentile: a request cannot outlive LOGOSNODE_INFER_TIMEOUT_SECONDS,
+         which is 600 s in production, so six hours is roughly 36 times the
+         longest a request can still be running. Raise the interval if that
+         timeout is ever raised past an hour.
+
+         What the gap does not bound is cost settlement, which has no timeout and
+         can land days after the request finished - production's oldest unsettled
+         completed row is 9.5 days old. Such a row is already inside the rollup
+         when it changes, so its cost is stale until the next rebuild. That is
+         bounded staleness rather than a wrong number that stays wrong: REFRESH
+         recomputes the whole view, so at most one refresh interval separates a
+         late correction from the page. Both halves of this are pinned by
+         RequestLogStatsRollupTest.
 
          The boundary stays purely a function of time on purpose. Excluding rows
-         by a mutable flag instead would look tighter and be wrong: the rollup
+         by a mutable flag instead would look tighter and be worse: the rollup
          would hold what the flag said at refresh time while the reader tested
-         what it says now, and a row that settled in between would belong to
-         neither branch. A time boundary partitions the range exactly once, no
-         matter what any row does afterwards.
+         what it says now, so a row that settled in between would belong to
+         neither branch and disappear from the totals outright. A time boundary
+         partitions the range exactly once, whatever any row does afterwards.
+         Tracking mutations properly - so that a changed row leaves the rollup
+         and rejoins it - needs incremental maintenance over a real table rather
+         than a view rebuilt whole; see docs/page-load-times.md.
 
          max(bucket_hour) + 1 hour is therefore a watermark the reader can trust,
          and it reads everything above it from log_entry.
