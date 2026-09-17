@@ -23,11 +23,24 @@ class RateLimitConfig:
     window_seconds: int = 60
 
 
+#: How often a locked call sweeps stale keys out of both stores. Deliberately much
+#: longer than any window_seconds used in this module (always 60, see
+#: RateLimitConfig) so a sweep is cheap relative to how rarely it needs to run.
+_SWEEP_INTERVAL_S = 300
+
+#: A key is swept once its most recent entry is older than this. Larger than every
+#: window_seconds in this module so a key already past this age is guaranteed to
+#: have nothing left to prune under any of them — this is what lets "stale by this
+#: much" stand in for "idle" without tracking last-access time separately.
+_STALE_AFTER_S = 120
+
+
 class InMemoryRateLimiter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._request_windows: dict[str, deque] = {}
         self._token_windows: dict[str, deque] = {}
+        self._last_sweep = time.monotonic()
 
     def _prune_requests(self, dq: deque, cutoff: float) -> None:
         while dq and dq[0] < cutoff:
@@ -36,6 +49,34 @@ class InMemoryRateLimiter:
     def _prune_tokens(self, dq: deque, cutoff: float) -> None:
         while dq and dq[0][0] < cutoff:
             dq.popleft()
+
+    def _sweep_locked(self, now: float) -> None:
+        """Evict keys pruning alone never reaches. Call with `self._lock` held.
+
+        `_prune_requests`/`_prune_tokens` only touch a key's own deque, and only
+        when that same key is looked up again — so a client that stops sending
+        requests (the common case for the per-IP buckets in `enforce_ip_rate_limit`
+        / `enforce_auth_failure_budget`: /health and /info take no credential, so
+        distinct source addresses show up once and often never again) would
+        otherwise sit in both dicts for the life of the process. Runs at most
+        once per `_SWEEP_INTERVAL_S`, so the O(n) scan below is cheap relative to
+        how rarely it happens.
+        """
+        if now - self._last_sweep < _SWEEP_INTERVAL_S:
+            return
+        self._last_sweep = now
+        cutoff = now - _STALE_AFTER_S
+        # Deques are appended in increasing time order, so the last entry is the
+        # most recent — if that one is already stale, everything before it is too.
+        for key in [k for k, dq in self._request_windows.items() if not dq or dq[-1] < cutoff]:
+            del self._request_windows[key]
+        for key in [k for k, dq in self._token_windows.items() if not dq or dq[-1][0] < cutoff]:
+            del self._token_windows[key]
+
+    def tracked_key_count(self) -> int:
+        """Total keys tracked across both stores. Exposed for tests observing memory bounds."""
+        with self._lock:
+            return len(self._request_windows) + len(self._token_windows)
 
     def check_and_record(self, key: str, config: RateLimitConfig) -> Tuple[bool, str]:
         # The TPM check runs before the RPM slot is recorded. A request the
@@ -48,6 +89,7 @@ class InMemoryRateLimiter:
         cutoff = now - config.window_seconds
 
         with self._lock:
+            self._sweep_locked(now)
             if config.tpm is not None:
                 tok_dq = self._token_windows.setdefault(key, deque())
                 self._prune_tokens(tok_dq, cutoff)
@@ -77,6 +119,7 @@ class InMemoryRateLimiter:
         now = time.monotonic()
 
         with self._lock:
+            self._sweep_locked(now)
             tok_dq = self._token_windows.setdefault(key, deque())
             tok_dq.append((now, token_count))
 
@@ -91,6 +134,7 @@ class InMemoryRateLimiter:
         now = time.monotonic()
         cutoff = now - window_seconds
         with self._lock:
+            self._sweep_locked(now)
             dq = self._request_windows.setdefault(key, deque())
             self._prune_requests(dq, cutoff)
             return len(dq) < limit
@@ -99,6 +143,7 @@ class InMemoryRateLimiter:
         """Spend one request slot for `key`, unconditionally."""
         now = time.monotonic()
         with self._lock:
+            self._sweep_locked(now)
             dq = self._request_windows.setdefault(key, deque())
             dq.append(now)
 

@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.common;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -118,6 +119,83 @@ class IpRateLimiterServiceTest {
         }
 
         assertEquals(limit, reserved.get());
+    }
+
+    @Test
+    void concurrentValidRequests_eachReleaseTheirOwnReservation() throws InterruptedException {
+        // Regression: releasing the reservation only after downstream work (e.g. the orchestrator call) meant a
+        // burst of concurrent *valid* requests could occupy every slot while their downstream work was in
+        // flight, causing the next valid request to see 429 even though every caller held a genuine key. The
+        // fix is structural (ModelController releases immediately after key validation, before calling out) —
+        // this test pins the limiter-level contract that a reserve immediately followed by a release, repeated
+        // concurrently, never exhausts the budget no matter how many callers do it.
+        int limit = 5;
+        int concurrentCallers = 50;
+        IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 60, limit));
+
+        ExecutorService pool = Executors.newFixedThreadPool(concurrentCallers);
+        CountDownLatch ready = new CountDownLatch(concurrentCallers);
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicInteger admitted = new AtomicInteger();
+        try {
+            for (int i = 0; i < concurrentCallers; i++) {
+                pool.submit(() -> {
+                    ready.countDown();
+                    try {
+                        start.await();
+                    }
+                    catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    if (limiter.tryReserveAuthFailureSlot("9.9.9.9")) {
+                        admitted.incrementAndGet();
+                        // Simulates a "key turned out valid" caller: release right away, as
+                        // ModelController now does, rather than holding the slot through downstream work.
+                        limiter.releaseAuthFailureSlot("9.9.9.9");
+                    }
+                });
+            }
+            ready.await();
+            start.countDown();
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS));
+        }
+        finally {
+            pool.shutdownNow();
+        }
+
+        // Every caller released its own reservation immediately, so none of the concurrency should have been
+        // throttled — a stronger guarantee than merely "at least `limit` got through".
+        assertEquals(concurrentCallers, admitted.get());
+    }
+
+    @Test
+    void evictStaleWindows_reclaimsWindowsOnceTheyHaveNothingLeftAfterPruning() throws InterruptedException {
+        // Regression: neither store ever removed a key, so /info (unauthenticated, therefore queried by an
+        // ever-changing set of source addresses) would grow the map for the life of the process. A short window
+        // (instead of the real 1-minute one) lets this test observe real-time expiry without sleeping a minute.
+        IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 1000, 1000), Duration.ofMillis(20));
+        int distinctAddresses = 500;
+        for (int i = 0; i < distinctAddresses; i++) {
+            limiter.enforcePublicEndpoint("10.0.0." + i, "info");
+        }
+        assertEquals(distinctAddresses, limiter.trackedWindowCount());
+
+        Thread.sleep(60); // longer than the 20ms window, so every window has nothing left to prune
+        limiter.evictStaleWindows();
+        assertEquals(0, limiter.trackedWindowCount());
+    }
+
+    @Test
+    void evictStaleWindows_keepsWindowsWithRecentActivity() {
+        IpRateLimiterService limiter = new IpRateLimiterService(new RateLimitingProperties(true, 1000, 1000));
+
+        limiter.enforcePublicEndpoint("10.0.0.1", "info");
+        limiter.evictStaleWindows();
+
+        // The call above is well within the (real, 1-minute) window, so the sweep must not have touched it.
+        assertEquals(1, limiter.trackedWindowCount());
     }
 
     @Test

@@ -2,6 +2,8 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -76,8 +78,11 @@ public class ModelController {
      * A 401 here is exactly what lets a caller test a leaked key for validity, so repeated 401s from one address
      * are rate limited: {@link IpRateLimiterService#tryReserveAuthFailureSlot} atomically checks and reserves the
      * budget before authentication runs, so a burst of concurrent requests cannot all slip through on the same
-     * free slot. The reservation is given back on success (see {@link IpRateLimiterService#releaseAuthFailureSlot})
-     * so real traffic stays governed by the key's own limits instead.
+     * free slot. The reservation is given back the moment the key is known valid (see
+     * {@link IpRateLimiterService#releaseAuthFailureSlot}) — deliberately before the orchestrator call below,
+     * which can be slow and does not need auth to succeed again: holding the reservation through it would let a
+     * burst of valid concurrent requests exhaust the failure budget among themselves while their calls are in
+     * flight, and would leave the slot stuck until it expired if that call ever threw.
      */
     @PostMapping("/get_model_health")
     public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
@@ -87,15 +92,15 @@ public class ModelController {
         }
 
         String apiKey = extractApiKey(request);
-        if (apiKey == null) {
+        Optional<Set<String>> accessibleModels = apiKey == null
+            ? Optional.empty()
+            : modelService.resolveAccessibleModelsForApiKey(apiKey);
+        if (accessibleModels.isEmpty()) {
             return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
         }
-        return modelService.getModelHealth(apiKey)
-            .map(result -> {
-                rateLimiter.releaseAuthFailureSlot(clientIp);
-                return ResponseEntity.ok(result);
-            })
-            .orElseGet(() -> ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key")));
+
+        rateLimiter.releaseAuthFailureSlot(clientIp);
+        return ResponseEntity.ok(modelService.getModelHealthForAccessibleModels(accessibleModels.get()));
     }
 
     static String extractApiKey(HttpServletRequest request) {

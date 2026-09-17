@@ -213,6 +213,10 @@ services:
       # map, internal paths included — they stay off unless a deployment
       # explicitly opts in (the dev compose does).
       LOGOS_DOCS_ENABLED: "${LOGOS_DOCS_ENABLED:-}"
+      # Per-IP rate limits: /health (no credential, DB-backed) and repeated
+      # auth failures on /v1/models, /v1/chat/completions. See logos.rate_limiter.
+      LOGOS_PUBLIC_ENDPOINT_RPM: "${LOGOS_PUBLIC_ENDPOINT_RPM:-60}"
+      LOGOS_AUTH_FAILURE_RPM: "${LOGOS_AUTH_FAILURE_RPM:-20}"
       TZ: "${TZ:-Europe/Berlin}"
     expose:
       - "8080"
@@ -327,6 +331,11 @@ services:
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      # Per-IP rate limits: /info (no credential) and repeated auth failures on
+      # /logosdb/get_model_health. See application.properties (logos.rate-limiting.*).
+      LOGOS_RATE_LIMITING_ENABLED: "${LOGOS_RATE_LIMITING_ENABLED:-true}"
+      LOGOS_RATE_LIMIT_PUBLIC_RPM: "${LOGOS_RATE_LIMIT_PUBLIC_RPM:-60}"
+      LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM: "${LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM:-20}"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
       # Keycloak (also served back to the UI via /api/info)
       KEYCLOAK_ISSUER_URI: "${KEYCLOAK_ISSUER_URI:?KEYCLOAK_ISSUER_URI must be set}"

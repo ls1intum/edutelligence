@@ -137,3 +137,41 @@ def test_auth_failure_budget_is_spent_only_by_record_auth_failure(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         rl.enforce_auth_failure_budget("9.9.9.9")
     assert exc.value.status_code == 429
+
+
+def test_high_cardinality_churn_is_reclaimed_once_stale(monkeypatch):
+    # Regression: neither store ever removed a key, so a per-IP bucket (e.g.
+    # /health, /info — no credential, so callers churn through distinct source
+    # addresses) would grow for the life of the process. Simulate high
+    # cardinality, then simulate enough time passing for every one of those
+    # keys to have gone stale.
+    limiter = InMemoryRateLimiter()
+    distinct_addresses = 500
+    for i in range(distinct_addresses):
+        limiter.check_and_record(f"ip:10.0.0.{i}:health", RateLimitConfig(rpm=1000))
+    assert limiter.tracked_key_count() == distinct_addresses
+
+    class _Clock:
+        @staticmethod
+        def monotonic():
+            return 1e9  # far beyond _STALE_AFTER_S past every recorded timestamp
+
+    monkeypatch.setattr(rl, "time", _Clock())
+    # Any call re-enters the locked section and triggers the sweep (the
+    # interval has necessarily elapsed too, given the clock jump above).
+    limiter.check_and_record("trigger-the-sweep", RateLimitConfig(rpm=1000))
+
+    # Only the key this call itself just created survives.
+    assert limiter.tracked_key_count() == 1
+
+
+def test_sweep_does_not_touch_a_key_with_recent_activity(monkeypatch):
+    limiter = InMemoryRateLimiter()
+    limiter.check_and_record("k", RateLimitConfig(rpm=1000))
+
+    # Force the sweep to run on the next call without any time having passed,
+    # so "recently active" is the only thing keeping this key alive.
+    monkeypatch.setattr(rl, "_SWEEP_INTERVAL_S", 0)
+    limiter.check_and_record("k", RateLimitConfig(rpm=1000))
+
+    assert limiter.tracked_key_count() == 1
