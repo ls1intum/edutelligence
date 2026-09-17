@@ -36,6 +36,7 @@
     "@angular/compiler-cli": "^21.2.17",
     "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4.3.1",
+    "@types/node": "^22.20.3",
     "jsdom": "^28.0.0",
     "postcss": "^8.5.15",
     "prettier": "^3.8.1",

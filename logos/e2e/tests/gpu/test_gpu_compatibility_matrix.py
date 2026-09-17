@@ -200,3 +200,33 @@ async def test_credentials_are_not_recorded_in_the_simulator_state(spawned, monk
         assert recorded.get("TORCH_CUDA_ARCH_LIST") == "8.9"
     finally:
         await ctx.__aexit__(None, None, None)
+
+
+async def test_pinned_device_order_decides_which_card_the_lane_uses(spawned):
+    """CUDA_VISIBLE_DEVICES is an ordering, not merely a filter.
+
+    CUDA numbers logical devices by position in that variable, so
+    ``CUDA_VISIBLE_DEVICES=1,0`` makes physical GPU 1 the lane's device 0. A
+    simulator that selected by membership against its own device order would
+    hand a TP=1 lane GPU 0 while real vLLM ran on GPU 1 — and the ledger would
+    then certify placement and capacity against a card the lane never touched.
+
+    The node is heterogeneous on purpose: with two identical cards the wrong
+    choice is invisible, because both allocations look the same.
+    """
+    env, handle, ctx = await spawned(GpuScenario(profiles=["rtx2080ti", "l40s"]))
+    try:
+        config = lane_harness.lane_config(gpu_memory_utilization=0.5)
+        config.gpu_devices = "1,0"  # L40S first: it is the lane's device 0
+        await handle.spawn(config)
+
+        assert env.last_env().get("CUDA_VISIBLE_DEVICES") == "1,0"
+
+        l40s_total = GpuProfile.load("l40s").memory_total_mb
+        assert env.used_mb(1) == pytest.approx(l40s_total * 0.5, rel=0.01), (
+            "the lane did not land on the first pinned card (the L40S) — "
+            "device order was treated as a membership filter"
+        )
+        assert env.used_mb(0) == 0.0, "the 2080 Ti was allocated against despite being second in the pin"
+    finally:
+        await ctx.__aexit__(None, None, None)

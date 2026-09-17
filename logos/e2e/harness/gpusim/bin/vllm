@@ -109,6 +109,13 @@ def _target_devices(tensor_parallel_size: int) -> list[int]:
     ``CUDA_VISIBLE_DEVICES`` pins the lane when the config set an explicit
     device list; otherwise the lane takes the first TP devices, which is what
     vLLM does.
+
+    The pinned list is an *ordering*, not just a filter: CUDA numbers logical
+    devices by position in that variable, so ``CUDA_VISIBLE_DEVICES=2,0`` makes
+    physical GPU 2 the lane's device 0. Selecting by membership against the
+    simulator's own order would hand a TP=1 lane GPU 0 while real vLLM used
+    GPU 2 — and on a heterogeneous node the ledger would then certify placement
+    and capacity against a card the lane never touched.
     """
     try:
         sim = gpustate.load()
@@ -119,8 +126,10 @@ def _target_devices(tensor_parallel_size: int) -> list[int]:
     if pinned is not None:
         if not pinned.strip():
             return []
-        wanted = [int(p) for p in pinned.split(",") if p.strip().isdigit()]
-        visible = [i for i in visible if i in wanted]
+        present = set(visible)
+        # Iterate the pinned list, not the simulator's, so position decides.
+        # An index that names no present device is dropped, as CUDA drops it.
+        visible = [int(p) for p in pinned.split(",") if p.strip().isdigit() and int(p) in present]
     return visible[:tensor_parallel_size]
 
 

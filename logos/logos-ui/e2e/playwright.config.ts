@@ -13,7 +13,7 @@ import { defineConfig, devices } from '@playwright/test';
  * start it: a run that owns the lifecycle rebuilds images every time and tears
  * down the evidence at the moment a failure needs looking at.
  */
-const UI_URL = process.env.E2E_UI_URL ?? `http://localhost:${process.env.E2E_UI_PORT ?? 18091}`;
+const UI_URL = process.env['E2E_UI_URL'] ?? `http://localhost:${process.env['E2E_UI_PORT'] ?? 18091}`;
 
 export default defineConfig({
   testDir: '.',
@@ -23,12 +23,12 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   timeout: 90_000,
   fullyParallel: false,
-  forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  forbidOnly: !!process.env['CI'],
+  retries: process.env['CI'] ? 1 : 0,
   // One worker: the specs share one seeded database and one worker fleet, so
   // parallel runs would be asserting on state each other is changing.
   workers: 1,
-  reporter: process.env.CI
+  reporter: process.env['CI']
     ? [['github'], ['html', { outputFolder: './.playwright/report', open: 'never' }]]
     : [['list']],
   use: {

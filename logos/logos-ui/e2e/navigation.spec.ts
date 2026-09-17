@@ -71,22 +71,44 @@ test.describe('unauthenticated access', () => {
     // only that the login button eventually appears would pass even if the
     // admin chrome painted first and was then replaced — and a flash of another
     // tenant's navigation is a real leak, not a cosmetic one.
+    type ShellWatch = { __shellSeen: boolean; __shellWatchError?: string };
+
     await page.addInitScript(() => {
-      (window as unknown as { __shellSeen: boolean }).__shellSeen = false;
+      const watch = window as unknown as ShellWatch;
+      watch.__shellSeen = false;
       const check = () => {
         if (document.querySelector('app-shell, main.main-content')) {
-          (window as unknown as { __shellSeen: boolean }).__shellSeen = true;
+          watch.__shellSeen = true;
         }
       };
-      new MutationObserver(check).observe(document.documentElement, { childList: true, subtree: true });
-      check();
+      try {
+        // Observe `document`, not `document.documentElement`. An init script can
+        // run before the root element exists, and observing a null target
+        // throws — after __shellSeen was already set to false. That exception
+        // does not fail the test, so the assertion below would read false and
+        // pass even if the shell did flash: a check that cannot fail.
+        new MutationObserver(check).observe(document, { childList: true, subtree: true });
+        check();
+      } catch (error) {
+        watch.__shellWatchError = String(error);
+      }
     });
 
     await page.goto('/statistics');
 
     await expect(page.getByRole('button', { name: /sign in with tum/i })).toBeVisible({ timeout: 30_000 });
 
-    const shellSeen = await page.evaluate(() => (window as unknown as { __shellSeen: boolean }).__shellSeen);
-    expect(shellSeen, 'the authenticated shell rendered before the redirect to login').toBe(false);
+    const watch = await page.evaluate(() => {
+      const w = window as unknown as ShellWatch;
+      return { seen: w.__shellSeen, error: w.__shellWatchError };
+    });
+
+    // Assert the watcher attached before trusting what it reports, so a broken
+    // observer surfaces as a failure rather than as a silent pass.
+    expect(
+      watch.error,
+      `the shell observer never attached (${watch.error}), so this test could not have detected a flash`,
+    ).toBeUndefined();
+    expect(watch.seen, 'the authenticated shell rendered before the redirect to login').toBe(false);
   });
 });
