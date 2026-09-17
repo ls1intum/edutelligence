@@ -1,0 +1,565 @@
+"""Tests for the Metal (Apple Silicon) calibration probe.
+
+No real vLLM/mlx process is ever spawned here — spawn, readiness, warmup
+and memory reads are all mocked, matching the style of the CUDA
+calibration tests in test_calibration.py.
+"""
+
+from __future__ import annotations
+
+import threading
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from logos_worker_node.calibration_metal import (
+    _build_metal_calibration_cmd,
+    _build_metal_calibration_env,
+    _log_working_set_budget,
+    calibrate_model_metal,
+)
+from logos_worker_node.models import MetalConfig
+
+# ═══════════════════════════════════════════════════════════════════════
+# _build_metal_calibration_cmd
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_build_cmd_basic_flags():
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
+    assert cmd[:3] == ["vllm", "serve", "org/model"]
+    assert "--host" in cmd and "127.0.0.1" in cmd
+    assert "--port" in cmd and "11499" in cmd
+    assert "--max-model-len" in cmd and "auto" in cmd
+    # No CUDA-only or KV-sweep flags — they do not exist on vllm-metal.
+    assert "--kv-cache-memory-bytes" not in cmd
+    assert "--tensor-parallel-size" not in cmd
+    assert "--enable-sleep-mode" not in cmd
+
+
+def test_build_cmd_omits_gpu_memory_utilization_by_default():
+    """No explicit fraction unless the plan pins one — lets vllm-metal
+    self-size against VLLM_METAL_MEMORY_FRACTION / the real working set."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
+    assert "--gpu-memory-utilization" not in cmd
+
+
+def test_build_cmd_forwards_explicit_gpu_memory_utilization():
+    cmd = _build_metal_calibration_cmd(
+        {"model": "org/model", "gpu_memory_utilization": 0.85},
+        ["vllm"],
+        "127.0.0.1",
+        11499,
+    )
+    idx = cmd.index("--gpu-memory-utilization")
+    assert cmd[idx + 1] == "0.85"
+
+
+def test_build_cmd_forwards_quantization_and_enforce_eager():
+    cmd = _build_metal_calibration_cmd(
+        {"model": "org/model", "quantization": "awq", "enforce_eager": True},
+        ["vllm"],
+        "127.0.0.1",
+        11499,
+    )
+    assert "--quantization" in cmd and "awq" in cmd
+    assert "--enforce-eager" in cmd
+
+
+def test_build_cmd_forwards_extra_args():
+    cmd = _build_metal_calibration_cmd(
+        {"model": "org/model", "extra_args": ["--trust-remote-code"]},
+        ["vllm"],
+        "127.0.0.1",
+        11499,
+    )
+    assert "--trust-remote-code" in cmd
+
+
+def test_build_cmd_extra_args_cannot_override_the_loopback_bind():
+    """A --host smuggled in via extra_args must not win: argparse keeps the
+    last occurrence, so the loopback bind must be repeated after extras."""
+    cmd = _build_metal_calibration_cmd(
+        {"model": "org/model", "extra_args": ["--host", "0.0.0.0", "--port", "9999"]},
+        ["vllm"],
+        "127.0.0.1",
+        11499,
+    )
+    host_indexes = [i for i, tok in enumerate(cmd) if tok == "--host"]
+    port_indexes = [i for i, tok in enumerate(cmd) if tok == "--port"]
+    assert cmd[host_indexes[-1] + 1] == "127.0.0.1"
+    assert cmd[port_indexes[-1] + 1] == "11499"
+
+
+def test_build_cmd_enables_prefix_caching_by_default():
+    """Matches the CUDA calibration path's own default (calibration.py):
+    this changes vLLM's KV-cache accounting, so probing without it
+    measures a different process than the production lane runs."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
+    assert "--enable-prefix-caching" in cmd
+
+
+def test_build_cmd_respects_explicit_prefix_caching_disable():
+    cmd = _build_metal_calibration_cmd(
+        {"model": "org/model", "enable_prefix_caching": False}, ["vllm"], "127.0.0.1", 11499
+    )
+    assert "--enable-prefix-caching" not in cmd
+
+
+def test_build_cmd_forwards_max_num_seqs():
+    cmd = _build_metal_calibration_cmd({"model": "org/model", "max_num_seqs": 64}, ["vllm"], "127.0.0.1", 11499)
+    idx = cmd.index("--max-num-seqs")
+    assert cmd[idx + 1] == "64"
+
+
+def test_build_cmd_forwards_explicit_max_model_len():
+    """A model whose full context does not fit the node (e.g.
+    config.example.mlx.yml's max_model_len: 32768 pin) must probe at that
+    length, not "auto" — production starts the lane at the pinned length
+    too, so a wider "auto" measurement would not match what actually runs."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model", "max_model_len": 32768}, ["vllm"], "127.0.0.1", 11499)
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "32768"
+
+
+def test_build_cmd_mm_processor_cache_gb_defaults_to_four():
+    """Unconfigured plans must still measure vLLM's own 4 GB default —
+    production (metal_process.py/vllm_process.py) always passes the flag."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model"}, ["vllm"], "127.0.0.1", 11499)
+    idx = cmd.index("--mm-processor-cache-gb")
+    assert cmd[idx + 1] == "4.0"
+
+
+def test_build_cmd_forwards_explicit_mm_processor_cache_gb_zero():
+    """0 must be forwarded, not treated as falsy/absent — a model pinning
+    mm_processor_cache_gb: 0 (config.example.mlx.yml) frees the 4 GB
+    default reserves, and calibrating under the default would over-reserve
+    versus what the served lane actually needs."""
+    cmd = _build_metal_calibration_cmd({"model": "org/model", "mm_processor_cache_gb": 0}, ["vllm"], "127.0.0.1", 11499)
+    idx = cmd.index("--mm-processor-cache-gb")
+    assert cmd[idx + 1] == "0"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# _build_metal_calibration_env
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_build_env_strips_stale_cuda_vars(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("NCCL_P2P_DISABLE", "1")
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], None)
+    assert "CUDA_VISIBLE_DEVICES" not in env
+    assert "NCCL_P2P_DISABLE" not in env
+
+
+def test_build_env_forwards_worker_metal_tuning_knobs():
+    """A node-wide VLLM_METAL_MEMORY_FRACTION shapes every production
+    lane's footprint — the probe measures a different process without it."""
+    mc = MetalConfig(memory_fraction=0.7, use_paged_attention=False, multimodal_mode="text-only-compat")
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], mc)
+    assert env["VLLM_METAL_MEMORY_FRACTION"] == "0.7"
+    assert env["VLLM_METAL_USE_PAGED_ATTENTION"] == "0"
+    assert env["VLLM_METAL_MULTIMODAL_MODE"] == "text-only-compat"
+
+
+def test_build_env_prepends_resolved_binary_dir_to_path():
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], None)
+    assert env["PATH"].split(":")[0] == "/fake/vllm-metal/bin"
+
+
+def test_build_env_applies_plan_env_overrides_after_worker_overrides():
+    """Per-model engines.vllm.model_overrides.<model>.env_overrides must
+    win over a node-wide engines.metal.env_overrides default, matching
+    production precedence (MetalVllmProcessHandle._build_env)."""
+    mc = MetalConfig(env_overrides={"FOO": "worker", "BAR": "worker"})
+    env = _build_metal_calibration_env(["/fake/vllm-metal/bin/vllm"], mc, plan_env_overrides={"FOO": "plan"})
+    assert env["FOO"] == "plan"
+    assert env["BAR"] == "worker"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# _log_working_set_budget
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_log_working_set_budget_logs_when_probe_answers(caplog):
+    info = {"max_recommended_working_set_size": 30_000_000_000, "device_name": "M3 Pro"}
+    with patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info):
+        with caplog.at_level("INFO"):
+            _log_working_set_budget("org/model")
+    assert any("working-set budget" in r.message for r in caplog.records)
+
+
+def test_log_working_set_budget_is_silent_when_probe_unavailable(caplog):
+    with patch("logos_worker_node.calibration_metal.probe_device_info", return_value=None):
+        with caplog.at_level("INFO"):
+            _log_working_set_budget("org/model")  # must not raise
+    assert not any("working-set budget" in r.message for r in caplog.records)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# calibrate_model_metal
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _patch_metal_infra(*, wired_memory_sequence, wait_ready_side_effect=None, warmup_ok=True):
+    mock_proc = MagicMock()
+    mock_proc.pid = 4242
+    mock_proc.poll.return_value = None
+    patches = {
+        "resolve_binary": patch(
+            "logos_worker_node.calibration_metal.resolve_metal_vllm_binary",
+            return_value="/fake/vllm-metal/bin/vllm",
+        ),
+        "spawn": patch(
+            "logos_worker_node.calibration_metal._spawn_vllm_metal",
+            return_value=mock_proc,
+        ),
+        "wait_ready": patch(
+            "logos_worker_node.calibration_metal.wait_ready",
+            side_effect=wait_ready_side_effect,
+        ),
+        "warmup": patch(
+            "logos_worker_node.calibration_metal.warmup_inference",
+            return_value=warmup_ok,
+        ),
+        "stop": patch("logos_worker_node.calibration_metal.stop_vllm"),
+        "sleep": patch("logos_worker_node.calibration_metal.time.sleep"),
+        "device_info": patch(
+            "logos_worker_node.calibration_metal.probe_device_info",
+            return_value=None,
+        ),
+        "read_mem": patch(
+            "logos_worker_node.calibration_metal.read_wired_memory_mb",
+            side_effect=wired_memory_sequence,
+        ),
+    }
+    return patches, mock_proc
+
+
+def _run(plan, patches):
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model_metal(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=Path("/tmp/test-metal-calibration-logs"),
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+    return result, managers
+
+
+def test_success_measures_wired_delta_between_baseline_and_loaded():
+    patches, mock_proc = _patch_metal_infra(wired_memory_sequence=[4000.0, 11500.0])
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert result.success
+    assert result.base_residency_mb == pytest.approx(7500.0)
+    assert result.loaded_vram_mb == pytest.approx(7500.0)
+    assert result.tensor_parallel_size == 1
+    assert result.min_kv_cache_mb == 0.0
+    assert result.max_kv_cache_mb == 0.0
+    mocks["stop"].assert_called_once()
+
+
+def test_forces_tp1_even_if_plan_configured_tp_greater_than_one(caplog):
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
+    result, _mocks = _run({"model": "org/model", "tensor_parallel_size": 2}, patches)
+
+    assert result.success
+    assert result.tensor_parallel_size == 1
+
+
+def test_fails_cleanly_when_baseline_memory_read_fails():
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[None])
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "vm_stat" in result.error or "wired-memory" in result.error
+    mocks["spawn"].assert_not_called()
+
+
+def test_fails_when_wait_ready_raises():
+    patches, _ = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+    )
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "exited" in result.error
+    mocks["stop"].assert_called_once()
+
+
+def test_spawn_oserror_yields_failed_result_not_a_raised_exception():
+    """subprocess.Popen raising OSError (e.g. exec permission denied) must
+    produce a normal failed CalibrationResult with a probe log, not an
+    unhandled exception — and must not call stop_vllm(None)."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0])
+    patches["spawn"] = patch(
+        "logos_worker_node.calibration_metal._spawn_vllm_metal",
+        side_effect=OSError("Permission denied"),
+    )
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "Permission denied" in result.error
+    mocks["stop"].assert_not_called()
+
+
+def test_cancelled_before_spawn_short_circuits():
+    cancel_event = threading.Event()
+    cancel_event.set()
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0])
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model_metal(
+            {"model": "org/model"},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=Path("/tmp/test-metal-calibration-logs"),
+            ready_timeout_s=60.0,
+            cancel_event=cancel_event,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    assert result.error == "cancelled"
+    managers["spawn"].assert_not_called()
+
+
+def test_warmup_failure_does_not_fail_calibration():
+    """An unclassified/generative model's warmup that never serves still
+    yields a load-only measurement; see
+    test_pooling_warmup_failure_fails_calibration for the classes that
+    have a real, gating probe instead."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9500.0], warmup_ok=False)
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert result.success
+    assert result.base_residency_mb == pytest.approx(5500.0)
+
+
+def test_pooling_warmup_failure_fails_calibration():
+    """A classified pooling/transcription model has a real probe — a
+    failure means the model itself doesn't serve one request on its own
+    endpoint, and must not persist a footprint measured before the real
+    request's lazy allocations."""
+    patches, mocks_ref = _patch_metal_infra(wired_memory_sequence=[4000.0], warmup_ok=False)
+    result, mocks = _run({"model": "org/embedding-model", "model_kind": "pooling"}, patches)
+
+    assert not result.success
+    assert "pooling" in result.error
+    mocks["warmup"].assert_called_once()
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "pooling"
+
+
+def test_generative_crash_during_warmup_is_not_recorded_as_success():
+    """A process that exits mid-warmup (e.g. an OOM during the first real
+    generation) must not be reported as a load-only success — a dead
+    process, not a slow/flaky first token, is what warmup_ok=False plus
+    proc.poll() != None means."""
+    patches, mock_proc = _patch_metal_infra(wired_memory_sequence=[4000.0], warmup_ok=False)
+    mock_proc.poll.return_value = 1
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "exited during warmup" in result.error
+
+
+def test_generative_crash_during_warmup_still_classifies_capacity_floor():
+    """Same crash, shaped like an OS OOM kill (SIGKILL) — the
+    capacity-floor classifier must still run, exactly as it does for a
+    crash during spawn/wait_ready."""
+    patches, mock_proc = _patch_metal_infra(wired_memory_sequence=[4000.0], warmup_ok=False)
+    mock_proc.poll.return_value = -9
+    info = {"max_recommended_working_set_size": 20_000 * 1024 * 1024, "device_name": "M3 Pro"}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch("logos_worker_node.calibration_metal._read_log_since", return_value="")
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is True
+    assert result.metal_capacity_floor_mb == pytest.approx(20_000.0)
+
+
+def test_model_kind_defaults_to_generative_and_is_forwarded_to_warmup():
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
+    _result, mocks = _run({"model": "org/model"}, patches)
+
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "generative"
+
+
+def test_detected_model_kind_is_forwarded_to_warmup():
+    """The HF-precheck's auto-classification (plan[_detected_model_kind])
+    is used when no operator override (plan[model_kind]) is present."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
+    _result, mocks = _run({"model": "org/model", "_detected_model_kind": "transcription"}, patches)
+
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "transcription"
+
+
+def test_resolve_probed_model_kind_result_reaches_warmup():
+    """Metal must apply the same live-endpoint resolution CUDA calibration
+    does before trusting a fatal probe (see calibration._resolve_probed_
+    model_kind) — this was missing entirely until now, so a Qwen3-Reranker-
+    style mismatch stayed uncalibratable on Metal even after CUDA was
+    fixed."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0])
+    patches["resolve_kind"] = patch(
+        "logos_worker_node.calibration_metal._resolve_probed_model_kind",
+        return_value="generative",
+    )
+    _result, mocks = _run({"model": "org/reranker-model", "model_kind": "reranking"}, patches)
+
+    mocks["resolve_kind"].assert_called_once()
+    assert mocks["resolve_kind"].call_args.args[-1] == "reranking"
+    # The resolved (downgraded) kind is what actually reaches warmup, not
+    # the plan's original classification.
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "generative"
+
+
+def test_reranking_falls_back_to_generative_when_rerank_route_missing():
+    """End-to-end regression for the Qwen3-Reranker case on Metal: HF
+    classifies the model "reranking", but this vLLM process never
+    registered /rerank (Supported tasks: ['generate']). Must not fail
+    calibration outright — must fall back to the generative probe, same
+    as CUDA."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0, 9000.0], warmup_ok=True)
+    # Leave the real _resolve_probed_model_kind in place; only fake the
+    # live-endpoint check it calls underneath.
+    patches["endpoint_registered"] = patch(
+        "logos_worker_node.calibration._endpoint_registered",
+        return_value=False,
+    )
+    result, mocks = _run({"model": "org/reranker-model", "model_kind": "reranking"}, patches)
+
+    assert result.success
+    assert mocks["warmup"].call_args.kwargs.get("model_kind") == "generative"
+
+
+def test_fails_cleanly_when_vllm_binary_cannot_be_resolved():
+    """No vllm-metal venv, no worker override, no explicit path, and no
+    PATH/sibling/module fallback either: must fail with a clear reason
+    instead of a bare FileNotFoundError from Popen."""
+    patches, _ = _patch_metal_infra(wired_memory_sequence=[4000.0])
+    patches["resolve_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_metal_vllm_binary", return_value=None
+    )
+    patches["resolve_generic_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_generic_vllm_binary", return_value=None
+    )
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert "vllm binary not found" in result.error
+    mocks["spawn"].assert_not_called()
+
+
+def test_capacity_failure_via_signal_exit_code_sets_floor():
+    """A SIGKILL-style exit code is the typical shape of an OS memory-
+    pressure kill on macOS — recorded as this node's capacity floor."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=-9)"),
+    )
+    mock_proc.poll.return_value = -9
+    info = {"max_recommended_working_set_size": 20_000 * 1024 * 1024, "device_name": "M3 Pro"}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch("logos_worker_node.calibration_metal._read_log_since", return_value="")
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is True
+    assert result.metal_capacity_floor_mb == pytest.approx(20_000.0)
+
+
+def test_capacity_failure_via_log_marker_sets_floor():
+    """No signal exit, but the log names a known memory-allocation failure
+    marker — still counts as capacity evidence (see _METAL_MEMORY_MARKERS)."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=1)"),
+    )
+    mock_proc.poll.return_value = 1
+    info = {"max_recommended_working_set_size": 18_000 * 1024 * 1024}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch(
+        "logos_worker_node.calibration_metal._read_log_since",
+        return_value="RuntimeError: MTLBuffer allocation failed",
+    )
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is True
+    assert result.metal_capacity_floor_mb == pytest.approx(18_000.0)
+
+
+def test_non_capacity_failure_leaves_floor_unset():
+    """A generic non-signal failure with no memory marker in the log must
+    not be mistaken for a capacity issue."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=1)"),
+    )
+    mock_proc.poll.return_value = 1
+    info = {"max_recommended_working_set_size": 18_000 * 1024 * 1024}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch(
+        "logos_worker_node.calibration_metal._read_log_since",
+        return_value="ValueError: unsupported dtype",
+    )
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is False
+    assert result.metal_capacity_floor_mb is None
+
+
+@pytest.mark.parametrize("signal_returncode", [-11, -15])
+def test_unrelated_signal_crash_is_not_mistaken_for_capacity(signal_returncode):
+    """SIGSEGV(-11)/SIGTERM(-15) are unrelated crashes, not OOM evidence —
+    signal numbers are not a severity scale, only exact SIGKILL(-9) counts."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError(f"vLLM exited before becoming ready (code={signal_returncode})"),
+    )
+    mock_proc.poll.return_value = signal_returncode
+    info = {"max_recommended_working_set_size": 18_000 * 1024 * 1024}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch("logos_worker_node.calibration_metal._read_log_since", return_value="")
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is False
+    assert result.metal_capacity_floor_mb is None
+
+
+def test_falls_back_to_generic_resolution_when_metal_specific_lookup_fails():
+    """A bare "vllm" the metal-specific lookup won't treat as explicit and
+    that isn't in the vllm-metal venv can still resolve via PATH/sibling/
+    module — the same fallback production falls back to
+    (MetalVllmProcessHandle._resolve_vllm_binary) — instead of failing a
+    configuration that would actually run in production."""
+    patches, mock_proc = _patch_metal_infra(wired_memory_sequence=[4000.0, 11500.0])
+    patches["resolve_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_metal_vllm_binary", return_value=None
+    )
+    patches["resolve_generic_binary"] = patch(
+        "logos_worker_node.calibration_metal.resolve_generic_vllm_binary",
+        return_value=["/usr/local/bin/vllm"],
+    )
+    result, mocks = _run({"model": "org/model"}, patches)
+
+    assert result.success
+    mocks["spawn"].assert_called_once()
+    cmd = mocks["spawn"].call_args.args[0]
+    assert cmd[:3] == ["/usr/local/bin/vllm", "serve", "org/model"]

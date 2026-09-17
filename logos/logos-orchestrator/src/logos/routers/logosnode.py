@@ -595,3 +595,53 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
         "count": len(models),
         "models": models,
     }
+
+
+@router.post("/logosdb/providers/logosnode/stop_calibration", tags=["logosnode"])
+async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
+    """Cancel a worker's in-progress calibration session, if any.
+
+    The worker owns the teardown via cancel_event; nothing partial is
+    written for the model in progress — it's just left uncalibrated for
+    a later session.
+    """
+    _require_root_access(data.logos_key)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        result = await _main._logosnode_registry.send_command(
+            data.provider_id,
+            "stop_calibration_session",
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Admin stop-calibration: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning(
+            "Admin stop-calibration: stop_calibration_session failed on provider=%s: %s",
+            pname,
+            exc,
+        )
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    was_active = bool(result.get("was_active", False))
+    current_model = result.get("current_model")
+    logger.info(
+        "Admin stop-calibration: provider=%s was_active=%s current_model=%s",
+        pname,
+        was_active,
+        current_model or "<none>",
+    )
+    return JSONResponse(
+        content={
+            "message": (
+                f"Calibration session on {pname} cancelled (was calibrating {current_model})"
+                if was_active
+                else f"No calibration session was running on {pname}"
+            ),
+            "was_active": was_active,
+            "current_model": current_model,
+        }
+    )
