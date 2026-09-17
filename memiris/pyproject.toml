@@ -46,6 +46,13 @@ httpx2 = ">=2.12.0"
 # >= 1.72.0. Pin grpcio to match rather than relying on it resolving high
 # enough on its own.
 grpcio = ">=1.78.0"
+Pygments = ">=2.20.0"
+authlib = ">=1.6.12"
+filelock = ">=3.20.3"
+python-dotenv = ">=1.2.2"
+requests = ">=2.33.0"
+setuptools = ">=83.0.0"
+virtualenv = ">=20.36.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^2.3.1"
