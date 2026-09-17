@@ -37,15 +37,18 @@ public class OrchestratorModelSyncClient {
     }
 
     /**
-     * Whether a cloud model sync pass is running or queued. No caching: the
-     * UI polls this on a two-second cadence and a stale "running" would keep
-     * its spinner spinning. Any failure — including an orchestrator without
-     * the endpoint yet — degrades to "not running", so a missing status can
-     * only end the wait early, never hold it open.
+     * The cloud model sync's in-flight state: true while a pass is running
+     * or queued, false once the orchestrator explicitly reports none in
+     * flight, and null when the state could not be read. The null matters:
+     * the admin UI treats an accepted refresh as settled only on an explicit
+     * false, so a transient timeout or a rolling-deploy 404 reads as unknown
+     * — and the UI keeps polling within its cap — rather than as "done". No
+     * caching: the UI polls on a two-second cadence and a stale "running"
+     * would keep its spinner spinning.
      */
-    public boolean isSyncRunning() {
+    public Boolean isSyncRunning() {
         if (orchestratorUrl.isBlank() || internalSecret == null || internalSecret.isBlank()) {
-            return false;
+            return null;
         }
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -55,10 +58,13 @@ public class OrchestratorModelSyncClient {
                 HttpMethod.GET,
                 new HttpEntity<Void>(headers),
                 Map.class);
-            return response.getBody() instanceof Map<?, ?> body && Boolean.TRUE.equals(body.get("running"));
+            if (response.getBody() instanceof Map<?, ?> body && body.get("running") instanceof Boolean running) {
+                return running;
+            }
+            return null;
         } catch (Exception e) {
             log.warn("Failed to fetch cloud model sync status from orchestrator: {}", e.getMessage());
-            return false;
+            return null;
         }
     }
 }

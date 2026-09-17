@@ -23,6 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -374,6 +375,34 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.running").value(true));
+    }
+
+    @Test
+    void modelSyncStatus_reportsExplicitIdle() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(false);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(false));
+    }
+
+    @Test
+    void modelSyncStatus_reportsUnknownWhenTheStatusCouldNotBeRead() throws Exception {
+        // null: the orchestrator did not answer. The UI settles an accepted
+        // refresh only on an explicit false, so the endpoint has to be able
+        // to express "unknown" — collapsing it to false would end the wait
+        // on a transient failure.
+        when(modelSyncClient.isSyncRunning()).thenReturn(null);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running", nullValue()));
     }
 
     @Test

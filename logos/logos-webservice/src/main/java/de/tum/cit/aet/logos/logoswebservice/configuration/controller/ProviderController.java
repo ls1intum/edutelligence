@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -130,7 +131,11 @@ public class ProviderController {
     @PostMapping("/model_sync_status")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> modelSyncStatus() {
-        return ResponseEntity.ok(Map.of("running", modelSyncClient.isSyncRunning()));
+        // null means "could not be read" and keeps the UI polling; Map.of
+        // rejects null values.
+        Map<String, Object> body = new HashMap<>();
+        body.put("running", modelSyncClient.isSyncRunning());
+        return ResponseEntity.ok(body);
     }
 
     @PostMapping("/get_provider_models")

@@ -301,9 +301,11 @@ export class Providers implements OnInit, OnDestroy {
   // first write of a pass can land at any moment, and a mid-pass snapshot
   // can look stable while a later provider is still ahead. The explicit
   // signal is the orchestrator's pass-in-flight status: poll it while
-  // refetching the model lists, and stop once the pass reports done. The
-  // rounds cap bounds a stuck upstream (one provider may hold the pass for
-  // its full 30 s request timeout).
+  // refetching the model lists, and stop only once it explicitly reports
+  // done — a status that cannot be read (timeout, rolling-deploy 404) is
+  // unknown, not done, and is retried on the next round. The rounds cap
+  // bounds both a stuck upstream (one provider may hold the pass for its
+  // full 30 s request timeout) and a status that never becomes readable.
   private static readonly REFRESH_POLL_INTERVAL_MS = 2000;
   private static readonly REFRESH_POLL_MAX_ROUNDS = 45;
 
@@ -333,25 +335,33 @@ export class Providers implements OnInit, OnDestroy {
       // Status first: when the pass is already done (e.g. there are no
       // cloud providers at all), the refetch below is the final state and
       // no further rounds are needed.
-      const running = await this.syncRunning();
+      const running = await this.syncStatus();
       await this.refetchModelLists();
-      if (!running) return;
+      // Only an explicit "not running" from the orchestrator ends the wait.
+      // A status that could not be read is unknown, not done — it must not
+      // report an accepted sync as settled while the pass may still be
+      // writing — so it is retried on the next round.
+      if (running === false) return;
       await new Promise<void>((resolve) => {
         this.refreshPollTimer = setTimeout(resolve, Providers.REFRESH_POLL_INTERVAL_MS);
       });
     }
-    // The cap ran out with the pass still running (a stuck upstream): stop
-    // waiting and release the button — the next interval pass catches up.
+    // The cap ran out with the pass still running, or its status still
+    // unreadable (a stuck upstream, a rolling deploy): stop waiting and
+    // release the button — the next interval pass catches up.
   }
 
-  private async syncRunning(): Promise<boolean> {
+  /**
+   * true/false when the orchestrator answered, null when its status could
+   * not be read (network failure, or a response without a usable
+   * `running` field). Only an explicit false ends the refresh wait.
+   */
+  private async syncStatus(): Promise<boolean | null> {
     try {
-      return (await this.providerService.modelSyncStatus()).running;
+      const { running } = await this.providerService.modelSyncStatus();
+      return running === true || running === false ? running : null;
     } catch {
-      // An unreachable status reads as done: the wait ends early instead of
-      // hanging (a rolling deploy may still run an orchestrator without the
-      // endpoint), and the model lists were refetched either way.
-      return false;
+      return null;
     }
   }
 

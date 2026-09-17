@@ -57,9 +57,15 @@ export class ProviderManagementService {
     return firstValueFrom(this.http.post<{ result: string }>('/api/logosdb/refresh_models', {}));
   }
 
-  /** Whether a cloud model sync pass is currently running or queued. */
-  modelSyncStatus(): Promise<{ running: boolean }> {
-    return firstValueFrom(this.http.post<{ running: boolean }>('/api/logosdb/model_sync_status', {}));
+  /**
+   * A cloud model sync's in-flight state: `true` while a pass is running or
+   * queued, `false` once the orchestrator explicitly reports none in flight,
+   * and `null` when its status could not be read (timeout, rolling deploy).
+   * Only an explicit `false` ends the refresh wait — a `null` is unknown,
+   * not done.
+   */
+  modelSyncStatus(): Promise<{ running: boolean | null }> {
+    return firstValueFrom(this.http.post<{ running: boolean | null }>('/api/logosdb/model_sync_status', {}));
   }
 
   getProviderModels(providerId: number): Promise<ModelConnection[]> {

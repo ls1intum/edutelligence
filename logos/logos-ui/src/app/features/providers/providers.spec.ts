@@ -242,16 +242,44 @@ describe('Providers', () => {
       expect(getModels).not.toHaveBeenCalled();
     });
 
-    it('treats an unreachable status as done', async () => {
-      // A rolling deploy may still run an orchestrator without the status
-      // endpoint: the wait ends early instead of hanging.
-      modelSyncStatus.mockRejectedValueOnce(new Error('unknown endpoint'));
-      await component.refreshModels();
+    it('retries an unreadable status within the rounds cap', async () => {
+      vi.useFakeTimers();
+      try {
+        // A failed status read is unknown, not done: the accepted sync may
+        // still be writing, so the UI polls until the cap instead of
+        // reporting completion on a transient failure (timeout, rolling
+        // deploy).
+        modelSyncStatus.mockRejectedValue(new Error('unknown endpoint'));
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(45 * 2000 + 1000);
+        await refresh;
 
-      expect(refreshModels).toHaveBeenCalledTimes(1);
-      expect(component.refreshing()).toBe(false);
-      expect(component.refreshError()).toBe(false);
-      expect(getModels).toHaveBeenCalledTimes(1);
+        expect(modelSyncStatus).toHaveBeenCalledTimes(45);
+        expect(getModels).toHaveBeenCalledTimes(45);
+        expect(component.refreshing()).toBe(false);
+        expect(component.refreshError()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps polling through unreadable statuses and stops on an explicit idle', async () => {
+      vi.useFakeTimers();
+      try {
+        modelSyncStatus
+          .mockRejectedValueOnce(new Error('timeout'))
+          .mockResolvedValueOnce({ running: null })
+          .mockResolvedValueOnce({ running: false });
+        const refresh = component.refreshModels();
+        await vi.advanceTimersByTimeAsync(2000 * 2);
+        await refresh;
+
+        expect(modelSyncStatus).toHaveBeenCalledTimes(3);
+        expect(getModels).toHaveBeenCalledTimes(3);
+        expect(component.refreshing()).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('gives up at the rounds cap if the pass never reports done', async () => {
