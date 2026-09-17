@@ -37,6 +37,8 @@ services:
       # container address so the first hop's X-Forwarded-* headers survive.
       # Only sources in those ranges may set X-Forwarded-For on the public
       # entrypoint; a forged header from anywhere else is stripped first.
+      # Comma-delimited (see the prod compose): Traefik's CLI wants commas,
+      # and the in-stack nginx gateway normalises commas to spaces itself.
       - "--entrypoints.internal8090.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--entrypoints.web8080.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--api.dashboard=false"

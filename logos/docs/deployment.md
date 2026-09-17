@@ -87,10 +87,14 @@ Tune per deployment in the node's `.env` (all optional):
   internet is stripped before it reaches the gateway. **If the node sits
   behind the chair's nginx (or any other reverse proxy), add that proxy's
   CIDR here too** — otherwise every client counts as that one proxy IP and
-  the per-IP isolation is lost:
+  the per-IP isolation is lost. **Comma-delimited**: the value is passed
+  straight to Traefik's `--forwardedHeaders.trustedIPs`, whose CLI expects a
+  comma list — a space-delimited value would leave the outer proxy untrusted
+  (or invalidate Traefik's static config). The in-stack nginx gateway
+  normalises commas to spaces itself, so the same value works for both:
 
   ```env
-  LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS="172.16.0.0/12 129.79.32.0/20"
+  LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS="172.16.0.0/12,129.79.32.0/20"
   ```
 
 - `LOGOS_GATEWAY_UPSTREAM` — where the gateway forwards (default

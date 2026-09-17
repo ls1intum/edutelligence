@@ -33,6 +33,11 @@ services:
       # deployment fronted by an outer reverse proxy (the chair's nginx)
       # adds that proxy's CIDR here — otherwise every client counts as
       # that one proxy IP and the per-IP isolation is lost.
+      # Comma-delimited (e.g. "172.16.0.0/12,129.79.32.0/20"): Traefik's
+      # CLI wants commas, so a space-delimited value would leave the outer
+      # proxy untrusted (or invalidate the static config). The in-stack
+      # nginx gateway normalises commas to spaces itself, so one value
+      # serves both consumers.
       # One list is shared with internal8090 and the gateway's real-IP
       # configuration on purpose: the only source on internal8090 is the
       # gateway itself (its peer list is this network and Traefik), so an

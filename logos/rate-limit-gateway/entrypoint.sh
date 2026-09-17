@@ -56,8 +56,14 @@ is_ip_entry() {
 # the line would degrade to a bare "1;" and fail nginx -t. Invalid
 # entries are rejected with a message rather than taken down: a typo in
 # .env must degrade to "no whitelist", not to a crashloop.
+# Both list variables accept "," OR whitespace as the separator. The
+# trusted-proxy list is documented comma-delimited because it also feeds
+# Traefik's --forwardedHeaders.trustedIPs (whose CLI wants a comma list);
+# the nginx side word-splits on whitespace, so tr normalises either form
+# to spaces before the loop. (nginx:alpine ships busybox tr.)
+whitelist_norm=$(printf '%s' "${LOGOS_RATE_LIMIT_WHITELISTED_IPS:-}" | tr ',' ' ')
 WHITELIST_ENTRIES=""
-for ip in ${LOGOS_RATE_LIMIT_WHITELISTED_IPS:-}; do
+for ip in $whitelist_norm; do
     if is_ip_entry "$ip"; then
         WHITELIST_ENTRIES="${WHITELIST_ENTRIES}    ${ip} 1;
 "
@@ -75,9 +81,11 @@ done
 # Same treatment for the trusted-proxy ranges: set_real_ip_from takes
 # exactly one parameter per directive, so one line per range, and each
 # range is parsed with the same validator (an invalid one would fail
-# nginx -t the same way).
+# nginx -t the same way). tr ',' ' ' accepts the documented comma form as
+# well, since this value is shared with Traefik, which requires commas.
+trusted_norm=$(printf '%s' "${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-}" | tr ',' ' ')
 {
-    for cidr in ${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-}; do
+    for cidr in $trusted_norm; do
         if is_ip_entry "$cidr"; then
             echo "set_real_ip_from ${cidr};"
         else
