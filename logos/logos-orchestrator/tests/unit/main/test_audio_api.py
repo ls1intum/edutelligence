@@ -140,9 +140,7 @@ async def test_audio_translation_job_does_not_add_stream_field(monkeypatch):
     }
     captured_body = None
 
-    monkeypatch.setattr(
-        main, "request_setup", lambda headers, api_key_id, db=None, raw_deployments=None: ([], [])
-    )
+    monkeypatch.setattr(main, "request_setup", lambda headers, api_key_id, db=None, raw_deployments=None: ([], []))
 
     class FakeDB:
         def __enter__(self):

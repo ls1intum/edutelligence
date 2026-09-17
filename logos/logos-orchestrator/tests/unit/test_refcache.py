@@ -1,4 +1,5 @@
 """Tests for the short-TTL ref cache (#980 O12)."""
+
 from __future__ import annotations
 
 import time
@@ -119,8 +120,8 @@ class TestAuthKeyCache:
         fake.get_api_key_by_value = lambda key: (fake.calls.append(key), None)[1]
         monkeypatch.setattr(auth, "DBManager", lambda: fake)
 
-        from fastapi import HTTPException
         import pytest
+        from fastapi import HTTPException
 
         with pytest.raises(HTTPException):
             auth.authenticate_api_key({"logos-key": "lg-missing"})

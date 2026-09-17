@@ -40,17 +40,23 @@ def build_markdown(result: Dict[str, Any]) -> str:
     lines: List[str] = []
     lines.append("# Per-Request Forwarding Overhead (issue #980)")
     lines.append("")
-    lines.append(f"**{icon} {verdict_str}** — overhead p50 = **{ns_to_us(ov['overhead_ns'])} µs** "
-                 f"(goal < {ns_to_us(GOAL_NS)} µs, CI fail threshold {ns_to_us(FAIL_NS)} µs)")
+    lines.append(
+        f"**{icon} {verdict_str}** — overhead p50 = **{ns_to_us(ov['overhead_ns'])} µs** "
+        f"(goal < {ns_to_us(GOAL_NS)} µs, CI fail threshold {ns_to_us(FAIL_NS)} µs)"
+    )
     lines.append("")
-    lines.append(f"Run at {result.get('generated_at', 'n/a')} · samples: "
-                 f"{ov['n_logos']} via Logos / {ov['n_direct']} direct baseline")
+    lines.append(
+        f"Run at {result.get('generated_at', 'n/a')} · samples: "
+        f"{ov['n_logos']} via Logos / {ov['n_direct']} direct baseline"
+    )
     lines.append("")
     lines.append("| Metric | p50 | p95 | p99 |")
     lines.append("|---|---:|---:|---:|")
     for label, key in (("Via Logos (full path)", "logos"), ("Direct to lane (baseline)", "direct")):
         s = result["summary"][key]
-        lines.append(f"| {label} | {ns_to_us(s['p50_ns'])} µs | {ns_to_us(s['p95_ns'])} µs | {ns_to_us(s['p99_ns'])} µs |")
+        lines.append(
+            f"| {label} | {ns_to_us(s['p50_ns'])} µs | {ns_to_us(s['p95_ns'])} µs | {ns_to_us(s['p99_ns'])} µs |"
+        )
     lines.append("")
 
     if phases:

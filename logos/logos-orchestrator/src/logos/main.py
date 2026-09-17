@@ -1106,7 +1106,7 @@ async def _filter_logosnode_deployments(
         _normalize_provider_type(deployment.get("type")) == "logosnode" and not deployment.get("model_name")
         for deployment in deployments
     )
-    with (DBManager() if needs_db else nullcontext()) as db:
+    with DBManager() if needs_db else nullcontext() as db:
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
@@ -2977,7 +2977,7 @@ async def _execute_resource_mode(
         # Budgets only meter cloud usage — for a scheduled logosnode provider
         # the check returns before touching the database, so the pool checkout
         # exists to be checked out for nothing (#980).
-        with (DBManager() if provider_type != "logosnode" else nullcontext()) as db:
+        with DBManager() if provider_type != "logosnode" else nullcontext() as db:
             try:
                 _check_budget_if_cloud(
                     db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
@@ -3666,18 +3666,10 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         generic_rpm = s.get("rpm_limit")
         generic_tpm = s.get("tpm_limit")
 
-        cloud_rpm = (
-            s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
-        )
-        cloud_tpm = (
-            s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
-        )
-        local_rpm = (
-            s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
-        )
-        local_tpm = (
-            s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
-        )
+        cloud_rpm = s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+        cloud_tpm = s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+        local_rpm = s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+        local_tpm = s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
 
         if cloud_rpm is not None or cloud_tpm is not None:
             auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
@@ -3742,9 +3734,7 @@ async def submit_job_request(path: str, request: Request) -> Response:
         return await handle_batch_api_request(request)
 
     # Auth with full context + initial logging
-    headers, auth, json_data, client_ip, log_id, _job_deployments = await auth_parse_log(
-        request, use_profile_auth=True
-    )
+    headers, auth, json_data, client_ip, log_id, _job_deployments = await auth_parse_log(request, use_profile_auth=True)
 
     # Persist job and run it asynchronously
     job_payload = JobSubmission(

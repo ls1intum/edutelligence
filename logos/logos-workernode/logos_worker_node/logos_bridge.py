@@ -28,9 +28,9 @@ except Exception:  # noqa: BLE001
         pass
 
 
+from logos_worker_node import perf_trace as worker_perf
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.metal import is_metal_backend
-from logos_worker_node import perf_trace as worker_perf
 from logos_worker_node.models import (
     LaneConfig,
     LaneEvent,
@@ -2233,8 +2233,8 @@ class LogosBridgeClient:
             content_type = upstream.headers.get("content-type")
             media_type = (content_type or "").partition(";")[0].strip().lower()
             is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
-            is_successful_multipart = (
-                upstream.status_code < 400 and isinstance(payload.get(MULTIPART_PAYLOAD_KEY), dict)
+            is_successful_multipart = upstream.status_code < 400 and isinstance(
+                payload.get(MULTIPART_PAYLOAD_KEY), dict
             )
             is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
             body_base64 = None

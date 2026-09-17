@@ -66,10 +66,7 @@ class _Tracer:
 
     def finish(self) -> Dict[str, Dict[str, int]]:
         """The shape the orchestrator's merge_worker expects."""
-        return {
-            name: {"total_ns": bucket[0], "count": bucket[1]}
-            for name, bucket in self._phases.items()
-        }
+        return {name: {"total_ns": bucket[0], "count": bucket[1]} for name, bucket in self._phases.items()}
 
 
 def begin() -> Optional[_Tracer]:

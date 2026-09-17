@@ -603,9 +603,9 @@ async def test_status_revision_no_longer_advances_on_active_request_change() -> 
     # ...but the count revision advances and wakes the combined wait
     # immediately (not on the next ~1s tick).
     assert manager.count_revision == initial_count + 1
-    assert (
-        await manager.wait_for_status_or_count_revision(initial, initial_count, timeout=0.01)
-        == (initial, initial_count + 1)
+    assert await manager.wait_for_status_or_count_revision(initial, initial_count, timeout=0.01) == (
+        initial,
+        initial_count + 1,
     )
     assert await manager.total_active_requests() == 1
 

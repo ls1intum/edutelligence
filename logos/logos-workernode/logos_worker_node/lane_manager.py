@@ -2863,16 +2863,10 @@ class LaneManager:
         in-memory payload patch instead of a full status rebuild (#980 W3).
         """
         while True:
-            if (
-                self._status_revision != last_revision
-                or self._count_revision != last_count_revision
-            ):
+            if self._status_revision != last_revision or self._count_revision != last_count_revision:
                 return self._status_revision, self._count_revision
             self._status_event.clear()
-            if (
-                self._status_revision != last_revision
-                or self._count_revision != last_count_revision
-            ):
+            if self._status_revision != last_revision or self._count_revision != last_count_revision:
                 continue
             try:
                 if timeout is None:

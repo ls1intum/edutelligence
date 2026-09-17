@@ -30,7 +30,9 @@ from types import SimpleNamespace
 # The worker package is not installed into the venv (CI installs only the
 # orchestrator package); make it importable from the repo checkout before the
 # logos_worker_node imports below.
-_WORKER_PKG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logos-workernode")
+_WORKER_PKG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logos-workernode"
+)
 if _WORKER_PKG not in sys.path:
     sys.path.insert(0, _WORKER_PKG)
 
@@ -45,7 +47,9 @@ def _env(name: str, default: str = "") -> str:
 
 
 async def main() -> int:
-    logging.basicConfig(level=os.environ.get("LOGOS_BENCH_LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=os.environ.get("LOGOS_BENCH_LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     log = logging.getLogger("worker-under-test")
 
     orchestrator_url = _env("LOGOS_BENCH_ORCHESTRATOR_URL")

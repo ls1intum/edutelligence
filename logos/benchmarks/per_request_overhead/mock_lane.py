@@ -19,7 +19,6 @@ Run: ``uvicorn mock_lane:app --host 127.0.0.1 --port <lane-port> --no-access-log
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from typing import Any, Dict

@@ -24,8 +24,7 @@ from __future__ import annotations
 
 import os
 import time
-from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Optional
 
 _TRACE_ENV_VAR = "LOGOS_PERF_TRACE"
 
@@ -172,10 +171,7 @@ def take(request_id: str) -> Optional[Dict[str, Any]]:
     return {
         "t0_ns": trace["t0_ns"],
         "end_ns": trace["end_ns"],
-        "phases": {
-            name: {"total_ns": bucket[0], "count": bucket[1]}
-            for name, bucket in trace["phases"].items()
-        },
+        "phases": {name: {"total_ns": bucket[0], "count": bucket[1]} for name, bucket in trace["phases"].items()},
     }
 
 

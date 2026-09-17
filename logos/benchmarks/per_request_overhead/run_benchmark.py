@@ -36,9 +36,7 @@ Environment (all optional, defaults in parentheses):
 
 from __future__ import annotations
 
-import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -121,7 +119,9 @@ def _wait_http(client: httpx.Client, url: str, what: str, timeout_s: float = 120
     raise RuntimeError(f"{what} did not come up within {timeout_s:.0f}s (last: {last_err})")
 
 
-def _wait_worker_connected(client: httpx.Client, orch: str, secret: str, provider_id: int, timeout_s: float = 180.0) -> None:
+def _wait_worker_connected(
+    client: httpx.Client, orch: str, secret: str, provider_id: int, timeout_s: float = 180.0
+) -> None:
     """Poll /internal/provider_status until the bench worker is connected."""
     headers = {"Authorization": f"Bearer {secret}"}
     deadline = time.monotonic() + timeout_s
@@ -194,9 +194,24 @@ def run() -> int:
         # -- 1. mock lane -----------------------------------------------------
         mock = _Proc(
             "mock-lane",
-            [python, "-m", "uvicorn", "mock_lane:app", "--app-dir", str(_HERE),
-             "--host", "127.0.0.1", "--port", str(lane_port), "--no-access-log", "--log-level", "warning"],
-            base_env, str(_HERE), work_dir / "mock_lane.log",
+            [
+                python,
+                "-m",
+                "uvicorn",
+                "mock_lane:app",
+                "--app-dir",
+                str(_HERE),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(lane_port),
+                "--no-access-log",
+                "--log-level",
+                "warning",
+            ],
+            base_env,
+            str(_HERE),
+            work_dir / "mock_lane.log",
         )
         procs.append(mock)
         with httpx.Client() as probe:
@@ -206,7 +221,9 @@ def run() -> int:
         worker = _Proc(
             "worker",
             [python, str(_HERE / "worker_under_test.py")],
-            base_env, str(_HERE), work_dir / "worker.log",
+            base_env,
+            str(_HERE),
+            work_dir / "worker.log",
         )
         procs.append(worker)
 
@@ -226,9 +243,22 @@ def run() -> int:
         )
         orchestrator = _Proc(
             "orchestrator",
-            [python, "-m", "uvicorn", "logos.main:app", "--host", "127.0.0.1",
-             "--port", str(orch_port), "--no-access-log", "--log-level", "warning"],
-            orch_env, str(_ORCH), work_dir / "orchestrator.log",
+            [
+                python,
+                "-m",
+                "uvicorn",
+                "logos.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(orch_port),
+                "--no-access-log",
+                "--log-level",
+                "warning",
+            ],
+            orch_env,
+            str(_ORCH),
+            work_dir / "orchestrator.log",
         )
         procs.append(orchestrator)
         with httpx.Client() as probe:
@@ -269,7 +299,9 @@ def run() -> int:
                     if perf_enabled:
                         request_id = resp.headers.get("X-Request-ID", "")
                         if request_id:
-                            trace_resp = client.get(f"{orch}/internal/perf_trace/{request_id}", headers=headers_trace, timeout=5.0)
+                            trace_resp = client.get(
+                                f"{orch}/internal/perf_trace/{request_id}", headers=headers_trace, timeout=5.0
+                            )
                             if trace_resp.status_code == 200:
                                 traces.append(trace_resp.json())
                 for i in range(samples_direct):
@@ -298,8 +330,10 @@ def run() -> int:
             },
         }
         paths = write_reports(result, str(out_dir))
-        print(f"\n  verdict: {verdict_str} — overhead p50 = {ov['overhead_ns'] / 1000.0:,.1f} µs "
-              f"(goal < {GOAL_NS / 1000.0:,.0f} µs)")
+        print(
+            f"\n  verdict: {verdict_str} — overhead p50 = {ov['overhead_ns'] / 1000.0:,.1f} µs "
+            f"(goal < {GOAL_NS / 1000.0:,.0f} µs)"
+        )
         print(f"  logos p50    = {summarize(logos_ns)['p50_ns'] / 1000.0:,.1f} µs (n={len(logos_ns)})")
         print(f"  direct p50   = {summarize(direct_ns)['p50_ns'] / 1000.0:,.1f} µs (n={len(direct_ns)})")
         print(f"  report: {paths['md']}")

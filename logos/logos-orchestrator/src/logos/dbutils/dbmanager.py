@@ -3718,8 +3718,7 @@ class DBManager:
         # so a top-level import would be circular.
         from logos.logosnode_snapshot import _resolve_requested_model_name
 
-        sql = text(
-            """
+        sql = text("""
                    WITH key_info AS (
                             SELECT ak.id AS aki,
                                    ak.team_id AS tid,
@@ -3767,8 +3766,7 @@ class DBManager:
                           )
                       )
                    ORDER BY m.id
-                   """
-        )
+                   """)
         rows = self.session.execute(sql, {"api_key_id": api_key_id}).fetchall()
         models = [
             {
@@ -3950,8 +3948,7 @@ class DBManager:
                  VALUES (:ts, :aki, :tid, :uid, :env,
                          :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid, :timeout_s)
                  RETURNING id
-                 """
-            ),
+                 """),
             {
                 "ts": timestamp,
                 "aki": api_key_id,
@@ -4027,55 +4024,59 @@ class DBManager:
         if usage:
             names = list(usage)
             type_ids.update(
-                {row.name: row.id for row in self.session.execute(
-                    text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
-                    {"names": names},
-                ).fetchall()}
+                {
+                    row.name: row.id
+                    for row in self.session.execute(
+                        text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                        {"names": names},
+                    ).fetchall()
+                }
             )
             missing = [name for name in names if name not in type_ids]
             if missing:
                 type_ids.update(
-                    {row.name: row.id for row in self.session.execute(
-                        text(
-                            """
+                    {
+                        row.name: row.id
+                        for row in self.session.execute(
+                            text("""
                             INSERT INTO token_types (name, description)
                             SELECT v.name, v.description
                             FROM unnest(:names, :descriptions) AS v(name, description)
                             ON CONFLICT (name) DO NOTHING
                             RETURNING id, name
-                            """
-                        ),
-                        {"names": missing, "descriptions": ["" for _ in missing]},
-                    ).fetchall()}
+                            """),
+                            {"names": missing, "descriptions": ["" for _ in missing]},
+                        ).fetchall()
+                    }
                 )
                 still_missing = [name for name in missing if name not in type_ids]
                 if still_missing:
                     type_ids.update(
-                        {row.name: row.id for row in self.session.execute(
-                            text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
-                            {"names": still_missing},
-                        ).fetchall()}
+                        {
+                            row.name: row.id
+                            for row in self.session.execute(
+                                text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                                {"names": still_missing},
+                            ).fetchall()
+                        }
                     )
 
             positive = {name: count for name, count in usage.items() if count}
             if positive:
                 value_clauses = ", ".join(
-                    f"(:log_entry_id, :type_id_{index}, :token_count_{index})"
-                    for index in range(len(positive))
+                    f"(:log_entry_id, :type_id_{index}, :token_count_{index})" for index in range(len(positive))
                 )
                 usage_params = {"log_entry_id": log_id}
                 for index, (name, count) in enumerate(positive.items()):
                     usage_params[f"type_id_{index}"] = type_ids[name]
                     usage_params[f"token_count_{index}"] = count
                 self.session.execute(
-                    text(
-                        f"""
+                    text(f"""
                         INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
                         VALUES {value_clauses}
                         ON CONFLICT (log_entry_id, type_id)
                         DO UPDATE SET token_count = EXCLUDED.token_count
-                        """
-                    ),
+                        """),
                     usage_params,
                 )
 

@@ -39,11 +39,19 @@ def _calls(db):
 
 
 def test_known_types_are_one_lookup_and_one_usage_upsert():
-    db = _db([
-        _exec(fetchall=[_type_row(1, "prompt_tokens"), _type_row(2, "completion_tokens"), _type_row(3, "total_tokens")]),
-        _exec(),  # usage_tokens upsert
-        _exec(),  # final UPDATE
-    ])
+    db = _db(
+        [
+            _exec(
+                fetchall=[
+                    _type_row(1, "prompt_tokens"),
+                    _type_row(2, "completion_tokens"),
+                    _type_row(3, "total_tokens"),
+                ]
+            ),
+            _exec(),  # usage_tokens upsert
+            _exec(),  # final UPDATE
+        ]
+    )
 
     db.set_response_payload(
         log_id=7,
@@ -62,12 +70,14 @@ def test_known_types_are_one_lookup_and_one_usage_upsert():
 
 
 def test_missing_type_is_created_in_one_upsert():
-    db = _db([
-        _exec(fetchall=[_type_row(1, "prompt_tokens")]),
-        _exec(fetchall=[_type_row(4, "audio_milliseconds")]),  # creator insert
-        _exec(),  # usage_tokens upsert
-        _exec(),  # final UPDATE
-    ])
+    db = _db(
+        [
+            _exec(fetchall=[_type_row(1, "prompt_tokens")]),
+            _exec(fetchall=[_type_row(4, "audio_milliseconds")]),  # creator insert
+            _exec(),  # usage_tokens upsert
+            _exec(),  # final UPDATE
+        ]
+    )
 
     db.set_response_payload(
         log_id=7,
@@ -87,13 +97,15 @@ def test_missing_type_is_created_in_one_upsert():
 def test_concurrent_creator_winning_the_conflict_is_safe():
     """ON CONFLICT DO NOTHING returns nothing when a race created the type;
     the refetch must then find the row instead of crashing the request."""
-    db = _db([
-        _exec(fetchall=[]),
-        _exec(fetchall=[]),  # insert lost the race
-        _exec(fetchall=[_type_row(9, "prompt_tokens")]),  # refetch
-        _exec(),  # usage_tokens upsert
-        _exec(),  # final UPDATE
-    ])
+    db = _db(
+        [
+            _exec(fetchall=[]),
+            _exec(fetchall=[]),  # insert lost the race
+            _exec(fetchall=[_type_row(9, "prompt_tokens")]),  # refetch
+            _exec(),  # usage_tokens upsert
+            _exec(),  # final UPDATE
+        ]
+    )
 
     db.set_response_payload(log_id=7, payload={"text": "ok"}, usage={"prompt_tokens": 5})
 
@@ -105,12 +117,14 @@ def test_concurrent_creator_winning_the_conflict_is_safe():
 def test_zero_counts_still_register_the_type_but_write_no_usage_row():
     """Old behaviour: every usage name got a token type, only count > 0 got a
     usage_tokens row. The batch must keep that split."""
-    db = _db([
-        _exec(fetchall=[_type_row(1, "prompt_tokens")]),
-        _exec(fetchall=[_type_row(2, "completion_tokens")]),  # missing, zero count
-        _exec(),  # usage_tokens upsert
-        _exec(),  # final UPDATE
-    ])
+    db = _db(
+        [
+            _exec(fetchall=[_type_row(1, "prompt_tokens")]),
+            _exec(fetchall=[_type_row(2, "completion_tokens")]),  # missing, zero count
+            _exec(),  # usage_tokens upsert
+            _exec(),  # final UPDATE
+        ]
+    )
 
     db.set_response_payload(log_id=7, payload={"text": "ok"}, usage={"prompt_tokens": 12, "completion_tokens": 0})
 
@@ -125,9 +139,11 @@ def test_zero_counts_still_register_the_type_but_write_no_usage_row():
 
 
 def test_empty_usage_skips_all_token_bookkeeping():
-    db = _db([
-        _exec(),  # final UPDATE only
-    ])
+    db = _db(
+        [
+            _exec(),  # final UPDATE only
+        ]
+    )
 
     db.set_response_payload(log_id=7, payload={"text": "ok"}, usage={})
 
@@ -138,9 +154,11 @@ def test_empty_usage_skips_all_token_bookkeeping():
 
 def test_set_first_token_merges_into_the_final_update():
     for set_first_token in (True, False):
-        db = _db([
-            _exec(),  # final UPDATE only
-        ])
+        db = _db(
+            [
+                _exec(),  # final UPDATE only
+            ]
+        )
         db.set_response_payload(log_id=7, payload={"text": "ok"}, set_first_token=set_first_token)
 
         final_params = _calls(db)[1]

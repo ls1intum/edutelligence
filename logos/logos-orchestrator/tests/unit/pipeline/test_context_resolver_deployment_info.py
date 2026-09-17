@@ -8,11 +8,11 @@ unused on that branch (endpoint, base URL, auth). Passing the entry as
 ``deployment_info`` skips the roundtrip; every other shape keeps the DB path.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from logos import PipelineRequest, RequestPipeline
-from types import SimpleNamespace
-
 from logos.pipeline.context_resolver import ContextResolver, _normalize_provider_type
 
 DeploymentInfo = {"type": "logosnode", "model_id": 1, "provider_id": 7, "model_name": "m-a", "provider_name": "p-a"}
