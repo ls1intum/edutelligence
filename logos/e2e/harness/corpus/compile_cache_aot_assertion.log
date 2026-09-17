@@ -1,0 +1,8 @@
+INFO 05-30 17:44:02 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 05-30 17:44:19 [caching.py:311] Loading CacheCompiledArtifact from /usr/share/logos/models/.cache/vllm/torch_compile_cache/a1f39c/rank_0_0
+ERROR 05-30 17:44:20 [core.py:712] EngineCore failed to start.
+ERROR 05-30 17:44:20 [core.py:712] Traceback (most recent call last):
+ERROR 05-30 17:44:20 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/torch/_inductor/package/package.py", line 402, in load
+ERROR 05-30 17:44:20 [core.py:712]     artifact = CacheCompiledArtifact.deserialize(payload)
+ERROR 05-30 17:44:20 [core.py:712] AssertionError
+Process EngineCore_DP0: exited with code 1

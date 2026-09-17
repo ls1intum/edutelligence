@@ -395,7 +395,7 @@ services:
       # and to both services but not to this line is still routed straight to the
       # orchestrator — which does not serve Spring's paths and answers 404. That
       # is what happened to lanes/add: present end to end, unreachable in prod.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=internal8090"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api,rl-admin"

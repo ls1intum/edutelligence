@@ -12,7 +12,9 @@ from logos.anthropic_compat import (
     UpstreamDialect,
     dialect_for,
     forward_path_for,
+    is_chat_completions_path,
     is_messages_path,
+    serves_only_messages,
     stream_translator,
     translate_error,
     translate_request,
@@ -145,4 +147,64 @@ def test_a_native_provider_keeps_the_messages_route():
     assert (
         dialect_for(provider_type="logosnode", cloud_provider_type=None, forward_url="logosnode://provider/4/lane/a")
         is UpstreamDialect.NATIVE
+    )
+
+
+# ── the mirror question: which upstream has no chat/completions route ───────
+
+
+def test_chat_completions_path_recognised_on_both_api_versions():
+    assert is_chat_completions_path("v1/chat/completions")
+    assert is_chat_completions_path("/v2/chat/completions")
+    assert is_chat_completions_path("v1/chat/completions?x=1")
+    assert not is_chat_completions_path("v1/messages")
+    assert not is_chat_completions_path(None)
+
+
+def test_an_anthropic_resource_serves_nothing_but_messages():
+    # Foundry answers every OpenAI path on a Claude deployment with
+    # api_not_supported, so a chat/completions request has to be translated.
+    assert serves_only_messages(provider_type="cloud", cloud_provider_type="anthropic")
+    assert serves_only_messages(
+        provider_type="cloud",
+        cloud_provider_type="azure",
+        forward_url="https://ase-se01.openai.azure.com/anthropic/v1/messages",
+    )
+
+
+def test_upstreams_that_serve_both_surfaces_are_not_messages_only():
+    """Not the negation of ``dialect_for``: NATIVE does not imply Messages-only.
+
+    vLLM and a Logos instance both answer /v1/messages *and*
+    /v1/chat/completions, so a chat request to either needs no translation —
+    even though a Messages request to either is forwarded verbatim as NATIVE.
+    """
+    assert dialect_for(provider_type="logosnode", cloud_provider_type=None) is UpstreamDialect.NATIVE
+    assert not serves_only_messages(provider_type="logosnode", cloud_provider_type=None)
+
+    assert (
+        dialect_for(provider_type="cloud", cloud_provider_type="logos", forward_url="https://logos.test/v1/messages")
+        is UpstreamDialect.NATIVE
+    )
+    assert not serves_only_messages(provider_type="cloud", cloud_provider_type="logos")
+
+
+def test_an_openai_shaped_upstream_is_never_messages_only():
+    assert not serves_only_messages(provider_type="cloud", cloud_provider_type="openai")
+    assert not serves_only_messages(provider_type="cloud", cloud_provider_type="azure", forward_url=AZURE_CHAT)
+    assert not serves_only_messages(provider_type="cloud", cloud_provider_type="azure", forward_url=AZURE_RESPONSES)
+
+
+def test_a_pinned_url_outranks_the_provider_type_here_too():
+    # Same rule as dialect_for: the URL is where the request is actually
+    # posted, and an operator can pin a per-model endpoint by hand.
+    assert not serves_only_messages(
+        provider_type="cloud",
+        cloud_provider_type="anthropic",
+        forward_url="https://gateway.test/v1/chat/completions",
+    )
+    assert serves_only_messages(
+        provider_type="cloud",
+        cloud_provider_type="openai",
+        forward_url="https://gateway.test/v1/messages",
     )

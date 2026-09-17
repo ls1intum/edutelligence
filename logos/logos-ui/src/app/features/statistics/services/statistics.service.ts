@@ -182,4 +182,15 @@ export class StatisticsService {
       }
     ));
   }
+
+  stopCalibration(
+    providerId: number
+  ): Promise<{ was_active?: boolean; current_model?: string; error?: string }> {
+    return firstValueFrom(this.http.post<{ was_active?: boolean; current_model?: string; error?: string }>(
+      '/api/logosdb/providers/logosnode/stop_calibration',
+      {
+        provider_id: providerId,
+      }
+    ));
+  }
 }

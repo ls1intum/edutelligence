@@ -394,14 +394,15 @@ async def logos_service_long_sync(request: Request, path: str = None):
 
 
 # vLLM non-prefixed endpoints (not part of OpenAI API spec, but user-facing).
-# These are canonical paths for pooling, scoring, reranking, and tokenization.
+# These are canonical paths for pooling, scoring, reranking, classification,
+# and tokenization.
 async def _handle_vllm_native(request: Request):
     """Forward to vLLM using the original request path."""
     path = request.url.path.lstrip("/")
     return await handle_sync_request(path, request)
 
 
-for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
+for _vllm_path in ("/pooling", "/score", "/rerank", "/classify", "/tokenize", "/detokenize"):
     router.add_api_route(
         _vllm_path,
         _handle_vllm_native,

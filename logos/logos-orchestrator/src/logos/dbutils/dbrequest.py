@@ -1,6 +1,8 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from logos.dbutils.dbmodules import ThresholdLevel
 
 
 class LogosKeyModel(BaseModel):
@@ -16,6 +18,23 @@ class LogosNodeAuthRequest(BaseModel):
 class LogosNodeRegisterRequest(LogosKeyModel):
     provider_name: str
     base_url: str = ""
+    # Required, deliberately without a default. LOCAL is the *most* trusted tier
+    # ("our datacentre"), so defaulting to it would silently make every
+    # self-registering worker eligible for traffic restricted to
+    # operator-controlled hardware — including a rented GPU or a personal Mac
+    # running the MLX worker, which belong in THIRD_PARTY_HARDWARE. The caller
+    # has to state the trust level; there is no safe value to assume on its
+    # behalf. Costless to require now because the endpoint has been returning
+    # 400 for every request, so it has no working callers to break.
+    privacy_level: str
+
+    @field_validator("privacy_level")
+    @classmethod
+    def _validate_privacy_level(cls, value: str) -> str:
+        known = {level.value for level in ThresholdLevel}
+        if value not in known:
+            raise ValueError(f"privacy_level must be one of {sorted(known)}")
+        return value
 
 
 class LogosNodeStatusRequest(LogosKeyModel):
@@ -64,6 +83,10 @@ class RefreshPipelineRequest(BaseModel):
 
 
 class InternalCalibrateRequest(BaseModel):
+    provider_id: int
+
+
+class InternalStopCalibrationRequest(BaseModel):
     provider_id: int
 
 

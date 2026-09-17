@@ -35,14 +35,34 @@ Start the Logos server and make sure it is reachable over HTTPS (e.g. `https://l
 ```bash
 curl -X POST https://logos.example.com/logosdb/providers/logosnode/register \
   -H 'Content-Type: application/json' \
-  -d '{"logos_key":"<root_key>","provider_name":"my-worker-node","base_url":""}'
+  -d '{"logos_key":"<root_key>","provider_name":"my-worker-node","base_url":"","privacy_level":"LOCAL"}'
 ```
+
+`privacy_level` is required and states how far this node may be trusted with
+data. There is deliberately no default:
+
+| Value | Use for |
+|-------|---------|
+| `LOCAL` | Hardware you operate — your own datacentre. The most trusted tier. |
+| `THIRD_PARTY_HARDWARE` | Hardware outside your control: a rented GPU, or a personal machine running the MLX worker. Its owner can inspect the running processes. |
+
+Registering a rented or personal machine as `LOCAL` makes it eligible for
+requests that are restricted to operator-controlled hardware, so pick the tier
+that matches reality rather than the one that unblocks the setup.
 
 Save the response values — you will need both:
 - `provider_id`
 - `shared_key`  ← this is the provider API key
 
 ## 3. Configure credentials (.env)
+
+If you are following this guide from a repository checkout, enter the
+worker directory first — the Compose file, `.env` and `config.yml` all live
+there (in production deployments it is already the working directory):
+
+```bash
+cd logos/logos-workernode
+```
 
 Copy `.env.example` to `.env` and fill in the required values:
 
@@ -89,16 +109,33 @@ engines:
 
 ## 5. Start the worker
 
+(From the worker directory entered in step 3.) The production Compose file
+pulls `${REGISTRY}/logos-workernode-vllm` from
+the project's registry (Harbor for team deployments — set `REGISTRY` and
+`IMAGE_TAG` in `.env` and log in). Without registry access, build the image
+first (this directory is the build context). Put the values in `.env` and
+export them in the shell as well — the Docker CLI does not read `.env`:
+
+```bash
+export REGISTRY=<your-registry> IMAGE_TAG=<tag>
+docker build -t "$REGISTRY/logos-workernode-vllm:$IMAGE_TAG" .
+```
+
+Then start the worker:
+
 ```bash
 docker compose up -d
 ```
 
 ## 6. Verify the local worker
 
+The worker API only exposes its root (plus FastAPI's `/docs`); it has no
+`/health` or `/admin/*` endpoints. Runtime state is pushed to Logos over the
+outbound session — check it on the server side in step 7:
+
 ```bash
-curl http://localhost:8444/health
-curl http://localhost:8444/admin/runtime
-curl http://localhost:8444/admin/lanes
+# Service info (the production worker listens on port 80)
+curl http://localhost:80/
 ```
 
 ## 7. Verify the Logos session
@@ -142,7 +179,7 @@ Both are enabled by default. No worker-side configuration needed.
   Check that `LOGOS_URL` is reachable from the worker host and that the URL is `https://`.
 
 - **lane never becomes `loaded`**
-  Call `GET /admin/runtime` and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics`.
+  Call `POST /logosdb/providers/logosnode/status` (step 7) and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics` in the returned snapshot.
 
 - **`IsADirectoryError: /app/config.yml`**
   The `config.yml` file is missing on the host. Ansible must create it before the first deploy.

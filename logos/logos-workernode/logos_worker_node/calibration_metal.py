@@ -1,0 +1,456 @@
+"""Calibration probe for the Metal backend (Apple Silicon).
+
+No KV sweep: vllm-metal only has VLLM_METAL_MEMORY_FRACTION (weights+KV
+together, no isolated KV flag). Measures one point: load, warm up, read
+the memory delta. No TP (single GPU) or sleep (CUDA-only CuMemAllocator).
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+from logos_worker_node.calibration import (
+    _FATAL_PROBE_MODEL_KINDS,
+    CalibrationResult,
+    _read_log_since,
+    _reset_calibration_log,
+    _resolve_probed_model_kind,
+    stop_vllm,
+    wait_ready,
+    warmup_inference,
+)
+from logos_worker_node.metal import probe_device_info, read_wired_memory_mb, resolve_metal_vllm_binary
+from logos_worker_node.models import MetalConfig
+from logos_worker_node.vllm_process import resolve_generic_vllm_binary
+
+logger = logging.getLogger(__name__)
+
+_METAL_SETTLE_S = 2.0  # let the allocator settle before the final read
+
+# Best-effort text markers for a Metal/mlx memory failure. There is no single
+# stable "out of memory" string for vllm-metal (unlike CUDA) — these are a
+# starting set, matched case-insensitively, and expected to grow as real
+# failures are observed in the field.
+_METAL_MEMORY_MARKERS: tuple[str, ...] = (
+    "out of memory",
+    "insufficient memory",
+    "mtlbuffer",
+)
+
+# Exactly SIGKILL — the signal macOS's memory-pressure killer sends — not
+# "any signal at or past it": signal numbers are not a severity scale, and
+# e.g. SIGSEGV(-11)/SIGTERM(-15) are unrelated crashes, not OOM evidence.
+_METAL_OOM_SIGNAL_EXIT_CODE = -9
+
+
+def _is_metal_capacity_failure(returncode: int | None, log_tail: str) -> bool:
+    """True when a failed Metal probe looks like a memory-capacity failure.
+
+    Combines two independent signals (neither alone is reliable): the
+    process was killed by exactly SIGKILL, consistent with an OS OOM kill, or
+    the log mentions a known memory-allocation failure marker. Any other
+    signal/exit code falls through to the log-marker check alone.
+    """
+    if returncode == _METAL_OOM_SIGNAL_EXIT_CODE:
+        return True
+    lowered = (log_tail or "").lower()
+    return any(marker in lowered for marker in _METAL_MEMORY_MARKERS)
+
+
+def _record_capacity_floor_if_applicable(
+    result: CalibrationResult,
+    *,
+    proc: subprocess.Popen[str] | None,
+    log_path: Path,
+    working_set_mb: float | None,
+    model: str,
+) -> None:
+    """Stamp ``result`` with this node's capacity floor when a crashed
+    probe looks like a memory-capacity failure. Shared by every path that
+    treats a dead vLLM process as a calibration failure, so a crash
+    during warmup is classified exactly like one during spawn/wait_ready.
+    """
+    returncode = proc.poll() if proc is not None else None
+    log_tail = _read_log_since(log_path, 0) if log_path.exists() else ""
+    if working_set_mb and _is_metal_capacity_failure(returncode, log_tail):
+        result.capacity_oom = True
+        result.metal_capacity_floor_mb = working_set_mb
+        logger.warning(
+            "  %s: failure looks like a memory-capacity issue — this "
+            "node's working-set budget (%.0f MB) is being recorded as "
+            "a floor this model did not fit under",
+            model,
+            working_set_mb,
+        )
+
+
+# Matches VllmConfig.mm_processor_cache_gb's own default (models.py) — vLLM's
+# built-in default, applied when the plan has no per-model override. Every
+# production lane (CUDA and Metal) passes --mm-processor-cache-gb
+# unconditionally, so calibration must too: the reserved GB comes out of the
+# same working-set budget the probe measures a residency against.
+_DEFAULT_MM_PROCESSOR_CACHE_GB = 4.0
+
+# Env vars a stale worker/CUDA environment could leak into the Metal
+# subprocess — meaningless on this backend and confusing in a crash dump
+# (mirrors MetalVllmProcessHandle._build_process_env).
+_STALE_CUDA_ENV_KEYS = ("CUDA_VISIBLE_DEVICES", "CUDA_HOME", "LD_LIBRARY_PATH", "NCCL_P2P_DISABLE")
+
+
+def _build_metal_calibration_cmd(
+    plan: dict[str, Any],
+    vllm_prefix: list[str],
+    host: str,
+    port: int,
+) -> list[str]:
+    """Build a ``vllm serve`` command for a Metal calibration probe.
+
+    Mirrors MetalVllmProcessHandle._build_cmd's flag set, off the plain
+    plan dict the CUDA calibration path already uses (not a LaneConfig).
+    ``vllm_prefix`` is one or more tokens (e.g. ``[sys.executable, "-m",
+    "vllm"]`` for the module-fallback form), not a single executable path.
+    """
+    model = plan["model"]
+    cmd = [
+        *vllm_prefix,
+        "serve",
+        model,
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--dtype",
+        str(plan.get("dtype") or "auto"),
+    ]
+    # Same precedence as the CUDA calibration path (calibration.py): an
+    # explicit plan override wins, else let vLLM size the window itself.
+    # A model whose full context does not fit (config.example.mlx.yml pins
+    # max_model_len well below the reported window for exactly this reason)
+    # would otherwise fail to start under "auto".
+    max_model_len = plan.get("max_model_len")
+    if max_model_len:
+        cmd.extend(["--max-model-len", str(int(max_model_len))])
+    else:
+        cmd.extend(["--max-model-len", "auto"])
+    quantization = plan.get("quantization")
+    if quantization:
+        cmd.extend(["--quantization", str(quantization)])
+    # Deliberately NOT passed unless the operator pinned one: leaving this
+    # out lets vllm-metal self-size against VLLM_METAL_MEMORY_FRACTION /
+    # the real working set, matching what a production lane does when the
+    # model has no explicit override either (metal_process.py:267-273).
+    gpu_memory_utilization = plan.get("gpu_memory_utilization")
+    if gpu_memory_utilization is not None:
+        cmd.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
+    if plan.get("enforce_eager"):
+        cmd.append("--enforce-eager")
+    # Same reasoning as the CUDA calibration path (calibration.py): this
+    # changes vLLM's KV-cache accounting, so probing without it measures
+    # a different process than the production lane actually runs.
+    if bool(plan.get("enable_prefix_caching", True)):
+        cmd.append("--enable-prefix-caching")
+    max_num_seqs = plan.get("max_num_seqs")
+    if max_num_seqs:
+        cmd.extend(["--max-num-seqs", str(int(max_num_seqs))])
+    # Unconditional, matching every production lane (metal_process.py,
+    # vllm_process.py): a model configured with mm_processor_cache_gb: 0
+    # (config.example.mlx.yml) frees the 4 GB the default reserves, so
+    # measuring under the default instead would record a residency the
+    # served lane never actually has room for.
+    mm_processor_cache_gb = plan.get("mm_processor_cache_gb")
+    if mm_processor_cache_gb is None:
+        mm_processor_cache_gb = _DEFAULT_MM_PROCESSOR_CACHE_GB
+    cmd.extend(["--mm-processor-cache-gb", str(mm_processor_cache_gb)])
+    extra_args = plan.get("extra_args") or []
+    cmd.extend(str(a) for a in extra_args)
+    # Repeat the bind settings AFTER the extras, mirroring
+    # MetalVllmProcessHandle._build_cmd: argparse keeps the last occurrence,
+    # so a --host/--port smuggled in through extra_args would otherwise
+    # override the loopback bind and expose the unauthenticated API.
+    cmd.extend(["--host", host, "--port", str(port)])
+    return cmd
+
+
+def _build_metal_calibration_env(
+    cmd: list[str],
+    worker_metal_config: MetalConfig | None,
+    plan_env_overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Environment for the Metal calibration probe.
+
+    Mirrors MetalVllmProcessHandle._build_env / _build_process_env's Metal
+    tuning knobs and stale-CUDA-var stripping — without them, a node-wide
+    VLLM_METAL_MEMORY_FRACTION (or paged-attention / multimodal-mode)
+    override that shapes every production lane's footprint would silently
+    not apply to the probe, measuring a different process configuration.
+    No HF_HOME override either: unlike the CUDA path, Metal calibration
+    does not integrate with the tmpfs RAM model cache (out of scope, see
+    module docstring), so it always loads from the plain HF cache.
+
+    ``plan_env_overrides`` is the per-model
+    ``engines.vllm.model_overrides.<model>.env_overrides`` the calibration
+    plan carries through — applied after the worker-wide overrides, same
+    precedence as production (MetalVllmProcessHandle._build_env).
+    """
+    env = os.environ.copy()
+    for key in _STALE_CUDA_ENV_KEYS:
+        env.pop(key, None)
+
+    mc = worker_metal_config or MetalConfig()
+    if mc.memory_fraction is not None:
+        env["VLLM_METAL_MEMORY_FRACTION"] = str(mc.memory_fraction)
+    if mc.use_paged_attention is not None:
+        env["VLLM_METAL_USE_PAGED_ATTENTION"] = "1" if mc.use_paged_attention else "0"
+    if mc.multimodal_mode:
+        env["VLLM_METAL_MULTIMODAL_MODE"] = mc.multimodal_mode
+    if mc.env_overrides:
+        env.update(mc.env_overrides)
+    if plan_env_overrides:
+        env.update(plan_env_overrides)
+
+    # The resolved binary's own directory first, so vLLM resolves any
+    # helper executable it shells out to from the vllm-metal venv rather
+    # than whatever the worker's own environment happens to have on PATH.
+    vllm_bin_dir = str(Path(cmd[0]).resolve().parent)
+    current_path = env.get("PATH", "")
+    env["PATH"] = vllm_bin_dir if not current_path else f"{vllm_bin_dir}{os.pathsep}{current_path}"
+    return env
+
+
+def _spawn_vllm_metal(
+    cmd: list[str],
+    log_path: Path,
+    worker_metal_config: MetalConfig | None = None,
+    plan_env_overrides: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
+    """Spawn the Metal calibration probe process."""
+    env = _build_metal_calibration_env(cmd, worker_metal_config, plan_env_overrides)
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file = log_path.open("a", encoding="utf-8")
+    try:
+        _sep = "=" * 72
+        log_file.write(
+            f"\n{_sep}\n"
+            f"  Metal calibration probe — {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"  Command: {' '.join(cmd)}\n"
+            f"{_sep}\n\n"
+        )
+        log_file.flush()
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+    finally:
+        log_file.close()
+    logger.info("  Spawned PID=%d  log=%s", proc.pid, log_path)
+    logger.info("  Command: %s", " ".join(cmd))
+    return proc
+
+
+def _log_working_set_budget(model: str) -> float | None:
+    """Log the GPU working-set ceiling for context, if the mlx probe answers.
+
+    Returns the budget in MB (None if unreachable) so a capacity failure
+    later in the same run can reuse this reading instead of re-probing.
+    """
+    info = probe_device_info()
+    if not info:
+        return None
+    working_set = info.get("max_recommended_working_set_size")
+    if not working_set:
+        return None
+    working_set_mb = float(working_set) / (1024.0 * 1024.0)
+    logger.info(
+        "  %s: GPU working-set budget = %.0f MB (%s)",
+        model,
+        working_set_mb,
+        info.get("device_name") or "Apple Silicon GPU",
+    )
+    return working_set_mb
+
+
+def calibrate_model_metal(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    ready_timeout_s: float,
+    cancel_event: threading.Event | None = None,
+    worker_metal_config: MetalConfig | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
+) -> CalibrationResult:
+    """Single-point calibration for a model served on the Metal backend.
+
+    No TP escalation, no KV sweep, no sleep/wake — see the module
+    docstring for why each is either impossible or unneeded here.
+
+    ``worker_metal_config`` is the node's ``engines.metal`` config — the
+    same object production Metal lanes resolve their binary and
+    ``VLLM_METAL_*`` environment from (``MetalVllmProcessHandle``). Without
+    it the probe falls back to a bare ``vllm`` lookup, which fails outright
+    (the worker's own venv deliberately excludes vllm/mlx) or, if it
+    happens to resolve to something on PATH, measures a differently
+    configured process than the lane it's meant to profile.
+    """
+    model = plan["model"]
+    _reset_calibration_log(log_dir, model)
+    host = "127.0.0.1"
+    base_url = f"http://{host}:{port}"
+    log_path = log_dir / f"{model.replace('/', '__')}.log"
+    # "model_kind" is an operator override (engines.vllm.model_overrides);
+    # "_detected_model_kind" is the HF-precheck's auto-classification
+    # (logos_bridge.py) — both backend-independent.
+    model_kind = str(plan.get("model_kind") or plan.get("_detected_model_kind") or "generative")
+
+    if int(plan.get("tensor_parallel_size", 1)) > 1:
+        logger.warning(
+            "  %s configured with tensor_parallel_size>1, which the Metal "
+            "backend does not support (single integrated GPU) — probing "
+            "at tp=1 regardless",
+            model,
+        )
+
+    result = CalibrationResult(
+        model=model,
+        tensor_parallel_size=1,
+        gpu_devices="",
+        kv_cache_sent_mb=0.0,
+        success=False,
+        enforce_eager=bool(plan.get("enforce_eager", False)),
+    )
+
+    if cancel_event is not None and cancel_event.is_set():
+        result.error = "cancelled"
+        return result
+
+    working_set_mb = _log_working_set_budget(model)
+
+    baseline_used_mb = read_wired_memory_mb()
+    if baseline_used_mb is None:
+        result.error = "metal wired-memory read failed (vm_stat unavailable)"
+        logger.warning("  ERROR: %s", result.error)
+        return result
+    logger.info("        baseline wired = %.0f MB", baseline_used_mb)
+
+    resolved_binary = resolve_metal_vllm_binary(
+        vllm_binary, worker_metal_config.vllm_binary if worker_metal_config else ""
+    )
+    # No explicit/worker/venv candidate resolved — fall back to the same
+    # PATH/sibling/module resolution production falls back to
+    # (MetalVllmProcessHandle._resolve_vllm_binary), instead of failing a
+    # configuration that would actually run in production.
+    vllm_prefix = [resolved_binary] if resolved_binary is not None else resolve_generic_vllm_binary(vllm_binary)
+    if vllm_prefix is None:
+        result.error = (
+            "vllm binary not found for Metal calibration — checked the "
+            "configured/worker paths, the vllm-metal venv "
+            "(LOGOS_METAL_VENV or ~/.venv-vllm-metal/bin/vllm), PATH, the "
+            "interpreter sibling, well-known venv roots, and the vllm module"
+        )
+        logger.warning("  ERROR: %s", result.error)
+        return result
+
+    cmd = _build_metal_calibration_cmd(plan, vllm_prefix, host, port)
+    result.probe_command = " ".join(cmd)
+
+    proc: subprocess.Popen[str] | None = None
+    try:
+        proc = _spawn_vllm_metal(cmd, log_path, worker_metal_config, plan.get("env_overrides"))
+        # Make the live process reachable to stop_calibration_session: it
+        # has no other way to unblock the plain blocking warmup call below
+        # once its 15s grace period elapses (see kill_current_proc in
+        # logos_bridge.py).
+        if proc_callback is not None:
+            proc_callback(proc)
+        wait_ready(base_url, ready_timeout_s, proc, cancel_event=cancel_event)
+
+        if cancel_event is not None and cancel_event.is_set():
+            result.error = "cancelled"
+            return result
+
+        # Ground-truth check before trusting a fatal probe: does this vLLM
+        # process actually serve model_kind's endpoint at all? Same mismatch
+        # CUDA calibration guards against (see _resolve_probed_model_kind) —
+        # HF's pipeline_tag/architectures can say "reranker" while the
+        # checkpoint is a plain CausalLM vLLM only serves generatively.
+        model_kind = _resolve_probed_model_kind(base_url, model, model_kind)
+
+        served = warmup_inference(base_url, model, model_kind=model_kind)
+        # A killed-to-unblock probe answers this call with a connection
+        # error just like a genuine failure — check cancellation first so
+        # it reports as "cancelled", not as a crash/serving-failure verdict.
+        if cancel_event is not None and cancel_event.is_set():
+            result.error = "cancelled"
+            return result
+        if not served:
+            if model_kind in _FATAL_PROBE_MODEL_KINDS:
+                # A classified pooling/transcription model has a real,
+                # working probe — a failure means the model itself
+                # doesn't answer one request on its own endpoint, not a
+                # missed /v1/completions mismatch. Must not persist a
+                # footprint measured before the real request's lazy
+                # allocations (e.g. an embedding model's pooling layer).
+                result.error = (
+                    f"functional probe failed ({model_kind}): {model} did not answer "
+                    "one request on its own serving endpoint"
+                )
+                logger.warning("  ERROR: %s", result.error)
+                return result
+            if proc is not None and proc.poll() is not None:
+                # The warmup didn't just time out or answer non-200 — the
+                # process is gone. A "generative" model tolerates a slow
+                # or flaky first token, but not a dead process: measuring
+                # memory now would read a footprint from after the crash,
+                # and skip the capacity-floor classification entirely.
+                result.error = (
+                    f"vLLM exited during warmup (returncode={proc.poll()}): "
+                    f"{model} crashed answering its own serving endpoint"
+                )
+                logger.warning("  ERROR: %s", result.error)
+                _record_capacity_floor_if_applicable(
+                    result, proc=proc, log_path=log_path, working_set_mb=working_set_mb, model=model
+                )
+                return result
+            logger.warning("  %s: warmup request did not complete — measuring load-only footprint", model)
+
+        time.sleep(_METAL_SETTLE_S)
+        loaded_used_mb = read_wired_memory_mb()
+        if loaded_used_mb is None:
+            result.error = "metal wired-memory read failed after load"
+            logger.warning("  ERROR: %s", result.error)
+            return result
+
+        base_residency_mb = max(loaded_used_mb - baseline_used_mb, 0.0)
+        logger.info(
+            "  Results: base_residency_mb = %.0f MB (wired-memory delta, weights + KV)",
+            base_residency_mb,
+        )
+        result.success = True
+        result.loaded_vram_mb = base_residency_mb
+        result.base_residency_mb = base_residency_mb
+        result.calibrated_at = time.time()
+        return result
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        result.error = str(exc)
+        logger.warning("  ERROR: %s", result.error)
+        _record_capacity_floor_if_applicable(
+            result, proc=proc, log_path=log_path, working_set_mb=working_set_mb, model=model
+        )
+        return result
+    finally:
+        if proc_callback is not None:
+            proc_callback(None)
+        if proc is not None:
+            stop_vllm(proc)
