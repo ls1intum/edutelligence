@@ -49,11 +49,13 @@ jobs:
       LOGOS_BENCH_DB_URL: postgresql://postgres:root@127.0.0.1:5432/logosdb
       LOGOS_BENCH_OUTPUT: ${{ github.workspace }}/logos/benchmarks/per_request_overhead/reports/ci
       # The worker's default state dir is /app/data (Docker layout); on a
-      # GitHub runner it must be a writable temp path.
-      LOGOS_STATE_DIR: ${{ runner.temp }}/logos-bench-state
+      # GitHub runner it must be a writable path. The `runner` context is not
+      # available in job-level env (GitHub rejects the expression), so both
+      # bench-only paths live in the workspace instead of runner.temp.
+      LOGOS_STATE_DIR: ${{ github.workspace }}/.logos-bench-state
       # The orchestrator loads all-MiniLM-L6-v2 (SentenceTransformer) eagerly
       # at startup; pin the cache so the Prime step and the run share it.
-      HF_HOME: ${{ runner.temp }}/hf-cache
+      HF_HOME: ${{ github.workspace }}/.hf-cache
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -61,12 +63,15 @@ jobs:
       - name: Migrate schema (Liquibase)
         # The liquibase image ships a JRE, so no Java setup step is needed.
         # From inside the container, host.docker.internal is the runner.
+        # `--search-path` is a global option and must precede the `migrate`
+        # command; keep it on its own continuation line — a `#` comment inside
+        # a `\`-joined line would comment out the image and the rest.
         run: |
           docker run --rm \
             --add-host=host.docker.internal:host-gateway \
             -v "$GITHUB_WORKSPACE/logos/logos-webservice/src/main/resources:/resources:ro" \
-            # --search-path is a global option and must precede the command.
-            liquibase/liquibase:4.28.0 --search-path=/resources migrate \
+            liquibase/liquibase:4.28.0 \
+            --search-path=/resources migrate \
             --changelog-file=liquibase/changelog/master.xml \
             --url="jdbc:postgresql://host.docker.internal:5432/logosdb" \
             --username=postgres --password=root
@@ -97,7 +102,7 @@ jobs:
         # network is still healthy; the benchmark run itself is offline.
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/hf-cache
+          path: ${{ github.workspace }}/.hf-cache
           key: hf-all-MiniLM-L6-v2-v1-${{ runner.os }}
           restore-keys: |
             hf-all-MiniLM-L6-v2-
@@ -141,16 +146,22 @@ jobs:
         working-directory: logos/logos-orchestrator
 
       - name: Upload benchmark report
+        # always(): the gate failing is exactly the case where the report is
+        # needed; ignore: if the benchmark itself crashed, no report exists
+        # and that failure is already the red step.
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: logos-overhead-benchmark
           path: logos/benchmarks/per_request_overhead/reports/ci
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - name: Comment on PR
+        # always(): the regression comment must land on a red gate run too.
         # Idempotent (HTML anchor, edits the last bench comment).
         # continue-on-error: fork PRs run with a read-only token — the gate
         # and the artifact above still count.
+        if: always()
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}

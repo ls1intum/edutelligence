@@ -23,7 +23,7 @@ import os
 import time
 from typing import Any, Dict
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from pydantic import BaseModel
 
 MODEL_NAME = os.environ.get("LOGOS_BENCH_MODEL", "bench-local-model")
@@ -72,7 +72,7 @@ async def is_sleeping() -> Dict[str, Any]:
 
 
 @app.get("/metrics")
-async def metrics() -> str:
+async def metrics() -> Response:
     lines = [
         "# HELP vllm:num_requests_running Number of requests currently running.",
         "# TYPE vllm:num_requests_running gauge",
@@ -86,7 +86,10 @@ async def metrics() -> str:
         "# HELP vllm:time_to_first_token_seconds Time to first token.",
         "# TYPE vllm:time_to_first_token_seconds histogram",
     ]
-    return "\n".join(lines) + "\n"
+    # Prometheus text — not a bare str, which FastAPI would serialize as a
+    # JSON document (quotes + escaped newlines) that the worker's metrics
+    # parser cannot read.
+    return Response("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.post("/v1/chat/completions")

@@ -13,8 +13,10 @@ Protocol:
   1. wait until /internal/provider_status reports the provider connected
   2. warmup: WARMUP Logos-path requests (not measured)
   3. BLOCKS x ( SAMPLES_LOGOS measured Logos requests, each followed by the
-     perf-trace fetch, then SAMPLES_DIRECT measured direct-baseline requests)
-     — interleaved so common-mode runner drift cancels in the median
+     perf-trace fetch, plus SAMPLES_DIRECT measured direct-baseline requests)
+     — interleaved *within* each block (Bresenham ratio distribution) so
+     common-mode runner drift hits both series at the same moments and
+     cancels in the pooled median
   4. report: overhead = median(Logos) - median(direct), phase table, verdict
 
 Environment (all optional, defaults in parentheses):
@@ -275,11 +277,34 @@ def run() -> int:
         direct_ns: List[int] = []
         traces: List[Dict[str, Any]] = []
 
-        def _timed_post(client: httpx.Client, url: str, headers: Dict[str, str]) -> httpx.Response:
+        def _timed_post(client: httpx.Client, url: str, headers: Dict[str, str]) -> tuple[httpx.Response, int]:
             t0 = time.perf_counter_ns()
             resp = client.post(url, headers=headers, json=payload)
             t1 = time.perf_counter_ns()
             return resp, t1 - t0
+
+        def _do_logos(client: httpx.Client) -> None:
+            """One measured Logos-path request + its perf-trace fetch."""
+            resp, dt = _timed_post(client, f"{orch}/v1/chat/completions", headers_logos)
+            if resp.status_code != 200:
+                raise RuntimeError(f"logos request failed: {resp.status_code} {resp.text[:400]}")
+            logos_ns.append(dt)
+            if perf_enabled:
+                request_id = resp.headers.get("X-Request-ID", "")
+                if request_id:
+                    trace_resp = client.get(
+                        f"{orch}/internal/perf_trace/{request_id}", headers=headers_trace, timeout=5.0
+                    )
+                    if trace_resp.status_code == 200:
+                        traces.append(trace_resp.json())
+
+        def _do_direct(client: httpx.Client) -> None:
+            """One measured direct-baseline request; non-200s are rejected so
+            a fast error response cannot skew the baseline median low."""
+            resp, dt = _timed_post(client, f"{lane}/v1/chat/completions", {"Content-Type": "application/json"})
+            if resp.status_code != 200:
+                raise RuntimeError(f"direct baseline request failed: {resp.status_code} {resp.text[:400]}")
+            direct_ns.append(dt)
 
         with httpx.Client(timeout=httpx.Timeout(60.0, connect=5.0)) as client:
             # warmup: pools, connection pools, name caches
@@ -291,22 +316,22 @@ def run() -> int:
             client.delete(f"{orch}/internal/perf_trace", headers=headers_trace)  # drop warmup traces
 
             for block in range(blocks):
-                for i in range(samples_logos):
-                    resp, dt = _timed_post(client, f"{orch}/v1/chat/completions", headers_logos)
-                    if resp.status_code != 200:
-                        raise RuntimeError(f"logos request failed: {resp.status_code} {resp.text[:400]}")
-                    logos_ns.append(dt)
-                    if perf_enabled:
-                        request_id = resp.headers.get("X-Request-ID", "")
-                        if request_id:
-                            trace_resp = client.get(
-                                f"{orch}/internal/perf_trace/{request_id}", headers=headers_trace, timeout=5.0
-                            )
-                            if trace_resp.status_code == 200:
-                                traces.append(trace_resp.json())
-                for i in range(samples_direct):
-                    _, dt = _timed_post(client, f"{lane}/v1/chat/completions", {"Content-Type": "application/json"})
-                    direct_ns.append(dt)
+                # Interleave logos and direct within the block instead of
+                # "all logos, then all direct": runner latency drift during a
+                # block would otherwise only hit the later series and bias the
+                # pooled median difference. The Bresenham distribution spreads
+                # SAMPLES_LOGOS logos evenly around SAMPLES_DIRECT direct
+                # samples; the pooled statistic is unchanged.
+                sent_logos = 0
+                for d in range(samples_direct):
+                    due = int((d + 1) * samples_logos / samples_direct) - sent_logos
+                    for _ in range(due):
+                        _do_logos(client)
+                        sent_logos += 1
+                    _do_direct(client)
+                while sent_logos < samples_logos:
+                    _do_logos(client)
+                    sent_logos += 1
                 print(f"  [block {block + 1}/{blocks}] logos={len(logos_ns)} direct={len(direct_ns)}")
 
         # -- 5. report ----------------------------------------------------------

@@ -60,6 +60,9 @@ docker exec -i logos-bench-db psql -U postgres -d logosdb \
 cd logos/logos-orchestrator
 ln -sfn ../../shared shared
 uv venv .venv && uv pip install -q .
+# The worker runs from the same venv (the director starts it as a
+# subprocess); its checked-in gRPC gencode needs protobuf >= 6.30.
+uv pip install -q -r ../logos-workernode/requirements.txt "protobuf>=6.30,<7"
 
 # 5. Run (ports 8090/11436/50051/5433 must be free — the dev stack may hold some)
 .venv/bin/python ../benchmarks/per_request_overhead/run_benchmark.py

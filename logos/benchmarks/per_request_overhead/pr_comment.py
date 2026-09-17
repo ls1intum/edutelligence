@@ -157,12 +157,15 @@ def _find_last_bench_comment(api_comments: str, token: str) -> Optional[Dict[str
 def _post_comment(markdown: str) -> None:
     token = os.environ.get("GITHUB_TOKEN")
     repo = os.environ.get("GITHUB_REPOSITORY")
-    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    # GITHUB_API_URL is the REST base (https://api.github.com on GitHub.com,
+    # the matching base on Enterprise). GITHUB_SERVER_URL is the *web* URL —
+    # appending /api/v3 to it would not resolve.
+    server = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     number = _pr_number()
     if not token or not repo or not number:
         print("PR comment skipped (no GITHUB_TOKEN / GITHUB_REPOSITORY / PR number)")
         return
-    api_comments = f"{server}/api/v3/repos/{repo}/issues/{number}/comments"
+    api_comments = f"{server}/repos/{repo}/issues/{number}/comments"
     existing = _find_last_bench_comment(api_comments, token)
     if existing:
         _api_request("PUT", f"{api_comments}/{existing['id']}", token, {"body": markdown})
@@ -174,7 +177,16 @@ def _post_comment(markdown: str) -> None:
 
 def main() -> int:
     check_only = "--check" in sys.argv[1:]
-    result = _load_result()
+    try:
+        result = _load_result()
+    except FileNotFoundError as exc:
+        # The gate must stay red when the benchmark produced nothing; the
+        # comment step (which runs with `if: always()`) has nothing to post.
+        if check_only:
+            print(f"GATE FAIL: {exc}")
+            return 1
+        print(f"PR comment skipped ({exc})")
+        return 0
     if check_only:
         return _gate(result)
 
