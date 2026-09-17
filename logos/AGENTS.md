@@ -47,7 +47,7 @@ logos/
 │   │   │   ├── monitoring.py          # /health, /metrics
 │   │   │   ├── internal.py            # secret-gated /internal/* (Spring webservice)
 │   │   │   ├── logosnode.py           # worker provider endpoints /logosdb/providers/logosnode/*
-│   │   │   ├── admin.py               # admin endpoints /logosdb/*, /forward_host
+│   │   │   ├── admin.py               # /logosdb/scheduler_state (internal services, secret-gated)
 │   │   │   └── user_facing.py         # public API: models, audio, /v1/{path:path} catch-all, jobs
 │   │   ├── auth.py                    # Authentication & authorization
 │   │   ├── role_auth.py               # Role-based authorization checks
@@ -115,12 +115,12 @@ database but does not migrate it — see Database Schema below.
 ## Architecture & Key Patterns
 
 ### main.py and where new code goes
-`logos-orchestrator/src/logos/main.py` owns the FastAPI `app`, the exception handlers, the middleware, and the shared runtime helpers (pipeline startup, request execution, VRAM payloads, benchmark bookkeeping). All route handlers live in `logos-orchestrator/src/logos/routers/`, grouped by domain, and are included on the app at the bottom of `main.py`:
+`logos-orchestrator/src/logos/main.py` owns the FastAPI `app`, the exception handlers, the middleware, and the shared runtime helpers (pipeline startup, request execution, benchmark bookkeeping). All route handlers live in `logos-orchestrator/src/logos/routers/`, grouped by domain, and are included on the app at the bottom of `main.py`:
 
 - `monitoring.py` — `/health`, `/metrics`
 - `internal.py` — secret-gated `/internal/*` endpoints (Spring webservice)
 - `logosnode.py` — worker provider endpoints under `/logosdb/providers/logosnode/*`
-- `admin.py` — admin endpoints under `/logosdb/*` and `/forward_host`
+- `admin.py` — `/logosdb/scheduler_state` (internal services, gated on `LOGOS_INTERNAL_SECRET`)
 - `user_facing.py` — public OpenAI-compatible API: model listing, audio, the `/v1/{path:path}` catch-all, jobs
 
 So new code must move toward that structure, not back into the monolith:

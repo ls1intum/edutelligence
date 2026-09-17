@@ -1,3 +1,11 @@
+-- The statistics rollup is kept current by a scheduled pass these tests do not
+-- run, and the rows below are back-dated into hours whose watermark already
+-- claims to cover them - something production never does, because the
+-- orchestrator inserts with now(). Ageing the state row past the reader's
+-- freshness guard makes every aggregate read log_entry, which is the path these
+-- tests mean to exercise.
+UPDATE log_entry_rollup_state SET processed_through = now() - INTERVAL '1 day';
+
 INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
                        timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
                        was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment)

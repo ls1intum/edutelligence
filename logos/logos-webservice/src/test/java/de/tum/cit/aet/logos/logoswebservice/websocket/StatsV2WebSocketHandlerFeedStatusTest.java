@@ -34,7 +34,6 @@ import org.springframework.web.socket.WebSocketSession;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import de.tum.cit.aet.logos.logoswebservice.operations.service.EnqueueEventService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.VramService;
@@ -55,7 +54,6 @@ class StatsV2WebSocketHandlerFeedStatusTest {
     private VramService vramService;
     private RequestLogService requestLogService;
     private RequestLogStatsService statsService;
-    private EnqueueEventService enqueueService;
     private StatsV2WebSocketHandler handler;
     private WebSocketSession session;
     private ObjectMapper objectMapper;
@@ -70,15 +68,10 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        enqueueService = mock(EnqueueEventService.class);
         when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));
-        when(enqueueService.getInRange(any(), any(), anyInt(), any(), any()))
-            .thenReturn(Map.of("events", List.of()));
-        when(enqueueService.getDeltas(any(), any(), any(), anyInt(), any(), any()))
-            .thenReturn(Map.of("events", List.of(), "cursor", Map.of("enqueue_ts", "", "request_id", "")));
         // A fresh, mutable payload per call — the push writes "total" into it
         // while a filter is on, and the real service returns a fresh map too.
         when(requestLogService.getLatestRequests(
@@ -100,7 +93,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
             .thenReturn(ResponseEntity.ok(Map.of("streams", List.of())));
 
         handler = new StatsV2WebSocketHandler(
-            vramService, requestLogService, statsService, enqueueService,
+            vramService, requestLogService, statsService,
             liveStreamClient, objectMapper);
         // The tests below drive the tick themselves; the scheduled one would
         // advance the same session in between.

@@ -4333,26 +4333,6 @@ def _admin_base_from_url(logos_url: str, admin_port: int) -> str:
     return f"https://{host}:{admin_port}"
 
 
-async def _discover_provider_names(logos_url: str, logos_key: str) -> "dict[int, str]":
-    """Best-effort {provider_id: friendly_name} from the (non-root) vram-stats
-    endpoint, so the live lane poller works (and charts keep human names like
-    deimama/deipapa) even when --calibration-provider-ids was not given."""
-    url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
-    headers = {"logos_key": logos_key, "Content-Type": "application/json"}
-    names: "dict[int, str]" = {}
-    try:
-        async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
-            resp = await client.post(url, json={"after_snapshot_id": 0}, headers=headers)
-            if resp.status_code == 200:
-                for prov in resp.json().get("providers") or []:
-                    pid = prov.get("provider_id")
-                    if isinstance(pid, int):
-                        names[pid] = str(prov.get("name") or f"provider-{pid}")
-    except Exception:
-        pass
-    return names
-
-
 async def _poll_model_states(
     admin_base: str,
     logos_key: str,
@@ -4725,8 +4705,7 @@ async def _benchmark_scenario(
     _poll_task: Optional[asyncio.Task] = None
     if logos_key is not None:
         admin_base = _admin_base_from_url(getattr(args, "logos_url", base_url) or base_url, args.logos_admin_port)
-        provider_names = await _discover_provider_names(base_url, logos_key)
-        provider_ids = list(getattr(args, "calibration_provider_ids", None) or []) or sorted(provider_names)
+        provider_ids = list(getattr(args, "calibration_provider_ids", None) or [])
         if provider_ids:
             print(f"  [timeline] polling live lane state for provider(s) {provider_ids} via {admin_base}")
             _poll_task = asyncio.create_task(
@@ -4737,13 +4716,12 @@ async def _benchmark_scenario(
                     t_run_start,
                     state_snapshots,
                     diag=_poll_diag,
-                    provider_names=provider_names,
                 )
             )
         else:
             print(
-                "  [timeline] WARNING: no provider IDs found (none passed and vram-stats "
-                "discovery returned none) — model_timeline.csv will be empty.",
+                "  [timeline] WARNING: no provider IDs found (pass "
+                "--calibration-provider-ids) — model_timeline.csv will be empty.",
                 file=sys.stderr,
             )
 

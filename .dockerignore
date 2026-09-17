@@ -40,6 +40,11 @@
 # The model gateway's nginx configuration, shipped in its image rather than
 # bind-mounted: a deployment copies only the compose file to its VM.
 !logos/agent-gateway/nginx.conf
+# The per-IP rate-limit gateway's nginx configuration and entrypoint, same
+# reasoning as the agent gateway above.
+!logos/rate-limit-gateway/nginx.conf
+!logos/rate-limit-gateway/upstream.conf
+!logos/rate-limit-gateway/entrypoint.sh
 !iris/pyproject.toml
 !iris/poetry.lock
 !iris/src/iris
