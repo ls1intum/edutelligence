@@ -32,6 +32,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -107,6 +108,33 @@ def http_headers(logos_key) -> dict:
 @pytest.fixture(scope="session")
 def client(api_base) -> httpx.Client:
     return httpx.Client(base_url=api_base, timeout=60.0)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reject_cleartext_internal_secret_transport(api_base, internal_secret):
+    """
+    Refuse to run when the shared internal secret would cross a non-loopback
+    link in cleartext.
+
+    /logosdb/scheduler_state is gated on LOGOS_INTERNAL_SECRET, and these tests
+    send it as a Bearer token to --api-base. A non-loopback plain-HTTP base lets
+    an on-path attacker capture the secret and reuse it against the internal
+    endpoints. Plain HTTP is only acceptable for loopback bases; a remote
+    deployment must be HTTPS (or a local tunnel that lands on loopback, e.g.
+    http://127.0.0.1:18443). Mirrors the guard in the performance workload
+    runner (tests/performance/run_api_workload.py).
+    """
+    if not internal_secret:
+        return  # nothing sensitive in flight; the scheduler_state calls will 401
+    parsed = urlparse(api_base)
+    if parsed.scheme.lower() == "http" and (parsed.hostname or "") not in {"", "localhost", "127.0.0.1", "0.0.0.0"}:
+        pytest.fail(
+            f"--api-base {api_base} uses plain HTTP for a non-loopback host. "
+            "The shared internal secret would cross that link in cleartext and "
+            "could be captured. Use an HTTPS base, or a local tunnel "
+            "(e.g. http://127.0.0.1:18443) port-forwarding to the orchestrator.",
+            pytrace=False,
+        )
 
 
 # ---------------------------------------------------------------------------
