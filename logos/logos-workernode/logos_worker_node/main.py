@@ -149,7 +149,7 @@ async def _auto_calibrate_if_needed(
         logger.info("Auto-calibration disabled via LOGOS_SKIP_AUTO_CALIBRATION")
         return
 
-    # The Metal backend has no nvidia-smi and no /proc/meminfo to measure
+    # The Metal engine has no nvidia-smi and no /proc/meminfo to measure
     # against, so calibration is impossible there by construction. Profiles
     # come from model_profile_overrides instead — no flag required.
     if is_metal_backend():
@@ -1139,7 +1139,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await logos_bridge.bootstrap_hf_token()
 
     # Device telemetry. Both collectors expose the same surface, so everything
-    # downstream (LaneManager, runtime status) is backend-agnostic.
+    # downstream (LaneManager, runtime status) is engine-agnostic.
     if is_metal_backend():
         gpu_collector = MetalMetricsCollector(
             poll_interval=cfg.worker.gpu_poll_interval,

@@ -90,7 +90,7 @@ export class Providers implements OnInit, OnDestroy {
   private cloudProviderTypeOptionsFor(type: ProviderType): AppSelectOption[] {
     if (type === 'logosnode') {
       // Never rendered — the field is hidden for a logosnode — but the value
-      // still has to resolve to something the backend maps to NULL.
+      // still has to resolve to something the application server maps to NULL.
       return [{ value: 'none', label: 'none' }];
     }
     return [
@@ -486,7 +486,7 @@ export class Providers implements OnInit, OnDestroy {
       const generatedKey: string = (res && (res as { api_key?: string }).api_key) || '';
       // Only surface the key when we actually generated one, i.e. the operator
       // left the key field empty. An operator-supplied key is echoed back by the
-      // backend too, and there is nothing new to show for that case.
+      // application server too, and there is nothing new to show for that case.
       if (generatedKey && payload.api_key === undefined) {
         this.createdKeyName.set(payload.name);
         this.createdKey.set(generatedKey);
@@ -554,7 +554,7 @@ export class Providers implements OnInit, OnDestroy {
       auth_name: this.editAuthName().trim(),
       auth_format: this.editAuthFormat().trim(),
       provider_type: this.editProviderType(),
-      // Send 'none' literally — the backend treats null as "leave unchanged",
+      // Send 'none' literally — the application server treats null as "leave unchanged",
       // so mapping it to null makes resetting the cloud type a silent no-op.
       cloud_provider_type: this.editCloudProviderType(),
       privacy_level: this.editPrivacyLevel(),

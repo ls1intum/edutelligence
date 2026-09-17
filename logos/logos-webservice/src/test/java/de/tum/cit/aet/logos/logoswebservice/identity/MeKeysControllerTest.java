@@ -73,7 +73,7 @@ class MeKeysControllerTest {
 
     @Test
     void getMyKeys_keepsUnknownRateLimitUsageDistinctFromZero() throws Exception {
-        // No traffic in the window -> the backend reports no usage at all.
+        // No traffic in the window -> the application server reports no usage at all.
         // It must NOT report zeros: for a rate-limit figure, zero is the most
         // reassuring value ("you have your entire budget available"), so an
         // unknown window has to stay distinguishable and the UI renders "–".

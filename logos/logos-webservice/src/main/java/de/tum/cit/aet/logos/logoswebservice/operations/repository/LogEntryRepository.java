@@ -460,7 +460,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("requestIds") List<String> requestIds);
 
     /**
-     * The request traces of one team for the export (issue #667).
+     * The request traces of one team for the export.
      *
      * Every request of the window comes out — the export must describe the
      * same slice of traffic the activity list above shows, and a download that
@@ -699,7 +699,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                -- counts stay on the local side of the cloud/local split: the
                -- KPI card labels the denominator "local starts" and pairing
                -- that number with a denominator that also counts cloud requests
-               -- (issue #928) understates the cold-start share. The predicate
+               -- understates the cold-start share. The predicate
                -- mirrors localRequests above, so cold + warm always adds up to
                -- exactly the local request count.
                COUNT(*) FILTER (WHERE (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND was_cold_start IS TRUE) AS coldStarts,
@@ -775,7 +775,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                    THEN EXTRACT(EPOCH FROM (re.timestamp_forwarding - re.timestamp_request)) END) AS avgQueueSeconds,
                AVG(CASE WHEN re.timestamp_forwarding IS NOT NULL AND re.timestamp_response IS NOT NULL
                    THEN EXTRACT(EPOCH FROM (re.timestamp_response - re.timestamp_forwarding)) END) AS avgRunSeconds,
-               -- Same local-only rule as the totals above (issue #928): a cloud
+               -- Same local-only rule as the totals above: a cloud
                -- request on a model has no local start, so it must not pad the
                -- warm count for that model.
                SUM(CASE WHEN (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AND re.was_cold_start IS TRUE THEN 1 ELSE 0 END) AS coldStarts,

@@ -20,7 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.ScopeOptionPro
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamActivityProjections;
 
 /**
- * The team-scoped activity view app administrators asked for (issue #776).
+ * The team-scoped activity view for app administrators.
  *
  * What is happening right now, what the team has spent, and the requests
  * behind both. Not a second statistics page: the VRAM curves, the lane health
@@ -124,7 +124,7 @@ public class TeamActivityService {
         payload.put("since", since.toInstant().toString());
         // Whether any key of the team is opted into FULL logging, so the view
         // can say before an export is started that the download will hold no
-        // request or response content (issue #667).
+        // request or response content.
         payload.put("full_logging_enabled", hasFullLoggingKey(teamId));
         payload.put("live", live);
         payload.put("keys", keys);
@@ -145,7 +145,7 @@ public class TeamActivityService {
     }
 
     /**
-     * The request traces of one team for the export (issue #667).
+     * The request traces of one team for the export.
      *
      * <p>Every request of the window comes out — the same slice the activity
      * list shows, so an export is never a mystery of which rows it skipped.

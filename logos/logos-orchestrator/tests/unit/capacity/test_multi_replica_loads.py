@@ -1,6 +1,6 @@
 """Multiple lanes of one model on a worker, placed dynamically.
 
-Issue #789 — "Can a model be deployed multiple times on one node?" There is
+— "Can a model be deployed multiple times on one node?" There is
 no configured replica count anywhere (no ``models.replicas``, no worker
 entry): the planner derives scale-out from the live signals, the same
 principle that dropped ``models.parallel``. A model's additional lane on a

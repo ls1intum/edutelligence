@@ -57,7 +57,7 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
     mock_cache = MagicMock()
     mock_cache.enabled = False
 
-    # This test exercises the CUDA startup guard. Without pinning the backend
+    # This test exercises the CUDA startup guard. Without pinning the application server
     # it would pick the Metal path when the suite runs on a developer's Mac,
     # instantiate the real MetalMetricsCollector instead of _FakeGpuCollector,
     # and hang in lifespan startup instead of raising.

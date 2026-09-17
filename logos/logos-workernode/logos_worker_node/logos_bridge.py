@@ -1264,10 +1264,10 @@ class LogosBridgeClient:
         back to the server. The server does not poll status and does not
         choose models; it only sends start/stop session RPCs.
         """
-        # Refuse up front on the Metal backend: calibration.py measures
+        # Refuse up front on the Metal engine: calibration.py measures
         # against nvidia-smi and samples /proc/meminfo, neither of which
         # exists on macOS, so no probe here can ever succeed. Capacity
-        # profiles on this backend come from model_profile_overrides
+        # profiles on this engine come from model_profile_overrides
         # (config.example.mlx.yml) — no flag is needed to keep the worker
         # away from a dead measurement path.
         if is_metal_backend():
@@ -1654,7 +1654,7 @@ class LogosBridgeClient:
             plan_by_model = {p["model"]: p for p in all_plans}
 
             # Free the calibration's GPU slice up front — but only that slice
-            # (issue #592). The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
+            # The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
             # so it only competes for the slice's VRAM; lanes on the leftover
             # GPUs keep serving for the rest of the session instead of sitting
             # idle. Without the pin the kv-cache search would start against an
@@ -1925,7 +1925,7 @@ class LogosBridgeClient:
                         except Exception:  # noqa: BLE001
                             logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
 
-                    # Issue #615: when the calibrated TP is >1, pre-shard the
+                    # When the calibrated TP is >1, pre-shard the
                     # checkpoint now while the GPU is free, so the lane that
                     # serves this model later loads each rank's shard directly
                     # instead of every rank re-reading the full checkpoint.
@@ -1999,7 +1999,7 @@ class LogosBridgeClient:
         Runs the (blocking, GPU-loading) conversion on the thread executor with
         the session's cancel_event wired through, so stop_calibration_session
         tears it down within ~2s. Best-effort: any failure is logged and the
-        model still serves from its full checkpoint. See issue #615.
+        model still serves from its full checkpoint.
         """
         try:
             from pathlib import Path  # noqa: PLC0415
