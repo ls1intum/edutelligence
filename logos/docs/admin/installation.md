@@ -77,7 +77,11 @@ docker build -t "$REGISTRY/logos-ui:$IMAGE_TAG" logos/logos-ui
 docker build -t "$REGISTRY/logos-db:$IMAGE_TAG" logos/db
 docker build -t "$REGISTRY/logos-agent:$IMAGE_TAG" -f logos/logos-agent/Dockerfile .
 docker build -t "$REGISTRY/logos-agent-gateway:$IMAGE_TAG" -f logos/agent-gateway/Dockerfile .
+docker build -t "$REGISTRY/logos-agent-workspace:$IMAGE_TAG" -f logos/logos-agent/workspace/Dockerfile .
 ```
+
+(All seven images are required to run the full stack: the agent runner
+refuses to start a session when the `logos-agent-workspace` image is absent.)
 
 Set the same `REGISTRY` and `IMAGE_TAG` in `.env`, then start the stack
 (the worker node image is built on the GPU host instead — see the worker
