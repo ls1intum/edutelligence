@@ -7,7 +7,10 @@
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test"
+    "test": "ng test",
+    "e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:ui": "playwright test --config e2e/playwright.config.ts --ui",
+    "e2e:install": "playwright install --with-deps chromium"
   },
   "private": true,
   "packageManager": "npm@11.19.0",
@@ -37,6 +40,7 @@
     "@angular/compiler-cli": "22.1.6",
     "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4.3.1",
+    "@types/node": "^22.20.3",
     "jsdom": "^28.0.0",
     "postcss": "^8.5.15",
     "prettier": "^3.8.1",
