@@ -24,7 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos import perf_trace, refcache
+from logos import perf_trace, refcache, write_queue
 from logos.anthropic_compat import UpstreamDialect, stream_translator, translate_error, translate_response
 from logos.auth import AuthContext, authenticate_api_key
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
@@ -825,6 +825,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
+    # Flush the write-behind queue so no terminal log writes are lost on exit
+    # (the drain is a blocking thread join, so it runs off the event loop).
+    await asyncio.to_thread(write_queue.get_write_queue().shutdown, 5.0)
     for batch_task in (_batch_reconciler_task, _local_batch_runner_task):
         if batch_task:
             batch_task.cancel()
@@ -2203,6 +2206,57 @@ async def _streaming_response(
     )
 
 
+def _persist_response_block(
+    log_id: int,
+    response_payload,
+    provider_id,
+    model_id,
+    usage_tokens,
+    policy_id,
+    classification_stats,
+    *,
+    service_tier=None,
+    set_first_token=None,
+    request_id=None,
+    queue_depth_at_arrival=None,
+    utilization_at_arrival=None,
+    result_status=None,
+    error_message=None,
+) -> None:
+    """Persist the terminal response payload and metrics for a log row in one
+    pool checkout. Runs on the write-behind thread (#980 O13): the request's
+    event loop is already back to serving by the time this executes, so it is
+    invisible to the client.
+    """
+    with DBManager() as db:
+        db.set_response_payload(
+            log_id,
+            response_payload,
+            provider_id,
+            model_id,
+            usage_tokens,
+            policy_id,
+            classification_stats,
+            service_tier=service_tier,
+            set_first_token=set_first_token,
+            request_id=request_id,
+            queue_depth_at_arrival=queue_depth_at_arrival,
+            utilization_at_arrival=utilization_at_arrival,
+        )
+        # result_status is written directly by log_id (not via the
+        # request_id-keyed monitoring flush below): that flush only runs when
+        # scheduling_stats is present, which left cloud requests with no
+        # scheduling stats — e.g. a failed Azure call — at result_status NULL,
+        # rendering grey (neither success nor error) on the statistics page.
+        db.update_log_entry_metrics(
+            log_id=log_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            result_status=result_status,
+            error_message=error_message,
+        )
+
+
 async def _sync_response(
     context,
     payload,
@@ -2379,46 +2433,39 @@ async def _sync_response(
         )
 
         if log_id:
+            _result_status = "timeout" if timed_out else ("success" if exec_result.success else "error")
+            _error_message = error_message if timed_out else (exec_result.error if not exec_result.success else None)
             with perf_trace.phase(request_id, "db.response_block"):
-                with DBManager() as db:
-                    db.set_response_payload(
-                        log_id,
-                        response_payload,
-                        provider_id,
-                        model_id,
-                        usage_tokens,
-                        policy_id,
-                        classification_stats,
-                        service_tier=extract_service_tier(response_payload),
-                        set_first_token=exec_result.success,
-                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
-                        queue_depth_at_arrival=(
-                            scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
-                        ),
-                        utilization_at_arrival=(
-                            scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
-                        ),
-                    )
-                    # Persist the final result_status directly by log_id.
-                    # record_completion below only runs when scheduling_stats is
-                    # present (it keys off request_id), which left cloud requests
-                    # with no scheduling stats — e.g. a failed Azure call — at
-                    # result_status NULL, rendering grey (neither success nor
-                    # error) on the statistics page.
-                    db.update_log_entry_metrics(
-                        log_id=log_id,
-                        provider_id=provider_id,
-                        model_id=model_id,
-                        result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
-                        error_message=(
-                            error_message if timed_out else (exec_result.error if not exec_result.success else None)
-                        ),
-                    )
+                # Terminal response + metrics are bookkeeping the client never
+                # waits for — hand them to the write-behind thread instead of
+                # running psycopg2 on this loop (#980 O13).
+                write_queue.get_write_queue().enqueue(
+                    _persist_response_block,
+                    log_id,
+                    response_payload,
+                    provider_id,
+                    model_id,
+                    usage_tokens,
+                    policy_id,
+                    classification_stats,
+                    service_tier=extract_service_tier(response_payload),
+                    set_first_token=exec_result.success,
+                    request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
+                    queue_depth_at_arrival=(
+                        scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
+                    ),
+                    utilization_at_arrival=(
+                        scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
+                    ),
+                    result_status=_result_status,
+                    error_message=_error_message,
+                )
 
         if scheduling_stats:
             status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             with perf_trace.phase(request_id, "monitoring.record_complete"):
-                _pipeline.record_completion(
+                write_queue.get_write_queue().enqueue(
+                    _pipeline.record_completion,
                     request_id=scheduling_stats.get("request_id"),
                     result_status=status,
                     error_message=(

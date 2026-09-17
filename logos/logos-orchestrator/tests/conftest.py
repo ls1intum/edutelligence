@@ -318,3 +318,17 @@ def _clear_ref_cache():
     refcache.get_ref_cache().clear()
     yield
     refcache.get_ref_cache().clear()
+
+
+@pytest.fixture(autouse=True)
+def _sync_write_queue():
+    """The write-behind queue (#980 O13) runs on a background thread in
+    production, but tests must observe DB writes synchronously (they assert on
+    them right after the handler returns). Install a sync-mode queue — one
+    whose ``enqueue`` runs the write inline — around every test. The queue is
+    fresh per test so a prior test's counter (flushed/dropped) never leaks."""
+    from logos import write_queue
+
+    write_queue.set_write_queue(write_queue.WriteQueue(sync=True))
+    yield
+    write_queue.set_write_queue(write_queue.WriteQueue(sync=True))
