@@ -10,14 +10,23 @@ authors = [
     { name = "Tobias Wasner", email = "tobias.wasner@tum.de" }
 ]
 readme = "README.md"
-requires-python = ">=3.9,<4.0.0"
+requires-python = ">=3.11,<4.0.0"
 
 dependencies = [
-    "fastapi[standard] >= 0.115.9"
+    "fastapi[standard] >= 0.141.1",
+    # Security floor. python-multipart arrives through fastapi's "standard"
+    # extra, which only asks for >= 0.0.18. Consumers install shared from this
+    # manifest rather than from poetry.lock, so this constraint is what keeps
+    # them off a vulnerable version.
+    "python-multipart >= 0.0.30",
+    # Security floor. starlette arrives through fastapi; fastapi 0.115 capped it
+    # below 0.47, so this also requires the fastapi floor above to be recent
+    # enough to allow the 1.x line.
+    "starlette >= 1.3.1",
 ]
 
 [tool.poetry.group.dev.dependencies]
-black = "25.1.0"
+black = "26.5.1"
 flake8 = "7.1.2"
 
 [virtualenvs]

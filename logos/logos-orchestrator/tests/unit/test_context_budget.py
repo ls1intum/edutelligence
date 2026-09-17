@@ -52,9 +52,9 @@ class TestEstimatePromptTokens:
         conversation (hundreds of tool_use/tool_result blocks, repeated JSON
         framing) tokenizes at ~3.7 chars per token. At the old 3.0 rate the
         estimate ran ~20 % above the truth — enough to push a request that fit
-        its 256k window over the limit and 404 the model out of routing
-        (#810). This pins the rate so the estimate stays within a hair of the
-        measured truth for that traffic shape.
+        its 256k window over the limit and 404 the model out of routing. This
+        pins the rate so the estimate stays within a hair of the measured truth
+        for that traffic shape.
         """
         tool_block = {"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok " * 40}
         agent_messages = []

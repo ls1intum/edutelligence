@@ -17,6 +17,9 @@
 !shared/shared
 !logos/db
 !logos/logos-orchestrator/pyproject.toml
+# The orchestrator installs with `uv sync --locked`, so the lock is a build
+# input rather than local churn (cf. iris/poetry.lock below).
+!logos/logos-orchestrator/uv.lock
 !logos/logos-orchestrator/src
 !logos/logos-orchestrator/tests
 # Agent runner: the service package and the session-image entrypoints.

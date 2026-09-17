@@ -182,6 +182,8 @@ export interface VramV2Provider {
   runtime_modes?: string[];
   transport_connected?: boolean;
   last_heartbeat?: string | null;
+  connected_at?: string | null;
+  worker_started_at?: string | null;
   devices?: DeviceInfo[];
   data: VramV2Sample[];
 }
@@ -259,6 +261,8 @@ export type VramProviderMeta = {
   runtime_modes?: string[];
   transport_connected?: boolean;
   last_heartbeat?: string | null;
+  connected_at?: string | null;
+  worker_started_at?: string | null;
   calibrating?: boolean;
 };
 

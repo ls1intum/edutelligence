@@ -1,4 +1,4 @@
-import { daysSince, formatLastUsed } from './date';
+import { daysSince, formatIsoDate, formatLastUsed } from './date';
 
 describe('date utils', () => {
   const now = new Date('2026-08-26T12:00:00');
@@ -17,6 +17,20 @@ describe('date utils', () => {
       expect(formatLastUsed('2026-08-25T12:00:00', now)).toBe('25.08.2026 (1 day ago)');
       expect(formatLastUsed('2026-08-24T09:00:00', now)).toBe('24.08.2026 (2 days ago)');
       expect(formatLastUsed('1996-06-02T00:00:00', now)).toBe('02.06.1996 (11042 days ago)');
+    });
+  });
+
+  describe('formatIsoDate', () => {
+    it('keeps the calendar date of a UTC midnight timestamp in every time zone', () => {
+      // Catalogue valid_from values: the date part is the effective date and
+      // must not shift by a day in UTC-negative time zones.
+      expect(formatIsoDate('2025-08-01T00:00:00Z')).toBe('01.08.2025');
+    });
+
+    it('returns an em dash for missing or invalid values', () => {
+      expect(formatIsoDate(null)).toBe('—');
+      expect(formatIsoDate(undefined)).toBe('—');
+      expect(formatIsoDate('not a date')).toBe('—');
     });
   });
 

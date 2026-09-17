@@ -178,7 +178,24 @@ async def internal_refresh_pipeline(data: RefreshPipelineRequest, request: Reque
         # timeout. The pass refreshes runtime state itself once it finds
         # something, so nothing is lost by returning first.
         _main._cloud_model_sync.request_refresh()
+    if data.sync_cloud_models and _main._azure_deployment_sync is not None:
+        _main._azure_deployment_sync.request_refresh()
     return {"status": "ok"}
+
+
+@router.get("/internal/cloud_model_sync_status", tags=["admin"])
+async def internal_cloud_model_sync_status(request: Request):
+    """Whether a cloud model sync pass is running or queued, for the webservice.
+
+    A manual refresh is answered before its pass has written anything, and the
+    pass contacts every cloud upstream in turn — so "trigger accepted" is not
+    "done". The admin UI polls this until the pass the refresh requested has
+    finished, instead of guessing from unchanged model lists (the first write
+    can land at any moment, and a mid-pass snapshot can look stable).
+    """
+    _require_internal_secret(request, disabled_detail="Internal cloud model sync status endpoint disabled")
+    sync = _main._cloud_model_sync
+    return {"running": bool(sync is not None and sync.is_busy())}
 
 
 @router.get("/internal/provider_status", tags=["admin"])
@@ -204,6 +221,14 @@ async def internal_provider_status(request: Request):
         last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
         if isinstance(last_heartbeat, datetime.datetime):
             last_heartbeat = last_heartbeat.isoformat()
+        connected_at = runtime_snapshot.get("connected_at") if runtime_snapshot else None
+        if isinstance(connected_at, datetime.datetime):
+            connected_at = connected_at.isoformat()
+        # Self-reported by the worker — distinct from connected_at, so it
+        # reflects worker uptime even across bridge reconnects.
+        worker_started_at = (
+            (runtime_snapshot.get("runtime") or {}).get("process_started_at") if runtime_snapshot else None
+        )
         providers.append(
             {
                 "provider_id": provider_id,
@@ -212,6 +237,8 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "connected_at": connected_at if isinstance(connected_at, str) else None,
+                "worker_started_at": worker_started_at if isinstance(worker_started_at, str) else None,
                 "calibrating": _main._logosnode_registry.is_calibrating(provider_id),
             }
         )

@@ -779,7 +779,7 @@ async def lifespan(app: FastAPI):
     # state" unambiguously means "orphaned by a restart".
     _close_orphaned_request_logs()
 
-    # Ollama-typed provider rows are a data problem, not a runtime state —
+    # Legacy local-provider rows are a data problem, not a runtime state —
     # abort loudly instead of scheduling around them.
     _assert_no_ollama_typed_providers()
 
@@ -1175,7 +1175,7 @@ def _prefer_deployments_with_context_room(
       Downstream, proxy mode narrows this list to the requested model and
       turns an emptied model into a 404 "no deployment found" that hides the
       real state; the engine, by contrast, either serves the request or
-      answers its own honest 400 — which is what the client should see (#810).
+      answers its own honest 400 — which is what the client should see.
     * When no worker is left, the widest ones are returned instead of nothing,
       so the request fails upstream exactly as it did before this filter
       existed.
@@ -3958,7 +3958,7 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
                      ceiling ``current_max`` can grow to. The live snapshots
                      only say this while a workernode is connected, so the
                      number is topped up from the historic maximum the
-                     database keeps per model (#829): when every workernode
+                     database keeps per model: when every workernode
                      is offline, that — not a client-side guess — is what the
                      clients size the session from.
 
@@ -4032,7 +4032,7 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
 
     # The live snapshots above only exist while workernodes are connected.
     # Top the "overall" figure up with the historic maximum the database keeps
-    # per model, so it is still known when every node is offline (#829) and so
+    # per model, so it is still known when every node is offline  and so
     # a wider window reported on another node (or by an earlier calibration)
     # is not lost while this node runs the model narrower.
     for model, value in _historic_max_context_by_model().items():

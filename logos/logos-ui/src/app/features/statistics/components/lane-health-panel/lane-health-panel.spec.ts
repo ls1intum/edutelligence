@@ -595,7 +595,7 @@ describe('LaneHealthPanel load outcome poll', () => {
   it('stops the poll on a backend that predates the load_status route', async () => {
     // A 404/501 is not a blip to retry: the deployed Spring has no route, so
     // the poll would 404 until the cap. Stop and fall back to the
-    // lane-appearance check, which needs no backend support.
+    // lane-appearance check, which needs no application server support.
     await acceptLoad();
     loadStatusStub = () =>
       Promise.reject(Object.assign(new Error('Not Found'), { status: 404 }));
