@@ -1018,14 +1018,17 @@ async def test_send_count_update_patches_lane_and_capacity_counts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_count_update_with_unchanged_counts_is_deduped(monkeypatch):
-    """A bump that leaves the counts identical (e.g. a decrement floored at
-    zero) must not re-send an identical payload."""
+async def test_send_count_update_with_unchanged_counts_is_still_sent(monkeypatch):
+    """An increment and decrement can both land between the last push and the
+    count-triggered snapshot: the patched payload then matches the previous
+    one, but the push must still go out — the orchestrator's per-snapshot
+    forwarding budget resets only on a new status push."""
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     app = _DummyApp()
 
     class _LaneManager:
         async def active_requests_snapshot(self):
+            # The +1/-1 pair cancelled out since the baseline push.
             return {"lane-a": 0}
 
     app.state.lane_manager = _LaneManager()
@@ -1050,8 +1053,9 @@ async def test_send_count_update_with_unchanged_counts_is_deduped(monkeypatch):
 
     sent = await client._send_count_update(object())  # noqa: SLF001
 
-    assert sent is False
-    assert sends == []
+    assert sent is True
+    assert len(sends) == 1
+    assert sends[0]["runtime"]["lanes"][0]["active_requests"] == 0
 
 
 @pytest.mark.asyncio

@@ -182,6 +182,10 @@ class LogosBridgeClient:
             return
         if self._task is not None and not self._task.done():
             return
+        # stop() closes the shared relay client; a restarted bridge must not
+        # reuse it (httpx rejects requests on a closed client).
+        if self._relay_client.is_closed:
+            self._relay_client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         self._stopping.clear()
         self._task = asyncio.create_task(self._run(), name="logos-bridge")
         logger.info("Logos bridge started (worker_id=%s)", self.worker_id)
@@ -574,9 +578,12 @@ class LogosBridgeClient:
         capacity = payload.get("capacity")
         if isinstance(capacity, dict):
             capacity["active_requests"] = sum(int(v) for v in counts.values())
-        # The signature dedupe drops no-op patches (e.g. a decrement that
-        # floored at zero) instead of re-sending an identical payload.
-        return await self._send_runtime_payload(ws, payload, force=False)
+        # Forced: an increment and decrement can both land between the last
+        # push and this snapshot, leaving the patched payload identical to
+        # the previous one. Signature dedupe would then drop the push — but
+        # the orchestrator's per-snapshot forwarding budget resets only on a
+        # new status push, so a count-triggered update must always reach it.
+        return await self._send_runtime_payload(ws, payload, force=True)
 
     async def _send_runtime_payload(self, ws, payload: dict[str, Any], force: bool = False) -> bool:
         # Every status repeats the live calibration state, so the server can

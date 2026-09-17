@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import socket
 import time
@@ -370,7 +371,15 @@ class LaneManager:
             _lane_status_ttl = float(os.getenv("LOGOS_LANE_STATUS_TTL_S") or 1.0)
         except (TypeError, ValueError):
             _lane_status_ttl = 1.0
-        self._lane_status_ttl_seconds = _lane_status_ttl if _lane_status_ttl > 0 else 0.0
+        if _lane_status_ttl <= 0:
+            # 0 (or negative) explicitly disables the cache (legacy behavior).
+            _lane_status_ttl = 0.0
+        elif not math.isfinite(_lane_status_ttl):
+            # inf/nan would keep cached lane statuses forever (until a
+            # lifecycle event clears the cache) — treat as invalid and fall
+            # back to the default TTL.
+            _lane_status_ttl = 1.0
+        self._lane_status_ttl_seconds = _lane_status_ttl
         # lane_id -> (built_at monotonic, LaneStatus)
         self._lane_status_cache: dict[str, tuple[float, LaneStatus]] = {}
         self._model_profiles = model_profiles
