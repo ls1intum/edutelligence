@@ -18,6 +18,32 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
+  # The logos services are uv projects. They were not covered here at all, so
+  # their manifests were only ever read once by the dependency graph and never
+  # rescanned -- an alert for a dependency that had since been fixed stayed
+  # open indefinitely (GHSA-3936-cmfr-pm3m on logos-agent's black).
+  #
+  # The ecosystem is "uv" rather than "pip" deliberately: these images install
+  # with `uv sync --locked`, so a bump that edited pyproject.toml without
+  # updating uv.lock would fail the build.
+  - package-ecosystem: "uv"
+    directory: "logos/logos-agent"
+    schedule:
+      interval: "weekly"
+    groups:
+      logos-agent-python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+  - package-ecosystem: "uv"
+    directory: "logos/logos-orchestrator"
+    schedule:
+      interval: "weekly"
+    groups:
+      logos-orchestrator-python-dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
