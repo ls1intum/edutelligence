@@ -300,7 +300,7 @@ export class Statistics implements OnInit, OnDestroy {
       startDate = r.currStart;
       // currEnd is the exclusive next-period midnight (e.g. Jul 1 for June).
       // Cap at now so we don't request future buckets, and subtract 1ms so
-      // the backend doesn't include a stray midnight bucket from the next period.
+      // the application server doesn't include a stray midnight bucket from the next period.
       endDate = new Date(Math.min(r.currEnd.getTime() - 1, Date.now()));
     }
     const spanMs = Math.max(endDate.getTime() - startDate.getTime(), 60 * 1000);

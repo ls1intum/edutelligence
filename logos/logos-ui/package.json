@@ -14,26 +14,30 @@
   },
   "private": true,
   "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
+  },
   "dependencies": {
-    "@angular/animations": "^21.2.17",
-    "@angular/cdk": "^21.2.14",
-    "@angular/common": "^21.2.17",
-    "@angular/compiler": "^21.2.17",
-    "@angular/core": "^21.2.17",
-    "@angular/forms": "^21.2.17",
-    "@angular/platform-browser": "^21.2.17",
-    "@angular/router": "^21.2.17",
-    "@primeuix/themes": "^2.0.3",
+    "@angular/cdk": "22.1.6",
+    "@angular/common": "22.1.6",
+    "@angular/compiler": "22.1.6",
+    "@angular/core": "22.1.6",
+    "@angular/forms": "22.1.6",
+    "@angular/platform-browser": "22.1.6",
+    "@angular/router": "22.1.6",
+    "@fortawesome/angular-fontawesome": "5.1.0",
+    "@fortawesome/fontawesome-svg-core": "7.3.1",
+    "@fortawesome/free-solid-svg-icons": "7.3.1",
+    "@tumaet/ui-angular": "file:./vendor/tumaet-ui-angular",
     "keycloak-js": "^26.2.4",
     "primeicons": "^7.0.0",
-    "primeng": "^21.1.9",
-    "rxjs": "~7.8.0",
+    "rxjs": "7.8.2",
     "tslib": "^2.3.0"
   },
   "devDependencies": {
-    "@angular/build": "^21.2.16",
-    "@angular/cli": "^21.2.16",
-    "@angular/compiler-cli": "^21.2.17",
+    "@angular/build": "22.1.8",
+    "@angular/cli": "22.1.8",
+    "@angular/compiler-cli": "22.1.6",
     "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4.3.1",
     "@types/node": "^22.20.3",
@@ -41,7 +45,14 @@
     "postcss": "^8.5.15",
     "prettier": "^3.8.1",
     "tailwindcss": "^4.3.1",
-    "typescript": "~5.9.0",
+    "typescript": "~6.0.3",
     "vitest": "^4.0.8"
+  },
+  "allowScripts": {
+    "@parcel/watcher@2.6.0": true,
+    "esbuild@0.28.2": true,
+    "lmdb@3.5.6": true,
+    "msgpackr-extract@3.0.4": true,
+    "fsevents@2.3.3": true
   }
 }

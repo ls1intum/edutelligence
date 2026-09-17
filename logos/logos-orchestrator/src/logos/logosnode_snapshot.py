@@ -344,7 +344,7 @@ def _profile_native_context_length(profile: dict) -> int:
     recorded no wider KV point, so the calibrated cap is the only context the
     profile reports. Ignoring it made such a model look context-unknown (and
     the client fall back to a guessed window) while its worker sat connected
-    and ready to serve it at exactly that width (#829).
+    and ready to serve it at exactly that width.
     """
     return derived_reported_context_length(profile)
 
@@ -611,7 +611,7 @@ def _build_live_local_provider_sample(
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
-    # telemetry_available is the backend-neutral successor to
+    # telemetry_available is the application server-neutral successor to
     # nvidia_smi_available: it means "the worker measured this on real
     # hardware", whether that hardware reports through nvidia-smi or through
     # Metal's device_info. Metal workers set it and leave nvidia_smi_available

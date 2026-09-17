@@ -353,7 +353,7 @@ class ModelProfileRegistry:
         (re-inferred at spawn time, a stale value from upstream) produces
         measurements that describe a different configuration — recording
         them, or letting the runtime TP overwrite the calibrated one, would
-        leave a split-brain profile (see issue #616).
+        leave a split-brain profile.
         """
         return (
             tensor_parallel_size is not None

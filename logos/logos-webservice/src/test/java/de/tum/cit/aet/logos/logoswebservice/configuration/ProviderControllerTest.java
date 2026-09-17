@@ -23,11 +23,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
@@ -54,6 +60,11 @@ class ProviderControllerTest {
     // Mocked so the price refresh triggered by connect_model_provider does not
     // reach the live litellm catalog during tests.
     @MockitoBean PriceUpdaterService priceUpdaterService;
+    // Mocked so tests can assert what the endpoint announces to the
+    // orchestrator instead of sending nothing (no orchestrator URL in tests).
+    @MockitoBean OrchestratorNotificationService orchestratorNotificationService;
+    // Mocked so the status endpoint is testable without an orchestrator URL.
+    @MockitoBean OrchestratorModelSyncClient modelSyncClient;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -305,6 +316,93 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.totalProviders").isNumber());
+    }
+
+    @Test
+    void refreshModels_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+        verify(orchestratorNotificationService, never()).notifyRefresh(anyBoolean(), anyBoolean());
+    }
+
+    @Test
+    void refreshModels_triggersCloudModelSync() throws Exception {
+        when(orchestratorNotificationService.sendRefreshSync(false, true)).thenReturn(true);
+
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model refresh triggered."));
+
+        // syncCloudModels must be true: a plain pipeline refresh would leave
+        // the upstream listings unread until the next 15-minute interval.
+        verify(orchestratorNotificationService).sendRefreshSync(false, true);
+    }
+
+    @Test
+    void refreshModels_reports503WhenTheOrchestratorCouldNotBeReached() throws Exception {
+        // The mock's default false: the pass was never handed over, so a 200
+        // would leave the UI polling a completion status that can never come.
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isServiceUnavailable())
+           .andExpect(jsonPath("$.error").value(containsString("orchestrator")));
+    }
+
+    @Test
+    void modelSyncStatus_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void modelSyncStatus_reportsTheOrchestratorState() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(true);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(true));
+    }
+
+    @Test
+    void modelSyncStatus_reportsExplicitIdle() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(false);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(false));
+    }
+
+    @Test
+    void modelSyncStatus_reportsUnknownWhenTheStatusCouldNotBeRead() throws Exception {
+        // null: the orchestrator did not answer. The UI settles an accepted
+        // refresh only on an explicit false, so the endpoint has to be able
+        // to express "unknown" — collapsing it to false would end the wait
+        // on a transient failure.
+        when(modelSyncClient.isSyncRunning()).thenReturn(null);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running", nullValue()));
     }
 
     @Test

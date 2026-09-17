@@ -892,7 +892,7 @@ class RequestResult:
     # x requests queued.
     warmth_state: Optional[int] = None
     ettft_ms: Optional[float] = None
-    # Full generated text and the backend's finish_reason ("stop", "length", …).
+    # Full generated text and the application server's finish_reason ("stop", "length", …).
     # Logged so truncated/empty/garbage responses are visible after the run —
     # e.g. finish_reason="length" means the answer was cut off by a token cap.
     response_text: str = ""
@@ -1036,10 +1036,10 @@ async def _dispatch(
     # vanilla OpenAI-compatible servers) only emit it when explicitly asked —
     # without this, rows would be missing token counts (and derived metrics).
     payload = {**entry.body, "stream": True, "stream_options": {"include_usage": True}}
-    # No completion-token limit: a falsy/absent max_tokens means "let the backend
+    # No completion-token limit: a falsy/absent max_tokens means "let the application server
     # decide when to stop". Strip it defensively so a stale workload CSV that still
-    # carries max_tokens=512 can't silently truncate answers (issue: completion
-    # tokens pinned to exactly the cap). See benchmark_config.GSM8K_MAX_TOKENS.
+    # carries max_tokens=512 can't silently truncate answers when completion
+    # tokens are pinned to exactly the cap. See benchmark_config.GSM8K_MAX_TOKENS.
     if not payload.get("max_tokens"):
         payload.pop("max_tokens", None)
 
@@ -3517,7 +3517,7 @@ async def _ensure_sllm_models(
             print(f"  [sllm] '{model}' already deployed — skipping.")
             continue
         # register downloads + converts the model onto a worker on first deploy
-        # (vLLM backend), so the first call for a large model can take minutes.
+        # (vLLM application server), so the first call for a large model can take minutes.
         num_gpus = _SLLM_MODEL_NUM_GPUS.get(model, _SLLM_DEFAULT_NUM_GPUS)
         print(
             f"  [sllm] Deploying '{model}' (backend={_SLLM_BACKEND}, num_gpus={num_gpus}; "
@@ -3551,17 +3551,17 @@ async def _ensure_sllm_models(
 # ── NVIDIA Dynamo (alternative serving framework) ──────────────────────────
 #
 # Dynamo (github.com/ai-dynamo/dynamo) is an OpenAI-compatible distributed
-# inference frontend over vLLM workers, coordinated by etcd + NATS. Unlike SLLM
+# inference gateway over vLLM workers, coordinated by etcd + NATS. Unlike SLLM
 # it loads HuggingFace models NATIVELY through vLLM (no custom checkpoint
 # conversion), so gemma-3 / MoE models that broke SLLM serve fine.
 #
 # Topology this benchmark uses (multi-node, all on the GPU nodes — nothing on the
-# benchmark host): etcd + NATS + the OpenAI frontend run on the FIRST GPU host
+# benchmark host): etcd + NATS + the OpenAI user interface run on the FIRST GPU host
 # ("head"); one vLLM worker per model is spread across the GPU hosts, each pinned
 # to its own GPU(s) and pointed at the head's etcd/NATS. The benchmark dispatches
-# to http://<head>:<frontend port>. Requires (host config, set up out-of-band like
+# to http://<head>:<gateway port>. Requires (host config, set up out-of-band like
 # any firewall change): the head allows the other GPU node + the benchmark host
-# (frontend port) through UFW, and each GPU node allows its peer.
+# (gateway port) through UFW, and each GPU node allows its peer.
 _DYNAMO_IMAGE = "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.1"
 _DYNAMO_FRONTEND_PORT = 8000
 _DYNAMO_ETCD_PORT = 2379
@@ -3709,7 +3709,7 @@ def _stop_dynamo_via_ssh(
 ) -> None:
     """Stop all Dynamo containers: workers on every host, infra on the head."""
     sudo = "sudo " if use_sudo else ""
-    # Remove every dyn-* container (workers on all hosts; frontend/etcd/nats on head).
+    # Remove every dyn-* container (workers on all hosts; UI/etcd/nats on head).
     remote = f"for c in $({sudo}docker ps -aq --filter name=dyn-); do {sudo}docker rm -f $c >/dev/null 2>&1; done; true"
     for host in hosts:
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote, relay_host, relay_user))
@@ -3745,7 +3745,7 @@ async def _wait_for_dynamo(url: str, expected_models: list[str], timeout_s: floa
 
 # ── Ray Serve LLM (dynamic multi-model serving) ────────────────────────────
 #
-# Ray Serve LLM is an OpenAI-compatible vLLM frontend that does what Dynamo
+# Ray Serve LLM is an OpenAI-compatible vLLM gateway that does what Dynamo
 # couldn't: serve MORE models than fit on the GPUs by autoscaling each model to
 # zero when idle (min_replicas=0) and loading it on demand — so all 5 benchmark
 # models share the 4-GPU cluster via load/evict (validated: each cold-starts in
@@ -4830,8 +4830,8 @@ async def _benchmark_scenario(
 
     summary = compute_summary(results, scenario, tracker.method)
     # Authoritative scenario energy: integrate the power trace over the whole run
-    # and attribute per-request/token by simple division (issue: per-request
-    # windows over-count under concurrency).
+    # and attribute per-request/token by simple division; per-request windows
+    # over-count under concurrency.
     n_ok = summary["successful_requests"]
     n_tokens = summary["total_completion_tokens"]
     summary.update(_overall_energy_metrics(tracker, t_run_start, t_run_end, n_ok, n_tokens))
@@ -4985,7 +4985,7 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
 #   - sllm: multi-node Ray serving never converged here (gemma-3 conversion drops a
 #     buffer, qwen3.6 MoE unsupported by the image, fragile instance bring-up).
 #   - dynamo: serves fine but CAN'T over-provision — 5 models need 6 GPU-slots on
-#     4 GPUs and its Planner has no working scale-to-zero (issue #6985), so it can't
+#     4 GPUs and its Planner has no working scale-to-zero, so it can't
 #     share GPUs across more models than fit. Not a fit for this cluster.
 # Both remain runnable explicitly, e.g. `--scenarios dynamo`.
 _ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "ray", "kserve"]

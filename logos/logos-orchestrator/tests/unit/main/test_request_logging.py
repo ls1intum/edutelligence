@@ -265,7 +265,7 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     # vLLM lanes report usage.prompt_tokens_details.cached_tokens (the worker
     # starts them with --enable-prompt-tokens-details); the orchestrator must
     # relay it to the application and log it the same way as the cloud
-    # provider's cached count (#813).
+    # provider's cached count.
     dummy_db = _make_dummy_db()
     monkeypatch.setattr(main, "DBManager", dummy_db)
     monkeypatch.setattr(
@@ -331,7 +331,7 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
 async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
     # The lane's usage.prompt_tokens_details must reach the application in
     # the response and land in the request log as prompt_cached_tokens,
-    # mirroring the cloud path (#813).
+    # mirroring the cloud path.
     dummy_db = _make_dummy_db()
     monkeypatch.setattr(main, "DBManager", dummy_db)
     monkeypatch.setattr(
@@ -1484,7 +1484,7 @@ async def test_proxy_sync_response_logs_status_and_skips_ttft_on_error(monkeypat
 
 
 # ---------------------------------------------------------------------------
-# _log_request_completion — prefix-cache hit rate field (issue 748)
+# _log_request_completion — prefix-cache hit rate field
 # ---------------------------------------------------------------------------
 
 
