@@ -122,6 +122,12 @@ aggregated in the database over the whole range, arrives already bucketed, and
 costs a few kilobytes. The 200k-event payload, its delta stream, the client-side
 re-bucketing and the three repository queries behind them are gone.
 
+One behavioural consequence: the chart used to redraw from the event deltas every
+two seconds and now moves with the aggregate push, so at most every ten. Its
+smallest bucket is 15 minutes (the "today" preset) and its default is six hours,
+so the extra eight seconds are not visible. The KPI cards beside it already ran
+on the aggregate push and are unchanged.
+
 ## Models page
 
 `ModelRepository.findAllWithPricing` took **9,648 ms on production**, of which
