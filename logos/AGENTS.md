@@ -68,7 +68,7 @@ Log in with a seeded Keycloak user (e.g. `tobias.wasner` / `password` — logos 
 
 ## Skills
 
-Task-specific playbooks live in `.agents/skills/<name>/SKILL.md`, in the [Agent Skills](https://agentskills.io) format. `.claude/skills/<name>` symlinks to the same directory because Claude Code only scans `.claude/skills/`; Codex only scans `.agents/skills/`, Copilot scans both. Add a new skill under `.agents/skills/` and symlink it, so there is one copy. An agent that discovers neither can read the file directly.
+Task-specific playbooks live in `.agents/skills/<name>/SKILL.md`, in the [Agent Skills](https://agentskills.io) format, and are mirrored by a frontmatter-only stub under `.claude/skills/<name>/` because clients scan different directories. Before adding, renaming or removing one, read [`.agents/skills/AGENTS.md`](.agents/skills/AGENTS.md) — it has the mirroring rules. An agent that discovers neither location can read the file directly.
 
 | Skill | Use it for |
 |-------|------------|
