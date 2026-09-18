@@ -321,9 +321,12 @@ services:
 
   logos-webservice:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-webservice:${IMAGE_TAG:-latest}
-    # No fixed container_name: Traefik load-balances across replicas
-    # (`docker compose up --scale logos-webservice=N`). Liquibase serialises
-    # schema apply via its database changelog lock.
+    # No fixed container_name: Traefik load-balances across replicas.
+    # Production/dev/test deploy workflows scale from the node's .env:
+    #   LOGOS_WEBSERVICE_REPLICAS=<N>   # default 1
+    # via `docker compose up -d --remove-orphans --scale logos-webservice=$N`
+    # on docker-compose.yaml only (worker compose files skip --scale).
+    # Liquibase serialises schema apply via its database changelog lock.
     restart: unless-stopped
     depends_on:
       logos-db:

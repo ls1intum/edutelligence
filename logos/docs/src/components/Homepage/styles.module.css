@@ -1,0 +1,222 @@
+.page {
+  --logos-ink: #1a1d26;
+  --logos-muted: #5b6472;
+  --logos-teal: #0b6e6a;
+  --logos-teal-dark: #085652;
+  --logos-surface: #f3f6f8;
+  --logos-card: #ffffff;
+  --logos-border: #d8e0e6;
+  --logos-hero-from: #e8f2f1;
+  --logos-hero-to: #f7f8fa;
+}
+
+[data-theme="dark"] .page {
+  --logos-ink: #eef1f5;
+  --logos-muted: #a8b0bc;
+  --logos-teal: #3db8b1;
+  --logos-teal-dark: #2a9e97;
+  --logos-surface: #161a22;
+  --logos-card: #1c222c;
+  --logos-border: #2c3440;
+  --logos-hero-from: #122221;
+  --logos-hero-to: #12151c;
+}
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 4.5rem 1.5rem 3.75rem;
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%, rgba(11, 110, 106, 0.14), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 90% 20%, rgba(53, 120, 229, 0.08), transparent 50%),
+    linear-gradient(165deg, var(--logos-hero-from), var(--logos-hero-to));
+}
+
+.heroInner {
+  max-width: 720px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.heroLogo {
+  display: block;
+  margin: 0 auto 1rem;
+  border-radius: 16px;
+}
+
+.heroBrand {
+  margin: 0 0 0.35rem;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--logos-teal);
+}
+
+.heroHeadline {
+  margin: 0 0 0.85rem;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--logos-ink);
+}
+
+.heroSubtitle {
+  margin: 0 auto 1.75rem;
+  max-width: 36rem;
+  font-size: 1.1rem;
+  line-height: 1.55;
+  color: var(--logos-muted);
+}
+
+.heroCtas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+.btnPrimary,
+.btnGhost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.7rem 1.25rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none !important;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btnPrimary {
+  background: var(--logos-teal);
+  color: #fff !important;
+  border: 1px solid var(--logos-teal);
+}
+
+.btnPrimary:hover {
+  background: var(--logos-teal-dark);
+  border-color: var(--logos-teal-dark);
+  color: #fff !important;
+}
+
+.btnGhost {
+  background: transparent;
+  color: var(--logos-ink) !important;
+  border: 1px solid var(--logos-border);
+}
+
+.btnGhost:hover {
+  border-color: var(--logos-teal);
+  color: var(--logos-teal) !important;
+}
+
+.section,
+.sectionAltInner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem;
+}
+
+.sectionAlt {
+  background: var(--logos-surface);
+}
+
+.sectionHeading {
+  margin: 0 0 0.65rem;
+  text-align: center;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--logos-ink);
+}
+
+.sectionSubtitle {
+  margin: 0 auto 2rem;
+  max-width: 36rem;
+  text-align: center;
+  color: var(--logos-muted);
+  line-height: 1.5;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+@media (max-width: 860px) {
+  .cardGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.35rem 1.4rem 1.25rem;
+  background: var(--logos-card);
+  border: 1px solid var(--logos-border);
+  border-radius: 12px;
+  text-decoration: none !important;
+  color: inherit !important;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.card:hover {
+  border-color: var(--logos-teal);
+  transform: translateY(-2px);
+  text-decoration: none !important;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--logos-ink);
+}
+
+.cardBody {
+  margin: 0;
+  flex: 1;
+  color: var(--logos-muted);
+  line-height: 1.45;
+  font-size: 0.95rem;
+}
+
+.cardCta {
+  margin-top: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--logos-teal);
+}
+
+.diagramLink {
+  display: block;
+  border-radius: 12px;
+  border: 1px solid var(--logos-border);
+  background: var(--logos-card);
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.diagramLink:hover {
+  border-color: var(--logos-teal);
+}
+
+.diagram {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.diagramCaption {
+  margin: 1rem 0 0;
+  text-align: center;
+  color: var(--logos-muted);
+  font-size: 0.95rem;
+}

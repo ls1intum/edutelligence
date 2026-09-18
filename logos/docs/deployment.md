@@ -221,10 +221,26 @@ Public `/v1`, `/openai`, and `/jobs` traffic lands on **logos-webservice**.
 The service has no fixed `container_name`, so Compose can run more than one
 replica; Traefik load-balances them under `logos-webservice-svc`.
 
+The deploy workflows (`logos_deploy-prod.yml`, `logos_deploy-dev.yml`,
+`logos_deploy-test.yml`) scale the core stack from the node's `.env`:
+
 ```bash
-# on the core node, from /opt/logos
-docker compose up -d --scale logos-webservice=2 --no-recreate
+# on the core node .env (e.g. /opt/logos/.env)
+LOGOS_WEBSERVICE_REPLICAS=2
 ```
+
+On the next `Logos - Deploy` run for `docker-compose.yaml`, the SSH step
+sources that file and runs:
+
+```bash
+docker compose -f …/docker-compose.yaml --env-file=…/.env \
+  up -d --remove-orphans --scale logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}
+```
+
+Worker compose files have no `logos-webservice` service, so those matrix
+entries omit `--scale`. For a one-off manual bump on the core node you can
+use the same `--scale` flag; prefer setting `LOGOS_WEBSERVICE_REPLICAS` so the
+next pipeline deploy does not collapse back to one replica.
 
 On the **dev** compose, drop or retarget the host publish `18082:8081` before
 scaling — published host ports cannot be shared across replicas. Liquibase
@@ -234,9 +250,17 @@ short-TTL budget cache are the remaining per-instance state (see
 
 Optional `.env` knobs:
 
+- `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count applied
+  by the deploy workflows on the core `docker-compose.yaml`.
 - `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
   accepts the public paths but proxies every request to the orchestrator after
   API-key auth.
+- `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
+  overshoot bound; see `GatewayBudgetService`.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
+  cost reserved in `log_entry_cost` before each direct-cloud forward so
+  concurrent admissions see the spend; reconciled (kept or zeroed) when the
+  stream completes.
 - `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
   overshoot bound; see `GatewayBudgetService`.
 - `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
