@@ -267,6 +267,7 @@ services:
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
       LOGOS_GATEWAY_ENABLED: "${LOGOS_GATEWAY_ENABLED:-true}"
       LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS: "${LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS:-15}"
+      LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS:-1000000}"
       # Per-IP rate limits: /info (no credential) and repeated auth failures on
       # /logosdb/get_model_health. See application.properties (logos.rate-limiting.*).
       LOGOS_RATE_LIMITING_ENABLED: "${LOGOS_RATE_LIMITING_ENABLED:-true}"

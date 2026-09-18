@@ -1,0 +1,57 @@
+package de.tum.cit.aet.logos.logoswebservice.gateway;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Hop-by-hop header filtering for gateway proxies (RFC 9110 §7.6.1).
+ */
+final class GatewayHopByHop {
+
+    private static final Set<String> BASE = Set.of(
+        "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+        "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length",
+        // JDK HttpClient rejects these restricted request headers.
+        "expect"
+    );
+
+    private GatewayHopByHop() {
+    }
+
+    /** Whether a request header must not be forwarded upstream. */
+    static boolean isRequestHopByHop(String name) {
+        return name != null && BASE.contains(name.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Build the set of response header names that must not be forwarded to the
+     * client: the base hop-by-hop set plus every field nominated by
+     * {@code Connection}.
+     */
+    static Set<String> responseExcludeNames(Map<String, List<String>> upstreamHeaders) {
+        Set<String> exclude = new HashSet<>(BASE);
+        if (upstreamHeaders == null) {
+            return exclude;
+        }
+        for (Map.Entry<String, List<String>> e : upstreamHeaders.entrySet()) {
+            if (e.getKey() == null || !"connection".equalsIgnoreCase(e.getKey()) || e.getValue() == null) {
+                continue;
+            }
+            for (String value : e.getValue()) {
+                if (value == null) {
+                    continue;
+                }
+                for (String token : value.split(",")) {
+                    String t = token.strip().toLowerCase(Locale.ROOT);
+                    if (!t.isEmpty()) {
+                        exclude.add(t);
+                    }
+                }
+            }
+        }
+        return exclude;
+    }
+}

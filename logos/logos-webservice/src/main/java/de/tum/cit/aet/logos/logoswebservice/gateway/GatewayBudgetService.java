@@ -33,10 +33,14 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * <p><b>Overshoot bound:</b> with TTL {@code T} seconds, a multi-instance
  * deployment (or concurrent requests on one instance after a spend lands in
  * {@code log_entry_cost}) can admit traffic for up to roughly {@code T} seconds
- * after the true budget is exhausted. The admitted overshoot is therefore
- * bounded by concurrent cloud spend in that window — not by an unbounded lag.
- * Example: TTL 15s → overshoot ≲ concurrent spend in any 15s window after the
- * true breach. Lower the TTL to tighten the bound at the cost of more DB load.
+ * after the true budget is exhausted — <em>except</em> on the direct-cloud path,
+ * where {@link GatewayCloudAccounting} writes a finalized reservation into
+ * {@code log_entry_cost} before the upstream call and invalidates this cache,
+ * so concurrent admissions on the same instance see the reservation immediately.
+ * Cross-instance lag remains bounded by {@code T} until the other instances'
+ * caches expire. Example: TTL 15s → overshoot ≲ concurrent spend in any 15s
+ * window after the true breach (plus one reservation per in-flight direct-cloud
+ * request). Lower the TTL to tighten the bound at the cost of more DB load.
  */
 @Service
 public class GatewayBudgetService {
@@ -180,6 +184,20 @@ public class GatewayBudgetService {
             return total == null ? 0L : total;
         });
         return v == null ? 0L : v;
+    }
+
+    /** Drop usage (and limit) cache entries for this key so a reservation is visible immediately. */
+    void invalidateUsageCache(GatewayKey key) {
+        if (key == null) {
+            return;
+        }
+        String monthStart = YearMonth.from(LocalDate.now(clock.withZone(ZoneOffset.UTC)))
+            .atDay(1)
+            .toString();
+        cache.remove("usage:key:" + key.id() + ":" + monthStart);
+        if (key.teamId() != null) {
+            cache.remove("usage:team:" + key.teamId() + ":" + monthStart);
+        }
     }
 
     @SuppressWarnings("unchecked")

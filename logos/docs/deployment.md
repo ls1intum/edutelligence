@@ -239,6 +239,10 @@ Optional `.env` knobs:
   API-key auth.
 - `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
   overshoot bound; see `GatewayBudgetService`.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
+  cost reserved in `log_entry_cost` before each direct-cloud forward so
+  concurrent admissions see the spend; reconciled (kept or zeroed) when the
+  stream completes.
 
 ## Required configuration per GitHub environment
 

@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -44,6 +45,7 @@ public class InferenceGatewayController {
     private final boolean enabled;
     private final GatewayAuthService authService;
     private final GatewayBudgetService budgetService;
+    private final GatewayCloudAccounting cloudAccounting;
     private final GatewayCloudForwarder cloudForwarder;
     private final GatewayOrchestratorProxy orchestratorProxy;
     private final ObjectMapper objectMapper;
@@ -52,12 +54,14 @@ public class InferenceGatewayController {
             @Value("${logos.gateway.enabled:true}") boolean enabled,
             GatewayAuthService authService,
             GatewayBudgetService budgetService,
+            GatewayCloudAccounting cloudAccounting,
             GatewayCloudForwarder cloudForwarder,
             GatewayOrchestratorProxy orchestratorProxy,
             ObjectMapper objectMapper) {
         this.enabled = enabled;
         this.authService = authService;
         this.budgetService = budgetService;
+        this.cloudAccounting = cloudAccounting;
         this.cloudForwarder = cloudForwarder;
         this.orchestratorProxy = orchestratorProxy;
         this.objectMapper = objectMapper;
@@ -79,17 +83,20 @@ public class InferenceGatewayController {
 
         // Named-model inference: one SQL round-trip for auth + permissions.
         // Listing/jobs/resource-mode: key-only query, then proxy.
+        String contentType = request.getContentType();
+        boolean multipart = contentType != null
+            && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/");
         if (modelName != null
                 && !path.startsWith("/jobs")
                 && !GatewayRouteResolver.isListingOrWarmupPath(path, request.getMethod())
-                && (request.getContentType() == null
-                    || !request.getContentType().toLowerCase().startsWith("multipart/"))) {
+                && !multipart) {
             GatewayAuthContext ctx = authService.requireKeyAndDeployments(apiKeyValue, modelName);
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(
                 ctx.deploymentsForModel());
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null
                     && !GatewayRouteResolver.isMessagesPath(path)) {
                 budgetService.enforceCloudBudget(ctx.key());
+                Integer logId = cloudAccounting.reserve(ctx.key(), decision.deployment());
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
@@ -99,7 +106,9 @@ public class InferenceGatewayController {
                     request.getQueryString(),
                     request.getMethod(),
                     body,
-                    copyHeaders(request));
+                    copyHeaders(request),
+                    () -> cloudAccounting.settleSuccess(logId),
+                    err -> cloudAccounting.settleFailure(logId, err));
             }
             log.debug("Orchestrator proxy {} {} reason={}", request.getMethod(), path, decision.reason());
             return orchestratorProxy.proxy(request, path, body);
@@ -114,7 +123,7 @@ public class InferenceGatewayController {
         if (body == null || body.length == 0) {
             return null;
         }
-        if (contentType != null && contentType.toLowerCase().startsWith("multipart/")) {
+        if (contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/")) {
             return null;
         }
         try {

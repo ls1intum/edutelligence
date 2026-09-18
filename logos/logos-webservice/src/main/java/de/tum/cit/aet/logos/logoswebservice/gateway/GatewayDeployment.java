@@ -22,7 +22,7 @@ public record GatewayDeployment(
 ) {
     /** True when this deployment is a cloud upstream (not a worker / logosnode). */
     public boolean isCloud() {
-        String type = providerType == null ? "" : providerType.strip().toLowerCase();
+        String type = providerType == null ? "" : providerType.strip().toLowerCase(java.util.Locale.ROOT);
         return "cloud".equals(type);
     }
 
@@ -31,7 +31,8 @@ public record GatewayDeployment(
      * (or Azure Anthropic) that Phase 1 does not implement in the gateway.
      */
     public boolean needsAnthropicDialect() {
-        String cloud = cloudProviderType == null ? "" : cloudProviderType.strip().toLowerCase();
+        String cloud = cloudProviderType == null ? ""
+            : cloudProviderType.strip().toLowerCase(java.util.Locale.ROOT);
         if ("anthropic".equals(cloud)) {
             return true;
         }

@@ -32,11 +32,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @Service
 public class GatewayCloudForwarder {
 
-    private static final Set<String> HOP_BY_HOP = Set.of(
-        "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-        "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length"
-    );
-
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
@@ -56,6 +51,8 @@ public class GatewayCloudForwarder {
      * @param method        HTTP method
      * @param body          request body bytes (may be empty)
      * @param inboundHeaders inbound request headers to selectively copy (Content-Type)
+     * @param onSuccess     invoked after the response body has been fully streamed
+     * @param onFailure     invoked when the upstream call or stream fails
      */
     public ResponseEntity<StreamingResponseBody> forward(
             GatewayDeployment deployment,
@@ -63,7 +60,9 @@ public class GatewayCloudForwarder {
             String queryString,
             String method,
             byte[] body,
-            Map<String, List<String>> inboundHeaders) throws IOException {
+            Map<String, List<String>> inboundHeaders,
+            Runnable onSuccess,
+            java.util.function.Consumer<String> onFailure) throws IOException {
 
         String forwardUrl = CloudForwardUrlBuilder.build(
             deployment.baseUrl(), inferencePath, deployment.endpoint());
@@ -76,9 +75,7 @@ public class GatewayCloudForwarder {
             azureDeploymentId = responses.get().deploymentId();
         }
 
-        if (queryString != null && !queryString.isBlank() && !forwardUrl.contains("?")) {
-            forwardUrl = forwardUrl + "?" + queryString;
-        }
+        forwardUrl = GatewayQueryMerge.merge(forwardUrl, queryString);
 
         byte[] outboundBody = body;
         if (azureDeploymentId != null && body != null && body.length > 0) {
@@ -121,12 +118,24 @@ public class GatewayCloudForwarder {
             upstream = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if (onFailure != null) {
+                onFailure.accept("Interrupted while forwarding to cloud");
+            }
             throw new IOException("Interrupted while forwarding to cloud", e);
+        } catch (IOException e) {
+            if (onFailure != null) {
+                onFailure.accept(e.getMessage());
+            }
+            throw e;
         }
 
+        int status = upstream.statusCode();
+        boolean upstreamOk = status >= 200 && status < 400;
+
+        Set<String> exclude = GatewayHopByHop.responseExcludeNames(upstream.headers().map());
         HttpHeaders responseHeaders = new HttpHeaders();
         upstream.headers().map().forEach((name, values) -> {
-            if (name == null || HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
+            if (name == null || exclude.contains(name.toLowerCase(Locale.ROOT))) {
                 return;
             }
             responseHeaders.put(name, values);
@@ -137,10 +146,22 @@ public class GatewayCloudForwarder {
             try (upstreamBody; OutputStream out = outputStream) {
                 upstreamBody.transferTo(out);
                 out.flush();
+                if (upstreamOk) {
+                    if (onSuccess != null) {
+                        onSuccess.run();
+                    }
+                } else if (onFailure != null) {
+                    onFailure.accept("Upstream HTTP " + status);
+                }
+            } catch (IOException e) {
+                if (onFailure != null) {
+                    onFailure.accept(e.getMessage());
+                }
+                throw e;
             }
         };
 
-        return ResponseEntity.status(upstream.statusCode()).headers(responseHeaders).body(stream);
+        return ResponseEntity.status(status).headers(responseHeaders).body(stream);
     }
 
     private byte[] rewriteModelField(byte[] body, String deploymentId) throws IOException {

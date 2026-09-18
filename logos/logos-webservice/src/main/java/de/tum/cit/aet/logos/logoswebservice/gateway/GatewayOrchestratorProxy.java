@@ -33,16 +33,6 @@ import jakarta.servlet.http.HttpServletRequest;
 @Service
 public class GatewayOrchestratorProxy {
 
-    private static final Set<String> REQUEST_HOP_BY_HOP = Set.of(
-        "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-        "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length"
-    );
-
-    private static final Set<String> RESPONSE_HOP_BY_HOP = Set.of(
-        "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-        "te", "trailers", "transfer-encoding", "upgrade", "content-length"
-    );
-
     private final HttpClient httpClient;
     private final String orchestratorUrl;
 
@@ -80,7 +70,7 @@ public class GatewayOrchestratorProxy {
         Enumeration<String> headerNames = request.getHeaderNames();
         while (headerNames != null && headerNames.hasMoreElements()) {
             String name = headerNames.nextElement();
-            if (name == null || REQUEST_HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
+            if (name == null || GatewayHopByHop.isRequestHopByHop(name)) {
                 continue;
             }
             Enumeration<String> values = request.getHeaders(name);
@@ -103,9 +93,10 @@ public class GatewayOrchestratorProxy {
             throw new IOException("Interrupted while proxying to orchestrator", e);
         }
 
+        Set<String> exclude = GatewayHopByHop.responseExcludeNames(upstream.headers().map());
         HttpHeaders responseHeaders = new HttpHeaders();
         upstream.headers().map().forEach((name, values) -> {
-            if (name == null || RESPONSE_HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
+            if (name == null || exclude.contains(name.toLowerCase(Locale.ROOT))) {
                 return;
             }
             responseHeaders.put(name, values);
