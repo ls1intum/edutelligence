@@ -184,10 +184,12 @@ class LectureIngestionSettings(BaseModel):
 
     vision_max_attempts: int = Field(
         default=3,
+        ge=1,
         description="Max attempts to interpret a slide via the vision LLM before failing the run.",
     )
     skip_check_fetch_limit: int = Field(
         default=10_000,
+        ge=1,
         description=(
             "Max rows read when checking whether a unit's stored chunks are already "
             "current and complete, and when counting a unit's distinct ingestion "
@@ -197,6 +199,7 @@ class LectureIngestionSettings(BaseModel):
     )
     convergence_max_escalations: int = Field(
         default=2,
+        ge=0,
         description=(
             "After write-then-purge, how many times to escalate to a full "
             "delete-and-rewrite if a stale generation the id-scoped purge missed is "
@@ -205,6 +208,7 @@ class LectureIngestionSettings(BaseModel):
     )
     language_detection_min_chars: int = Field(
         default=200,
+        ge=1,
         description=(
             "Below this much aggregated deck text, language detection is unreliable "
             "and default_language is used instead of guessing."
@@ -212,12 +216,22 @@ class LectureIngestionSettings(BaseModel):
     )
     language_detection_max_chars: int = Field(
         default=10_000,
+        ge=1,
         description="Max characters of deck text fed to the language detector per run.",
     )
     default_language: str = Field(
         default="en",
         description="Fallback language (ISO 639-1) when detection is skipped or fails.",
     )
+
+    @model_validator(mode="after")
+    def validate_language_detection_bounds(self):
+        """Ensure the detector sample window is at least the gating threshold."""
+        if self.language_detection_max_chars < self.language_detection_min_chars:
+            raise ValueError(
+                "language_detection_max_chars must be >= language_detection_min_chars"
+            )
+        return self
 
 
 class Settings(BaseModel):
