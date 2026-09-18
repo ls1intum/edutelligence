@@ -303,6 +303,9 @@ def test_expansion_restricts_the_transcription_lane_to_slide_less_segments():
     transcription_call = calls[retrieval.transcription_collection]
 
     assert len(segment_call.args) == 3, "the segment lane keeps every page"
+    assert (
+        segment_call.kwargs.get("extra_filter") is None
+    ), "a regression could pass extra_filter as a keyword and still keep len(args) == 3"
     assert transcription_call.args[3] == Filter.by_property(
         LectureTranscriptionSchema.PAGE_NUMBER.value
     ).equal(-1), "the transcription lane must skip rows a slide segment already covers"

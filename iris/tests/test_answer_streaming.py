@@ -139,6 +139,17 @@ class TestNavigateFallbackClearsTheStream:
     def test_stream_handler_is_reset_before_the_fallback_call_runs(self):
         pipeline = self._pipeline_with("!none!", "Yes, see the exercise.")
         deltas: list = []
+        original_generate_answer = pipeline._generate_answer
+
+        def assert_reset_already_sent_when_navigating(*args, **kwargs):
+            # `assert None in deltas` alone only checks the final state — it would
+            # still pass if a future change moved the reset to AFTER the fallback
+            # call instead of before it, silently reintroducing the stale-draft bug.
+            if kwargs.get("navigate"):
+                assert deltas and deltas[-1] is None
+            return original_generate_answer(*args, **kwargs)
+
+        pipeline._generate_answer = assert_reset_already_sent_when_navigating
 
         pipeline(
             query="where is this covered",
@@ -146,9 +157,6 @@ class TestNavigateFallbackClearsTheStream:
             stream_handler=deltas.append,
         )
 
-        # A reset (None) must reach the client BEFORE the fallback's answer is
-        # generated, not only after __call__ has already returned — otherwise the
-        # discarded first draft stays the last thing shown for the whole fallback.
         assert None in deltas
 
     def test_no_reset_when_the_first_call_already_answers(self):
