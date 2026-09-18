@@ -161,6 +161,15 @@ def run() -> int:
     samples_logos = _env_int("LOGOS_BENCH_SAMPLES_LOGOS", 100)
     samples_direct = _env_int("LOGOS_BENCH_SAMPLES_DIRECT", 50)
     blocks = _env_int("LOGOS_BENCH_BLOCKS", 4)
+    for _env_name, _value in (
+        ("LOGOS_BENCH_SAMPLES_LOGOS", samples_logos),
+        ("LOGOS_BENCH_SAMPLES_DIRECT", samples_direct),
+        ("LOGOS_BENCH_BLOCKS", blocks),
+    ):
+        if _value <= 0:
+            # Zero/negative counts would yield empty sample sets and a
+            # KeyError deep in the stats code — fail fast instead.
+            raise RuntimeError(f"{_env_name} must be > 0, got {_value}")
     out_dir = Path(_env("LOGOS_BENCH_OUTPUT", str(_HERE / "reports")))
     perf_enabled = _env("LOGOS_BENCH_NO_PERF_TRACE", "0") != "1"
 
