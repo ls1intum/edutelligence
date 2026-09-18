@@ -55,6 +55,9 @@ public class SecurityConfig {
                 // models_discovered is authenticated with the internal secret in
                 // the controller — same reason: it is not a JWT.
                 .requestMatchers(HttpMethod.POST, "/internal/models_discovered").permitAll()
+                // Inference gateway authenticates Logos API keys in-controller;
+                // Bearer values on these paths are API keys, not JWTs.
+                .requestMatchers("/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(rs -> rs
                 .bearerTokenResolver(new LogosBearerTokenResolver())
@@ -163,6 +166,13 @@ public class SecurityConfig {
                 path = path.substring(contextPath.length());
             }
             if ("/logosdb/get_model_health".equals(path) || "/internal/models_discovered".equals(path)) {
+                return null;
+            }
+            // Logos API keys often arrive as Authorization: Bearer <key>. Do not
+            // feed them to the JWT resource-server filter.
+            if (path.equals("/v1") || path.startsWith("/v1/")
+                || path.equals("/openai") || path.startsWith("/openai/")
+                || path.equals("/jobs") || path.startsWith("/jobs/")) {
                 return null;
             }
             String token = defaultResolver.resolve(request);

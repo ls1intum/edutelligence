@@ -36,6 +36,9 @@ environment vars/secrets except the SSH/registry plumbing) to the node and runs
 The orchestrator's API surface is tiered:
 
 - **User-facing** (`/v1`, `/openai`, `/jobs`) — any valid Logos API key.
+  Traefik sends these to **logos-webservice** (inference gateway). Pure-cloud
+  named-model requests are answered there; local/logosnode and mixed traffic
+  is reverse-proxied to the orchestrator on the compose network.
 - **Cluster-internal** (`/logosdb/scheduler_state`, `/internal/*`) — the shared
   `LOGOS_INTERNAL_SECRET`, never a user key. `/logosdb/scheduler_state` used
   to accept any Logos API key and was publicly routed; it is now secret-gated
@@ -211,6 +214,31 @@ needed. Sleep/wake is unavailable (it requires CUDA virtual memory), so the
 server reclaims memory by stopping and restarting lanes instead.
 
 Full setup, sizing and troubleshooting: `logos/logos-workernode/MACOS.md`.
+
+## Inference gateway replicas
+
+Public `/v1`, `/openai`, and `/jobs` traffic lands on **logos-webservice**.
+The service has no fixed `container_name`, so Compose can run more than one
+replica; Traefik load-balances them under `logos-webservice-svc`.
+
+```bash
+# on the core node, from /opt/logos
+docker compose up -d --scale logos-webservice=2 --no-recreate
+```
+
+On the **dev** compose, drop or retarget the host publish `18082:8081` before
+scaling — published host ports cannot be shared across replicas. Liquibase
+serialises schema apply via its changelog lock; open SSE streams and the
+short-TTL budget cache are the remaining per-instance state (see
+`gateway/InferenceGatewayController`).
+
+Optional `.env` knobs:
+
+- `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
+  accepts the public paths but proxies every request to the orchestrator after
+  API-key auth.
+- `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
+  overshoot bound; see `GatewayBudgetService`.
 
 ## Required configuration per GitHub environment
 

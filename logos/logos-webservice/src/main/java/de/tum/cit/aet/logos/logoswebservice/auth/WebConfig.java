@@ -19,8 +19,12 @@ public class WebConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(jwtAuthInterceptor)
             // get_model_health and models_discovered authenticate API key /
-            // internal secret in their controllers, not a JWT.
-            .excludePathPatterns("/error", "/info", "/ws/**", "/logosdb/get_model_health", "/internal/models_discovered");
+            // internal secret in their controllers, not a JWT. The inference
+            // gateway (/v1, /openai, /jobs) likewise uses Logos API keys.
+            .excludePathPatterns(
+                "/error", "/info", "/ws/**",
+                "/logosdb/get_model_health", "/internal/models_discovered",
+                "/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**");
     }
 
     @Bean
