@@ -22,10 +22,14 @@
     <app-error-message variant="banner" message="Failed to load teams, please refresh." />
   }
 
+  @if (priorityError()) {
+    <app-error-message variant="banner" [message]="priorityError()" />
+  }
+
   <!-- ── Table ──────────────────────────────────────────────────────────── -->
   <app-data-table
-    [columns]="['TEAM', 'OWNERS', 'MEMBERS', 'MODELS', '']"
-    gridCols="240fr 200fr 100fr 100fr 88px"
+    [columns]="['TEAM', 'OWNERS', 'MEMBERS', 'MODELS', 'PRIORITY', '']"
+    gridCols="240fr 200fr 100fr 100fr 110fr 88px"
     [loading]="loading()"
     [empty]="filteredTeams().length === 0"
     emptyMessage="No teams match your search."
@@ -70,6 +74,28 @@
         <!-- MODELS col -->
         <div class="col-models count-cell" role="cell" data-label="Models">
           <span class="count-badge">{{ team.model_count }}</span>
+        </div>
+
+        <!-- PRIORITY col: queue level of the team's traffic, set by Logos admins.
+             Within a priority, application keys queue before app admins, before developers. -->
+        <div class="col-priority priority-cell" role="cell" data-label="Priority">
+          @if (isLogosAdmin()) {
+            <select
+              class="field-input priority-select"
+              [attr.aria-label]="'Queue priority for team ' + team.name"
+              title="Queue priority of this team's traffic (applies to all its keys without an explicit key priority)"
+              [value]="team.priority ?? ''"
+              [disabled]="prioritySaving().has(team.id)"
+              (click)="$event.stopPropagation()"
+              (change)="$event.stopPropagation(); changeTeamPriority(team, $any($event.target).value)"
+            >
+              @for (option of priorityOptions; track option.value) {
+                <option [value]="option.value">{{ option.label }}</option>
+              }
+            </select>
+          } @else {
+            <span class="count-badge">{{ priorityLabel(team) }}</span>
+          }
         </div>
 
         <!-- ACTIONS col -->

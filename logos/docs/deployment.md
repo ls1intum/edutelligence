@@ -97,8 +97,37 @@ Tune per deployment in the node's `.env` (all optional):
   LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS="172.16.0.0/12,129.79.32.0/20"
   ```
 
+  This value covers the **public** entrypoints only. The gateway → Traefik
+  hop has its own list (below), so replacing the default here can never cut
+  the in-stack chain.
+- `LOGOS_INTERNAL_HOP_TRUSTED_CIDRS` — the sources trusted on the internal
+  entrypoint (`:8090`), i.e. the rate gateway. Defaults to the private
+  address space (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`) because the
+  gateway's address comes from Docker's network pool and is not necessarily
+  a `172.16.0.0/12` one. Leave it alone unless the stack's networks are
+  pinned to known subnets; the entrypoint has no published host port, so
+  only containers of this stack can reach it.
 - `LOGOS_GATEWAY_UPSTREAM` — where the gateway forwards (default
   `traefik:8090`); only change if the internal entrypoint moves.
+
+**Symptom to watch for:** if the internal hop is not trusted, Traefik
+rewrites the gateway's `X-Forwarded-Proto` to `http` and every service
+loses the TLS signal. The loudest consequence is worker nodes failing to
+attach in a loop:
+
+```text
+BRIDGE ERROR ══ /auth rejected with HTTP 400:
+{"error":{"message":"TLS is required for logosnode auth/session endpoints ...
+```
+
+The 400 body names the scheme and `X-Forwarded-Proto` the orchestrator
+actually saw. Verify the chain with the gateway's address and the trusted
+list:
+
+```bash
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' logos-rate-gateway
+docker inspect traefik | grep -- '--entrypoints.internal8090.forwardedHeaders'
+```
 
 The dev compose runs the same gateway with looser defaults (300/600 and
 50/100) so local benchmarking is not throttled; the direct ports 18080 and

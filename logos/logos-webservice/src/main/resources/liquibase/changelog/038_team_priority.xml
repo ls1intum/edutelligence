@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Queue priorities needed a per-team dimension: within a team the
+         default ordering is application > app admin > developer, but the
+         overall importance of a team's traffic is a platform decision and
+         is therefore set by Logos admins only (PATCH /teams/{id}/priority).
+
+         The orchestrator reads this column directly in its auth path, so
+         the column must exist before an orchestrator that selects it is
+         deployed (webservice first).
+
+         Nullable, no default: NULL means "admin has not set a team
+         priority", in which case the policy-level priority keeps applying
+         exactly as before. Values use the same 1/5/10 scale as
+         api_keys.default_priority (1=LOW, 5=NORMAL, 10=HIGH); any integer
+         1..10 is accepted for finer-grained ordering. -->
+    <changeSet id="038-team-priority" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="teams" columnName="priority"/></not>
+        </preConditions>
+        <addColumn tableName="teams">
+            <column name="priority" type="INTEGER"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="teams" columnName="priority"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

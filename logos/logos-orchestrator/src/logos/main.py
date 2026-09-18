@@ -74,7 +74,7 @@ from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.latency_store import LatencyStore
-from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, queue_role_rank
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
     force_non_streaming_payload,
@@ -2682,9 +2682,11 @@ async def _execute_resource_mode(
         skip_laura=skip_laura,
         request_path=request_path,
         required_provider_id=required_provider_id,
-        # The key owner's queue priority; 0 falls back to the
-        # policy-level priority inside the pipeline.
+        # The key owner's queue priority; 0 falls back to the team's, then
+        # the policy-level priority inside the pipeline.
         default_priority=auth.default_priority,
+        team_priority=auth.team_priority,
+        role_rank=queue_role_rank(auth.key_type, auth.user_role),
         api_key_id=auth.api_key_id,
     )
 

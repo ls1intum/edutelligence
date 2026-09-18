@@ -3189,8 +3189,12 @@ class DBManager:
             self.session.execute(
                 text("""
                 SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
-                       ak.environment, ak.log, ak.settings, ak.default_priority
+                       ak.environment, ak.log, ak.settings, ak.default_priority,
+                       u.role,
+                       t.priority AS team_priority
                 FROM api_keys ak
+                         LEFT JOIN users u ON u.id = ak.user_id
+                         LEFT JOIN teams t ON t.id = ak.team_id
                 WHERE ak.id = :api_key_id AND ak.is_active = true
                 """),
                 {"api_key_id": int(api_key_id)},
@@ -4161,9 +4165,11 @@ class DBManager:
                         ak.default_priority,
                         ak.is_active,
                         ak.use_custom_permissions,
-                        u.role
+                        u.role,
+                        t.priority AS team_priority
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
+                          LEFT JOIN teams t ON t.id = ak.team_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
                  """),
@@ -4173,13 +4179,11 @@ class DBManager:
         if not row:
             return None
 
-        data = dict(row._mapping)
-        # Admin keys are no longer special-cased: a logos_admin's key resolves
-        # its rate limits and budget from its team / key settings like any other
-        # key. Drop the joined role column so callers see a plain api_key row.
-        data.pop("role", None)
-
-        return data
+        # The joined columns (u.role, t.team_priority) are part of the auth
+        # context now: queue ordering needs the caller's role as a tiebreak
+        # and the team's admin-set priority as its queue level. Callers that
+        # only want key data ignore the extra keys.
+        return dict(row._mapping)
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(
