@@ -12,38 +12,43 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
-# Prometheus stub (matches test_planner_concurrency.py).
-if "prometheus_client" not in sys.modules:
-    _prom_stub = ModuleType("prometheus_client")
+# Only stub prometheus when the real package (or its .core submodule) is
+# unavailable — a bare ModuleType stub shadows an installed package and
+# breaks ``from prometheus_client.core import Metric``.
+try:
+    import prometheus_client.core  # noqa: F401
+except ImportError:
+    if "prometheus_client" not in sys.modules:
+        _prom_stub = ModuleType("prometheus_client")
 
-    class _MetricStub:
-        def __init__(self, *a, **kw):
-            pass
+        class _MetricStub:
+            def __init__(self, *a, **kw):
+                pass
 
-        def labels(self, *a, **kw):
-            return self
+            def labels(self, *a, **kw):
+                return self
 
-        def inc(self, *a, **kw):
-            pass
+            def inc(self, *a, **kw):
+                pass
 
-        def dec(self, *a, **kw):
-            pass
+            def dec(self, *a, **kw):
+                pass
 
-        def set(self, *a, **kw):
-            pass
+            def set(self, *a, **kw):
+                pass
 
-        def observe(self, *a, **kw):
-            pass
+            def observe(self, *a, **kw):
+                pass
 
-    _prom_stub.Counter = _MetricStub
-    _prom_stub.Gauge = _MetricStub
-    _prom_stub.Histogram = _MetricStub
-    _prom_stub.Summary = _MetricStub
-    _prom_stub.CollectorRegistry = MagicMock
-    _prom_stub.REGISTRY = MagicMock()
-    _prom_stub.CONTENT_TYPE_LATEST = "text/plain"
-    _prom_stub.generate_latest = lambda *a, **kw: b""
-    sys.modules["prometheus_client"] = _prom_stub
+        _prom_stub.Counter = _MetricStub
+        _prom_stub.Gauge = _MetricStub
+        _prom_stub.Histogram = _MetricStub
+        _prom_stub.Summary = _MetricStub
+        _prom_stub.CollectorRegistry = MagicMock
+        _prom_stub.REGISTRY = MagicMock()
+        _prom_stub.CONTENT_TYPE_LATEST = "text/plain"
+        _prom_stub.generate_latest = lambda *a, **kw: b""
+        sys.modules["prometheus_client"] = _prom_stub
 
 from logos import CapacityPlanner  # noqa: E402
 from logos.capacity.host_ram_ledger import HostRamLedger  # noqa: E402
@@ -173,6 +178,7 @@ def _profile(**kwargs) -> SimpleNamespace:
         "sleep_l1_transient_host_ram_mb": None,
         "sleep_l2_transient_host_ram_mb": None,
         "host_ram_residual_mb": None,
+        "host_ram_mb": None,
         "disk_size_bytes": None,
     }
     base.update(kwargs)
@@ -225,3 +231,97 @@ def test_sleep_precheck_without_a_residency_measurement_is_unchanged():
 
     assert ok is True
     assert required == p.HOST_RAM_SAFETY_MARGIN_MB + 2_000.0
+
+
+# ---------------------------------------------------------------------------
+# Sticky EngineCore host-RAM growth (#1061)
+#
+# Long-lived awake lanes can hold tens of GB of host shm beyond the calibrated
+# footprint. Sleep→wake does not clear that ceiling, so cold-load projections
+# and sleep residency must prefer live / high-water marks over lean profiles.
+# ---------------------------------------------------------------------------
+
+
+def test_cold_estimate_uses_live_same_model_ceiling_over_lean_profile():
+    """A fresh replica of a model that already has a sticky-heavy sibling must
+    be gated against that live ceiling, not only disk/profile size."""
+    p = _bare_planner(
+        {
+            "runtime": {
+                "host_memory": {"source": "proc-meminfo", "available_mb": 200_000.0},
+                "lanes": [
+                    {"lane_id": "old", "model": "Qwen/Qwen3.8-27B", "host_ram_mb": 80_000.0},
+                    {"lane_id": "new", "model": "Qwen/Qwen3.8-27B", "host_ram_mb": 5_500.0},
+                    {"lane_id": "other", "model": "other/model", "host_ram_mb": 90_000.0},
+                ],
+            },
+        }
+    )
+    profile = _profile(host_ram_mb=6_000.0, disk_size_bytes=50_000 * 1024 * 1024)
+
+    projected = p._estimate_lane_host_ram_mb(
+        1,
+        "cold-lane",
+        "Qwen/Qwen3.8-27B",
+        profile,
+        runtime_state="cold",
+    )
+
+    assert projected == 80_000.0
+
+
+def test_cold_estimate_falls_back_to_profile_when_no_siblings():
+    p = _bare_planner(_snapshot_with_host_memory(200_000.0))
+    profile = _profile(host_ram_mb=12_000.0)
+
+    projected = p._estimate_lane_host_ram_mb(
+        1,
+        "cold-lane",
+        "Qwen/Qwen3.8-27B",
+        profile,
+        runtime_state="cold",
+    )
+
+    assert projected == 12_000.0
+
+
+def test_sleep_precheck_uses_live_lane_pss_when_residual_is_lean():
+    """Calibrated residual can be weight-sized while live PSS includes sticky
+    shm that sleep→wake does not clear — residency must follow the live value."""
+    p = _bare_planner(
+        {
+            "runtime": {
+                "host_memory": {"source": "proc-meminfo", "available_mb": 50_000.0},
+                "lanes": [
+                    {"lane_id": "heavy", "model": "Qwen/Qwen3.8-27B", "host_ram_mb": 70_000.0},
+                ],
+            },
+        }
+    )
+
+    ok, _eff, required = p._check_host_ram_headroom_for_sleep(
+        1,
+        1,
+        _profile(sleep_l1_transient_host_ram_mb=2_000.0, host_ram_residual_mb=8_000.0),
+        lane_id="heavy",
+    )
+
+    assert ok is False
+    assert required >= 70_000.0
+
+
+def test_sleep_precheck_uses_profile_awake_ceiling_without_lane_id():
+    p = _bare_planner(_snapshot_with_host_memory(50_000.0))
+
+    ok, _eff, required = p._check_host_ram_headroom_for_sleep(
+        1,
+        1,
+        _profile(
+            sleep_l1_transient_host_ram_mb=2_000.0,
+            host_ram_residual_mb=8_000.0,
+            host_ram_mb=65_000.0,
+        ),
+    )
+
+    assert ok is False
+    assert required >= 65_000.0

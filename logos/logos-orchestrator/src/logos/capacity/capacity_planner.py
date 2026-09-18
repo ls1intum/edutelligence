@@ -1372,6 +1372,7 @@ class CapacityPlanner:
         provider_id: int,
         sleep_level: int,
         profile: ModelProfile | None,
+        lane_id: str | None = None,
     ) -> tuple[bool, float, float]:
         """Is there enough host RAM to safely sleep a lane?
 
@@ -1386,11 +1387,12 @@ class CapacityPlanner:
             estimate from ``disk_size_bytes`` when that is missing (the
             weight transfer dominates l2), and a flat
             ``HOST_RAM_SLEEP_HEADROOM_MB`` for pre-calibration profiles.
-          * the *residency* the lane keeps for as long as it stays asleep,
-            from ``host_ram_residual_mb``. sleep_l1 relocates the weights to
-            the host instead of dropping them, so the sleep does not hand
-            that memory back when it finishes — it holds it until the lane
-            wakes or is stopped.
+          * the *residency* the lane keeps for as long as it stays asleep —
+            the max of calibrated ``host_ram_residual_mb``, the profile's
+            awake ``host_ram_mb`` ceiling, and the lane's live process-tree
+            PSS when *lane_id* is known. Long-lived EngineCores accumulate
+            sticky host shared-memory that sleep→wake does not clear; the
+            calibrated residual alone understates that lasting footprint.
 
         Only the transient used to be counted, which asks "can this sleep
         complete" and never "what does it leave behind". A worker could pass
@@ -1426,6 +1428,14 @@ class CapacityPlanner:
         residency_mb = 0.0
         if profile is not None and profile.host_ram_residual_mb:
             residency_mb = max(float(profile.host_ram_residual_mb), 0.0)
+        if profile is not None:
+            awake_ceiling = getattr(profile, "host_ram_mb", None)
+            if awake_ceiling and awake_ceiling > 0:
+                residency_mb = max(residency_mb, float(awake_ceiling))
+        if lane_id:
+            live_mb = self._lane_host_ram_from_snapshot(provider_id, lane_id)
+            if live_mb > 0:
+                residency_mb = max(residency_mb, live_mb)
 
         required = self.HOST_RAM_SAFETY_MARGIN_MB + max(transient_mb, residency_mb)
         return effective_available >= required, effective_available, required
@@ -7992,8 +8002,12 @@ class CapacityPlanner:
         Order of preference:
           1. The lane's last-measured host_ram_mb in the runtime snapshot
              (the worker reports PSS across the process tree).
-          2. The model profile estimate (host_ram_mb, then disk_size).
-          3. Zero — caller treats as "unknown" and skips the gate.
+          2. For cold loads: the high-water mark across live same-model lanes
+             on this provider (sticky EngineCore shm grows with uptime and
+             is not cleared by sleep→wake — a fresh replica of a heavy model
+             should be gated against that ceiling, not only disk size).
+          3. The model profile estimate (host_ram_mb, then disk_size).
+          4. Zero — caller treats as "unknown" and skips the gate.
 
         *runtime_state* is used only for cold-load paths where the lane does
         not yet exist; ignored otherwise.
@@ -8002,15 +8016,55 @@ class CapacityPlanner:
             measured = self._lane_host_ram_from_snapshot(provider_id, lane_id)
             if measured > 0:
                 return measured
-        if profile is None:
+
+        profile_estimate = 0.0
+        if profile is not None:
+            host_ram_mb = getattr(profile, "host_ram_mb", None)
+            if host_ram_mb and host_ram_mb > 0:
+                profile_estimate = float(host_ram_mb)
+            else:
+                disk_size = getattr(profile, "disk_size_bytes", None)
+                if disk_size and disk_size > 0:
+                    profile_estimate = float(disk_size) / (1024 * 1024)
+
+        if runtime_state == "cold":
+            live_ceiling = self._max_model_host_ram_from_snapshot(provider_id, model_name)
+            return max(profile_estimate, live_ceiling)
+
+        return profile_estimate
+
+    def _max_model_host_ram_from_snapshot(
+        self,
+        provider_id: int,
+        model_name: str,
+    ) -> float:
+        """Max live host_ram_mb among lanes serving *model_name* on a provider.
+
+        Sticky awake growth means two replicas of the same calibrated profile
+        are not equal on the host axis; the heaviest live sibling is the
+        planning ceiling for another cold load of that model.
+        """
+        if self._registry is None or not model_name:
             return 0.0
-        host_ram_mb = getattr(profile, "host_ram_mb", None)
-        if host_ram_mb and host_ram_mb > 0:
-            return float(host_ram_mb)
-        disk_size = getattr(profile, "disk_size_bytes", None)
-        if disk_size and disk_size > 0:
-            return float(disk_size) / (1024 * 1024)
-        return 0.0
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return 0.0
+        lanes = (snap.get("runtime") or {}).get("lanes") or []
+        if not isinstance(lanes, list):
+            return 0.0
+        ceiling = 0.0
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if str(lane.get("model") or "") != model_name:
+                continue
+            try:
+                measured = float(lane.get("host_ram_mb") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if measured > ceiling:
+                ceiling = measured
+        return ceiling
 
     def _lane_host_ram_from_snapshot(
         self,
@@ -8259,6 +8313,7 @@ class CapacityPlanner:
                     action.provider_id,
                     _sleep_level,
                     _profile,
+                    lane_id=action.lane_id,
                 )
                 if not host_ram_ok:
                     logger.warning(
