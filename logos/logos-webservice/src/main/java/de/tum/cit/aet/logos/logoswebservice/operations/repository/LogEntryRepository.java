@@ -891,4 +891,49 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("useRollup") boolean useRollup,
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT q.content AS question,
+            COUNT(*) AS askCount
+        FROM log_entry le
+        CROSS JOIN LATERAL (
+            SELECT CASE jsonb_typeof(elem -> 'content')
+                       WHEN 'string' THEN elem ->> 'content'
+                       WHEN 'array' THEN (
+                           SELECT string_agg(part_elem ->> 'text', E'\n' ORDER BY part_ord)
+                           FROM jsonb_array_elements(elem -> 'content') WITH ORDINALITY AS part(part_elem, part_ord)
+                           WHERE part_elem ->> 'type' IN ('text', 'input_text', 'output_text')
+                       )
+                       ELSE NULL
+                   END AS content
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(le.input_payload -> 'messages') = 'array'
+                     THEN le.input_payload -> 'messages'
+                     WHEN jsonb_typeof(le.input_payload -> 'input') = 'array'
+                     THEN le.input_payload -> 'input'
+                     WHEN jsonb_typeof(le.input_payload -> 'input') = 'string'
+                     THEN jsonb_build_array(
+                         jsonb_build_object('role', 'user', 'content', le.input_payload -> 'input')
+                     )
+                     ELSE '[]'::jsonb
+                END
+            ) WITH ORDINALITY AS t(elem, ord)
+            WHERE elem ->> 'role' = 'user'
+            ORDER BY ord DESC
+            LIMIT 1
+        ) q
+        WHERE le.privacy_level = 'FULL'
+        AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+        AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+        AND q.content IS NOT NULL
+        GROUP BY q.content
+        ORDER BY askCount DESC, q.content ASC
+        LIMIT :limitN
+        """, nativeQuery = true)
+    List<MostAskedQuestionProjection> findMostAskedQuestions(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("teamId") Integer teamId,
+        @Param("limitN") int limitN);
 }
