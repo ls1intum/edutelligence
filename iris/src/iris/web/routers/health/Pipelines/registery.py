@@ -11,6 +11,7 @@ from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
 )
 from iris.pipeline.rewriting_pipeline import RewritingPipeline
+from iris.pipeline.struggle_intervention_pipeline import StruggleInterventionPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.web.routers.health.Pipelines.features import Features
 
@@ -23,6 +24,7 @@ PipelineType = Type[
     | LectureIngestionUpdatePipeline
     | FaqIngestionPipeline
     | AutonomousTutorPipeline
+    | StruggleInterventionPipeline
 ]
 
 PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
@@ -34,4 +36,5 @@ PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
     Features.LECTURE_INGESTION: LectureIngestionUpdatePipeline,
     Features.FAQ_INGESTION: FaqIngestionPipeline,
     Features.AUTONOMOUS_TUTOR: AutonomousTutorPipeline,
+    Features.STRUGGLE_INTERVENTION: StruggleInterventionPipeline,
 }
