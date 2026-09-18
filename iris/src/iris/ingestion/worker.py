@@ -265,7 +265,10 @@ class IngestionWorker:
             return 0
         upstream.claim_failures = 0
         jobs = (response.json() or {}).get("jobs") or []
-        return sum(1 for job in jobs if self._start_job(job, upstream))
+        # The request already asked for at most `slots`; re-clamp the response too, instead of
+        # trusting the upstream to honor that limit, since starting more than the requested
+        # slots would exceed this worker's own configured capacity.
+        return sum(1 for job in jobs[:slots] if self._start_job(job, upstream))
 
     def _start_job(self, job: dict, upstream: _Upstream) -> bool:
         # Import here: the webhooks router pulls in the full pipeline stack, and

@@ -141,6 +141,36 @@ class TestClaim:
         assert post.call_args.kwargs["headers"] == {"Authorization": "key-a"}
         assert started == [{"a": 1}, {"b": 2}]
 
+    def test_claim_clamps_an_over_generous_response_to_the_requested_slots(self):
+        # The worker asked for at most `capacity` jobs; an upstream that ignores that (a bug, or a
+        # misconfigured/non-Artemis issuer) and hands back more must not push this worker over its
+        # own configured capacity.
+        worker = IngestionWorker()
+        worker.register_upstream("http://a:8080", "key-a")
+        started = []
+        with patch.object(
+            worker,
+            "_start_job",
+            side_effect=lambda job, upstream: started.append(job) or True,
+        ):
+            with patch(
+                "iris.ingestion.worker.http_requests.post",
+                return_value=_response(
+                    body={
+                        "jobs": [
+                            {"job": i}
+                            for i in range(
+                                worker._config.capacity + 3
+                            )  # pylint: disable=protected-access
+                        ]
+                    }
+                ),
+            ):
+                worker._claim_once()  # pylint: disable=protected-access
+        assert (
+            len(started) == worker._config.capacity
+        )  # pylint: disable=protected-access
+
     def test_claim_does_nothing_before_any_upstream_announced(self):
         worker = IngestionWorker()
         with patch("iris.ingestion.worker.http_requests.post") as post:
