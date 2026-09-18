@@ -12,7 +12,17 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode
 
-from logos.anthropic_compat import UpstreamDialect, dialect_for, forward_path_for, is_messages_path, translate_request
+from logos.anthropic_compat import (
+    MESSAGES_PATH,
+    UpstreamDialect,
+    dialect_for,
+    forward_path_for,
+    is_chat_completions_path,
+    is_messages_path,
+    serves_only_messages,
+    to_messages,
+    translate_request,
+)
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
@@ -48,6 +58,12 @@ class ExecutionContext:
     # ``None`` for every other route; ``NATIVE`` for upstreams that serve the
     # Messages API themselves and are forwarded verbatim.
     anthropic_dialect: Optional[UpstreamDialect] = None
+    # The mirror case: set only for inbound ``POST /v1/chat/completions``
+    # against an upstream that serves nothing but the Anthropic Messages API
+    # (a Claude deployment on Azure Foundry). The request goes out as a
+    # Messages call and its answer comes back translated into a
+    # chat/completions body. False for every other route.
+    messages_upstream: bool = False
     # Headers the upstream's protocol requires on every request, beyond auth
     # and content type — Anthropic's mandatory ``anthropic-version``. Empty for
     # every other provider.
@@ -273,6 +289,14 @@ class ContextResolver:
             if is_messages_path(request_path)
             else None
         )
+        # Both questions are asked against the resolved URL, so the answer
+        # follows the surface the request is actually posted to rather than
+        # how the provider was typed.
+        messages_upstream = is_chat_completions_path(request_path) and serves_only_messages(
+            provider_type=provider_type,
+            cloud_provider_type=cloud_type,
+            forward_url=forward_url,
+        )
 
         return ExecutionContext(
             model_id=model_id,
@@ -286,6 +310,7 @@ class ContextResolver:
             lane_id=lane_id,
             azure_body_deployment=azure_body_deployment,
             anthropic_dialect=anthropic_dialect,
+            messages_upstream=messages_upstream,
             protocol_headers=(
                 cloud_protocol_headers("anthropic" if azure_anthropic else cloud_type)
                 if provider_type == "cloud"
@@ -321,6 +346,10 @@ class ContextResolver:
         # sent.
         if context.anthropic_dialect is not None:
             payload = translate_request(payload, context.anthropic_dialect, model_name=context.model_name)
+        # ... and a chat/completions request bound for a Messages-only upstream
+        # becomes a Messages call, for the same reason and at the same point.
+        elif context.messages_upstream:
+            payload = to_messages(payload, model_name=context.model_name)
 
         # OpenWebUI requires model name injection
         if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
@@ -473,14 +502,25 @@ class ContextResolver:
     def _upstream_path(request_path: str, cloud_provider_type: Optional[str]) -> str:
         """The path an OpenAI-shaped cloud upstream is addressed under.
 
-        The inbound path unchanged, except for ``POST /v1/messages`` against an
-        upstream that has no Messages route: those are re-pointed at
-        ``chat/completions``, the surface the Anthropic translation targets.
+        The inbound path unchanged, except where the upstream does not serve
+        it. ``POST /v1/messages`` against an upstream without a Messages route
+        is re-pointed at ``chat/completions``, and ``POST
+        /v1/chat/completions`` against an Anthropic resource — which has no
+        OpenAI route — at ``v1/messages``. Each is the surface the matching
+        translation targets, so the URL and the body always agree.
+
+        Only the ``base_url`` branch reaches here. A provider whose per-model
+        endpoint is a full URL keeps the operation that endpoint names, and
+        both classifications read it back off the resolved URL.
         """
-        if not is_messages_path(request_path):
-            return request_path
-        dialect = dialect_for(provider_type="cloud", cloud_provider_type=cloud_provider_type)
-        return request_path if dialect is UpstreamDialect.NATIVE else forward_path_for(dialect)
+        if is_messages_path(request_path):
+            dialect = dialect_for(provider_type="cloud", cloud_provider_type=cloud_provider_type)
+            return request_path if dialect is UpstreamDialect.NATIVE else forward_path_for(dialect)
+        if is_chat_completions_path(request_path) and serves_only_messages(
+            provider_type="cloud", cloud_provider_type=cloud_provider_type
+        ):
+            return MESSAGES_PATH
+        return request_path
 
     @staticmethod
     def _merge_url(base_url: str, endpoint: str) -> str:

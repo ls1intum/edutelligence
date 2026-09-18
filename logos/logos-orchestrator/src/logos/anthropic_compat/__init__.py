@@ -1,15 +1,24 @@
 # src/logos/anthropic_compat/__init__.py
-"""Serve the Anthropic Messages API on upstreams that do not have one.
+"""Make the Messages API and chat/completions reachable on either upstream.
+
+Logos serves both surfaces, and an upstream rarely serves both. Which
+translation a request needs therefore follows from two things: the API the
+client addressed, and the API the resolved upstream speaks.
 
 ``POST /v1/messages`` is what Claude Code (and every Anthropic SDK) talks to.
 vLLM serves that surface itself, and so does another Logos instance, so those
 requests are forwarded verbatim. An Azure or OpenAI resource does not: it has
 ``chat/completions`` and ``responses`` and would answer a forwarded Messages
-path with 404. This package picks the dialect the
-resolved upstream actually speaks and translates in both directions.
+path with 404.
 
-The entry points are ``dialect_for``, which classifies an upstream, and the
-three ``translate_*`` helpers plus ``stream_translator``, which the forwarding
+The reverse happens on a Claude deployment. Azure Foundry serves it on
+``/anthropic/v1/messages`` and offers no OpenAI-shaped route at all, so a
+``POST /v1/chat/completions`` addressed to one has to travel the other way —
+out as a Messages request, back as a chat/completions body.
+
+The entry points are ``dialect_for`` and ``serves_only_messages``, which
+classify an upstream from each side, and the ``translate_*`` helpers plus
+``stream_translator`` / ``MessagesStreamTranslator``, which the forwarding
 layer calls once each per request.
 """
 
@@ -22,27 +31,34 @@ from logos.anthropic_compat.chat_completions import (
     from_chat_completion,
     to_chat_completions,
 )
-from logos.anthropic_compat.common import MESSAGES_PATH, UpstreamDialect, error_body, is_messages_path
+from logos.anthropic_compat.common import (
+    CHAT_COMPLETIONS_PATH,
+    MESSAGES_PATH,
+    UpstreamDialect,
+    error_body,
+    is_chat_completions_path,
+    is_messages_path,
+)
+from logos.anthropic_compat.messages_api import MessagesStreamTranslator, from_message, to_messages
 from logos.anthropic_compat.responses_api import ResponsesStreamTranslator, from_response, to_responses
 
 __all__ = [
     "MESSAGES_PATH",
     "CHAT_COMPLETIONS_PATH",
+    "MessagesStreamTranslator",
     "UpstreamDialect",
     "dialect_for",
     "forward_path_for",
+    "from_message",
+    "is_chat_completions_path",
     "is_messages_path",
+    "serves_only_messages",
     "stream_translator",
+    "to_messages",
     "translate_error",
     "translate_request",
     "translate_response",
 ]
-
-# Where a Messages request is sent when the upstream only speaks
-# chat/completions. Azure upstreams never take this path: their per-model
-# endpoint already names the deployment and its operation, so the URL is used
-# as stored and only the dialect is derived from it.
-CHAT_COMPLETIONS_PATH = "v1/chat/completions"
 
 # Cloud provider types that serve the Anthropic Messages API themselves.
 # "logos" is another Logos instance used as an upstream, which serves every
@@ -83,6 +99,41 @@ def dialect_for(
     if (cloud_provider_type or "").lower() in _NATIVE_CLOUD_PROVIDERS:
         return UpstreamDialect.NATIVE
     return UpstreamDialect.CHAT_COMPLETIONS
+
+
+def serves_only_messages(
+    *,
+    provider_type: Optional[str],
+    cloud_provider_type: Optional[str],
+    forward_url: Optional[str] = None,
+) -> bool:
+    """Whether this upstream has no chat/completions route to forward to.
+
+    The question :func:`dialect_for` asks from the other side, and it is not
+    its negation: an upstream can serve both surfaces. vLLM does, and so does
+    a Logos instance used as an upstream — both are ``NATIVE`` for a Messages
+    request *and* answer chat/completions directly, so neither needs anything
+    translated.
+
+    An Anthropic resource is the one that does not. Azure Foundry publishes
+    Claude on ``/anthropic/v1/messages`` and answers every OpenAI path on that
+    resource with ``api_not_supported``; the Claude API itself has an OpenAI
+    compatibility layer, but Anthropic documents it as a testing aid that
+    silently ignores half the request, so the Messages route is the one worth
+    addressing either way.
+
+    As in ``dialect_for``, a URL that names a surface outranks the provider
+    type — it is where the request is actually posted, and an operator can pin
+    a per-model endpoint by hand.
+    """
+    path = (forward_url or "").split("?", 1)[0].rstrip("/")
+    if path.endswith("/chat/completions") or path.endswith("/responses"):
+        return False
+    if path.endswith("/messages"):
+        return True
+    if (provider_type or "").lower() == "logosnode":
+        return False
+    return (cloud_provider_type or "").lower() == "anthropic"
 
 
 def forward_path_for(dialect: UpstreamDialect) -> str:

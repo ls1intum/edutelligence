@@ -1,0 +1,175 @@
+# The compatibility oracle.
+#
+# Each entry pairs a captured vLLM failure log with the verdict the worker must
+# reach from it. A GPU-less suite can only stay honest if this file grows with
+# production: **every GPU incident lands a corpus entry in the same PR as its
+# fix**, with `source` naming where the log came from.
+#
+# Fields
+#   log         path relative to harness/corpus/
+#   summary     what went wrong, in one line
+#   source      where this log was captured or derived from
+#   sharded     serve this through a pre-sharded lane (the broken-checkpoint
+#               detector only arms when the lane is actually serving shards)
+#   expect      the classification VllmProcessHandle must produce
+#     fatal_cuda            -> has_fatal_cuda_errors
+#     poisoned_cache        -> has_poisoned_compile_cache
+#     cache_fingerprint     -> _matched_cache_poisoning_fingerprint() (null = none,
+#                              which for a poisoned entry means it matched by
+#                              stack-trace path instead)
+#     broken_shards         -> has_broken_sharded_checkpoint
+
+entries:
+  # -- fatal CUDA: only a host reboot clears these ---------------------------
+  - log: cuda_devices_busy.log
+    summary: CUDA context allocation refused; every subsequent lane start fails the same way.
+    source: Derived from the RTX 6000 Ada GSP-wedge signature documented in gpu_watchdog.py.
+    expect:
+      fatal_cuda: true
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false
+
+  - log: nccl_cuda_failure.log
+    summary: TP worker aborted on an NCCL CUDA failure; VRAM stayed pinned afterwards.
+    source: research/bench_results/vllm_worker_crash_postmortem_20260310.md
+    expect:
+      fatal_cuda: true
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false
+
+  - log: engine_core_oom.log
+    summary: Profile run exhausted VRAM — the lane asked for more than the card had free.
+    source: Synthetic, modelled on vLLM's determine_available_memory failure path.
+    expect:
+      fatal_cuda: true
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false
+
+  # -- poisoned compile cache: purge and retry once --------------------------
+  - log: compile_cache_copy_misaligned.log
+    summary: Stale AOT graph got an int where the cached artifact expected a Tensor.
+    source: The GLM-OCR incident referenced in vllm_process.py's fingerprint table.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: true
+      cache_fingerprint: copy_misaligned_inputs
+      broken_shards: false
+
+  - log: compile_cache_aot_assertion.log
+    summary: A cached AOT artifact asserted while being deserialised.
+    source: Synthetic, matching the aot_artifact_assertion fingerprint.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: true
+      cache_fingerprint: aot_artifact_assertion
+      broken_shards: false
+
+  - log: compile_cache_inductor_missing.log
+    summary: A previous start was killed mid-write, leaving a truncated inductor artifact.
+    source: Synthetic, matching the inductor_artifact_missing fingerprint.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: true
+      cache_fingerprint: inductor_artifact_missing
+      broken_shards: false
+
+  - log: compile_cache_key_error.log
+    summary: Cache-key lookup hit an index entry that no longer matches.
+    source: Synthetic, matching the compilation_cache_key_error fingerprint.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: true
+      cache_fingerprint: compilation_cache_key_error
+      broken_shards: false
+
+  - log: compile_cache_stack_trace.log
+    summary: >-
+      Execution crashed inside a file loaded from the compile cache. No named
+      fingerprint matches — the stack-trace path is the signal on its own, and
+      it is the only signal strong enough to justify a worker-wide purge.
+    source: Synthetic, matching _POISONED_COMPILE_CACHE_PATH_FRAGMENTS.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: true
+      cache_fingerprint: null
+      broken_shards: false
+
+  # -- rejected pre-sharded checkpoints --------------------------------------
+  - log: sharded_loader_rejected.log
+    summary: The conversion wrote shards for fewer ranks than the lane runs.
+    source: Synthetic, matching sharded_state_loader.py's rank lookup failure.
+    sharded: true
+    expect:
+      fatal_cuda: false
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: true
+
+  - log: sharded_loader_shape_mismatch.log
+    summary: >-
+      Conversion succeeded but produced a packed layout the loader refuses —
+      a quantization whose weights do not survive the sharded_state round trip.
+    source: Synthetic, the failure mode _sharded_rejection_reason was written for.
+    sharded: true
+    expect:
+      fatal_cuda: false
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: true
+
+  # -- benign: startup failures that must NOT trigger any recovery -----------
+  # A false positive here is expensive: widening a fingerprint to catch one of
+  # these would wipe every model's compile cache on an unrelated failure.
+  - log: benign/gated_repo_401.log
+    summary: Gated HuggingFace repo, no token. A credentials problem, not a GPU one.
+    source: Synthetic, the false positive vllm_process.py's comments call out.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false
+
+  - log: benign/model_not_found_404.log
+    summary: Mistyped repo id.
+    source: Synthetic, the false positive vllm_process.py's comments call out.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false
+
+  - log: benign/missing_ninja.log
+    summary: >-
+      FileNotFoundError for the ninja build tool alongside ordinary compilation
+      output. Must not be read as a missing inductor artifact — the fingerprint
+      requires a compile-cache path next to the exception for exactly this reason.
+    source: research/bench_results/vllm_worker_crash_postmortem_20260310.md
+    expect:
+      fatal_cuda: false
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false
+
+  - log: benign/port_in_use.log
+    summary: Lane port collision — a worker configuration problem.
+    source: Synthetic.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false
+
+  - log: benign/unsupported_quantization.log
+    summary: >-
+      A genuine GPU-compatibility failure (awq_marlin needs sm80, the card is
+      sm75) — but permanent, not recoverable. No cache purge and no reboot can
+      fix it, so no recovery path may claim it.
+    source: Synthetic, from vLLM's quantization capability gate.
+    expect:
+      fatal_cuda: false
+      poisoned_cache: false
+      cache_fingerprint: null
+      broken_shards: false

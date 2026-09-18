@@ -24,6 +24,7 @@ CLOUD_CONTEXT = SimpleNamespace(
     model_name="gpt-4.1-nano",
     lane_id=None,
     anthropic_dialect=UpstreamDialect.CHAT_COMPLETIONS,
+    messages_upstream=False,
 )
 
 MESSAGES_BODY = {"model": "gpt-4.1-nano", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}

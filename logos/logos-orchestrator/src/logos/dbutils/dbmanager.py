@@ -1025,11 +1025,14 @@ class DBManager:
         permissions are NOT granted automatically — an admin assigns access per
         team via the models tab.
 
-        Returns ``{"new_models": [names of newly inserted model rows],
+        Returns ``{"new_models": [names], "new_model_ids": [ids],
         "changed": bool}``. ``changed`` is True when anything that affects
         routing changed (a link was inserted, an endpoint updated, or a stale
         link pruned) so the caller can refresh runtime state; ``new_models``
-        drives the (more expensive) classifier rebuild.
+        drives the (more expensive) classifier rebuild. ``new_model_ids``
+        covers every model that got a link to this provider in this pass —
+        including model rows that already existed globally, because their
+        per-provider price rows are created only on first link.
         """
         pid = int(provider_id)
         desired = {d["model_name"]: d["endpoint"] for d in deployments}
@@ -1057,6 +1060,7 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
+        newly_linked_ids: list[int] = []
         for model_name, endpoint in desired.items():
             row = self.session.execute(
                 text("SELECT id FROM models WHERE name = :name"),
@@ -1081,9 +1085,15 @@ class DBManager:
                 newly_inserted.append(model_name)
 
             # A new link for this provider, or an endpoint that drifted, changes
-            # routing and must be reflected in the runtime registry.
-            if model_name not in existing_by_name or existing_endpoint.get(model_name) != endpoint:
+            # routing and must be reflected in the runtime registry. The link
+            # is what gates the per-provider price rows, so every freshly
+            # linked model — even one whose row already existed globally —
+            # needs a price/capability refresh on the webservice side.
+            new_link = model_name not in existing_by_name
+            if new_link or existing_endpoint.get(model_name) != endpoint:
                 changed = True
+            if new_link:
+                newly_linked_ids.append(mid)
 
             # Upsert the link and refresh the endpoint; preserve any api_key override.
             self.session.execute(
@@ -1096,8 +1106,13 @@ class DBManager:
                 {"pid": pid, "mid": mid, "endpoint": endpoint},
             )
 
+        self._queue_discovery_notifications(newly_linked_ids)
         self.session.commit()
-        return {"new_models": newly_inserted, "changed": changed or bool(newly_inserted)}
+        return {
+            "new_models": newly_inserted,
+            "new_model_ids": newly_linked_ids,
+            "changed": changed or bool(newly_inserted),
+        }
 
     def get_cloud_sync_providers(self) -> list[Dict[str, Any]]:
         """Cloud providers whose model catalogue is discovered over ``/v1/models``.
@@ -1166,7 +1181,7 @@ class DBManager:
         automatically — an admin assigns access per team via the models tab, so
         a discovered model stays invisible to users until then.
 
-        Returns ``{"new_models": [...], "changed": bool}`` with the same
+        Returns ``{"new_models": [...], "new_model_ids": [...], "changed": bool}`` with the same
         meaning as :meth:`sync_azure_deployments`.
         """
         pid = int(provider_id)
@@ -1192,6 +1207,10 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
+        # Every model below receives a new link for this provider (existing
+        # links were skipped above), so each one needs a refresh — even when
+        # the models row already existed globally.
+        newly_linked_ids: list[int] = []
         for model_name in sorted(desired):
             if model_name in existing_by_name:
                 continue
@@ -1216,6 +1235,7 @@ class DBManager:
                     .id
                 )
                 newly_inserted.append(model_name)
+            newly_linked_ids.append(mid)
 
             self.session.execute(
                 text("""
@@ -1227,8 +1247,56 @@ class DBManager:
             )
             changed = True
 
+        self._queue_discovery_notifications(newly_linked_ids)
         self.session.commit()
-        return {"new_models": newly_inserted, "changed": changed}
+        return {"new_models": newly_inserted, "new_model_ids": newly_linked_ids, "changed": changed}
+
+    def _queue_discovery_notifications(self, model_ids: list[int]) -> None:
+        """Queue freshly linked models for a webservice refresh notification.
+
+        Runs in the caller's open transaction, so a queue row commits
+        atomically with the model_provider link that created the need for
+        it: a crash can never leave a freshly linked model whose price/
+        capability refresh was never queued and thus never retried.
+        """
+        for model_id in model_ids:
+            self.session.execute(
+                text("""
+                    INSERT INTO model_discovery_notifications (model_id)
+                    VALUES (:id)
+                    ON CONFLICT (model_id) DO NOTHING
+                    """),
+                {"id": model_id},
+            )
+
+    def get_pending_discovery_model_ids(self) -> list[int]:
+        """Model IDs still waiting for a webservice discovery notification.
+
+        The discovery syncs queue every newly linked model here (see
+        :meth:`_queue_discovery_notifications`); the notifier delivers the
+        whole queue on each pass and clears it only on acknowledgment, so a
+        webservice outage delays the refresh to the next pass instead of
+        losing it until the daily full refresh.
+        """
+        rows = self.session.execute(
+            text("SELECT model_id FROM model_discovery_notifications ORDER BY model_id")
+        ).fetchall()
+        return [row.model_id for row in rows]
+
+    def mark_discovery_notified(self, model_ids: list[int]) -> None:
+        """Drop queue entries the webservice has acknowledged.
+
+        The webservice refresh is idempotent, so if an ID is queued again
+        while the delivery is in flight (a re-link in a concurrent pass),
+        this only delays that refresh to the following pass.
+        """
+        if not model_ids:
+            return
+        self.session.execute(
+            text("DELETE FROM model_discovery_notifications WHERE model_id = ANY(:ids)"),
+            {"ids": list(model_ids)},
+        )
+        self.session.commit()
 
     def replace_cloud_model_context(self, provider_id: int, contexts: Dict[str, Dict[str, int]]) -> bool:
         """Store the context windows a cloud upstream reports for its models.
@@ -3116,8 +3184,12 @@ class DBManager:
             self.session.execute(
                 text("""
                 SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
-                       ak.environment, ak.log, ak.settings, ak.default_priority
+                       ak.environment, ak.log, ak.settings, ak.default_priority,
+                       u.role,
+                       t.priority AS team_priority
                 FROM api_keys ak
+                         LEFT JOIN users u ON u.id = ak.user_id
+                         LEFT JOIN teams t ON t.id = ak.team_id
                 WHERE ak.id = :api_key_id AND ak.is_active = true
                 """),
                 {"api_key_id": int(api_key_id)},
@@ -4088,9 +4160,11 @@ class DBManager:
                         ak.default_priority,
                         ak.is_active,
                         ak.use_custom_permissions,
-                        u.role
+                        u.role,
+                        t.priority AS team_priority
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
+                          LEFT JOIN teams t ON t.id = ak.team_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
                  """),
@@ -4100,13 +4174,11 @@ class DBManager:
         if not row:
             return None
 
-        data = dict(row._mapping)
-        # Admin keys are no longer special-cased: a logos_admin's key resolves
-        # its rate limits and budget from its team / key settings like any other
-        # key. Drop the joined role column so callers see a plain api_key row.
-        data.pop("role", None)
-
-        return data
+        # The joined columns (u.role, t.team_priority) are part of the auth
+        # context now: queue ordering needs the caller's role as a tiebreak
+        # and the team's admin-set priority as its queue level. Callers that
+        # only want key data ignore the extra keys.
+        return dict(row._mapping)
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(

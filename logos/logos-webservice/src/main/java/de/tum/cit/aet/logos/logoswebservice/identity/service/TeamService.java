@@ -91,6 +91,7 @@ public class TeamService {
             t.getDefaultCloudTpmLimit(),
             t.getDefaultLocalRpmLimit(),
             t.getDefaultLocalTpmLimit(),
+            t.getPriority(),
             isCallerOwner,
             t.getKeycloakGroup() != null
         );
@@ -201,6 +202,19 @@ public class TeamService {
         return teamRepository.findById(teamId).map(team -> {
             requireUnmanaged(team, "renamed");
             team.setName(name);
+            teamRepository.save(team);
+            return new TeamResponseDTO(team.getId(), team.getName());
+        });
+    }
+
+    /**
+     * Sets (or, with null, unsets) the queue priority of a team's traffic.
+     * The priority is a platform-level decision, so the endpoint is gated to
+     * logos_admin only. Null restores the policy-level priority behaviour.
+     */
+    public Optional<TeamResponseDTO> updateTeamPriority(Integer teamId, Integer priority) {
+        return teamRepository.findById(teamId).map(team -> {
+            team.setPriority(priority);
             teamRepository.save(team);
             return new TeamResponseDTO(team.getId(), team.getName());
         });

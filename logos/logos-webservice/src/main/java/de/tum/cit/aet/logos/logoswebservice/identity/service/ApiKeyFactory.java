@@ -40,7 +40,10 @@ public class ApiKeyFactory {
         key.setEnvironment("-");
         key.setLog(LogLevel.BILLING);
         key.setSettings("{}");
-        key.setDefaultPriority(1);
+        // 0 = "not explicitly set": the queue resolves the team priority,
+        // then the policy priority. 1 would shadow the team priority,
+        // because the queue treats any non-zero value as a key override.
+        key.setDefaultPriority(0);
         key.setIsActive(true);
         key.setUseCustomPermissions(false);
         return key;

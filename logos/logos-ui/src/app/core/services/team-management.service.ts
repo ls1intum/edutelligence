@@ -46,6 +46,11 @@ export class TeamManagementService {
     return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}`, payload));
   }
 
+  /** Sets the queue priority of a team's traffic (logos_admin only); null unsets it. */
+  updateTeamPriority(teamId: number, priority: number | null): Promise<void> {
+    return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}/priority`, { priority }));
+  }
+
   getTeamApiKeys(teamId: number): Promise<TeamApiKey[]> {
     return firstValueFrom(this.http.get<TeamApiKey[]>(`/api/admin/teams/${teamId}/api-keys`));
   }
@@ -64,6 +69,16 @@ export class TeamManagementService {
 
   setTeamProviderPermissions(teamId: number, providerIds: number[]): Promise<void> {
     return firstValueFrom(this.http.put<void>(`/api/admin/teams/${teamId}/provider-permissions`, { provider_ids: providerIds }));
+  }
+
+  /** Atomic single-grant add (model access page) — no full-set replacement. */
+  addTeamProviderPermission(teamId: number, providerId: number): Promise<void> {
+    return firstValueFrom(this.http.post<void>(`/api/admin/teams/${teamId}/provider-permissions/${providerId}`, {}));
+  }
+
+  /** Atomic single-grant removal (model access page) — no full-set replacement. */
+  removeTeamProviderPermission(teamId: number, providerId: number): Promise<void> {
+    return firstValueFrom(this.http.delete<void>(`/api/admin/teams/${teamId}/provider-permissions/${providerId}`));
   }
 
   getAllProviders(): Promise<ProviderItem[]> {

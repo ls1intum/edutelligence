@@ -18,6 +18,15 @@ body:json {
   {
     "logos_key": "{{logosKey}}",
     "provider_name": "{{providerName}}",
-    "base_url": ""
+    "base_url": "",
+    "privacy_level": "LOCAL"
   }
+}
+
+docs {
+  privacy_level is required, with no default. LOCAL means hardware you operate;
+  use THIRD_PARTY_HARDWARE for a rented GPU or a personal machine running the
+  MLX worker, whose owner can inspect the running processes. Registering such a
+  node as LOCAL makes it eligible for requests restricted to operator-controlled
+  hardware.
 }

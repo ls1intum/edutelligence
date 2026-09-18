@@ -8,6 +8,8 @@ export interface Team {
   default_cloud_tpm_limit: number | null;
   default_local_rpm_limit: number | null;
   default_local_tpm_limit: number | null;
+  /** Queue priority of the team's traffic (1..10, same scale as API-key priorities); null = not set. */
+  priority: number | null;
   is_caller_owner: boolean;
   /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
   managed: boolean;

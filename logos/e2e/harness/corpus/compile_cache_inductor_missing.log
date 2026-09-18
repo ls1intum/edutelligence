@@ -1,0 +1,8 @@
+INFO 06-04 21:15:55 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 06-04 21:16:10 [backends.py:601] Using cache directory: /usr/share/logos/models/.cache/vllm/torch_compile_cache/7be420/rank_0_0 for vLLM's torch.compile
+ERROR 06-04 21:16:11 [core.py:712] EngineCore failed to start.
+ERROR 06-04 21:16:11 [core.py:712] Traceback (most recent call last):
+ERROR 06-04 21:16:11 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/torch/_inductor/codecache.py", line 1877, in _load_graph
+ERROR 06-04 21:16:11 [core.py:712]     with open(artifact_path, "rb") as f:
+ERROR 06-04 21:16:11 [core.py:712] FileNotFoundError: [Errno 2] No such file or directory: '/usr/share/logos/models/.cache/vllm/torch_compile_cache/7be420/rank_0_0/inductor_graph.so'
+Process EngineCore_DP0: exited with code 1

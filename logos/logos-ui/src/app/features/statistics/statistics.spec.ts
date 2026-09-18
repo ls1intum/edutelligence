@@ -1,6 +1,8 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { vi } from 'vitest';
 
+import { provideRouter } from '@angular/router';
+
 import { Statistics } from './statistics';
 import { StatsWebsocketService } from './services/stats-websocket.service';
 import { StatisticsService } from './services/statistics.service';
@@ -39,6 +41,9 @@ async function pageAt(
     providers: [
       { provide: StatsWebsocketService, useValue: ws },
       { provide: StatisticsService, useValue: { getScopeOptions } },
+      // The page reads ?tab= and navigates on a tab switch, so it needs a real
+      // router: without one construction fails before any test body runs.
+      provideRouter([]),
     ],
   }).compileComponents();
   const fx = TestBed.createComponent(Statistics);
