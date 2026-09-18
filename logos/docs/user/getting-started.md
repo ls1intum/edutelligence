@@ -20,12 +20,12 @@ to your team's permissions.
 Use your API key as a bearer token:
 
 ```bash
-curl https://logos.example.com/v1/chat/completions \
+curl https://logos.aet.cit.tum.de/v1/chat/completions \
   -H "Authorization: ******" \
   -H "Content-Type: application/json" \
   -d '{"model":"your-model","messages":[{"role":"user","content":"Hello!"}]}'
 ```
 
-The API is documented interactively at `https://logos.example.com/docs`.
+The API is documented interactively at `https://logos.aet.cit.tum.de/docs`.
 Ask an administrator which model names and endpoint URL are enabled for your
 team.
