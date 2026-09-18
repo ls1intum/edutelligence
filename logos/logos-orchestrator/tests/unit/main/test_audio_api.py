@@ -4,12 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Request
+from fastapi.routing import iter_route_contexts
 
 import logos as main
 
 
 def test_audio_routes_are_registered_before_the_v1_catch_all():
-    paths = [route.path for route in main.app.routes]
+    paths = [route.path for route in iter_route_contexts(main.app.routes)]
 
     catch_all_index = paths.index("/v1/{path:path}")
     assert paths.index("/v1/audio/transcriptions") < catch_all_index
@@ -40,7 +41,7 @@ def test_translation_openapi_declares_multipart_contract():
 async def test_audio_authentication_happens_before_multipart_parsing(monkeypatch):
     parsed = False
 
-    def reject_auth(_headers):
+    def reject_auth(_headers, client_ip=None):
         raise HTTPException(status_code=401, detail="invalid key")
 
     async def parse_upload(_request):

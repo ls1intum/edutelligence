@@ -122,13 +122,45 @@ def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
     )
 
 
-def authenticate_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:
-    logos_key = _resolve_logos_key(headers)
-    with DBManager() as db:
-        row = db.get_api_key_by_value(logos_key)
-    if row is None:
-        raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
-    return _auth_context_from_key_row(row)
+def authenticate_api_key(headers: Optional[Dict[str, str]], client_ip: Optional[str] = None) -> AuthContext:
+    """Authenticate a Logos API key.
+
+    `client_ip`, when passed, gates and meters the failure path: a 401 here
+    is exactly what lets a caller test a leaked key for validity, so repeated
+    401s from one address are rate limited. A successful call never spends
+    that budget, so real traffic stays governed by the key's own limits.
+    """
+    # Local import: logos.rate_limiter must not be imported at module scope
+    # here. auth.py loads during logos/__init__.py's package initialization,
+    # before it hands the "logos" name over to logos.main — a module-level
+    # import would bind the submodule to the discarded pre-handover package
+    # object instead of logos.main, breaking `import logos.rate_limiter`
+    # anywhere else (see logos/rate_limiter.py's own lazy-import callers).
+    from logos.rate_limiter import enforce_auth_failure_budget, record_auth_failure, release_auth_failure_reservation
+
+    enforce_auth_failure_budget(client_ip)
+    try:
+        logos_key = _resolve_logos_key(headers)
+        with DBManager() as db:
+            row = db.get_api_key_by_value(logos_key)
+        if row is None:
+            raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
+        release_auth_failure_reservation(client_ip)
+        return _auth_context_from_key_row(row)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            if not record_auth_failure(client_ip):
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many failed authentication attempts",
+                    headers={"Retry-After": "60"},
+                ) from exc
+        else:
+            release_auth_failure_reservation(client_ip)
+        raise
+    except Exception:
+        release_auth_failure_reservation(client_ip)
+        raise
 
 
 def authenticate_batch_api_key(headers: Optional[Dict[str, str]]) -> AuthContext:

@@ -36,6 +36,7 @@ import httpx
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
+from logos.sdi.model_discovery_notifier import deliver_discovery_notifications
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,17 @@ class CloudModelSyncService:
         # cloud_model_context per provider with delete-then-insert — two doing
         # that at once race for the same rows.
         self._pass_lock = asyncio.Lock()
+        # Passes scheduled but not finished — the interval pass plus every
+        # out-of-band refresh, including one queued behind a running pass.
+        # The /internal/cloud_model_sync_status endpoint serves this count,
+        # so the admin UI knows when a refresh it triggered has actually
+        # stopped writing; two unchanged model lists are not that signal,
+        # because the first write of a pass can land at any moment.
+        self._passes_outstanding = 0
+
+    def is_busy(self) -> bool:
+        """Whether a sync pass is running or queued for a run."""
+        return self._passes_outstanding > 0
 
     async def start(self) -> None:
         """Schedule the sync; returns immediately.
@@ -219,19 +231,26 @@ class CloudModelSyncService:
         if not self._enabled:
             return
         if self._refresh_task is not None and not self._refresh_task.done():
+            # Already counted: the follow-up pass rides on the running task.
             self._refresh_pending = True
             return
+        self._passes_outstanding += 1
         self._refresh_task = asyncio.create_task(self._refresh_loop())
 
     async def _refresh_loop(self) -> None:
-        while True:
-            self._refresh_pending = False
-            try:
-                await self.run_once()
-            except Exception:  # noqa: BLE001
-                logger.exception("Cloud model sync: out-of-band refresh failed")
-            if not self._refresh_pending:
-                return
+        try:
+            while True:
+                self._refresh_pending = False
+                try:
+                    await self.run_once()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Cloud model sync: out-of-band refresh failed")
+                if not self._refresh_pending:
+                    return
+        finally:
+            # Also runs on stop(): a cancelled task still unwinds here, so
+            # the status endpoint never reports a pass that no longer exists.
+            self._passes_outstanding -= 1
 
     async def stop(self) -> None:
         for attr in ("_task", "_refresh_task"):
@@ -247,10 +266,15 @@ class CloudModelSyncService:
 
     async def _loop(self) -> None:
         while True:
+            # Counted only while the pass itself runs, not during the sleep
+            # until the next tick — a sleeping interval is nothing in flight.
+            self._passes_outstanding += 1
             try:
                 await self.run_once()
             except Exception:  # noqa: BLE001
                 logger.exception("Cloud model sync cycle failed")
+            finally:
+                self._passes_outstanding -= 1
             await asyncio.sleep(self._interval_s)
 
     async def run_once(self) -> None:
@@ -361,6 +385,14 @@ class CloudModelSyncService:
                 result = db.sync_cloud_models(pid, model_names)
                 context_changed = db.replace_cloud_model_context(pid, contexts)
                 self._note_logos_upstream(db, provider, looks_like_logos)
+                try:
+                    await deliver_discovery_notifications(db)
+                except Exception:  # noqa: BLE001
+                    # A queue read/delivery failure must not fail the pass —
+                    # the IDs stay queued and are retried on the next pass.
+                    logger.exception(
+                        "Cloud model sync: discovery notification delivery failed for provider %s (%s)", pid, name
+                    )
         except Exception:  # noqa: BLE001
             logger.exception("Cloud model sync: DB update failed for provider %s (%s)", pid, name)
             return False, False

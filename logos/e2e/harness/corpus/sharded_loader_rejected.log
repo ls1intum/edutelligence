@@ -1,0 +1,8 @@
+INFO 07-22 13:55:09 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 07-22 13:55:12 [utils.py:233] non-default args: {'load_format': 'sharded_state', 'tensor_parallel_size': 2}
+ERROR 07-22 13:55:30 [core.py:712] EngineCore failed to start.
+ERROR 07-22 13:55:30 [core.py:712] Traceback (most recent call last):
+ERROR 07-22 13:55:30 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/model_executor/model_loader/sharded_state_loader.py", line 141, in load_model
+ERROR 07-22 13:55:30 [core.py:712]     raise ValueError(f"Could not find checkpoint files for rank {rank}")
+ERROR 07-22 13:55:30 [core.py:712] ValueError: Could not find checkpoint files for rank 1
+Process EngineCore_DP0: exited with code 1

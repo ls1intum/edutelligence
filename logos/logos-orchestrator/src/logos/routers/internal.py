@@ -33,6 +33,7 @@ from logos.dbutils.dbrequest import (
     InternalDeleteLaneRequest,
     InternalLaneLoadStatusRequest,
     InternalSleepLaneRequest,
+    InternalStopCalibrationRequest,
     InternalWakeLaneRequest,
     RefreshPipelineRequest,
 )
@@ -178,7 +179,24 @@ async def internal_refresh_pipeline(data: RefreshPipelineRequest, request: Reque
         # timeout. The pass refreshes runtime state itself once it finds
         # something, so nothing is lost by returning first.
         _main._cloud_model_sync.request_refresh()
+    if data.sync_cloud_models and _main._azure_deployment_sync is not None:
+        _main._azure_deployment_sync.request_refresh()
     return {"status": "ok"}
+
+
+@router.get("/internal/cloud_model_sync_status", tags=["admin"])
+async def internal_cloud_model_sync_status(request: Request):
+    """Whether a cloud model sync pass is running or queued, for the webservice.
+
+    A manual refresh is answered before its pass has written anything, and the
+    pass contacts every cloud upstream in turn — so "trigger accepted" is not
+    "done". The admin UI polls this until the pass the refresh requested has
+    finished, instead of guessing from unchanged model lists (the first write
+    can land at any moment, and a mid-pass snapshot can look stable).
+    """
+    _require_internal_secret(request, disabled_detail="Internal cloud model sync status endpoint disabled")
+    sync = _main._cloud_model_sync
+    return {"running": bool(sync is not None and sync.is_busy())}
 
 
 @router.get("/internal/provider_status", tags=["admin"])
@@ -204,6 +222,14 @@ async def internal_provider_status(request: Request):
         last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
         if isinstance(last_heartbeat, datetime.datetime):
             last_heartbeat = last_heartbeat.isoformat()
+        connected_at = runtime_snapshot.get("connected_at") if runtime_snapshot else None
+        if isinstance(connected_at, datetime.datetime):
+            connected_at = connected_at.isoformat()
+        # Self-reported by the worker — distinct from connected_at, so it
+        # reflects worker uptime even across bridge reconnects.
+        worker_started_at = (
+            (runtime_snapshot.get("runtime") or {}).get("process_started_at") if runtime_snapshot else None
+        )
         providers.append(
             {
                 "provider_id": provider_id,
@@ -212,6 +238,8 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "connected_at": connected_at if isinstance(connected_at, str) else None,
+                "worker_started_at": worker_started_at if isinstance(worker_started_at, str) else None,
                 "calibrating": _main._logosnode_registry.is_calibrating(provider_id),
             }
         )
@@ -680,12 +708,17 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
     sleep_level = (
         _main._calibration_orchestrator._config.sleep_level if _main._calibration_orchestrator is not None else 1
     )
+    skip_models = (
+        sorted(_main._calibration_orchestrator._capacity_skip_models(data.provider_id))
+        if _main._calibration_orchestrator is not None
+        else []
+    )
     pname = _resolve_provider_name(data.provider_id)
     try:
         await _main._logosnode_registry.send_command(
             data.provider_id,
             "start_calibration_session",
-            params={"sleep_level": sleep_level},
+            params={"sleep_level": sleep_level, "skip_models": skip_models},
             timeout_seconds=30,
         )
     except LogosNodeOfflineError as exc:
@@ -704,6 +737,51 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
         "count": len(models),
         "models": models,
     }
+
+
+@router.post("/internal/logosnode/stop_calibration", tags=["admin"])
+async def internal_logosnode_stop_calibration(data: InternalStopCalibrationRequest, request: Request):
+    """Cancel a worker's in-progress calibration session, called by Spring after JWT validation.
+
+    The worker owns the teardown via cancel_event; nothing partial is
+    written for the model in progress — it's just left uncalibrated for
+    a later session.
+    """
+    _require_internal_secret(request)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        result = await _main._logosnode_registry.send_command(
+            data.provider_id,
+            "stop_calibration_session",
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Internal stop-calibration: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning("Internal stop-calibration: stop_calibration_session failed on provider=%s: %s", pname, exc)
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    was_active = bool(result.get("was_active", False))
+    current_model = result.get("current_model")
+    logger.info(
+        "Internal stop-calibration: provider=%s was_active=%s current_model=%s",
+        pname,
+        was_active,
+        current_model or "<none>",
+    )
+    result = {
+        "message": (
+            f"Calibration session on {pname} cancelled (was calibrating {current_model})"
+            if was_active
+            else f"No calibration session was running on {pname}"
+        ),
+        "was_active": was_active,
+        "current_model": current_model,
+    }
+    return JSONResponse(content=result, status_code=200)
 
 
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])

@@ -134,7 +134,7 @@ def test_recorder_updates_log_entry_metrics_by_request_id(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Prometheus label plumbing (issue 738)
+# Prometheus label plumbing
 # ---------------------------------------------------------------------------
 
 
@@ -250,7 +250,7 @@ def test_complete_without_enqueue_records_no_duration(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Token usage metrics (issue 819)
+# Token usage metrics
 # ---------------------------------------------------------------------------
 
 
@@ -296,8 +296,8 @@ def test_record_complete_observes_token_counters_and_context_histogram(monkeypat
         assert metric.label_calls == [{"model": "Qwen/Qwen3-8B", "provider": "local-node"}]
         assert metric.inc_values == [expected]
 
-    # …the context-window histogram is per model only (issue 819: "not given
-    # model/provider pair") and covers prompt + generation tokens.
+    # The context-window histogram is per model only, not per provider pair,
+    # and covers prompt + generation tokens.
     assert fake.REQUEST_CONTEXT_TOKENS.label_calls == [{"model": "Qwen/Qwen3-8B"}]
     assert fake.REQUEST_CONTEXT_TOKENS.observations == [140]
 

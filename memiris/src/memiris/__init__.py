@@ -2,7 +2,8 @@
 MemIris: A Python package for long-term memory management in large language models.
 """
 
-from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
+from importlib.metadata import PackageNotFoundError  # pragma: no cover
+from importlib.metadata import version
 
 from memiris.api.learning_dto import LearningDTO
 from memiris.api.learning_service import LearningService

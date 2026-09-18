@@ -344,7 +344,7 @@ def _profile_native_context_length(profile: dict) -> int:
     recorded no wider KV point, so the calibrated cap is the only context the
     profile reports. Ignoring it made such a model look context-unknown (and
     the client fall back to a guessed window) while its worker sat connected
-    and ready to serve it at exactly that width (#829).
+    and ready to serve it at exactly that width.
     """
     return derived_reported_context_length(profile)
 
@@ -424,6 +424,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 "error_lane_count": 0,
                 "active_requests": 0,
                 "effective_vram_mb": 0.0,
+                "host_ram_mb": 0.0,
                 "reported_vram_mb": 0.0,
                 "pid_vram_mb": 0.0,
                 "device_vram_mb": 0.0,
@@ -473,6 +474,14 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "pid_vram_mb": _safe_float(lane.get("pid_vram_mb")) or 0.0,
             "device_vram_mb": _safe_float(lane.get("device_vram_mb")) or 0.0,
             "vram_source": lane.get("vram_source"),
+            # Host RAM of the lane's process tree, the counterpart to
+            # effective_vram_mb above. The worker measures it per lane (PSS where
+            # it can read it, RSS otherwise, hence the source); carrying it here
+            # is what lets the statistics page break host RAM down by model the
+            # same way it breaks down VRAM, instead of only showing the host
+            # total in provider_signals.
+            "host_ram_mb": _safe_float(lane.get("host_ram_mb")) or 0.0,
+            "host_ram_source": lane.get("host_ram_source"),
             "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
             "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
@@ -512,6 +521,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
 
         entry["active_requests"] += active_requests
         entry["effective_vram_mb"] += _safe_float(lane.get("effective_vram_mb")) or 0.0
+        entry["host_ram_mb"] += _safe_float(lane.get("host_ram_mb")) or 0.0
         entry["reported_vram_mb"] += _safe_float(lane.get("reported_vram_mb")) or 0.0
         entry["pid_vram_mb"] += _safe_float(lane.get("pid_vram_mb")) or 0.0
         entry["device_vram_mb"] += _safe_float(lane.get("device_vram_mb")) or 0.0
@@ -611,7 +621,7 @@ def _build_live_local_provider_sample(
         total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
 
     remaining_vram_mb: Optional[float] = None
-    # telemetry_available is the backend-neutral successor to
+    # telemetry_available is the application server-neutral successor to
     # nvidia_smi_available: it means "the worker measured this on real
     # hardware", whether that hardware reports through nvidia-smi or through
     # Metal's device_info. Metal workers set it and leave nvidia_smi_available

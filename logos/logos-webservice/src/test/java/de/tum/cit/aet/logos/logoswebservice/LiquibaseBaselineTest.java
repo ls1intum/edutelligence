@@ -112,7 +112,7 @@ class LiquibaseBaselineTest {
     @Test
     void migration030_allowsStartWithoutOllamaTypedProviders() {
         // The 030 gate must be a no-op on a clean schema (the provider_type
-        // enum makes 'ollama' rows impossible) — reaching this test already
+        // enum makes legacy local-provider rows impossible) — reaching this test already
         // proves the changelog ran to the end.
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();
     }
@@ -142,7 +142,7 @@ class LiquibaseBaselineTest {
         assertThat(key.get("is_active")).isEqualTo(true);
         assertThat(key.get("environment")).isEqualTo("-");
         // The 002 backfill SQL writes the legacy default 1, which is preserved
-        // as-is (changeset 036 deliberately does not rewrite existing rows;
+        // as-is (changeset 039 deliberately does not rewrite existing rows;
         // 1 keeps acting as an explicit LOW override until an admin resets it).
         assertThat(((Number) key.get("default_priority")).intValue()).isEqualTo(1);
         assertThat(key.get("use_custom_permissions")).isEqualTo(false);
@@ -182,10 +182,10 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration036_preservesExistingPrioritiesAndUnsetsFutureDefaults() {
+    void migration039_preservesExistingPrioritiesAndUnsetsFutureDefaults() {
         // A stored 1 on a developer key is ambiguous: legacy factory/backfill
         // default or a deliberately pinned LOW override. There is no reliable
-        // provenance, so 036 must leave every existing row untouched (a bulk
+        // provenance, so 039 must leave every existing row untouched (a bulk
         // reset would silently lift pinned-LOW keys to team/policy priority
         // without owner intent) and only re-point the column default so
         // future raw inserts use the "unset" marker 0.
@@ -201,7 +201,7 @@ class LiquibaseBaselineTest {
         jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
             + "VALUES ('lg-app-key', 'app key', 'application', ?, ?, 1, true)", teamId, userId);
 
-        runMigration036();
+        runMigration039();
 
         // Existing values survive, including a developer key pinned to LOW.
         assertThat(keyPriority("lg-pinned-low-dev")).isEqualTo(1);
@@ -220,7 +220,7 @@ class LiquibaseBaselineTest {
         return priority.intValue();
     }
 
-    private void runMigration036() {
+    private void runMigration039() {
         jdbc.update("ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 0");
     }
 

@@ -257,7 +257,7 @@ class TokenCostFunctionTest {
         // OpenAI-compatible gateway: prompt_tokens is inclusive (contains the
         // cached tokens) and there is no cache-write counter. The decomposition
         // must not treat this as the disjoint native shape -- doing so bills the
-        // cached tokens at the full input rate AND the cache-read rate (#892 B1).
+        // cached tokens at the full input rate AND the cache-read rate ( B1).
         int model = seedModel();
         int provider = seedCloudProvider("anthropic");
         seedPrice(model, provider, "billed_input_uncached", "token", 0, "default", 20000, "2020-01-01");

@@ -1,4 +1,4 @@
-import type { RequestLogStats, VramV2Sample, TimelineEnqueueEvent, VramSeriesPoint, VramProviderPayload } from './statistics.models';
+import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
 import { cssVar } from './statistics.constants';
 
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
@@ -62,6 +62,26 @@ export function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}m ${s}s`;
+}
+
+/**
+ * "Uptime since" label for a timestamp, e.g. "3d 4h", "5h 12m", "42m", "<1m".
+ */
+export function formatUptime(ts: string | null | undefined, nowMs: number): string | null {
+  if (!ts) return null;
+  const startMs = new Date(ts).getTime();
+  if (Number.isNaN(startMs)) return null;
+  const diffS = Math.floor((nowMs - startMs) / 1000);
+  // Negative = clock skew between worker/orchestrator/browser; hide rather
+  // than show a nonsense duration.
+  if (diffS < 0) return null;
+  const days = Math.floor(diffS / 86400);
+  const hours = Math.floor((diffS % 86400) / 3600);
+  const minutes = Math.floor((diffS % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
 }
 
 // ── Recent-requests state filter ──────────────────────────────────────────────
@@ -662,85 +682,4 @@ export const chooseDynamicTargetBuckets = (spanMs: number): number => {
   if (spanMs > 7 * day) return 96;
   if (spanMs > day) return 108;
   return 120;
-};
-
-export const chooseDynamicBucketMs = (spanMs: number): number => {
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const safeSpanMs = Math.max(spanMs, minute);
-  const targetBuckets = chooseDynamicTargetBuckets(safeSpanMs);
-  const rawBucketMs = Math.max(safeSpanMs / targetBuckets, minute);
-  const niceCandidates = [
-    minute,
-    5 * minute,
-    15 * minute,
-    30 * minute,
-    hour,
-    3 * hour,
-    6 * hour,
-    12 * hour,
-    day,
-  ];
-
-  return niceCandidates.reduce((best, candidate) =>
-    Math.abs(candidate - rawBucketMs) < Math.abs(best - rawBucketMs)
-      ? candidate
-      : best
-  );
-};
-
-export const aggregateEventsToVolumeSeries = (
-  events: TimelineEnqueueEvent[],
-  startMs: number,
-  endMs: number,
-  bucketMs: number
-): RequestLogStats['timeSeries'] => {
-  const safeBucketMs = Math.max(bucketMs, 30 * 1000);
-  const alignedStart = Math.floor(startMs / safeBucketMs) * safeBucketMs;
-  const alignedEnd = Math.ceil(endMs / safeBucketMs) * safeBucketMs;
-  const buckets = new Map<
-    number,
-    { cloud: number; local: number; total: number }
-  >();
-
-  for (let ts = alignedStart; ts <= alignedEnd; ts += safeBucketMs) {
-    buckets.set(ts, { cloud: 0, local: 0, total: 0 });
-  }
-
-  for (const event of events) {
-    const ts = Number(event.timestamp_ms);
-    if (!Number.isFinite(ts) || ts < alignedStart || ts > alignedEnd)
-      continue;
-    const bucketTs = Math.floor(ts / safeBucketMs) * safeBucketMs;
-    const bucket = buckets.get(bucketTs) || {
-      cloud: 0,
-      local: 0,
-      total: 0,
-    };
-    if (event.is_cloud) bucket.cloud += 1;
-    else bucket.local += 1;
-    bucket.total += 1;
-    buckets.set(bucketTs, bucket);
-  }
-
-  const rawSeries: RequestLogStats['timeSeries'] = [];
-  for (const [timestamp, bucket] of buckets.entries()) {
-    rawSeries.push({
-      timestamp,
-      label: '',
-      cloud: bucket.cloud,
-      local: bucket.local,
-      total: bucket.total,
-      avgRunSeconds: null,
-      avgVram: null,
-    });
-  }
-
-  rawSeries.sort((a, b) => a.timestamp - b.timestamp);
-  return applyTimeSeriesLabels(
-    rawSeries,
-    new Date(alignedStart),
-    new Date(alignedEnd)
-  );
 };
