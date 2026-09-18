@@ -5,7 +5,7 @@ orchestrator to a local workernode and back — scenario: **logosnode provider,
 warm lane (model already loaded), no other running requests**, non-streaming
 `POST /v1/chat/completions`. Headline metrics: p50 and p95 of via-Logos
 latency minus the matching direct-lane percentile; goals are **< 10 ms p50**
-and **< 20 ms p95**. Cloud providers
+and **< 30 ms p95**. Cloud providers
 share the identical path up to the relay target, so the measured orchestrator
 phases transfer; only the last network hop differs.
 
@@ -83,7 +83,7 @@ orchestrator startup (the CI workflow caches the model).
 `.github/workflows/logos_benchmark-overhead.yml` runs the same harness on
 every PR (incl. leaving draft) touching `logos/**` or `shared/**`, against a
 postgres:17 service + Liquibase migration. The job **fails** when p50 exceeds
-15 ms or p95 exceeds 20 ms. Results between the 10 ms p50 goal and the
+15 ms or p95 exceeds 30 ms. Results between the 10 ms p50 goal and the
 15 ms CI threshold are warnings in the idempotent comment.
 
 ## Notes

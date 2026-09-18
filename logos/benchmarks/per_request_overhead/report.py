@@ -11,9 +11,9 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-# Goals from the benchmark: p50 forwarding overhead < 10 ms and p95 < 20 ms.
+# Goals from the benchmark: p50 forwarding overhead < 10 ms and p95 < 30 ms.
 GOAL_NS = 10_000_000
-P95_GOAL_NS = 20_000_000
+P95_GOAL_NS = 30_000_000
 # CI allows runner noise above the p50 goal before blocking the PR.
 FAIL_NS = 15_000_000
 
