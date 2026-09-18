@@ -1,4 +1,4 @@
-"""The context resolver's logosnode fast path (#980).
+"""The context resolver's logosnode fast path .
 
 The request route already fetched the key's deployment list; for a logosnode
 target the resolver used to pay a second database roundtrip

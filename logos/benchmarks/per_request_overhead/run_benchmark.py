@@ -1,4 +1,4 @@
-"""Director of the per-request overhead benchmark (issue #980).
+"""Director of the per-request overhead benchmark (the benchmark).
 
 Process layout (all on 127.0.0.1):
 
@@ -54,7 +54,7 @@ _ORCH = _HERE.parents[1] / "logos-orchestrator"  # .../logos/logos-orchestrator
 
 sys.path.insert(0, str(_HERE))
 
-from report import FAIL_NS, GOAL_NS, verdict, write_reports  # noqa: E402
+from report import FAIL_NS, GOAL_NS, P95_GOAL_NS, overall_verdict, write_reports  # noqa: E402
 from stats import merge_phase_totals, overhead_ns, summarize  # noqa: E402
 
 
@@ -345,7 +345,7 @@ def run() -> int:
 
         # -- 5. report ----------------------------------------------------------
         ov = overhead_ns(logos_ns, direct_ns)
-        verdict_str = verdict(ov["overhead_ns"])
+        verdict_str = overall_verdict(ov["overhead_p50_ns"], ov["overhead_p95_ns"])
         result = {
             "scenario": "logosnode, warm lane, no concurrent requests, non-streaming POST /v1/chat/completions",
             "overhead": ov,
@@ -354,6 +354,7 @@ def run() -> int:
             "n_traces": len(traces),
             "verdict": verdict_str,
             "goal_ns": GOAL_NS,
+            "p95_goal_ns": P95_GOAL_NS,
             "fail_ns": FAIL_NS,
             "env": {
                 "python": python,
@@ -365,11 +366,20 @@ def run() -> int:
         }
         paths = write_reports(result, str(out_dir))
         print(
-            f"\n  verdict: {verdict_str} — overhead p50 = {ov['overhead_ns'] / 1000.0:,.1f} µs "
-            f"(goal < {GOAL_NS / 1000.0:,.0f} µs)"
+            f"\n  verdict: {verdict_str} — overhead p50 = {ov['overhead_p50_ns'] / 1000.0:,.1f} µs, "
+            f"p95 = {ov['overhead_p95_ns'] / 1000.0:,.1f} µs "
+            f"(goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs)"
         )
-        print(f"  logos p50    = {summarize(logos_ns)['p50_ns'] / 1000.0:,.1f} µs (n={len(logos_ns)})")
-        print(f"  direct p50   = {summarize(direct_ns)['p50_ns'] / 1000.0:,.1f} µs (n={len(direct_ns)})")
+        logos_summary = summarize(logos_ns)
+        direct_summary = summarize(direct_ns)
+        print(
+            f"  logos        = p50 {logos_summary['p50_ns'] / 1000.0:,.1f} µs, "
+            f"p95 {logos_summary['p95_ns'] / 1000.0:,.1f} µs (n={len(logos_ns)})"
+        )
+        print(
+            f"  direct       = p50 {direct_summary['p50_ns'] / 1000.0:,.1f} µs, "
+            f"p95 {direct_summary['p95_ns'] / 1000.0:,.1f} µs (n={len(direct_ns)})"
+        )
         print(f"  report: {paths['md']}")
         return 0
     finally:

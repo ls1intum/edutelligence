@@ -1,4 +1,4 @@
-"""peek_runtime_snapshot memoisation (#980 O16).
+"""peek_runtime_snapshot memoisation .
 
 The scheduler and the capacity planner call peek_runtime_snapshot several
 times per request; the rebuild re-sorts the model sets and copies the event

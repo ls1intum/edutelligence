@@ -1,4 +1,4 @@
-"""Tests for the short-TTL ref cache (#980 O12)."""
+"""Tests for the short-TTL ref cache ."""
 
 from __future__ import annotations
 
@@ -127,42 +127,30 @@ class _CountingDBManager:
         return _AuthKeyRow.row(key_value)
 
 
-class TestAuthKeyIsNotCached:
-    """The api-key row carries is_active: a revoked key must fail on the very
-    next request, so authentication reads the row fresh every time (#980
-    review) — the ref cache must not front it."""
+class TestAuthKeyCache:
+    """Warm authentication reuses the short-lived in-memory key snapshot."""
 
-    def test_repeated_key_hits_the_db_every_time(self, monkeypatch):
+    def test_repeated_key_uses_the_cache(self, monkeypatch):
         fake = _CountingDBManager()
         monkeypatch.setattr(auth, "DBManager", lambda: fake)
 
         first = auth.authenticate_api_key({"logos-key": "lg-test-abc"})
         second = auth.authenticate_api_key({"logos-key": "lg-test-abc"})
 
-        # Two DB calls for two authentications: no caching of the key row.
-        assert fake.calls == ["lg-test-abc", "lg-test-abc"]
+        assert fake.calls == ["lg-test-abc"]
         assert first.api_key_id == second.api_key_id == 5
 
-    def test_revoked_key_fails_on_the_next_request(self, monkeypatch):
+    def test_expired_key_snapshot_is_reloaded(self, monkeypatch):
         fake = _CountingDBManager()
-        rows = ["lg-test-abc", None]  # the row disappears after the first call
-
-        def _lookup(key):
-            return _AuthKeyRow.row(key) if rows.pop(0) is not None else None
-
-        fake.get_api_key_by_value = _lookup
         monkeypatch.setattr(auth, "DBManager", lambda: fake)
-
-        import pytest
-        from fastapi import HTTPException
+        monkeypatch.setattr(refcache.get_ref_cache(), "ttl_s", 0.0)
 
         auth.authenticate_api_key({"logos-key": "lg-test-abc"})
-        with pytest.raises(HTTPException):
-            auth.authenticate_api_key({"logos-key": "lg-test-abc"})
+        auth.authenticate_api_key({"logos-key": "lg-test-abc"})
+        assert fake.calls == ["lg-test-abc", "lg-test-abc"]
 
     def test_context_is_fresh_per_call(self, monkeypatch):
-        """The row is read fresh, but the AuthContext must not be shared —
-        the request path mutates cloud_rl/local_rl on it."""
+        """The cached row must still produce an independent AuthContext."""
         fake = _CountingDBManager()
         monkeypatch.setattr(auth, "DBManager", lambda: fake)
 

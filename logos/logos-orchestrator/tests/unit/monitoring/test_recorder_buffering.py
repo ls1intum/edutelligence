@@ -1,4 +1,4 @@
-"""Buffered lifecycle writes (#980) and the failure-path drain contract.
+"""Buffered lifecycle writes  and the failure-path drain contract.
 
 The recorder used to UPDATE the log row on every lifecycle event (enqueue,
 scheduled, provider, rate-limit admission, provider metrics) — one pool

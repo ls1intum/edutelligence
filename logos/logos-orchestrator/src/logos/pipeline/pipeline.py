@@ -444,7 +444,7 @@ class RequestPipeline:
         """The scheduled entry from the key's already-fetched deployment list.
 
         The context resolver uses it to skip its database roundtrip for
-        logosnode targets (#980); callers without a deployment list (async
+        logosnode targets ; callers without a deployment list (async
         jobs) yield ``None`` and take the DB path.
         """
         return next(
@@ -732,7 +732,7 @@ class RequestPipeline:
         self._monitoring.discard(request_id, result_status)
 
     def take_monitoring_buffer(self, request_id: str) -> Dict[str, Any]:
-        """Drain the lifecycle fields buffered for a request (#980).
+        """Drain the lifecycle fields buffered for a request .
 
         Failure paths that persist the log row themselves call this before
         ``discard_request`` and merge the fields into their own metrics

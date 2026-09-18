@@ -1,10 +1,11 @@
-# Per-Request Forwarding Overhead Benchmark (issue #980)
+# Per-Request Forwarding Overhead Benchmark
 
 Measures the overhead Logos adds to a request that is forwarded from the
 orchestrator to a local workernode and back — scenario: **logosnode provider,
 warm lane (model already loaded), no other running requests**, non-streaming
-`POST /v1/chat/completions`. Headline metric: median(via Logos) −
-median(direct to the same lane), goal **< 1 ms** per request. Cloud providers
+`POST /v1/chat/completions`. Headline metrics: p50 and p95 of via-Logos
+latency minus the matching direct-lane percentile; goals are **< 1 ms p50**
+and **< 20 ms p95**. Cloud providers
 share the identical path up to the relay target, so the measured orchestrator
 phases transfer; only the last network hop differs.
 
@@ -33,7 +34,7 @@ phases transfer; only the last network hop differs.
 | `worker_under_test.py` | Real `LaneManager` + real `LogosBridgeClient` (production auth + WebSocket), one warm `FakeLaneHandle` injected into `manager._handles` |
 | `fake_lane_handle.py` | `ProcessHandle` reporting a RUNNING process with `pid=None`; the status probes are real HTTP calls against the mock lane |
 | `seed.sql` | Benchmark data (developer + admin key, team with **NULL** rate limits, logosnode provider, model, token types) — idempotent |
-| `stats.py` / `report.py` | Median/percentile statistics, JSON + Markdown report with the 1 ms verdict |
+| `stats.py` / `report.py` | Percentile statistics, JSON + Markdown report with p50/p95 goals |
 
 ## Running locally
 
@@ -81,9 +82,9 @@ orchestrator startup (the CI workflow caches the model).
 
 `.github/workflows/logos_benchmark-overhead.yml` runs the same harness on
 every PR (incl. leaving draft) touching `logos/**` or `shared/**`, against a
-postgres:17 service + Liquibase migration. The job **fails** when the p50
-overhead exceeds 1.5 ms (noise tolerance around the 1 ms goal) and posts an
-idempotent comment with the verdict and the phase table.
+postgres:17 service + Liquibase migration. The job **fails** when p50 exceeds
+1.5 ms or p95 exceeds 20 ms, and posts an idempotent comment with both
+percentiles and the phase table.
 
 ## Notes
 

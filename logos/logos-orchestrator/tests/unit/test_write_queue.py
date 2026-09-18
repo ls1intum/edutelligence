@@ -1,4 +1,4 @@
-"""Write-behind queue (#980 O13): off-critical-path DB bookkeeping.
+"""Write-behind queue : off-critical-path DB bookkeeping.
 
 These exercise the queue itself (local instances, so the conftest's global
 sync-mode queue is irrelevant). The production behaviour — a dedicated worker

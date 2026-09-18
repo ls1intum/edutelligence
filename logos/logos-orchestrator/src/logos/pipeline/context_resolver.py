@@ -128,7 +128,7 @@ class ContextResolver:
                 logosnode deployment it carries everything this resolution
                 needs — the lane lookup runs on the provider/model names and
                 endpoint/base URL/auth stay unused on that branch — so the
-                database roundtrip is skipped outright (#980). Callers without
+                database roundtrip is skipped outright . Callers without
                 a deployment list (async jobs) omit it and take the DB path.
 
         Returns:

@@ -435,7 +435,7 @@ class LogosBridgeClient:
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
             elif count_bumped:
-                # Per-request counting must stay off the hot path (#980 W3):
+                # Per-request counting must stay off the hot path :
                 # a full rebuild would re-probe every lane (nvidia-smi, HTTP,
                 # /proc) next to the relay. A count change only patches the
                 # fields a count touches in the last pushed payload, so the
@@ -587,7 +587,7 @@ class LogosBridgeClient:
 
         A full status build probes every lane (nvidia-smi, HTTP, /proc); doing
         that on every increment/decrement would put the worker's biggest
-        per-request cost back on the request cycle (#980 W3). A count change
+        per-request cost back on the request cycle . A count change
         touches exactly two fields — each lane's active_requests and the
         capacity total — so patch them from the live counters and re-send the
         payload. Lane-set changes cannot reach this path: adding/removing a

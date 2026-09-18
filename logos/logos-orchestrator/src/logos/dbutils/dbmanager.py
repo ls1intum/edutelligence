@@ -4069,7 +4069,7 @@ class DBManager:
         return {"result": "time_at_first_token set"}, 200
 
     def _upsert_usage_tokens(self, log_id: int, usage) -> None:
-        """Token-type bookkeeping for one log row (#980), no commit — the
+        """Token-type bookkeeping for one log row , no commit — the
         caller owns the transaction.
 
         Two roundtrips instead of a SELECT + (INSERT + commit) per token
@@ -4167,8 +4167,7 @@ class DBManager:
         result_status=None,
         error_message=None,
     ):
-        """Synchronous billing half of the terminal response write (#980 O13
-        split, after review): the usage_tokens rows plus exactly the row
+        """Synchronous billing half of the terminal response write : the usage_tokens rows plus exactly the row
         columns the settled cost snapshot reads (model_id, provider_id,
         service_tier, timestamp_response, time_at_first_token) — and, when
         passed, the terminal result_status/error_message. This must be
@@ -4178,8 +4177,8 @@ class DBManager:
 
         The status write rides the same UPDATE and the same commit as the
         billing columns (one fewer round-trip than a separate
-        update_log_entry_metrics call — #980). The settled cost snapshot is
-        deliberately NOT part of this write (#980 O14): it is a derived
+        update_log_entry_metrics call — ). The settled cost snapshot is
+        deliberately NOT part of this write : it is a derived
         value — ``logos_price_usage`` over the rows committed here — so it
         settles in the queued `store_response_payload(settle_cost=True)`
         instead of taking a second synchronous commit off the response
@@ -4233,13 +4232,13 @@ class DBManager:
         utilization_at_arrival=None,
         settle_cost: bool = False,
     ):
-        """Non-billing half of the terminal response write (#980 O13 split):
+        """Non-billing half of the terminal response write :
         the response payload JSONB (privacy-gated) plus the classification /
         policy / queue-metric side columns. Safe to run off the event loop
         after `finalize_billing_row` has committed — neither the ledger nor
         the settled cost snapshot reads these columns.
 
-        ``settle_cost=True`` prices the row in this write (#980 O14): the
+        ``settle_cost=True`` prices the row in this write : the
         settled cost snapshot is a *derived* value — ``logos_price_usage``
         over the usage rows and billing columns `finalize_billing_row`
         already committed — so it rides the queue instead of taking a second

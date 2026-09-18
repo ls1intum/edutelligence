@@ -456,7 +456,7 @@ async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sync_response_settles_cost_on_the_queued_write(monkeypatch):
-    # #980 O14: the derived settled-cost snapshot must not take a second
+    #  O14: the derived settled-cost snapshot must not take a second
     # synchronous commit off the response path — it rides the queued
     # payload write, which only reads what the billing commit made durable.
     dummy_db = _make_dummy_db()
@@ -1187,7 +1187,7 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     )
 
     assert result["status_code"] == 200
-    # The first-token timestamp merged into the response write (#980), so the
+    # The first-token timestamp merged into the response write , so the
     # sync path no longer issues its own UPDATE for it.
     assert dummy_db.ttft_calls == []
     assert dummy_db.finalize_calls[0]["set_first_token"] is True

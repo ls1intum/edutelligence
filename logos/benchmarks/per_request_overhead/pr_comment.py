@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""CI gate + PR comment for the per-request overhead benchmark (issue #980).
+"""CI gate + PR comment for the per-request overhead benchmark (the benchmark).
 
 Reads ``result.json`` (from ``LOGOS_BENCH_OUTPUT``, default ``reports/`` next
 to this file) and:
@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-from report import FAIL_NS, GOAL_NS, verdict  # noqa: E402
+from report import FAIL_NS, GOAL_NS, P95_GOAL_NS, overall_verdict  # noqa: E402
 
 _ANCHOR = "<!-- logos-overhead-bench -->"
 _API_TIMEOUT_S = 30.0
@@ -43,17 +43,25 @@ def _load_result() -> Dict[str, Any]:
 
 
 def _gate(result: Dict[str, Any]) -> int:
-    overhead = float(result["overhead"]["overhead_ns"])
-    if overhead > FAIL_NS:
+    overhead = result["overhead"]
+    p50_ns = float(overhead.get("overhead_p50_ns", overhead["overhead_ns"]))
+    p95_ns = float(overhead.get("overhead_p95_ns", 0.0))
+    if p50_ns > FAIL_NS or p95_ns > P95_GOAL_NS:
+        failures = []
+        if p50_ns > FAIL_NS:
+            failures.append(
+                f"p50 {p50_ns / 1000.0:,.1f} µs exceeds the CI fail threshold of {FAIL_NS / 1000.0:,.0f} µs"
+            )
+        if p95_ns > P95_GOAL_NS:
+            failures.append(f"p95 {p95_ns / 1000.0:,.1f} µs exceeds the goal of {P95_GOAL_NS / 1000.0:,.0f} µs")
         print(
-            f"GATE FAIL: overhead p50 {overhead / 1000.0:,.1f} µs exceeds the "
-            f"CI fail threshold of {FAIL_NS / 1000.0:,.0f} µs "
-            f"(goal < {GOAL_NS / 1000.0:,.0f} µs)"
+            f"GATE FAIL: {'; '.join(failures)} "
+            f"(goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs)"
         )
         return 1
     print(
-        f"GATE PASS: overhead p50 {overhead / 1000.0:,.1f} µs "
-        f"(goal < {GOAL_NS / 1000.0:,.0f} µs, CI fail threshold {FAIL_NS / 1000.0:,.0f} µs)"
+        f"GATE PASS: overhead p50 {p50_ns / 1000.0:,.1f} µs, p95 {p95_ns / 1000.0:,.1f} µs "
+        f"(goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs)"
     )
     return 0
 
@@ -77,20 +85,25 @@ def _top_phases(result: Dict[str, Any], limit: int = 10) -> List[Tuple[str, floa
 
 
 def _comment_markdown(result: Dict[str, Any]) -> str:
-    overhead = float(result["overhead"]["overhead_ns"])
+    overhead = result["overhead"]
+    p50_ns = float(overhead.get("overhead_p50_ns", overhead["overhead_ns"]))
+    p95_ns = float(overhead.get("overhead_p95_ns", 0.0))
     logo = result["summary"]["logos"]
     direct = result["summary"]["direct"]
-    icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}[verdict(overhead)]
+    icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}[overall_verdict(p50_ns, p95_ns)]
     lines = [
-        f"## {icon} {verdict(overhead)} — Per-request forwarding overhead",
+        f"## {icon} {overall_verdict(p50_ns, p95_ns)} — Per-request forwarding overhead",
         "",
-        f"**Overhead p50 = {overhead / 1000.0:,.1f} µs** — goal "
-        f"< {GOAL_NS / 1000.0:,.0f} µs, CI fail threshold {FAIL_NS / 1000.0:,.0f} µs.",
+        f"**Overhead p50 = {p50_ns / 1000.0:,.1f} µs; p95 = {p95_ns / 1000.0:,.1f} µs** — "
+        f"goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs; "
+        f"CI p50 fail threshold {FAIL_NS / 1000.0:,.0f} µs.",
         "",
-        "| Path | p50 | samples |",
-        "| --- | ---: | ---: |",
-        f"| Logos (orchestrator → worker → back) | {logo['p50_ns'] / 1000.0:,.1f} µs | {int(logo['n'])} |",
-        f"| Direct baseline (same payload, keep-alive) | {direct['p50_ns'] / 1000.0:,.1f} µs | {int(direct['n'])} |",
+        "| Path | p50 | p95 | samples |",
+        "| --- | ---: | ---: | ---: |",
+        f"| Logos (orchestrator → worker → back) | {logo['p50_ns'] / 1000.0:,.1f} µs | "
+        f"{logo['p95_ns'] / 1000.0:,.1f} µs | {int(logo['n'])} |",
+        f"| Direct baseline (same payload, keep-alive) | {direct['p50_ns'] / 1000.0:,.1f} µs | "
+        f"{direct['p95_ns'] / 1000.0:,.1f} µs | {int(direct['n'])} |",
         "",
         "Top phases (per-request p50, share of the median request):",
         "",
@@ -103,7 +116,8 @@ def _comment_markdown(result: Dict[str, Any]) -> str:
     lines += [
         "",
         "Scenario: `logosnode` provider, warm lane, no concurrent requests, "
-        "non-streaming `POST /v1/chat/completions`. Overhead = median(Logos) − median(direct).",
+        "non-streaming `POST /v1/chat/completions`. Overhead p50/p95 = matching "
+        "percentile(Logos) − percentile(direct).",
         "",
         _ANCHOR,
     ]

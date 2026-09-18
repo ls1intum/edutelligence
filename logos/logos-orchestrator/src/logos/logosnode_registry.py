@@ -343,7 +343,7 @@ class ProviderSession:
     # Lets peek memoise the assembled dict per version instead of rebuilding
     # it on every read: the scheduler and the capacity planner call it
     # several times per request, and the rebuild copies the event backlog
-    # each time (#980 O16).
+    # each time .
     snapshot_version: int = 0
     # Bridge actions the worker advertised in its hello. Used to feature-gate
     # commands a worker may not know yet — an unrecognised action comes back
@@ -763,7 +763,7 @@ class LogosNodeRuntimeRegistry:
             return
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
-        # worker_id / max_lanes / heartbeat are all peek-visible (#980 O16).
+        # worker_id / max_lanes / heartbeat are all peek-visible .
         session.snapshot_version += 1
         session.max_lanes = max_lanes
         if actions is not None:
@@ -807,7 +807,7 @@ class LogosNodeRuntimeRegistry:
         session.first_status_received = True
         session.last_heartbeat = _utc_now()
         # This call always moves peek-visible state (latest_runtime,
-        # last_heartbeat), so the memoised snapshot must be rebuilt (#980 O16).
+        # last_heartbeat), so the memoised snapshot must be rebuilt .
         session.snapshot_version += 1
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
@@ -947,7 +947,7 @@ class LogosNodeRuntimeRegistry:
         session.last_heartbeat = _utc_now()
         # last_heartbeat is peek-visible and moves on every call (events are
         # appended when present), so the memoised snapshot is stale after
-        # each one (#980 O16).
+        # each one .
         session.snapshot_version += 1
         if isinstance(event, dict):
             session.latest_events.append(event)
@@ -1074,7 +1074,7 @@ class LogosNodeRuntimeRegistry:
         session = await self._get_session(provider_id)
         if session is not None:
             session.last_heartbeat = _utc_now()
-            session.snapshot_version += 1  # heartbeat is peek-visible (#980 O16)
+            session.snapshot_version += 1  # heartbeat is peek-visible
 
     async def on_vllm_metrics(self, provider_id: int, metrics_text: str) -> None:
         session = await self._get_session(provider_id)
@@ -1086,7 +1086,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
-        session.snapshot_version += 1  # heartbeat is peek-visible (#980 O16)
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1099,7 +1099,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
-        session.snapshot_version += 1  # heartbeat is peek-visible (#980 O16)
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1112,7 +1112,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
-        session.snapshot_version += 1  # heartbeat is peek-visible (#980 O16)
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1133,7 +1133,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
-        session.snapshot_version += 1  # heartbeat is peek-visible (#980 O16)
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1399,7 +1399,7 @@ class LogosNodeRuntimeRegistry:
 
         ``update_runtime`` replaces ``latest_runtime`` and bumps this counter
         in one step, so a derived structure the providers memoise per
-        revision (#980 O15) stays exact for the whole window between two
+        revision  stays exact for the whole window between two
         worker status pushes. Returns None when the session is gone.
         """
         session = self._sessions.get(int(provider_id))
@@ -1408,7 +1408,7 @@ class LogosNodeRuntimeRegistry:
     def peek_runtime_snapshot(self, provider_id: int) -> dict[str, Any] | None:
         """The session's latest state as a read-only snapshot dict.
 
-        Memoised per ``snapshot_version`` (#980 O16): the scheduler and the
+        Memoised per ``snapshot_version`` : the scheduler and the
         capacity planner call this several times per request, and every
         rebuild re-sorts the model sets and copies the event backlog. The
         version moves on exactly the mutations that change any field below

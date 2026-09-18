@@ -311,7 +311,7 @@ import pytest  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _clear_ref_cache():
-    """The short-TTL ref cache (#980 O12) is process-global: clear it around
+    """The short-TTL ref cache  is process-global: clear it around
     every test so one test's cached rows never leak into the next."""
     from logos import refcache
 
@@ -322,7 +322,7 @@ def _clear_ref_cache():
 
 @pytest.fixture(autouse=True)
 def _sync_write_queue():
-    """The write-behind queue (#980 O13) runs on a background thread in
+    """The write-behind queue  runs on a background thread in
     production, but tests must observe DB writes synchronously (they assert on
     them right after the handler returns). Install a sync-mode queue — one
     whose ``enqueue`` runs the write inline — around every test. The queue is

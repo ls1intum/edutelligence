@@ -154,5 +154,5 @@ async def test_request_path_propagates_to_context_resolver():
     assert resolver.kwargs is not None
     assert resolver.kwargs["request_path"] == "v1/chat/completions"
     # The scheduled entry of the request's deployment list rides along so the
-    # resolver can skip its database roundtrip for logosnode targets (#980).
+    # resolver can skip its database roundtrip for logosnode targets .
     assert resolver.kwargs["deployment_info"] == {"model_id": 27, "provider_id": 12, "type": "cloud"}

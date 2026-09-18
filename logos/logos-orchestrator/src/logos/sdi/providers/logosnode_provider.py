@@ -73,7 +73,7 @@ class LogosNodeDataProvider:
         # requests, zero holds. Counting our own sends closes that window.
         self._forwarded_since_snapshot: Dict[int, int] = {}
         self._snapshot_marker: Optional[str] = None
-        # Scheduler state memoised per runtime revision (#980 O15): the lane
+        # Scheduler state memoised per runtime revision : the lane
         # signals and per-model views are pure functions of (latest_runtime,
         # model registration), and the registry replaces latest_runtime and
         # bumps runtime_revision in one step — so within one revision every
@@ -511,7 +511,7 @@ class LogosNodeDataProvider:
         constructs LaneSchedulerSignals per lane, aggregates into ModelSchedulerView.
         Returns None if the model is not registered or no runtime data available.
 
-        Memoised per runtime revision (#980 O15): the view is a pure function
+        Memoised per runtime revision : the view is a pure function
         of the snapshot, and the revision only changes when the snapshot is
         replaced, so a per-request rebuild would return an identical object.
         """
@@ -613,7 +613,7 @@ class LogosNodeDataProvider:
     def get_all_lane_signals(self) -> List[LaneSchedulerSignals]:
         """Return signals for every lane regardless of model. Used by capacity planner.
 
-        Memoised per runtime revision (#980 O15) — same rationale as
+        Memoised per runtime revision  — same rationale as
         ``get_model_scheduler_view``: the signals are a pure function of the
         snapshot, and the revision only changes when it is replaced.
         """

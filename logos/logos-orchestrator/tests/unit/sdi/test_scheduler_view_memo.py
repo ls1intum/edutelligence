@@ -1,4 +1,4 @@
-"""Per-revision memoisation of the scheduler views (#980 O15).
+"""Per-revision memoisation of the scheduler views .
 
 ``get_model_scheduler_view`` / ``get_all_lane_signals`` are pure functions of
 the latest runtime snapshot, and ``update_runtime`` replaces that snapshot and

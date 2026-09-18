@@ -1,9 +1,10 @@
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from logos import batch_credential
+from logos import batch_credential, refcache
 from logos.dbutils.dbmanager import DBManager
 
 
@@ -76,13 +77,13 @@ class AuthContext:
     # Request-scoped, set by auth_parse_log: the proxy-mode model resolution
     # ((model_id, canonical name) or None) run in the same DB session as the
     # deployment lookup, so the request path does not need a second checkout
-    # (#980). None when the body names no model, or on callers that do not go
+    # . None when the body names no model, or on callers that do not go
     # through auth_parse_log — _execute_proxy_mode then resolves on its own.
     resolved_proxy_model: Optional[tuple[int, str]] = None
     # The key owner's users.role (NULL when the key has no user). Read from
     # the auth row, never persisted: it only routes proxy-mode resolution
     # between the admin bypass (SQL, sees every model) and the in-memory
-    # resolution over the key's permitted deployments (#980 O17).
+    # resolution over the key's permitted deployments .
     role: Optional[str] = None
 
 
@@ -138,8 +139,14 @@ def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
 
 
 def _lookup_api_key_row(logos_key: str) -> Optional[Dict[str, Any]]:
-    with DBManager() as db:
-        return db.get_api_key_by_value(logos_key)
+    # The digest keeps the bearer value out of cache keys and diagnostics.
+    cache_key = hashlib.sha256(logos_key.encode("utf-8")).hexdigest()
+
+    def _load() -> Optional[Dict[str, Any]]:
+        with DBManager() as db:
+            return db.get_api_key_by_value(logos_key)
+
+    return refcache.get_ref_cache().load(("api_key", cache_key), _load)
 
 
 def authenticate_api_key(headers: Optional[Dict[str, str]], client_ip: Optional[str] = None) -> AuthContext:

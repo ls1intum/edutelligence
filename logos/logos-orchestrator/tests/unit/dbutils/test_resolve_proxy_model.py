@@ -1,4 +1,4 @@
-"""resolve_proxy_model (#980): one permission-scoped query + the shared resolver.
+"""resolve_proxy_model : one permission-scoped query + the shared resolver.
 
 Proxy mode used to call get_models_info (up to two queries) and re-implement
 name matching in a Python loop. resolve_proxy_model collapses that into a

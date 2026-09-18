@@ -95,7 +95,7 @@ def _patch_prom(monkeypatch):
 
 
 def test_recorder_buffers_lifecycle_fields_until_completion(monkeypatch):
-    """#980: enqueue/scheduled/provider events no longer pay a DB write each;
+    """: enqueue/scheduled/provider events no longer pay a DB write each;
     the single completion UPDATE carries the union of their fields."""
     recorder, calls = _make_recorder(monkeypatch, {27: "test-model"}, {12: "test-provider"})
     _patch_prom(monkeypatch)

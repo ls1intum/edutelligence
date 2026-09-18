@@ -192,7 +192,7 @@ async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_ali
 async def test_execute_resource_mode_logosnode_skips_the_budget_db_checkout(monkeypatch):
     """A scheduled logosnode provider costs no DB checkout for the budget
     check — budgets only meter cloud usage, so the check returns before
-    touching the database (#980)."""
+    touching the database ."""
 
     instantiations = []
 

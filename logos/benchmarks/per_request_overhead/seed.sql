@@ -1,4 +1,4 @@
--- Seed data for the per-request overhead benchmark (issue #980).
+-- Seed data for the per-request overhead benchmark (the benchmark).
 -- Run AFTER the Liquibase migration, against an empty logosdb:
 --   psql "$LOGOS_DB_URL" -f seed.sql
 --

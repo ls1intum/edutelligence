@@ -8,7 +8,7 @@ snapshot is also recomputed on every finalization so a retry that corrects the
 persisted usage rows corrects the stored cost.
 
 The sync response path settles the snapshot on the queued payload write
-(``store_response_payload(settle_cost=True)`` — #980 O14): the snapshot only
+(``store_response_payload(settle_cost=True)`` —  O14): the snapshot only
 reads columns the billing commit made durable, so it prices after that commit
 in its own transaction.
 """

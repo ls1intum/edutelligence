@@ -1,4 +1,4 @@
-"""Tests for resolve_proxy_model_from_deployments (#980 O17).
+"""Tests for resolve_proxy_model_from_deployments .
 
 The in-memory twin of DBManager.resolve_proxy_model for non-admin keys: it
 must resolve exactly the names the SQL non-admin branch resolves, over the

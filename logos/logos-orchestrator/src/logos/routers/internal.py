@@ -248,7 +248,7 @@ async def internal_provider_status(request: Request):
 
 @router.get("/internal/perf_trace/{request_id}", tags=["admin"])
 async def internal_perf_trace(request: Request, request_id: str):
-    """Fetch and consume the env-gated perf trace of one request (issue #980).
+    """Fetch and consume the env-gated perf trace of one request (the benchmark).
 
     Only available with ``LOGOS_PERF_TRACE`` enabled — then each request's
     phase timings accumulate in memory and are exposed here exactly once

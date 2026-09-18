@@ -576,7 +576,7 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
 
 @pytest.mark.asyncio
 async def test_status_revision_no_longer_advances_on_active_request_change() -> None:
-    """#980 W3: counting a request is not a lifecycle change. Bumping the
+    """W3: counting a request is not a lifecycle change. Bumping the
     STATUS revision per request woke the bridge refresh loop into a full-node
     status build (all lanes, all probes) next to the relay — the worker's
     biggest per-request cost. Count changes bump the separate COUNT revision

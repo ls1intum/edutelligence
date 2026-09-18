@@ -1,4 +1,4 @@
-"""Per-lane status TTL cache (#980 W2).
+"""Per-lane status TTL cache .
 
 Every request used to pay a full lane status build (three HTTP probes against
 the lane) on the hot path. The TTL cache serves steady-state re-acquires from

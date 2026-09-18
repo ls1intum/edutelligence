@@ -11,8 +11,9 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-# Goal from issue #980: total forwarding overhead < 1 ms per request.
+# Goals from the benchmark: p50 forwarding overhead < 1 ms and p95 < 20 ms.
 GOAL_NS = 1_000_000
+P95_GOAL_NS = 20_000_000
 # CI tolerance for the blocking check (shared runner noise); between GOAL_NS
 # and this the job passes but the comment warns.
 FAIL_NS = 1_500_000
@@ -30,10 +31,22 @@ def verdict(overhead_ns: float) -> str:
     return "FAIL"
 
 
+def overall_verdict(overhead_p50_ns: float, overhead_p95_ns: float) -> str:
+    """Return the combined verdict for the p50 and p95 service goals."""
+    p50_verdict = verdict(overhead_p50_ns)
+    if p50_verdict == "FAIL" or overhead_p95_ns > P95_GOAL_NS:
+        return "FAIL"
+    if p50_verdict == "WARN":
+        return "WARN"
+    return "PASS"
+
+
 def build_markdown(result: Dict[str, Any]) -> str:
     """Render the full result dict (as produced by run_benchmark) to Markdown."""
     ov = result["overhead"]
-    verdict_str = verdict(ov["overhead_ns"])
+    overhead_p50_ns = float(ov.get("overhead_p50_ns", ov["overhead_ns"]))
+    overhead_p95_ns = float(ov.get("overhead_p95_ns", 0.0))
+    verdict_str = overall_verdict(overhead_p50_ns, overhead_p95_ns)
     icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}[verdict_str]
     phases = result.get("phases", {})
 
@@ -41,8 +54,10 @@ def build_markdown(result: Dict[str, Any]) -> str:
     lines.append("# Per-Request Forwarding Overhead")
     lines.append("")
     lines.append(
-        f"**{icon} {verdict_str}** — overhead p50 = **{ns_to_us(ov['overhead_ns'])} µs** "
-        f"(goal < {ns_to_us(GOAL_NS)} µs, CI fail threshold {ns_to_us(FAIL_NS)} µs)"
+        f"**{icon} {verdict_str}** — overhead p50 = **{ns_to_us(overhead_p50_ns)} µs**, "
+        f"p95 = **{ns_to_us(overhead_p95_ns)} µs** "
+        f"(goals: p50 < {ns_to_us(GOAL_NS)} µs, p95 < {ns_to_us(P95_GOAL_NS)} µs; "
+        f"CI p50 fail threshold {ns_to_us(FAIL_NS)} µs)"
     )
     lines.append("")
     lines.append(
@@ -78,8 +93,8 @@ def build_markdown(result: Dict[str, Any]) -> str:
         "requests), non-streaming `POST /v1/chat/completions`."
     )
     lines.append(
-        "- Overhead = median(via Logos) − median(direct baseline to the same mock lane), "
-        "interleaved blocks to cancel common-mode drift."
+        "- Overhead p50/p95 = the matching percentile of via Logos minus the same "
+        "percentile of the direct baseline, with interleaved blocks to cancel common-mode drift."
     )
     lines.append(
         "- No GPU host in CI: nvidia-smi and /proc-walk costs in the worker degrade to cheap "

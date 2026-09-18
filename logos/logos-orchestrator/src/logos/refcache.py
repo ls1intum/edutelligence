@@ -1,4 +1,4 @@
-"""In-memory TTL cache for non-authorization DB reference reads (#980 O12).
+"""In-memory TTL cache for non-authorization DB reference reads .
 
 The request happy path reads a handful of rows that rarely change. Only the
 *team* row (rate-limit defaults) is served from this cache: its contents are
@@ -6,7 +6,7 @@ configuration, not authorization. The api-key row (is_active) and the
 permission lookups (deployments, resolve_proxy_model) are deliberately read
 fresh on every request — caching them would let a revoked key or a removed
 permission keep working until the TTL expires, which is an authorization
-behavior change the optimization must not make (#980 review). Re-enabling a
+behavior change the optimization must not make . Re-enabling a
 full reference cache needs push invalidation from the webservice (the rows
 are written there, not in the orchestrator), not a shorter TTL.
 

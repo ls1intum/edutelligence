@@ -1,4 +1,4 @@
-"""Token-type bookkeeping in set_response_payload must be O(1) roundtrips (#980).
+"""Token-type bookkeeping in set_response_payload must be O(1) roundtrips .
 
 The old code paid a SELECT (plus INSERT + commit) per token type, so a response
 with three usage figures meant seven extra roundtrips on the event loop. The

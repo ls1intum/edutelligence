@@ -1,10 +1,10 @@
 """Statistics helpers for the per-request overhead benchmark.
 
 All latency values are integers in nanoseconds (``time.perf_counter_ns``).
-The headline metric is the *median* of each run; the overhead is computed as
-``median(logos) - median(direct baseline)`` — not the median of per-request
-differences, because the two runs are separate blocks and comparing block
-medians cancels common-mode drift (shared runner load affects both).
+The headline metrics are percentile differences for p50 and p95; each is
+computed as ``percentile(logos) - percentile(direct baseline)`` — not the
+percentile of per-request differences, because the two runs are separate
+blocks and comparing matching percentiles cancels common-mode drift.
 """
 
 from __future__ import annotations
@@ -46,15 +46,31 @@ def summarize(values: Sequence[int]) -> Dict[str, float]:
 
 
 def overhead_ns(logos_ns: Sequence[int], direct_ns: Sequence[int]) -> Dict[str, float]:
-    """Median-based overhead: median(Logos path) - median(direct baseline)."""
+    """Return p50 and p95 overhead against the direct baseline.
+
+    ``overhead_ns`` remains the p50 alias for callers that consumed the
+    original report shape.
+    """
     if not logos_ns or not direct_ns:
-        return {"overhead_ns": 0.0, "logos_median_ns": 0.0, "direct_median_ns": 0.0, "n_logos": 0, "n_direct": 0}
-    logos_med = percentile(logos_ns, 50)
-    direct_med = percentile(direct_ns, 50)
+        return {
+            "overhead_ns": 0.0,
+            "overhead_p50_ns": 0.0,
+            "overhead_p95_ns": 0.0,
+            "logos_median_ns": 0.0,
+            "direct_median_ns": 0.0,
+            "n_logos": 0,
+            "n_direct": 0,
+        }
+    logos_p50 = percentile(logos_ns, 50)
+    direct_p50 = percentile(direct_ns, 50)
+    logos_p95 = percentile(logos_ns, 95)
+    direct_p95 = percentile(direct_ns, 95)
     return {
-        "overhead_ns": logos_med - direct_med,
-        "logos_median_ns": logos_med,
-        "direct_median_ns": direct_med,
+        "overhead_ns": logos_p50 - direct_p50,
+        "overhead_p50_ns": logos_p50 - direct_p50,
+        "overhead_p95_ns": logos_p95 - direct_p95,
+        "logos_median_ns": logos_p50,
+        "direct_median_ns": direct_p50,
         "n_logos": len(logos_ns),
         "n_direct": len(direct_ns),
     }

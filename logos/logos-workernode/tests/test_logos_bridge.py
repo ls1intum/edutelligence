@@ -347,7 +347,7 @@ async def test_execute_infer_command_passthrough(monkeypatch):
             assert url.endswith("/v1/chat/completions")
             return _Resp()
 
-    # Pooled relay client (#980 W1): pin the fake on the instance.
+    # Pooled relay client : pin the fake on the instance.
     monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
     result = await client._execute_infer_command(  # noqa: SLF001
         {
@@ -396,7 +396,7 @@ async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(mon
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    # Pooled relay client (#980 W1): pin the fake on the instance.
+    # Pooled relay client : pin the fake on the instance.
     monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
@@ -454,7 +454,7 @@ async def test_execute_infer_command_base64_encodes_binary_multipart_response(mo
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    # Pooled relay client (#980 W1): pin the fake on the instance.
+    # Pooled relay client : pin the fake on the instance.
     monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
@@ -513,7 +513,7 @@ async def test_execute_infer_command_preserves_binary_when_json_parsing_fails(mo
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    # Pooled relay client (#980 W1): pin the fake on the instance.
+    # Pooled relay client : pin the fake on the instance.
     monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
@@ -919,7 +919,7 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
 @pytest.mark.asyncio
 async def test_status_refresh_loop_count_bump_sends_patch_not_full_build(monkeypatch):
     """A count change (no lifecycle change, no interval elapsed) must take the
-    in-memory patch path (#980 W3): the loop must NOT rebuild the full status
+    in-memory patch path : the loop must NOT rebuild the full status
     (all lanes, all probes) just because a request was counted."""
     cfg = LogosConfig(
         enabled=True,
@@ -2786,7 +2786,7 @@ async def _run_stream(monkeypatch, chunks: list[bytes], status_code: int = 200) 
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
     upstream = _FakeUpstream(status_code, chunks)
-    # The relay uses one pooled client shared by all commands (#980 W1), so
+    # The relay uses one pooled client shared by all commands , so
     # the fake is pinned on the instance, not the httpx class.
     monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
     ws = _CollectWS()
@@ -3305,7 +3305,7 @@ def _stream_client_fixture(monkeypatch, upstream):
         app,
         LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
     )
-    # Pooled relay client (#980 W1): pin the fake on the instance.
+    # Pooled relay client : pin the fake on the instance.
     monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
     return client, lane_manager
 
@@ -3443,7 +3443,7 @@ async def test_cancel_command_only_touches_its_target(monkeypatch):
     )
 
     class _TwoUpstreamClient:
-        # Both commands share the pooled relay client (#980 W1); distinguish
+        # Both commands share the pooled relay client ; distinguish
         # them per send instead of per client instance.
         def build_request(self, *a, **k):  # noqa: ANN002, ANN003
             return SimpleNamespace()
@@ -3506,7 +3506,7 @@ async def test_cancelling_a_non_streaming_infer_aborts_the_relay_request(monkeyp
     """The sync `infer` path is exposed the same way — a client that leaves
     mid-request would otherwise keep the lane busy for the whole generation.
 
-    Since the relay uses one pooled client (#980 W1) there is no per-request
+    Since the relay uses one pooled client  there is no per-request
     connection to close: cancelling the task aborts the in-flight POST (httpx
     releases the connection as it unwinds) and the shared client keeps
     serving every other command."""
@@ -3562,7 +3562,7 @@ async def test_cancelling_a_non_streaming_infer_aborts_the_relay_request(monkeyp
 
 @pytest.mark.asyncio
 async def test_stop_closes_the_pooled_relay_client(monkeypatch) -> None:
-    """The relay client is shared by every command (#980 W1), so its
+    """The relay client is shared by every command , so its
     lifecycle belongs to the bridge: stop() — not any command — may close it."""
     app = _DummyApp()
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")

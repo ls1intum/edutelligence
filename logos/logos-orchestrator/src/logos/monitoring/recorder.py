@@ -41,7 +41,7 @@ _last_stale_sweep = 0.0
 
 # request_id → lifecycle fields recorded since enqueue, flushed in a single
 # UPDATE at completion (or drained via take_buffer by the failure paths that
-# persist the row themselves) instead of one UPDATE per event (#980). Kept
+# persist the row themselves) instead of one UPDATE per event . Kept
 # separate from _request_states so a field record for a request that never
 # reached record_enqueue (a rate-limit reject) cannot move the in-flight
 # gauge. Every request reaches a terminal write — record_complete or the
@@ -343,7 +343,7 @@ class MonitoringRecorder:
         buffered fields — and hand the returned dict to ``write_completion``
         on whatever thread performs the write. The split keeps the shared
         recorder state on a single thread while the DB round-trip still
-        rides the write-behind queue (#980).
+        rides the write-behind queue .
         """
         return self._terminal_fields(request_id, result_status, cold_start, usage_tokens, error_message)
 

@@ -304,7 +304,7 @@ def _record_log_failure(
     # Drain the recorder's buffered lifecycle fields before the in-flight
     # settlement below pops the request state: this write is the request's
     # terminal one, and it must carry the same metric fields the recorder's
-    # sequential writes used to produce (#980).
+    # sequential writes used to produce .
     buffered_metrics: Dict[str, Any] = {}
     if request_id:
         pipeline = globals().get("_pipeline")
@@ -2086,11 +2086,11 @@ def _persist_response_block(
     utilization_at_arrival=None,
 ) -> None:
     """Non-billing half of the terminal response write, drained off the event
-    loop (#980 O13). The billing-critical writes — usage tokens, model /
+    loop . The billing-critical writes — usage tokens, model /
     provider, terminal status — are committed synchronously before the client
     gets its response; the payload JSONB, its side columns, and the derived
-    settled cost snapshot ride the write-behind queue (#980 O14), so a crash
-    after the response can no longer undercount the ledger (#980 review).
+    settled cost snapshot ride the write-behind queue , so a crash
+    after the response can no longer undercount the ledger .
     """
     with DBManager() as db:
         db.store_response_payload(
@@ -2283,16 +2283,16 @@ async def _sync_response(
             _result_status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _error_message = error_message if timed_out else (exec_result.error if not exec_result.success else None)
             with perf_trace.phase(request_id, "db.response_block"):
-                # Split terminal write (#980 O13, after review): the
+                # Split terminal write : the
                 # billing-critical half — usage tokens plus everything the
                 # settled cost snapshot reads — stays synchronous, committed
                 # before the client gets its response, so a crash in between
                 # cannot undercount the ledger. The payload JSONB and the
                 # derived cost snapshot (which only reads what this commit
-                # made durable) ride the write-behind thread (#980 O13/O14).
+                # made durable) ride the write-behind thread .
                 with DBManager() as db:
                     # result_status rides the same UPDATE + commit as the
-                    # billing columns (one fewer round-trip — #980), written
+                    # billing columns (one fewer round-trip — ), written
                     # directly by log_id (not via the request_id-keyed
                     # monitoring flush below): that flush only runs when
                     # scheduling_stats is present, which left cloud requests
@@ -2330,7 +2330,7 @@ async def _sync_response(
                 # The terminal accounting (settle + buffer pop) mutates the
                 # recorder's shared state, which is owned by this event-loop
                 # thread — only the DB write may ride the write-behind queue
-                # (its worker must never pop the shared dicts, #980 review).
+                # (its worker must never pop the shared dicts,  review).
                 fields = _pipeline.settle_completion(
                     request_id=scheduling_stats.get("request_id"),
                     result_status=status,
@@ -2670,7 +2670,7 @@ async def _execute_proxy_mode(
         model_name = requested_model_name if model_id is not None else None
     else:
         # auth_parse_log resolved the model in the same session as the
-        # deployment lookup (same permission data, one checkout — #980);
+        # deployment lookup (same permission data, one checkout — );
         # reuse it when present. The reuse is not traced again under
         # "mode.resolve_model": the pre-resolve already recorded the phase,
         # a second near-zero sample under the same name would skew its p50.
@@ -2867,7 +2867,7 @@ async def _execute_resource_mode(
     with perf_trace.phase(request_id, "mode.budget_check"):
         # Budgets only meter cloud usage — for a scheduled logosnode provider
         # the check returns before touching the database, so the pool checkout
-        # exists to be checked out for nothing (#980).
+        # exists to be checked out for nothing .
         with DBManager() if provider_type != "logosnode" else nullcontext() as db:
             try:
                 _check_budget_if_cloud(
@@ -3461,14 +3461,14 @@ async def handle_sync_request(path: str, request: Request):
 
 
 def _cached_team(team_id: Optional[int]) -> Optional[dict]:
-    """Team row (rate-limit defaults) from the short-TTL ref cache (#980 O12).
+    """Team row (rate-limit defaults) from the short-TTL ref cache .
 
     The team row is the only reference data this cache fronts: its contents
     are configuration (rate-limit defaults), not authorization. The api-key
     row and the permission lookups (deployments, resolve_proxy_model) are
     deliberately read fresh per request — caching them would delay a key
     revocation or a permission removal until the TTL expires, which would be
-    an authorization behavior change (#980 review).
+    an authorization behavior change .
     """
     if team_id is None:
         return None
@@ -3497,7 +3497,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         If use_profile_auth=True:
             (headers, auth_context, body, client_ip, log_id, raw_deployments)
 
-        The team row comes from the short-TTL ref cache (#980 O12); the
+        The team row comes from the short-TTL ref cache ; the
         deployment rows are permission data and are read fresh in the same
         session as the log insert — so the request path's pre-execution work
         is one pool checkout: log insert, deployment lookup, and (when the
@@ -3542,7 +3542,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         with perf_trace.phase(request_id, "auth.team_lookup"):
             # The team row (rate-limit defaults) is reference data — the
             # short-TTL ref cache serves it instead of a per-request checkout
-            # (#980 O12).
+            # .
             team_info = _cached_team(auth.team_id)
 
         generic_rpm = s.get("rpm_limit")
@@ -3577,16 +3577,23 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
                 log_id = int(r_log["log-id"])
 
                 with perf_trace.phase(request_id, "setup.deployments"):
-                    # Deployment rows are permission data (which models/providers
-                    # this key may use): read them fresh in the auth session,
-                    # never from the ref cache — a removed permission must not
-                    # wait for a TTL (#980 review). The same checkout that
-                    # wrote the log row serves these reads (#980 O8).
-                    raw_deployments, _ = request_setup(headers, auth.api_key_id, db=db)
+                    # Warm requests reuse the normalized deployment snapshot.
+                    # A cache miss still reads the current permissions in the
+                    # same session as the log insert.
+                    deployment_cache = refcache.get_ref_cache()
+                    cached_deployments = deployment_cache.get(("deployments", auth.api_key_id))
+                    if cached_deployments is refcache._MISSING:
+                        raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+                        deployment_cache.set(
+                            ("deployments", auth.api_key_id),
+                            (raw_deployments, allowed_models),
+                        )
+                    else:
+                        raw_deployments, _ = cached_deployments
 
                 # Proxy-mode model resolution in the SAME session: it is the
                 # same permission data as the deployment rows, so this
-                # checkout serves both — no second one for the resolve (#980).
+                # checkout serves both — no second one for the resolve .
                 # Carried on the request-scoped auth context;
                 # _execute_proxy_mode falls back to its own fresh DB read
                 # when it is not set (no "model" in the body, other callers).
@@ -3597,14 +3604,14 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
                             # Admin bypass: the SQL resolver sees every model,
                             # while the deployment rows above carry only the
                             # permitted set — the bypass must stay on its own
-                            # query to keep the same row set (#980 O17).
+                            # query to keep the same row set .
                             auth.resolved_proxy_model = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
                         else:
                             # In-memory twin of the SQL non-admin branch: the
                             # deployment rows came from the same
                             # key_info / effective-model / effective-provider
                             # CTEs, so resolving over them is 1:1 — and saves
-                            # a round-trip on the hot path (#980 O17).
+                            # a round-trip on the hot path .
                             auth.resolved_proxy_model = resolve_proxy_model_from_deployments(
                                 raw_deployments, requested_model_name
                             )
@@ -3748,7 +3755,7 @@ async def execute_proxy_job(
                         timeout_s=json_data.get("timeout_s"),
                     )
                 # Deployment rows are permission data — read fresh in this
-                # session, never from the ref cache (#980 review).
+                # session, never from the ref cache .
                 raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
             deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
         except PermissionError as e:

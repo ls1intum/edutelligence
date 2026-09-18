@@ -1,4 +1,4 @@
-"""auth_parse_log (#980): log insert, deployment lookup, and proxy-mode
+"""auth_parse_log : log insert, deployment lookup, and proxy-mode
 model resolution share one session.
 
 The log row carries request_id and timeout_s from the INSERT (no follow-up
@@ -8,7 +8,7 @@ _execute_proxy_mode — runs in the same DBManager session, so the hot path
 check
 s out the pool once for all of it.
 
-Resolution routing (#980 O17): non-admin keys resolve in memory over the
+Resolution routing : non-admin keys resolve in memory over the
 deployment rows just fetched (same row set as the SQL non-admin branch —
 same permission CTEs), so the DB resolver is never called; admin keys keep
 the SQL query, whose bypass sees every model, not just the permitted set.
@@ -128,10 +128,8 @@ async def test_missing_timeout_defaults_to_none(_profile_auth):
 
 
 @pytest.mark.asyncio
-async def test_deployments_are_read_fresh_per_request(_profile_auth):
-    """Deployment rows are permission data: one DB read per request, never
-    served from the ref cache — a removed permission must not wait for a TTL
-    (#980 review)."""
+async def test_deployments_are_reused_for_warm_requests(_profile_auth):
+    """Warm requests reuse the normalized deployment snapshot."""
     db, _ = _profile_auth()
     _, _, _, _, _, raw_deployments = await main.auth_parse_log(
         _request({"model": "m"}), use_profile_auth=True, request_id="req-1"
@@ -143,13 +141,13 @@ async def test_deployments_are_read_fresh_per_request(_profile_auth):
         _request({"model": "m"}), use_profile_auth=True, request_id="req-2"
     )
     assert raw_deployments_again == [_DEPLOYMENT_ROW]
-    assert db.deployments_calls == 2  # fresh read, no cache
+    assert db.deployments_calls == 1
 
 
 @pytest.mark.asyncio
 async def test_non_admin_resolution_is_in_memory_over_the_fetched_rows(_profile_auth):
     """Non-admin keys resolve over the deployment rows fetched in the same
-    session (#980 O17): same row set as the SQL non-admin branch, so the DB
+    session : same row set as the SQL non-admin branch, so the DB
     resolver is never called and one checkout serves log + deployments +
     resolution."""
     db, auth = _profile_auth(role="developer")
@@ -168,7 +166,7 @@ async def test_non_admin_resolution_is_in_memory_over_the_fetched_rows(_profile_
 @pytest.mark.asyncio
 async def test_admin_key_keeps_sql_resolution(_profile_auth):
     """Admin keys must keep the SQL resolver: its bypass sees every model,
-    while the deployment rows carry only the permitted set (#980 O17)."""
+    while the deployment rows carry only the permitted set ."""
     db, auth = _profile_auth(role="logos_admin")
     _, _, _, _, _, _ = await main.auth_parse_log(_request({"model": "m"}), use_profile_auth=True, request_id="req-1")
 

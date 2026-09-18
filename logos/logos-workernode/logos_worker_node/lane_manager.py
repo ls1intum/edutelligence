@@ -358,7 +358,7 @@ class LaneManager:
         # count change is NOT a lifecycle change: waking the loop must not
         # trigger a full-node status build (all lanes, all probes) — that is
         # the exact cost W3 removed from the hot path. The loop reacts to a
-        # count bump by patching the last payload in memory (#980).
+        # count bump by patching the last payload in memory .
         self._count_revision = 0
         # Per-lane status TTL cache for the request hot path (acquire_lane_
         # for_infer). A status build costs three HTTP probes against the lane
@@ -1579,7 +1579,7 @@ class LaneManager:
             # No _mark_status_dirty() here: counting a request is not a
             # lifecycle change, and a dirty mark would make the bridge loop
             # rebuild the full node status (all lanes, all probes) next to the
-            # relay — the worker's biggest per-request cost (#980 W3). The
+            # relay — the worker's biggest per-request cost . The
             # count revision instead wakes the loop (shared _status_event —
             # the combined wait re-checks both revisions, so the spurious
             # status wake is a cheap int compare), which patches the last
@@ -1644,7 +1644,7 @@ class LaneManager:
         """Per-lane in-flight counts (lock-protected copy).
 
         Used by the bridge refresh loop to patch the last pushed runtime
-        payload after a count change without rebuilding the status (#980 W3).
+        payload after a count change without rebuilding the status .
         """
         async with self._lock:
             return dict(self._active_requests)
@@ -2893,7 +2893,7 @@ class LaneManager:
 
         Returns the current (status_revision, count_revision). The split
         exists so the bridge can react to in-flight count changes with an
-        in-memory payload patch instead of a full status rebuild (#980 W3).
+        in-memory payload patch instead of a full status rebuild .
         """
         while True:
             if self._status_revision != last_revision or self._count_revision != last_count_revision:
@@ -2931,7 +2931,7 @@ class LaneManager:
         # reconfigured/crashed): whatever a cached status said about any lane
         # may now be wrong, so drop the whole cache. The per-request hot path
         # (increment/acquire/decrement) deliberately does NOT mark dirty —
-        # that is what keeps the TTL cache warm (#980 W3); it bumps the count
+        # that is what keeps the TTL cache warm ; it bumps the count
         # revision instead, which the bridge refresh loop turns into an
         # in-memory patch of the last payload (no status rebuild).
         self._lane_status_cache.clear()

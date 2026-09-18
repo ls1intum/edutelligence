@@ -1,7 +1,7 @@
 ---
 name: Logos - Per-Request Overhead Benchmark
 
-# Issue #980: benchmark the per-request forwarding overhead (orchestrator →
+# Benchmark the per-request forwarding overhead (orchestrator →
 # workernode → back) on every PR and gate on the < 1 ms goal. The job FAILs
 # while the overhead p50 stays within CI noise of the goal (fail threshold
 # 1.5 ms); the PR comment reports the phase table regardless.
@@ -138,9 +138,8 @@ jobs:
         working-directory: logos/logos-orchestrator
 
       - name: Check overhead gate
-        # Blocking: FAIL while p50 > 1.5 ms (CI noise tolerance around the
-        # 1.0 ms goal). If this turns out to be flaky in practice, the
-        # follow-up is to demote it to an informational comment.
+        # Blocking: FAIL while p50 > 1.5 ms or p95 > 20 ms. The p50 threshold
+        # allows runner noise around the 1.0 ms goal.
         run: |
           source .venv/bin/activate
           python ../benchmarks/per_request_overhead/pr_comment.py --check

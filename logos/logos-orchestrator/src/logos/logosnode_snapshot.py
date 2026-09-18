@@ -214,7 +214,7 @@ def resolve_proxy_model_from_deployments(
     """Resolve a user-supplied model name over already-fetched deployment rows.
 
     In-memory twin of ``DBManager.resolve_proxy_model`` for non-admin keys
-    (#980 O17): ``get_deployments_for_api_key`` returns exactly the models
+    : ``get_deployments_for_api_key`` returns exactly the models
     the SQL resolver's non-admin branch returns (same key_info /
     effective-model / effective-provider CTEs, and the same model_aliases
     column), so feeding the distinct (model_id, model_name, aliases) rows

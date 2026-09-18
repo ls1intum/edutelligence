@@ -1,4 +1,4 @@
-"""Write-behind queue for per-request DB bookkeeping (#980 O13).
+"""Write-behind queue for per-request DB bookkeeping .
 
 The post-response DB writes (usage payload, log-entry metrics, monitoring
 flush) are bookkeeping the client never waits for, yet they are synchronous
