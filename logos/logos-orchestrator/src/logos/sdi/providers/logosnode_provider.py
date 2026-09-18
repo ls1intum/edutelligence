@@ -73,6 +73,17 @@ class LogosNodeDataProvider:
         # requests, zero holds. Counting our own sends closes that window.
         self._forwarded_since_snapshot: Dict[int, int] = {}
         self._snapshot_marker: Optional[str] = None
+        # Scheduler state memoised per runtime revision : the lane
+        # signals and per-model views are pure functions of (latest_runtime,
+        # model registration), and the registry replaces latest_runtime and
+        # bumps runtime_revision in one step — so within one revision every
+        # rebuild would produce identical objects. Rebuilding them per
+        # request (18-field dataclasses, histogram parses, per-snapshot dict
+        # construction) was ~400 µs of the warm scheduling decision; the
+        # revision-keyed lookup is the only work the hot path still needs.
+        # Both read and write happen on the event-loop thread — no locking.
+        self._view_cache: Dict[tuple, Optional[ModelSchedulerView]] = {}
+        self._lane_signals_cache: Optional[tuple[int, List[LaneSchedulerSignals]]] = None
         self._lock = threading.RLock()
         self._provider_config = self._load_provider_config()
 
@@ -499,6 +510,10 @@ class LogosNodeDataProvider:
         Reads lanes from latest_runtime, filters by model name matching model_id,
         constructs LaneSchedulerSignals per lane, aggregates into ModelSchedulerView.
         Returns None if the model is not registered or no runtime data available.
+
+        Memoised per runtime revision : the view is a pure function
+        of the snapshot, and the revision only changes when the snapshot is
+        replaced, so a per-request rebuild would return an identical object.
         """
         self.refresh_data()
 
@@ -508,6 +523,16 @@ class LogosNodeDataProvider:
 
         if self._runtime_registry is None:
             return None
+
+        # Model registration changes without a revision bump, so it rides the
+        # key: the same model_id under a different name must rebuild. A
+        # registry without peek_runtime_revision (test fakes, older builds)
+        # simply skips the memo and rebuilds, exactly as before.
+        peek_revision = getattr(self._runtime_registry, "peek_runtime_revision", None)
+        revision = peek_revision(self.provider_id) if peek_revision is not None else None
+        cache_key = (model_id, model_name, revision) if revision is not None else None
+        if cache_key is not None and cache_key in self._view_cache:
+            return self._view_cache[cache_key]
 
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
@@ -563,7 +588,7 @@ class LogosNodeDataProvider:
         cache_values = [s.gpu_cache_usage_percent for s in matching_signals if s.gpu_cache_usage_percent is not None]
         gpu_cache_max = max(cache_values) if cache_values else None
 
-        return ModelSchedulerView(
+        view = ModelSchedulerView(
             model_id=model_id,
             model_name=model_name,
             provider_id=self.provider_id,
@@ -577,13 +602,34 @@ class LogosNodeDataProvider:
             gpu_cache_pressure_max=gpu_cache_max,
             lanes=matching_signals,
         )
+        # Bounded: revisions only ever go up and bump at most per status push,
+        # so a plain clear keeps this O(1) without an LRU.
+        if cache_key is not None:
+            if len(self._view_cache) >= 128:
+                self._view_cache.clear()
+            self._view_cache[cache_key] = view
+        return view
 
     def get_all_lane_signals(self) -> List[LaneSchedulerSignals]:
-        """Return signals for every lane regardless of model. Used by capacity planner."""
+        """Return signals for every lane regardless of model. Used by capacity planner.
+
+        Memoised per runtime revision  — same rationale as
+        ``get_model_scheduler_view``: the signals are a pure function of the
+        snapshot, and the revision only changes when it is replaced.
+        """
         self.refresh_data()
 
         if self._runtime_registry is None:
             return []
+
+        # A registry without peek_runtime_revision (test fakes, older builds)
+        # simply skips the memo and rebuilds, exactly as before.
+        peek_revision = getattr(self._runtime_registry, "peek_runtime_revision", None)
+        revision = peek_revision(self.provider_id) if peek_revision is not None else None
+        if revision is not None:
+            cached = self._lane_signals_cache
+            if cached is not None and cached[0] == revision:
+                return cached[1]
 
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
@@ -594,7 +640,10 @@ class LogosNodeDataProvider:
         if not isinstance(lanes, list):
             return []
 
-        return [self._build_lane_signal(lane) for lane in lanes if isinstance(lane, dict)]
+        signals = [self._build_lane_signal(lane) for lane in lanes if isinstance(lane, dict)]
+        if revision is not None:
+            self._lane_signals_cache = (revision, signals)
+        return signals
 
     def get_model_profiles(self) -> Dict[str, ModelProfile]:
         """Read model profiles from runtime snapshot's model_profiles section."""

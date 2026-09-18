@@ -17,6 +17,8 @@ def _make_dummy_db(cost_micro_cents=None):
         ttft_calls = []
         payload_calls = []
         metric_calls = []
+        finalize_calls = []
+        store_calls = []
 
         def __enter__(self):
             return self
@@ -26,6 +28,56 @@ def _make_dummy_db(cost_micro_cents=None):
 
         def set_time_at_first_token(self, log_id):
             self.ttft_calls.append(log_id)
+
+        def finalize_billing_row(
+            self,
+            log_id,
+            usage,
+            *,
+            model_id=None,
+            provider_id=None,
+            service_tier=None,
+            set_first_token=False,
+            request_id=None,
+            result_status=None,
+            error_message=None,
+        ):
+            self.finalize_calls.append(
+                {
+                    "log_id": log_id,
+                    "usage": usage,
+                    "model_id": model_id,
+                    "provider_id": provider_id,
+                    "service_tier": service_tier,
+                    "set_first_token": set_first_token,
+                    "request_id": request_id,
+                    "result_status": result_status,
+                    "error_message": error_message,
+                }
+            )
+
+        def store_response_payload(
+            self,
+            log_id,
+            payload,
+            *,
+            policy_id=-1,
+            classified=None,
+            queue_depth_at_arrival=None,
+            utilization_at_arrival=None,
+            settle_cost=None,
+        ):
+            self.store_calls.append(
+                {
+                    "log_id": log_id,
+                    "payload": payload,
+                    "policy_id": policy_id,
+                    "classified": classified,
+                    "queue_depth_at_arrival": queue_depth_at_arrival,
+                    "utilization_at_arrival": utilization_at_arrival,
+                    "settle_cost": settle_cost,
+                }
+            )
 
         def set_response_payload(
             self,
@@ -175,6 +227,17 @@ def _make_pipeline(
         @staticmethod
         def record_completion(**kwargs):
             completion_calls.append(kwargs)
+
+        @staticmethod
+        def settle_completion(**kwargs):
+            # The sync path settles on the event loop and defers only the DB
+            # write (write_completion) to the queue — same recorded kwargs.
+            completion_calls.append(kwargs)
+            return {}
+
+        @staticmethod
+        def write_completion(request_id, fields):  # noqa: ARG002
+            return None
 
     return DummyPipeline(), completion_calls, release_calls
 
@@ -388,7 +451,61 @@ async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
 
     content = json.loads(response.body)
     assert content["usage"]["prompt_tokens_details"]["cached_tokens"] == 6
-    assert dummy_db.payload_calls[0]["usage"]["prompt_cached_tokens"] == 6
+    assert dummy_db.finalize_calls[0]["usage"]["prompt_cached_tokens"] == 6
+
+
+@pytest.mark.asyncio
+async def test_sync_response_settles_cost_on_the_queued_write(monkeypatch):
+    #  O14: the derived settled-cost snapshot must not take a second
+    # synchronous commit off the response path — it rides the queued
+    # payload write, which only reads what the billing commit made durable.
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def send_command(**kwargs):  # noqa: ARG001
+        return {
+            "status_code": 200,
+            "body": {
+                "id": "cmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            },
+            "headers": {"content-type": "application/json"},
+        }
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_command=send_command),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model", anthropic_dialect=None),
+        {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
+        45,
+        12,
+        27,
+        -1,
+        {"classified": True},
+        scheduling_stats={
+            "request_id": "req-sync-settle",
+            "provider_type": "logosnode",
+        },
+    )
+
+    assert response.status_code == 200
+    assert dummy_db.finalize_calls[0]["result_status"] == "success"
+    assert len(dummy_db.store_calls) == 1
+    assert dummy_db.store_calls[0]["settle_cost"] is True
 
 
 @pytest.mark.asyncio
@@ -532,7 +649,7 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
     body = json.loads(response.body)
     assert body["usage"]["cost"] == 0.00012345
     assert body["usage"]["cost_currency"] == "USD"
-    assert dummy_db.payload_calls[0]["usage"] == {
+    assert dummy_db.finalize_calls[0]["usage"] == {
         "prompt_tokens": 10,
         "completion_tokens": 5,
         "total_tokens": 15,
@@ -998,7 +1115,13 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     assert response.status_code == 500
     assert response.headers["x-request-id"] == "req-sync-error"
     assert dummy_db.ttft_calls == []
-    assert dummy_db.payload_calls[0]["payload"] == {"error": "bad request"}
+    assert dummy_db.finalize_calls[0]["set_first_token"] is False
+    # The terminal status rides the billing UPDATE itself — one write, no
+    # follow-up metrics UPDATE on the sync path.
+    assert dummy_db.finalize_calls[0]["result_status"] == "error"
+    assert dummy_db.finalize_calls[0]["error_message"] == "bad request"
+    assert dummy_db.metric_calls == []
+    assert dummy_db.store_calls[0]["payload"] == {"error": "bad request"}
     assert completion_calls == [
         {
             "request_id": "req-sync-error",
@@ -1064,8 +1187,11 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     )
 
     assert result["status_code"] == 200
-    assert dummy_db.ttft_calls == [56]
-    assert dummy_db.payload_calls[0]["usage"] == {
+    # The first-token timestamp merged into the response write , so the
+    # sync path no longer issues its own UPDATE for it.
+    assert dummy_db.ttft_calls == []
+    assert dummy_db.finalize_calls[0]["set_first_token"] is True
+    assert dummy_db.finalize_calls[0]["usage"] == {
         "prompt_tokens": 11,
         "completion_tokens": 13,
         "total_tokens": 24,
@@ -1382,7 +1508,7 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
+    assert dummy_db.finalize_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio
@@ -1442,7 +1568,7 @@ async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "application/json"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
+    assert dummy_db.finalize_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio

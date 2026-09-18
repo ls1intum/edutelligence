@@ -575,7 +575,14 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_status_revision_advances_on_active_request_change() -> None:
+async def test_status_revision_no_longer_advances_on_active_request_change() -> None:
+    """W3: counting a request is not a lifecycle change. Bumping the
+    STATUS revision per request woke the bridge refresh loop into a full-node
+    status build (all lanes, all probes) next to the relay — the worker's
+    biggest per-request cost. Count changes bump the separate COUNT revision
+    instead: the loop reacts with an in-memory patch of the last payload (no
+    probes), so the orchestrator still gets a per-request status push to
+    reset its per-snapshot forward budget."""
     manager = LaneManager(WorkerConfig(), lane_port_start=15060, lane_port_end=15070)
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
@@ -589,13 +596,23 @@ async def test_status_revision_advances_on_active_request_change() -> None:
     manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
 
     initial = manager.status_revision
+    initial_count = manager.count_revision
     await manager.increment_active_requests(lane_id)
-    after_inc = await manager.wait_for_status_revision(initial, timeout=0.01)
-    assert after_inc > initial
+    # The status revision is untouched: no full rebuild on the request path.
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    # ...but the count revision advances and wakes the combined wait
+    # immediately (not on the next ~1s tick).
+    assert manager.count_revision == initial_count + 1
+    assert await manager.wait_for_status_or_count_revision(initial, initial_count, timeout=0.01) == (
+        initial,
+        initial_count + 1,
+    )
+    assert await manager.total_active_requests() == 1
 
     await manager.decrement_active_requests(lane_id)
-    after_dec = await manager.wait_for_status_revision(after_inc, timeout=0.01)
-    assert after_dec > after_inc
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    assert manager.count_revision == initial_count + 2
+    assert await manager.total_active_requests() == 0
 
 
 def test_auto_tp_keeps_tp1_when_model_fits() -> None:
