@@ -1,6 +1,6 @@
 # AGENTS.md — logos-ui
 
-Angular 21 web application for Logos (teams, API keys, models, stats, batches), served behind Traefik on the same origin as the APIs in production.
+Angular 22 web application for Logos (teams, API keys, models, stats, batches), served behind Traefik on the same origin as the APIs in production.
 
 ## Commands
 

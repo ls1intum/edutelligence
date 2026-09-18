@@ -1,6 +1,6 @@
 # AGENTS.md — logos-orchestrator
 
-Python 3.13 / FastAPI (0.115.x) / Uvicorn service: the LLM proxy core — authentication, classification, scheduling, provider routing, request logging.
+Python 3.13 / FastAPI / Uvicorn service: the LLM proxy core — authentication, classification, scheduling, provider routing, request logging.
 
 - **Dependencies**: `uv` (lockfile `uv.lock`, committed). `pyproject.toml` still declares a Poetry-format `[tool.poetry]` section, but there is no `poetry.lock` — installs go through `uv pip install .` / `uv sync`.
 - **DB**: PostgreSQL 17 via SQLAlchemy 2.x raw SQL (`text()`, NOT the ORM query API). Schema owned by `logos-webservice` (Liquibase) — this service has no migration tooling.
