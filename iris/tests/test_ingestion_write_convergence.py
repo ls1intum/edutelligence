@@ -402,7 +402,10 @@ def test_interpret_image_retries_then_fails_the_run():
         chat=MagicMock(side_effect=RuntimeError("vision down"))
     )
 
-    with pytest.raises(IngestionStageError) as exc_info:
+    with (
+        patch("iris.pipeline.lecture_ingestion_pipeline.time.sleep") as mock_sleep,
+        pytest.raises(IngestionStageError) as exc_info,
+    ):
         pipeline.interpret_image("aW1n", "", "Lecture", "en")
 
     assert exc_info.value.error_code == SLIDE_VISION_FAILED
@@ -410,6 +413,9 @@ def test_interpret_image_retries_then_fails_the_run():
         pipeline.llm_chat.chat.call_count
         == settings.lecture_ingestion.vision_max_attempts
     )
+    # A provider-level failure (not a parse/validation error) backs off before
+    # every retry but the last attempt, since there is nothing left to retry into.
+    assert mock_sleep.call_count == settings.lecture_ingestion.vision_max_attempts - 1
 
 
 def test_interpret_image_rejects_empty_descriptions():
@@ -426,7 +432,10 @@ def test_interpret_image_rejects_empty_descriptions():
     )
     pipeline.llm_chat = SimpleNamespace(chat=MagicMock(return_value=empty_response))
 
-    with pytest.raises(IngestionStageError) as exc_info:
+    with (
+        patch("iris.pipeline.lecture_ingestion_pipeline.time.sleep") as mock_sleep,
+        pytest.raises(IngestionStageError) as exc_info,
+    ):
         pipeline.interpret_image("aW1n", "", "Lecture", "en")
 
     assert exc_info.value.error_code == SLIDE_VISION_FAILED
@@ -434,6 +443,34 @@ def test_interpret_image_rejects_empty_descriptions():
         pipeline.llm_chat.chat.call_count
         == settings.lecture_ingestion.vision_max_attempts
     )
+    # An empty description is a parse/validation failure: retrying immediately
+    # is correct since waiting would not change the model's next answer.
+    mock_sleep.assert_not_called()
+
+
+def test_interpret_image_json_decode_error_retries_immediately():
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.tokens = []
+    pipeline._append_tokens = MagicMock()
+    malformed_response = SimpleNamespace(
+        token_usage=None,
+        contents=[SimpleNamespace(text_content="not json")],
+    )
+    pipeline.llm_chat = SimpleNamespace(chat=MagicMock(return_value=malformed_response))
+
+    with (
+        patch("iris.pipeline.lecture_ingestion_pipeline.time.sleep") as mock_sleep,
+        pytest.raises(IngestionStageError) as exc_info,
+    ):
+        pipeline.interpret_image("aW1n", "", "Lecture", "en")
+
+    assert exc_info.value.error_code == SLIDE_VISION_FAILED
+    assert (
+        pipeline.llm_chat.chat.call_count
+        == settings.lecture_ingestion.vision_max_attempts
+    )
+    # json.JSONDecodeError is a ValueError subclass: same immediate-retry path.
+    mock_sleep.assert_not_called()
 
 
 def test_update_pipeline_forwards_stage_error_code_once():

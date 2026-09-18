@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from collections import Counter
 from datetime import datetime
 from typing import Optional
@@ -880,7 +881,25 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     display_page_number=parsed.get("display_page_number", -1),
                     academic_description=description,
                 )
+            except ValueError as e:
+                # Malformed/empty model output (includes json.JSONDecodeError, a
+                # ValueError subclass): a delay would not change the model's next
+                # answer, so retry immediately.
+                last_error = e
+                logger.warning(
+                    "Slide vision attempt %d/%d failed to parse response: %s",
+                    attempt,
+                    settings.lecture_ingestion.vision_max_attempts,
+                    e,
+                )
             except Exception as e:
+                # Likely a transient provider error. OpenAIChatModel already retries
+                # internally with its own backoff before raising, so this adds only
+                # one short delay per outer attempt. OllamaModel's transport
+                # deliberately has no retry/backoff of its own, so here it is the
+                # only thing standing between a momentary hiccup (e.g. Ollama still
+                # loading the model) and burning the whole attempt budget with
+                # zero-delay retries.
                 last_error = e
                 logger.warning(
                     "Slide vision attempt %d/%d failed: %s",
@@ -888,6 +907,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     settings.lecture_ingestion.vision_max_attempts,
                     e,
                 )
+                if attempt < settings.lecture_ingestion.vision_max_attempts:
+                    time.sleep(min(2 ** (attempt - 1), 8))
 
         raise IngestionStageError(
             SLIDE_VISION_FAILED,
