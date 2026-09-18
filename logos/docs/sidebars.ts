@@ -19,6 +19,11 @@ const sidebars: SidebarsConfig = {
     { type: "doc", id: "context-windows", label: "Context Windows" },
     { type: "doc", id: "developer/architecture", label: "Architecture" },
   ],
+  rolesSidebar: [
+    { type: "doc", id: "roles/app-developer", label: "App Developer" },
+    { type: "doc", id: "roles/app-admin", label: "App Admin" },
+    { type: "doc", id: "roles/logos-admin", label: "Logos Admin" },
+  ],
 };
 
 export default sidebars;

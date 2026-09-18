@@ -15,3 +15,4 @@ Choose a guide:
 - [User Guide](./user/getting-started): make requests and use the web interface.
 - [Administrator Guide](./admin/installation): deploy and operate your own Logos instance.
 - [Developer Guide](./developer/local-setup): develop Logos locally and understand its architecture.
+- [Roles](./roles/app-developer): what each role can see and do in the web interface.
