@@ -18,6 +18,7 @@ import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamPriorityRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.TeamService;
@@ -110,6 +111,28 @@ public class TeamController {
             return ResponseEntity.status(403).body(Map.of("detail", "Insufficient permissions"));
         }
         return teamService.updateTeamName(teamId, body.get("name"))
+            .<ResponseEntity<?>>map(ResponseEntity::ok)
+            .orElse(ResponseEntity.status(404).body(null));
+    }
+
+    /**
+     * Overall queue priority of a team's traffic. The ordering of the team's
+     * members (application > app admin > developer) is fixed by the
+     * orchestrator; this shifts the whole team within the queue. A platform
+     * decision, therefore logos_admin only. Null unsets the priority.
+     */
+    @PatchMapping("/{teamId}/priority")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> updateTeamPriority(
+            @RequestAttribute("authContext") AuthContext auth,
+            @PathVariable Integer teamId,
+            @RequestBody UpdateTeamPriorityRequestDTO body) {
+        Integer priority = body.priority();
+        if (priority != null && (priority < 1 || priority > 10)) {
+            return ResponseEntity.status(400).body(Map.of(
+                "detail", "priority must be between 1 and 10 (or null to unset)"));
+        }
+        return teamService.updateTeamPriority(teamId, priority)
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElse(ResponseEntity.status(404).body(null));
     }

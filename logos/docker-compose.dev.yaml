@@ -173,6 +173,9 @@ services:
       # auth failures on /v1/models, /v1/chat/completions. See logos.rate_limiter.
       LOGOS_PUBLIC_ENDPOINT_RPM: "${LOGOS_PUBLIC_ENDPOINT_RPM:-60}"
       LOGOS_AUTH_FAILURE_RPM: "${LOGOS_AUTH_FAILURE_RPM:-20}"
+      # Container port of the webservice (server.port=8081), not the
+      # host-mapped port — container-to-container DNS bypasses Traefik.
+      LOGOS_WEBSERVICE_URL: "http://logos-webservice:8081"
     expose:
       - "8080"
     ports:
