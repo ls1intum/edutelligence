@@ -42,14 +42,15 @@ The file is a YAML list of model definitions. Each entry defines a single model:
 
 Iris supports the following model types, each connecting to a different provider:
 
-| Type               | Provider        | Purpose                          |
-| ------------------ | --------------- | -------------------------------- |
-| `openai_chat`      | OpenAI API      | Chat completion models           |
-| `azure_chat`       | Azure OpenAI    | Chat completion models via Azure |
-| `ollama`           | Ollama (local)  | Locally hosted models            |
-| `openai_embedding` | OpenAI API      | Text embedding models            |
-| `azure_embedding`  | Azure OpenAI    | Text embedding models via Azure  |
-| `cohere_azure`     | Cohere on Azure | Reranking models                 |
+| Type                     | Provider        | Purpose                                       |
+| ------------------------ | --------------- | --------------------------------------------- |
+| `openai_chat`            | OpenAI API      | Chat completion models                        |
+| `azure_chat`             | Azure OpenAI    | Chat completion models via Azure              |
+| `ollama`                 | Ollama (local)  | Locally hosted models                         |
+| `openai_embedding`       | OpenAI API      | Text embedding models                         |
+| `azure_embedding`        | Azure OpenAI    | Text embedding models via Azure               |
+| `cohere_azure`           | Cohere on Azure | Reranking models                              |
+| `passthrough_reranker`   | Local           | Preserve vector-search order without reranking |
 
 ## Common Fields
 
@@ -62,7 +63,7 @@ These fields are shared across all model types:
 | `description` | Yes      | Additional information about the model                                                   |
 | `type`        | Yes      | Model type (see table above)                                                             |
 | `model`       | Yes      | Official model name as used by the vendor (e.g., `gpt-5-mini`, `text-embedding-3-large`) |
-| `api_key`     | Yes      | API key for authentication with the provider                                             |
+| `api_key`     | Provider | API key for external providers; omit for the passthrough reranker                        |
 
 ## Type-Specific Fields
 
@@ -195,6 +196,22 @@ For Cohere reranking models hosted on Azure:
   api_key: "<your-cohere-api-key>"
   endpoint: "https://your-cohere-endpoint"
   cost_per_1k_requests: 2
+```
+
+### Passthrough Reranker (`passthrough_reranker`)
+
+Use the passthrough reranker when no external reranking service is available.
+It performs no network request and returns the first `top_n` valid vector-search
+results in their existing order. Retrieval remains functional, but relevance
+quality can be lower than with a dedicated reranker.
+
+```yaml
+- id: "passthrough-reranker"
+  name: "Passthrough reranker"
+  description: "Preserve vector-search order"
+  type: "passthrough_reranker"
+  model: "passthrough"
+  cost_per_1k_requests: 0
 ```
 
 ## Cost Tracking
