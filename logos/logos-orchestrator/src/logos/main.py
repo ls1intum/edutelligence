@@ -853,6 +853,17 @@ async def lifespan(app: FastAPI):
         await _cloud_model_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
+    # Async jobs run as background tasks and finish their terminal writes by
+    # enqueuing them on the write-behind queue: quiesce them before the drain,
+    # or a late job write lands behind the sentinel and is lost. A cancelled
+    # job keeps the state its crash twin would have (process death already
+    # leaves jobs running; startup recovery closes the orphaned *request*
+    # logs, not job rows).
+    job_tasks = list(_background_tasks)
+    for task in job_tasks:
+        task.cancel()
+    if job_tasks:
+        await asyncio.gather(*job_tasks, return_exceptions=True)
     # Last step: flush the write-behind queue so no terminal log writes are
     # lost on exit.
     await asyncio.to_thread(write_queue.get_write_queue().shutdown, 5.0)
