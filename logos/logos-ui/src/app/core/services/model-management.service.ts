@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { ModelBenchmarkResponse, StartModelBenchmarkResponse } from '../../shared/models/provider.model';
+import { ModelAccessResponse } from '../../shared/models/model-access.model';
 import { ModelPriceResponse } from '../../shared/models/model-price.model';
 
 @Injectable({ providedIn: 'root' })
@@ -82,6 +83,13 @@ export class ModelManagementService {
   deleteModel(id: number): Promise<void> {
     return firstValueFrom(this.http.post<void>('/api/logosdb/delete_model', { id }));
   }
+  /** Admin-only access matrix: hosting providers, team grants, custom-permission keys. */
+  getModelAccess(modelId: number): Promise<ModelAccessResponse> {
+    return firstValueFrom(
+      this.http.get<ModelAccessResponse>(`/api/admin/models/${modelId}/access`),
+    );
+  }
+
   async getModelCapabilities(modelIds: number[]): Promise<Record<number, ModelCapability>> {
     return firstValueFrom(
       this.http.post<Record<number, ModelCapability>>(

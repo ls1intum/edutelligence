@@ -41,7 +41,7 @@ def test_translation_openapi_declares_multipart_contract():
 async def test_audio_authentication_happens_before_multipart_parsing(monkeypatch):
     parsed = False
 
-    def reject_auth(_headers):
+    def reject_auth(_headers, client_ip=None):
         raise HTTPException(status_code=401, detail="invalid key")
 
     async def parse_upload(_request):

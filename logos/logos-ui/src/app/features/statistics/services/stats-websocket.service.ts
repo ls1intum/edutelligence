@@ -4,7 +4,6 @@ import {
   TimelineRequestConfig,
   VramV2Payload,
   TimelineInitPayload,
-  TimelineDeltaPayload,
 } from '../statistics.models';
 
 // ─── Pure helper functions (exported for unit tests) ─────────────────────────
@@ -38,7 +37,6 @@ export interface StatsWsHandlers {
   onVramInit: (payload: VramV2Payload) => void;
   onVramDelta: (payload: VramV2Payload) => void;
   onTimelineInit: (payload: TimelineInitPayload) => void;
-  onTimelineDelta: (payload: TimelineDeltaPayload) => void;
   /**
    * Recomputed aggregates for the same range — the same shape as
    * `timeline_init` minus its (far larger) event list. Pushed while the page is
@@ -62,7 +60,6 @@ export interface StatsScope {
 export interface StatsWsConnectOptions {
   vramDayOffset: number;
   timeline: TimelineRequestConfig;
-  timelineDeltas: boolean;
   scope?: StatsScope;
   /**
    * State bucket the request feed is narrowed to (queued/running/error/
@@ -77,7 +74,6 @@ type ServerMessage =
   | { type: 'vram_init'; payload: VramV2Payload }
   | { type: 'vram_delta'; payload: VramV2Payload }
   | { type: 'timeline_init'; payload: TimelineInitPayload }
-  | { type: 'timeline_delta'; payload: TimelineDeltaPayload }
   | { type: 'stats'; payload: TimelineInitPayload }
   | { type: 'requests'; payload: { requests?: Array<any> } }
   | { type: 'pong' };
@@ -283,7 +279,6 @@ export class StatsWebsocketService {
         JSON.stringify({
           action: 'init',
           vram_day: this.currentVramDay,
-          timeline_deltas: current.timelineDeltas,
           timeline: {
             start: current.timeline.start,
             end: current.timeline.end,
@@ -311,8 +306,6 @@ export class StatsWebsocketService {
           opts.handlers.onVramDelta(msg.payload);
         } else if (msg.type === 'timeline_init') {
           opts.handlers.onTimelineInit(msg.payload);
-        } else if (msg.type === 'timeline_delta') {
-          opts.handlers.onTimelineDelta(msg.payload);
         } else if (msg.type === 'stats') {
           opts.handlers.onStats(msg.payload);
         } else if (msg.type === 'requests') {

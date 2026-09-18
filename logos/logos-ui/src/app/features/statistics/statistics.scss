@@ -21,6 +21,50 @@
 }
 
 
+// ── Section tabs ──────────────────────────────────────────────────────────────
+// An underline rail rather than buttons: the tabs switch what the page is about,
+// so they read as part of the header instead of as one more control next to the
+// filters they sit above.
+.stats-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  margin-top: 14px;
+  border-bottom: 1px solid var(--surface-border, rgb(255 255 255 / 12%));
+}
+
+.stats-tabs__tab {
+  appearance: none;
+  background: none;
+  border: none;
+  // The 2px bottom border is the active marker; carrying it transparent on
+  // every tab keeps the label from shifting a pixel when it becomes active.
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-color-secondary, rgb(255 255 255 / 60%));
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+
+  &:hover {
+    color: var(--text-color, rgb(255 255 255 / 90%));
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color, #6aa9ff);
+    outline-offset: -2px;
+    border-radius: 4px 4px 0 0;
+  }
+}
+
+.stats-tabs__tab--active {
+  color: var(--text-color, rgb(255 255 255 / 95%));
+  border-bottom-color: var(--primary-color, #6aa9ff);
+}
+
 .stats-header__controls {
   display: flex;
   align-items: center;
@@ -203,7 +247,7 @@
 }
 
 // ── Three-column panel layout ─────────────────────────────────────────────────
-.stats-three-col {
+.stats-panel-row {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;

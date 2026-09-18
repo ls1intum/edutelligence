@@ -212,7 +212,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -297,7 +297,7 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         43,
         12,
@@ -367,7 +367,13 @@ async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="local-model",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
         44,
         12,
@@ -409,7 +415,10 @@ async def test_cloud_streaming_response_returns_eur_cost_in_terminal_usage(monke
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         62,
@@ -456,7 +465,10 @@ async def test_cloud_streaming_delta_frames_get_no_interim_cost(monkeypatch):
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         62,
@@ -504,7 +516,10 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
 
     response = await main._sync_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         63,
@@ -555,7 +570,10 @@ async def test_cloud_sync_duration_only_response_still_prices_live(monkeypatch):
 
     response = await main._sync_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/audio/transcriptions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/audio/transcriptions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"file": "audio"},
         64,
@@ -608,7 +626,10 @@ async def test_pre_stream_error_records_failure_and_releases_scheduler(
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         58,
@@ -733,7 +754,10 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         59,
@@ -802,7 +826,12 @@ async def test_http_ndjson_response_preserves_content_type_and_does_not_append_s
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="local", forward_url="http://worker:8000/api/chat", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="local",
+            forward_url="http://worker:8000/api/chat",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"model": "local"},
         60,
         12,
@@ -854,7 +883,10 @@ async def test_http_sse_response_delimits_recovery_after_partial_first_chunk(mon
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         61,
@@ -945,7 +977,9 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "bad"}]},
         55,
         1,
@@ -1010,7 +1044,9 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     result = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "job"}]},
         56,
         1,
@@ -1083,7 +1119,9 @@ async def test_sync_response_async_job_base64_encodes_binary_body(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     result = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {"model": "audio-binary-model"},
         58,
         1,
@@ -1139,6 +1177,7 @@ async def test_sync_response_async_job_preserves_binary_logosnode_body(monkeypat
             lane_id="lane-a",
             model_name="audio-binary-model",
             anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {
             "model": "audio-binary-model",
@@ -1203,7 +1242,11 @@ async def test_sync_response_rejects_invalid_logosnode_binary_metadata(monkeypat
 
     result = await main._sync_response(
         SimpleNamespace(
-            provider_type="logosnode", lane_id="lane-a", model_name="audio-binary-model", anthropic_dialect=None
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="audio-binary-model",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"model": "audio-binary-model"},
         60,
@@ -1251,7 +1294,11 @@ async def test_sync_local_worker_translation_does_not_add_stream_field(monkeypat
 
     result = await main._sync_response(
         SimpleNamespace(
-            provider_type="logosnode", lane_id="lane-a", model_name="audio-translation-model", anthropic_dialect=None
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="audio-translation-model",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {
             "model": "audio-translation-model",
@@ -1315,7 +1362,9 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
     }
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         payload,
         57,
         1,
@@ -1373,7 +1422,9 @@ async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_a
         fields.append(["response_format", response_format])
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         payload,
         57,
         1,
@@ -1418,7 +1469,9 @@ async def test_sync_whisper_rejects_unmetered_raw_upstream_response(monkeypatch)
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {
             "model": "whisper-1",
             "response_format": "text",

@@ -12,9 +12,8 @@ import logos as main_mod
 from logos import ContextResolver, ExecutionContext, LogosNodeOfflineError, LogosNodeRuntimeRegistry
 from logos.dbutils.dbmanager import VALID_PRIVACY_LEVELS
 from logos.dbutils.dbmodules import ThresholdLevel
-from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
+from logos.dbutils.dbrequest import LogosNodeAuthRequest, LogosNodeRegisterRequest
 from logos.logosnode_registry import LogosNodeSessionConflictError
-from logos.routers import admin as admin_mod
 from logos.routers import logosnode as logosnode_mod
 
 
@@ -746,70 +745,6 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
         (20, 2): "cloud",
     }
     assert rebuilt == [True]
-
-
-@pytest.mark.asyncio
-async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypatch):
-    refresh_calls = []
-
-    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
-        refresh_calls.append(rebuild_model_classifier)
-
-    class _FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-            return False
-
-        @staticmethod
-        def connect_model_provider(**kwargs):
-            assert kwargs["provider_id"] == 13
-            assert kwargs["model_id"] == 30
-            return {"result": "ok"}, 200
-
-    monkeypatch.setattr(admin_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(admin_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
-
-    req = ConnectModelProviderRequest(logos_key="root-key", model_id=30, provider_id=13)
-    response = await admin_mod.connect_model_provider(req)
-
-    assert response == ({"result": "ok"}, 200)
-    assert refresh_calls == [False]
-
-
-@pytest.mark.asyncio
-async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monkeypatch):
-    refresh_calls = []
-
-    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
-        refresh_calls.append(rebuild_model_classifier)
-
-    class _FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-            return False
-
-        @staticmethod
-        def update_provider_sdi_config(**kwargs):
-            assert kwargs["provider_id"] == 13
-            assert kwargs["parallel_capacity"] == 16
-            return {"result": "ok"}, 200
-
-    monkeypatch.setattr(admin_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(admin_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
-
-    req = main_mod.UpdateProviderSdiConfigRequest(
-        logos_key="root-key",
-        provider_id=13,
-        parallel_capacity=16,
-    )
-    response = await admin_mod.update_provider_sdi_config(req)
-
-    assert response == ({"result": "ok"}, 200)
-    assert refresh_calls == [False]
 
 
 @pytest.mark.asyncio

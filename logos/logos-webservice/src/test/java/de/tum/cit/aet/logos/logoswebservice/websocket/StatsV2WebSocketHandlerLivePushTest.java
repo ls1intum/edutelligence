@@ -29,7 +29,6 @@ import org.springframework.web.socket.WebSocketSession;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import de.tum.cit.aet.logos.logoswebservice.operations.service.EnqueueEventService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.VramService;
@@ -46,7 +45,6 @@ class StatsV2WebSocketHandlerLivePushTest {
     private VramService vramService;
     private RequestLogService requestLogService;
     private RequestLogStatsService statsService;
-    private EnqueueEventService enqueueService;
     private OrchestratorLiveStreamClient liveStreamClient;
     private StatsV2WebSocketHandler handler;
     private WebSocketSession session;
@@ -75,13 +73,10 @@ class StatsV2WebSocketHandlerLivePushTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        enqueueService = mock(EnqueueEventService.class);
         when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));
-        when(enqueueService.getInRange(any(), any(), anyInt(), any(), any()))
-            .thenReturn(Map.of("events", List.of()));
 
         RestTemplate restTemplate = mock(RestTemplate.class);
         liveStreamClient = new OrchestratorLiveStreamClient(restTemplate);
@@ -93,7 +88,7 @@ class StatsV2WebSocketHandlerLivePushTest {
             .thenReturn(ResponseEntity.ok(Map.of("streams", List.of())));
 
         handler = new StatsV2WebSocketHandler(
-            vramService, requestLogService, statsService, enqueueService,
+            vramService, requestLogService, statsService,
             liveStreamClient, new ObjectMapper());
         stubLatestRequests(requestLogService, requestRow("req-1"));
 
