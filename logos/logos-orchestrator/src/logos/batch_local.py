@@ -14,6 +14,13 @@ soon as that capacity exists. Every line is an ordinary request — authorised,
 routed, logged and metered exactly like one a client sent — which is why a
 Logos-run batch needs no settlement pass afterwards.
 
+The lines run as the capacity frees, in whatever order that is: a long request
+does not hold the queue behind it, which is the same order-independence a
+provider-executed batch has (its provider schedules the lines however it
+likes). The result file is written back in input order, so no caller has to
+see the order the lines ran in — and none of the billing, checkpointing or
+resuming logic below depends on it either.
+
 The surface is the OpenAI Batch API, unchanged: a script uploads a file, polls
 ``GET /v1/batches/{id}`` every few minutes, and downloads
 ``output_file_id`` when the status turns terminal — the same code it would run
@@ -186,13 +193,13 @@ def _open_line_log(auth: AuthContext, body: Dict[str, Any]) -> Optional[int]:
         return None
 
 
-async def _run_line(
-    line: Dict[str, Any],
-    auth: AuthContext,
-    headers: Dict[str, str],
-    semaphore: asyncio.Semaphore,
-) -> Tuple[Dict[str, Any], bool]:
-    """Run one request line through the ordinary pipeline."""
+async def _run_line(line: Dict[str, Any], auth: AuthContext, headers: Dict[str, str]) -> Tuple[Dict[str, Any], bool]:
+    """Run one request line through the ordinary pipeline.
+
+    How many lines run at once is the caller's limit — the runner gives each
+    worker of its worker pool exactly one line — not a semaphore inside here,
+    so a cancelled worker holds no slot the next line could have taken.
+    """
     # Imported here rather than at module scope: main imports the batch modules,
     # so the reverse edge can only be taken once the app is up.
     from logos.main import execute_proxy_job
@@ -202,24 +209,23 @@ async def _run_line(
         endpoint = f"v1/{endpoint}"
     body = line.get("body") if isinstance(line.get("body"), dict) else {}
 
-    async with semaphore:
-        log_id = _open_line_log(auth, body)
-        if log_id is None:
-            # Fail closed: without the log row the pipeline would run the
-            # request and bill nothing, so the line is refused instead of run
-            # unbilled. The batch reports it as a failed line like any other.
-            logger.error("No usage log for batch line %s; refusing to run it unbilled", line.get("custom_id"))
-            return _result_row(
-                line, {"status_code": 500, "data": {"error": {"message": "the request could not be started"}}}
-            )
-        try:
-            result = await execute_proxy_job(endpoint, dict(headers), dict(body), None, auth, log_id)
-        except Exception:  # noqa: BLE001 - one bad line must not stop the batch
-            # The exception itself stays in the server log; the result file is
-            # downloadable by the caller, so it carries a generic message
-            # rather than internal details.
-            logger.exception("Batch line %s failed", line.get("custom_id"))
-            result = {"status_code": 500, "data": {"error": {"message": "the request failed"}}}
+    log_id = _open_line_log(auth, body)
+    if log_id is None:
+        # Fail closed: without the log row the pipeline would run the
+        # request and bill nothing, so the line is refused instead of run
+        # unbilled. The batch reports it as a failed line like any other.
+        logger.error("No usage log for batch line %s; refusing to run it unbilled", line.get("custom_id"))
+        return _result_row(
+            line, {"status_code": 500, "data": {"error": {"message": "the request could not be started"}}}
+        )
+    try:
+        result = await execute_proxy_job(endpoint, dict(headers), dict(body), None, auth, log_id)
+    except Exception:  # noqa: BLE001 - one bad line must not stop the batch
+        # The exception itself stays in the server log; the result file is
+        # downloadable by the caller, so it carries a generic message
+        # rather than internal details.
+        logger.exception("Batch line %s failed", line.get("custom_id"))
+        result = {"status_code": 500, "data": {"error": {"message": "the request failed"}}}
     return _result_row(line, result if isinstance(result, dict) else {})
 
 
@@ -282,9 +288,15 @@ async def _execute_lines(
     finished line was checkpointed as it completed, and those lines already
     went through the pipeline and were billed, so only the lines without a
     checkpoint are run.
+
+    The lines run on as many workers as there is capacity, a worker taking
+    the next line as soon as it is free — not in chunks, where one slow line
+    would hold the whole queue behind it until the chunk around it finished.
+    That is the same order-independence a provider-executed batch has: the
+    lines complete in whatever order the capacity allows, and nothing here
+    depends on the order the file spelled them in.
     """
     headers = {"logos_key": auth.key_value}
-    semaphore = asyncio.Semaphore(max(1, LOCAL_BATCH_CONCURRENCY))
 
     with DBManager() as db:
         finished = db.get_local_batch_lines(batch_object_id)
@@ -293,44 +305,82 @@ async def _execute_lines(
     pending = [line for line in lines if line.get("custom_id") not in finished]
     cancelled = False
 
-    # Chunked rather than one gather over the whole file: progress becomes
-    # visible while the batch runs, which is what a polling script watches, and
-    # a cancel takes effect within a chunk instead of at the end.
-    chunk_size = max(1, LOCAL_BATCH_CONCURRENCY)
-    # The in-chunk heartbeat interval: a single line can legitimately run
-    # longer than the whole lease, and the write before the chunk alone would
-    # let the lease lapse while the lines are in flight.
-    heartbeat_interval = max(0.2, LOCAL_BATCH_LEASE_TTL_S / 3)
-    for start in range(0, len(pending), chunk_size):
-        # The progress write is also the lease heartbeat. None means the lease
-        # was lost — another runner took the batch over after it lapsed — and
-        # this one must stop touching it. Its finished lines are checkpointed,
-        # so the new holder resumes from where this one got to.
-        with DBManager() as db:
-            still_running = db.update_local_batch_progress(
-                batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
-            )
-        if still_running is None:
-            logger.warning("Lost the lease on batch %s; another runner takes over", batch.get("upstream_id"))
-            return None
-        if still_running:
-            cancelled = True
-            break
-        chunk = pending[start : start + chunk_size]
-        lost = asyncio.Event()
-        chunk_task = asyncio.ensure_future(
-            asyncio.gather(*(_run_line(line, auth, headers, semaphore) for line in chunk), return_exceptions=True)
-        )
+    if pending:
+        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        for line in pending:
+            queue.put_nowait(line)
 
-        async def _heartbeat(chunk_task=chunk_task):
-            # Refresh the lease while the lines run. A None answer — or a
-            # check that failed, which fails closed the same way, because a
-            # heartbeat that cannot confirm the lease cannot keep it — is the
-            # lease being gone: stop this runner before it checkpoints or
-            # finalizes, and cancel the in-flight lines so the new holder's
-            # run of them is not billed twice.
+        # The two ways a run stops short of the last line:
+        lost = asyncio.Event()  # lease gone: no checkpoint, no finalization
+        no_more = asyncio.Event()  # cancel requested: in-flight lines finish, nothing new starts
+
+        # A single line can legitimately run longer than the whole lease, and
+        # a worker sitting in one cannot keep the batch alive on its own, so
+        # a heartbeat refreshes the lease while the lines are in flight.
+        heartbeat_interval = max(0.2, LOCAL_BATCH_LEASE_TTL_S / 3)
+        worker_tasks: List[asyncio.Task] = []
+
+        async def _run_and_checkpoint(line: Dict[str, Any]) -> None:
+            """Run one line, make it durable, and publish the progress with it."""
+            nonlocal completed, failed, cancelled
+            row, line_failed = await _run_line(line, auth, headers)
+            if lost.is_set():
+                # Deposed mid-line: do not write what the new holder will
+                # write again. It resumes past the checkpoint and re-runs
+                # this line — which is exactly what must not be billed twice.
+                return
+            finished[line.get("custom_id")] = row
+            if line_failed:
+                failed += 1
+            else:
+                completed += 1
+            # Durable per line: that is what makes the resume below skip
+            # exactly the lines already run and billed, no matter when the
+            # process dies. The progress write joins the checkpoint in one
+            # transaction and doubles as a lease heartbeat and a cancel
+            # check; it is conditional on the lease — a runner that was
+            # deposed must not publish counters the new holder is already
+            # moving.
+            with DBManager() as db:
+                db.save_local_batch_lines(
+                    batch_object_id, RUNNER_ID, [{"custom_id": line.get("custom_id"), "row": row}]
+                )
+                still_running = db.update_local_batch_progress(
+                    batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
+                )
+            if still_running is None:
+                lost.set()
+            elif still_running:
+                cancelled = True
+                no_more.set()
+
+        async def _worker() -> None:
+            while not lost.is_set() and not no_more.is_set():
+                try:
+                    line = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    # Every line is running or finished. All lines were put
+                    # in the queue before any worker started, so an empty
+                    # queue is the end of the batch, not a pause between
+                    # chunks the old design waited through.
+                    return
+                try:
+                    await _run_and_checkpoint(line)
+                finally:
+                    queue.task_done()
+
+        async def _heartbeat() -> None:
+            """Keep the lease alive while lines run, and report a cancel."""
+            nonlocal cancelled
+            # A None answer — or a check that failed, which fails closed the
+            # same way, because a heartbeat that cannot confirm the lease
+            # cannot keep it — is the lease being gone: stop the workers
+            # before they checkpoint or finalize, and cancel the in-flight
+            # lines so the new holder's run of them is not billed twice.
             while not lost.is_set():
                 await asyncio.sleep(heartbeat_interval)
+                if lost.is_set():
+                    return
                 try:
                     with DBManager() as db:
                         still = db.update_local_batch_progress(
@@ -341,49 +391,49 @@ async def _execute_lines(
                     still = None
                 if still is None:
                     lost.set()
-                    chunk_task.cancel()
+                    for task in worker_tasks:
+                        task.cancel()
                     return
+                if still:
+                    cancelled = True
+                    no_more.set()
 
-        heartbeat_task = asyncio.ensure_future(_heartbeat())
-        try:
-            results = await chunk_task
-        except asyncio.CancelledError:
-            if lost.is_set():
-                logger.warning(
-                    "Lost the lease on batch %s mid-chunk; another runner takes over", batch.get("upstream_id")
-                )
-                return None
-            raise
-        finally:
-            lost.set()
-            if not heartbeat_task.done():
-                heartbeat_task.cancel()
-            # Await the cleanup so the heartbeat cannot outlive the chunk: an
-            # unawaited, uncancelled task would keep refreshing a lease this
-            # runner is done with.
-            try:
-                await heartbeat_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - its state is in `lost`
-                pass
-        checkpoint: List[Dict[str, Any]] = []
-        for line, outcome in zip(chunk, results):
-            if isinstance(outcome, BaseException):
-                logger.exception("Batch line %s raised", line.get("custom_id"), exc_info=outcome)
-                row, line_failed = _result_row(line, {"status_code": 500, "data": {"error": {"message": "failed"}}})
-            else:
-                row, line_failed = outcome
-            finished[line.get("custom_id")] = row
-            if line_failed:
-                failed += 1
-            else:
-                completed += 1
-            checkpoint.append({"custom_id": line.get("custom_id"), "row": row})
-        # Durable per chunk: that is what makes the resume below skip exactly
-        # these lines, no matter when the process dies. The write is
-        # conditional on the lease — a runner that was deposed mid-batch must
-        # not overwrite the rows the new holder wrote.
+        # The first progress write is also the first lease check: the claim
+        # is the cross-process guard, and this is where a cancel requested
+        # before the start reaches this runner.
         with DBManager() as db:
-            db.save_local_batch_lines(batch_object_id, RUNNER_ID, checkpoint)
+            still_running = db.update_local_batch_progress(
+                batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
+            )
+        if still_running is None:
+            logger.warning("Lost the lease on batch %s; another runner takes over", batch.get("upstream_id"))
+            return None
+        if still_running:
+            cancelled = True
+            no_more.set()
+
+        if not no_more.is_set():
+            worker_tasks = [asyncio.ensure_future(_worker()) for _ in range(max(1, LOCAL_BATCH_CONCURRENCY))]
+            heartbeat_task = asyncio.ensure_future(_heartbeat())
+            try:
+                await asyncio.gather(*worker_tasks)
+            except asyncio.CancelledError:
+                if lost.is_set():
+                    logger.warning(
+                        "Lost the lease on batch %s mid-run; another runner takes over", batch.get("upstream_id")
+                    )
+                    return None
+                raise
+            finally:
+                if not heartbeat_task.done():
+                    heartbeat_task.cancel()
+                # Await the cleanup so the heartbeat cannot outlive the batch:
+                # an unawaited, uncancelled task would keep refreshing a lease
+                # this runner is done with.
+                try:
+                    await heartbeat_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001 - its state is in `lost`
+                    pass
 
     rows = [finished[line.get("custom_id")] for line in lines if line.get("custom_id") in finished]
     output_file_id = new_object_id("file")
