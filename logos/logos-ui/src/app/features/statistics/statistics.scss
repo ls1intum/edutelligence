@@ -69,8 +69,12 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
+  // Keep scope filters and the time range on one row whenever the content
+  // width allows; wrapping used to put the four filters on a line of their
+  // own and the time bar underneath, which reads as two toolbars.
+  flex-wrap: nowrap;
   margin-top: 8px;
+  min-width: 0;
 }
 
 .stats-time-range {
@@ -78,21 +82,23 @@
   min-width: 0;
 }
 
-// ── Scope (team / requester) ──────────────────────────────────────────────────
+// ── Scope (team / requester / provider / outcome) ─────────────────────────────
 
 .stats-scope {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  // The four filters must stay on one line — wrapping them into a 2×2 grid
+  // (especially once provider + outcome joined the row) was the regression.
+  flex-wrap: nowrap;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
-// Capped, because team and user names run long and two dropdowns sized by their
-// longest entry would push the time range off the row. The select inside stops
-// at the host's width rather than overflowing it (see the select component).
+// Shrink rather than wrap: long team/user labels truncate inside the select.
 .stats-scope__select {
-  min-width: 0;
+  flex: 0 1 170px;
+  min-width: 120px;
   max-width: 200px;
 }
 
@@ -436,11 +442,31 @@
   }
 }
 
+@media (max-width: 900px) {
+  // Time range drops under the filter row; the four filters stay on one line.
+  .stats-header__controls {
+    flex-wrap: wrap;
+  }
+
+  .stats-scope {
+    width: 100%;
+  }
+
+  .stats-scope__select {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .stats-time-range {
+    flex: 1 1 100%;
+  }
+}
+
 @media (max-width: 768px) {
   .stats-page {
     padding: 24px 16px 32px;
   }
-
 
   .stats-kpi-strip > * {
     flex-basis: 100%;
