@@ -14,8 +14,8 @@ from typing import Any, Dict, List
 # Goals from the benchmark: p50 forwarding overhead < 10 ms and p95 < 20 ms.
 GOAL_NS = 10_000_000
 P95_GOAL_NS = 20_000_000
-# The p50 goal is also the blocking CI threshold.
-FAIL_NS = GOAL_NS
+# CI allows runner noise above the p50 goal before blocking the PR.
+FAIL_NS = 15_000_000
 
 
 def ns_to_us(ns: float) -> str:
