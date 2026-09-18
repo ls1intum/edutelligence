@@ -1,7 +1,6 @@
 import {
   Component,
   computed,
-  effect,
   afterRenderEffect,
   ElementRef,
   inject,
@@ -68,11 +67,29 @@ import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
-import { VramDonutComponent } from './components/vram-donut/vram-donut';
+import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
+
+/** One Local Providers glass row — everything the panels for a single worker need. */
+type ProviderGlassRow = {
+  name: string;
+  online: boolean;
+  calibrating: boolean;
+  lanes: Record<string, LaneSignalData>;
+  hasLanes: boolean;
+  laneCount: number;
+  totalVramMb: number;
+  freeVramMb: number;
+  modelsLoaded: number;
+  ram: { reported: boolean; totalMb: number; freeMb: number; usedMb: number };
+  hasLaneRam: boolean;
+  fallbackVramPie: DonutSlice[];
+  vramUsedGb: number;
+  vramTotalGb: number;
+};
 
 @Component({
   selector: 'app-statistics',
@@ -314,7 +331,6 @@ export class Statistics implements OnInit, OnDestroy {
   readonly vramProviderMetaByName = signal<Record<string, VramProviderMeta>>({});
   readonly devicesByProvider = signal<Record<string, DeviceInfo[]>>({});
   readonly latestRequests = signal<RequestItem[]>([]);
-  readonly selectedVramProvider = signal<string | null>(null);
   readonly customRange = signal<{ start: Date; end: Date } | null>(null);
   readonly error = signal<string | null>(null);
   readonly vramError = signal<string | null>(null);
@@ -387,31 +403,6 @@ export class Statistics implements OnInit, OnDestroy {
   });
 
   // ── Provider derivations ──────────────────────────────────────────────────────
-
-  readonly vramProviders = computed(() => Object.keys(this.vramRawDataByProvider()).sort());
-
-  readonly vramProviderOptions = computed<AppSelectOption[]>(() =>
-    this.vramProviders().map((p) => ({
-      value: p,
-      label: this._isProviderOnline(p) ? p : `${p} (offline)`,
-    })),
-  );
-
-  readonly latestVramSample = computed<VramV2Sample | null>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return null;
-    const rawSeries = this.vramRawDataByProvider()[prov] || [];
-    if (!rawSeries.length) return null;
-    const raw = rawSeries[rawSeries.length - 1];
-    if (!raw?.timestamp) return null;
-    return raw as VramV2Sample;
-  });
-
-  readonly latestVramPoint = computed(() => {
-    const raw = this.latestVramSample();
-    if (!raw) return null;
-    return toVramSeriesPoint(raw, new Date(raw.timestamp).getTime());
-  });
 
   readonly lanesByProvider = computed<Record<string, Record<string, LaneSignalData>>>(() => {
     const result: Record<string, Record<string, LaneSignalData>> = {};
@@ -535,128 +526,51 @@ export class Statistics implements OnInit, OnDestroy {
     };
   });
 
-  readonly selectedProviderLanes = computed<Record<string, LaneSignalData>>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return {};
-    return this.lanesByProvider()[prov] ?? {};
-  });
-
-  readonly selectedProviderTotalVramMb = computed(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return 0;
-    return extractProviderVramMb(this.latestSampleByProvider()[prov]).totalMb;
-  });
-
-  readonly hasSelectedProviderLanes = computed(
-    () => Object.keys(this.selectedProviderLanes()).length > 0,
-  );
-
-  readonly selectedProviderFreeVramMb = computed(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return 0;
-    return extractProviderVramMb(this.latestSampleByProvider()[prov]).freeMb;
-  });
-
   /**
-   * Host RAM of the selected provider, the counterpart to the two above.
+   * One glass row per local provider, online-first then alphabetical.
    *
-   * `reported` rather than a total of 0 for the missing case: a worker that
-   * predates the field or cannot read the host's memory reports nothing, and
-   * drawing that as a fully free host would be worse than drawing nothing.
+   * The Local Providers tab used to pick a single provider from a dropdown;
+   * every provider is shown at once now so the page just scrolls.
    */
-  readonly selectedProviderRamMb = computed(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return { reported: false, totalMb: 0, freeMb: 0, usedMb: 0 };
-    return extractProviderHostRamMb(this.latestSampleByProvider()[prov]);
-  });
+  readonly providerGlassRows = computed<ProviderGlassRow[]>(() => {
+    const latestByProvider = this.latestSampleByProvider();
+    const lanesByProvider = this.lanesByProvider();
+    const metaByName = this.vramProviderMetaByName();
 
-  /**
-   * Whether any lane of the selected provider reports its host-RAM footprint.
-   * The per-model breakdown needs it; without it the panel can still show the
-   * host total, but not who is holding it.
-   */
-  readonly hasSelectedProviderLaneRam = computed(() =>
-    Object.values(this.selectedProviderLanes()).some((l) => typeof l.host_ram_mb === 'number'),
-  );
+    const names = Object.keys(latestByProvider).sort((a, b) => {
+      const aOnline = this._isProviderOnline(a);
+      const bOnline = this._isProviderOnline(b);
+      if (aOnline !== bOnline) return aOnline ? -1 : 1;
+      return a.localeCompare(b);
+    });
 
-  /**
-   * Badge text for the selected provider's free VRAM, or null when there is no
-   * sample to report. A provider whose memory is exhausted legitimately reports
-   * 0 MB free, so absence has to be the missing sample rather than the value —
-   * gating the badge on `> 0` hid exactly the state worth seeing.
-   */
-  readonly selectedProviderFreeVramLabel = computed<string | null>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return null;
-    const sample = this.latestSampleByProvider()[prov];
-    if (!sample) return null;
-    return `${(extractProviderVramMb(sample).freeMb / 1024).toFixed(1)} GB free`;
-  });
+    return names.map((name) => {
+      const sample = latestByProvider[name];
+      const lanes = lanesByProvider[name] ?? {};
+      const vram = extractProviderVramMb(sample);
+      const ram = extractProviderHostRamMb(sample);
+      const point = sample?.timestamp
+        ? toVramSeriesPoint(sample, new Date(sample.timestamp).getTime())
+        : null;
+      const modelsLoaded = point?.models_loaded ?? point?.loaded_models?.length ?? 0;
 
-  readonly vramPieData = computed(() => {
-    const pt = this.latestVramPoint();
-    const usedGb = pt?.used_vram_gb ?? 0;
-    const remainingGb = pt?.remaining_vram_gb ?? 0;
-    const totalGb = pt?.total_vram_gb ?? usedGb + remainingGb;
-    if (totalGb <= 0) return [];
-
-    const reportedModels = pt?.loaded_models ?? [];
-    const rawModelSlices = reportedModels
-      .map((model, index) => ({
-        value: Number(model.size_gb || 0),
-        color: seriesColor(index),
-        text: model.name,
-      }))
-      .filter((slice) => slice.value > 0);
-
-    const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
-    const modelScale =
-      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
-    const modelSlices = rawModelSlices.map((slice) => ({
-      ...slice,
-      value: Number((slice.value * modelScale).toFixed(3)),
-    }));
-    const modeledUsedGb = modelSlices.reduce((sum, s) => sum + s.value, 0);
-    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
-
-    return [
-      ...modelSlices,
-      {
-        value: otherUsedGb,
-        color: CHART_ROLE.total,
-        text: modelSlices.length > 0 ? 'Other used' : 'Used',
-      },
-      {
-        value: remainingGb,
-        color: seriesColor(3),
-        text: 'Free',
-      },
-    ].filter((s) => s.value > 0);
-  });
-
-  readonly vramSummary = computed(() => {
-    const pt = this.latestVramPoint();
-    const usedGb = pt?.used_vram_gb ?? 0;
-    const remainingGb = pt?.remaining_vram_gb ?? 0;
-    const totalGb = usedGb + remainingGb;
-    const freePct = totalGb > 0 ? Math.round((remainingGb / totalGb) * 100) : 0;
-    const models = pt?.loaded_models ?? [];
-    const modelPreview =
-      models.length > 0
-        ? `${models
-            .slice(0, 3)
-            .map((m) => m.name)
-            .join(', ')}${models.length > 3 ? ` +${models.length - 3} more` : ''}`
-        : 'No models reported';
-    return {
-      usedGb,
-      remainingGb,
-      totalGb,
-      freePct,
-      modelsLoaded: pt?.models_loaded ?? models.length,
-      modelPreview,
-      models,
-    };
+      return {
+        name,
+        online: this._isProviderOnline(name),
+        calibrating: metaByName[name]?.calibrating === true,
+        lanes,
+        hasLanes: Object.keys(lanes).length > 0,
+        laneCount: Object.keys(lanes).length,
+        totalVramMb: vram.totalMb,
+        freeVramMb: vram.freeMb,
+        modelsLoaded,
+        ram,
+        hasLaneRam: Object.values(lanes).some((l) => typeof l.host_ram_mb === 'number'),
+        fallbackVramPie: this._fallbackVramPie(point),
+        vramUsedGb: point?.used_vram_gb ?? 0,
+        vramTotalGb: point?.total_vram_gb ?? (point?.used_vram_gb ?? 0) + (point?.remaining_vram_gb ?? 0),
+      };
+    });
   });
 
   // ── Volume line data ──────────────────────────────────────────────────────────
@@ -872,14 +786,6 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Lane KPI helpers ──────────────────────────────────────────────────────────
 
-  readonly totalLanesAcrossProviders = computed(() => {
-    let count = 0;
-    for (const lanes of Object.values(this.onlineLanesByProvider())) {
-      count += Object.keys(lanes).length;
-    }
-    return count;
-  });
-
   readonly allLanesForKpi = computed(() =>
     Object.values(this.onlineLanesByProvider()).flatMap((p) => Object.values(p)),
   );
@@ -906,39 +812,9 @@ export class Statistics implements OnInit, OnDestroy {
   readonly STATUS_COLOR = STATUS_COLOR;
   readonly seriesColor = seriesColor;
 
-  // ── Provider-selection auto-ranking effect ────────────────────────────────────
+  // ── Tooltip positioning ───────────────────────────────────────────────────────
 
   constructor() {
-    effect(() => {
-      const providers = this.vramProviders();
-      if (!providers.length) {
-        this.selectedVramProvider.set(null);
-        return;
-      }
-      const source = this.vramRawDataByProvider();
-      const meta = this.vramProviderMetaByName();
-
-      const ranked = [...providers].sort((left, right) => {
-        const leftMeta = meta[left];
-        const rightMeta = meta[right];
-        const leftConnected =
-          leftMeta?.connection_state !== 'offline' && leftMeta?.connected !== false;
-        const rightConnected =
-          rightMeta?.connection_state !== 'offline' && rightMeta?.connected !== false;
-        const leftHasSamples = (source[left] || []).length > 0;
-        const rightHasSamples = (source[right] || []).length > 0;
-        const leftScore = (leftHasSamples ? 2 : 0) + (leftConnected ? 1 : 0);
-        const rightScore = (rightHasSamples ? 2 : 0) + (rightConnected ? 1 : 0);
-        if (leftScore !== rightScore) return rightScore - leftScore;
-        return left.localeCompare(right);
-      });
-
-      const current = this.selectedVramProvider();
-      if (!current || !providers.includes(current)) {
-        this.selectedVramProvider.set(ranked[0]);
-      }
-    });
-
     // Position the chart hover tooltip near the cursor, then clamp it inside the
     // viewport so it is always fully visible (critical on narrow mobile screens).
     afterRenderEffect(() => {
@@ -1144,10 +1020,6 @@ export class Statistics implements OnInit, OnDestroy {
     this.requestsPending.set(true);
   }
 
-  setSelectedVramProvider(name: string | null): void {
-    this.selectedVramProvider.set(name);
-  }
-
   /**
    * Whether a range end means "up to now" rather than a fixed past instant.
    * Same 120 s tolerance the websocket applies, so the client and the server
@@ -1172,13 +1044,6 @@ export class Statistics implements OnInit, OnDestroy {
       startIso: cfg.start,
       endIso: this.isLiveEnd(endMs, Date.now()) ? '' : cfg.end,
     };
-  });
-
-  /** True while the selected provider's worker is running a calibration session. */
-  readonly selectedProviderCalibrating = computed(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return false;
-    return this.vramProviderMetaByName()[prov]?.calibrating === true;
   });
 
   setCustomRange(range: { start: Date; end: Date }): void {
@@ -1493,6 +1358,58 @@ export class Statistics implements OnInit, OnDestroy {
   private _isProviderOnline(name: string): boolean {
     const m = this.vramProviderMetaByName()[name];
     return m?.connection_state !== 'offline' && m?.connected !== false;
+  }
+
+  /**
+   * Legacy model-list donut used when a provider has no lane signals yet (older
+   * snapshot shape). Same accounting as the old selected-provider pie.
+   */
+  private _fallbackVramPie(
+    pt: {
+      used_vram_gb?: number;
+      remaining_vram_gb?: number;
+      total_vram_gb?: number;
+      loaded_models?: Array<{ name: string; size_gb: number }>;
+    } | null,
+  ): DonutSlice[] {
+    if (!pt) return [];
+    const usedGb = pt.used_vram_gb ?? 0;
+    const remainingGb = pt.remaining_vram_gb ?? 0;
+    const totalGb = pt.total_vram_gb ?? usedGb + remainingGb;
+    if (totalGb <= 0) return [];
+
+    const reportedModels = pt.loaded_models ?? [];
+    const rawModelSlices = reportedModels
+      .map((model, index) => ({
+        value: Number(model.size_gb || 0),
+        color: seriesColor(index),
+        text: model.name,
+      }))
+      .filter((slice) => slice.value > 0);
+
+    const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
+    const modelScale =
+      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
+    const modelSlices = rawModelSlices.map((slice) => ({
+      ...slice,
+      value: Number((slice.value * modelScale).toFixed(3)),
+    }));
+    const modeledUsedGb = modelSlices.reduce((sum, s) => sum + s.value, 0);
+    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
+
+    return [
+      ...modelSlices,
+      {
+        value: otherUsedGb,
+        color: CHART_ROLE.total,
+        text: modelSlices.length > 0 ? 'Other used' : 'Used',
+      },
+      {
+        value: remainingGb,
+        color: seriesColor(3),
+        text: 'Free',
+      },
+    ].filter((s) => s.value > 0);
   }
 
   isProviderOnline = (name: string): boolean => this._isProviderOnline(name);
