@@ -1801,12 +1801,12 @@ class DBManager:
             INSERT INTO calibration_probe_logs (
                 provider_id, model_name,
                 success, probe_command, error,
-                unsupported_reason, node_unhealthy_reason,
+                unsupported_reason, node_unhealthy_reason, observed_reason,
                 summary, log_text, recorded_at, updated_at
             ) VALUES (
                 :provider_id, :model_name,
                 :success, :probe_command, :error,
-                :unsupported_reason, :node_unhealthy_reason,
+                :unsupported_reason, :node_unhealthy_reason, :observed_reason,
                 :summary, :log_text, :recorded_at, CURRENT_TIMESTAMP
             )
             ON CONFLICT (provider_id, model_name) DO UPDATE SET
@@ -1815,6 +1815,7 @@ class DBManager:
                 error = EXCLUDED.error,
                 unsupported_reason = EXCLUDED.unsupported_reason,
                 node_unhealthy_reason = EXCLUDED.node_unhealthy_reason,
+                observed_reason = EXCLUDED.observed_reason,
                 summary = EXCLUDED.summary,
                 log_text = EXCLUDED.log_text,
                 recorded_at = EXCLUDED.recorded_at,
@@ -1833,6 +1834,7 @@ class DBManager:
                 "error": payload.get("error") or None,
                 "unsupported_reason": payload.get("unsupported_reason"),
                 "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
+                "observed_reason": payload.get("observed_reason"),
                 "summary": _json_for_jsonb(payload),
                 "log_text": log_text or None,
                 "recorded_at": recorded_at,
@@ -1851,6 +1853,8 @@ class DBManager:
         sql = text("""
             SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
                    cpl.probe_command, cpl.error, cpl.summary, cpl.log_text,
+                   cpl.unsupported_reason, cpl.node_unhealthy_reason,
+                   cpl.observed_reason, cpl.summary->'stages' AS stages,
                    cpl.recorded_at, cpl.updated_at
             FROM calibration_probe_logs cpl
             JOIN providers p ON p.id = cpl.provider_id
@@ -1861,8 +1865,9 @@ class DBManager:
         results = []
         for row in rows:
             entry = dict(row._mapping)
-            summary = entry.get("summary")
-            entry["summary"] = json.loads(summary) if isinstance(summary, str) else summary
+            for field in ("summary", "stages"):
+                value = entry.get(field)
+                entry[field] = json.loads(value) if isinstance(value, str) else value
             results.append(entry)
         return results
 

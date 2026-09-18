@@ -262,6 +262,17 @@ class FatalLoadErrorPattern:
     needle: str
     reason_code: str  # short, kebab-case; surfaced in logs and the persisted file
     description: str  # human-readable, shown to ops in the file and in error responses
+    # Which deployment failure domain (calibration.py's _DOMAIN_* ids) this
+    # belongs to — a plain string, not the constant itself: importing
+    # calibration.py's domain constants here would be circular (calibration.py
+    # already imports this module). None means "no single deterministic
+    # point — resolve positionally instead", not "uncategorized".
+    domain: str | None = None
+    # False when an automatic retry (see
+    # _retry_with_trust_remote_code_if_needed) can resolve this within the
+    # same run — persisting it would block that retry's own re-entry into
+    # calibrate_model.
+    persist: bool = True
 
 
 _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
@@ -274,6 +285,7 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
             "identifier is misspelled, the repository is private/withdrawn, "
             "or the local directory is missing config.json / params.json."
         ),
+        domain="model_resolution",
     ),
     FatalLoadErrorPattern(
         needle="Cannot access gated repo",
@@ -284,6 +296,7 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
             "HUGGING_FACE_HUB_TOKEN with read access to the repo before "
             "removing this entry."
         ),
+        domain="model_resolution",
     ),
     FatalLoadErrorPattern(
         needle="does not recognize this architecture",
@@ -293,6 +306,32 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
             "architecture. Upgrade vLLM (and remove this entry) if support "
             "has been added since this worker was deployed."
         ),
+        domain="engine_init",
+    ),
+    FatalLoadErrorPattern(
+        needle="trust_remote_code=True",
+        reason_code="requires-trust-remote-code",
+        description=(
+            "This repository ships custom modeling code and requires "
+            "trust_remote_code=True to load. Deliberately not auto-enabled "
+            "(arbitrary code execution) — remove this entry only after "
+            "reviewing the repo's code and enabling it explicitly."
+        ),
+        domain="model_resolution",
+        # _retry_with_trust_remote_code_if_needed retries this within the
+        # same run — never persist it as permanently unsupported.
+        persist=False,
+    ),
+    FatalLoadErrorPattern(
+        needle="is not supported for quantization method",
+        reason_code="unsupported-quantization",
+        description=(
+            "The installed vLLM build does not support this model's "
+            "quantization method on this hardware/kernel combination. "
+            "Upgrade vLLM (and remove this entry) if support has been "
+            "added since this worker was deployed."
+        ),
+        domain="engine_init",
     ),
 )
 
