@@ -168,7 +168,12 @@ def _post_comment(markdown: str) -> None:
     api_comments = f"{server}/repos/{repo}/issues/{number}/comments"
     existing = _find_last_bench_comment(api_comments, token)
     if existing:
-        _api_request("PUT", f"{api_comments}/{existing['id']}", token, {"body": markdown})
+        _api_request(
+            "PATCH",
+            f"{server}/repos/{repo}/issues/comments/{existing['id']}",
+            token,
+            {"body": markdown},
+        )
         print(f"PR comment updated (id={existing['id']})")
     else:
         _api_request("POST", api_comments, token, {"body": markdown})
