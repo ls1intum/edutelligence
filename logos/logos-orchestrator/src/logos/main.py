@@ -2656,7 +2656,8 @@ async def _proxy_sync_response(
                 provider_id=provider_id,
                 model_id=model_id,
                 result_status=(
-                    "timeout" if _is_timeout_failure(error=exec_result.error, status_code=exec_result.status_code)
+                    "timeout"
+                    if _is_timeout_failure(error=exec_result.error, status_code=exec_result.status_code)
                     else ("success" if exec_result.success else "error")
                 ),
                 error_message=None if exec_result.success else exec_result.error,
