@@ -273,6 +273,8 @@ export interface RequestItem {
   team_name: string | null;
   username: string | null;
   full_name: string | null;
+  api_key_name: string | null;
+  api_key_type: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;

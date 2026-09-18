@@ -33,6 +33,7 @@ async function pageAt(
   getScopeOptions: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({
     teams: [],
     requesters: [],
+    providers: [],
   }),
 ) {
   const ws = wsSpy();
@@ -47,9 +48,10 @@ async function pageAt(
     ],
   }).compileComponents();
   const fx = TestBed.createComponent(Statistics);
-  const component = fx.componentInstance;
-  component.ngOnInit();
-  return { fx, component, ws, getScopeOptions };
+  // detectChanges runs ngOnInit through Angular's hook machinery so a later
+  // signal-driven CD pass (e.g. the 30s ticker) does not re-fire it.
+  fx.detectChanges();
+  return { fx, component: fx.componentInstance, ws, getScopeOptions };
 }
 
 describe('Statistics calendar rollover', () => {
@@ -68,14 +70,19 @@ describe('Statistics calendar rollover', () => {
     fixture = page.fx;
 
     page.component.setPreset('day');
+    // Flush the scope-options promise kicked off by the preset pick so the
+    // quiet window below is not counting a late init resolution.
+    await Promise.resolve();
+    await Promise.resolve();
     const rangesBefore = page.ws.setTimelineRange.mock.calls.length;
+    const connectsBefore = page.ws.connect.mock.calls.length;
 
     // 23:50 to 23:59, still the same day: every tick is a no-op.
     vi.advanceTimersByTime(9 * 60_000);
 
     expect(page.ws.setTimelineRange.mock.calls.length).toBe(rangesBefore);
     // The page is up and connected, so the silence is a decision, not an absence.
-    expect(page.ws.connect).toHaveBeenCalledTimes(1);
+    expect(page.ws.connect).toHaveBeenCalledTimes(connectsBefore);
   });
 
   it('re-anchors the range at each midnight while the page stays open', async () => {
@@ -85,6 +92,8 @@ describe('Statistics calendar rollover', () => {
     fixture = page.fx;
 
     page.component.setPreset('day');
+    await Promise.resolve();
+    await Promise.resolve();
     const rangesBefore = page.ws.setTimelineRange.mock.calls.length;
     const scopesBefore = page.getScopeOptions.mock.calls.length;
 
@@ -170,16 +179,26 @@ describe('Statistics scope options', () => {
 
     // The init request is the one the operator outlives: it resolves only
     // after a range pick and a requester selection it does not know about.
-    let releaseStale: (value: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] }) => void =
-      () => {};
-    const stale = new Promise<{ teams: FeedFilterOption[]; requesters: FeedFilterOption[] }>(
-      (resolve) => {
-        releaseStale = resolve;
-      },
-    );
-    const fresh: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] } = {
+    let releaseStale: (value: {
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+    }) => void = () => {};
+    const stale = new Promise<{
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+    }>((resolve) => {
+      releaseStale = resolve;
+    });
+    const fresh: {
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+    } = {
       teams: [{ id: 1, label: 'Team One', requestCount: 3 }],
       requesters: [{ id: 7, label: 'User Seven', requestCount: 5 }],
+      providers: [],
     };
     // First request (the init one) is the one that outlives the operator;
     // everything after it serves the fresh range. State-based rather than
@@ -205,7 +224,7 @@ describe('Statistics scope options', () => {
     const scopesBefore = page.ws.setScope.mock.calls.length;
 
     // The stale response lands last: empty lists, no user 7.
-    releaseStale({ teams: [], requesters: [] });
+    releaseStale({ teams: [], requesters: [], providers: [] });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -225,16 +244,26 @@ describe('Statistics scope options', () => {
     // Same shape as the preset-pick race, one different move: the range
     // changes by zooming, and the in-flight request for the range the
     // operator zoomed away from must be superseded by it.
-    let releaseStale: (value: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] }) => void =
-      () => {};
-    const stale = new Promise<{ teams: FeedFilterOption[]; requesters: FeedFilterOption[] }>(
-      (resolve) => {
-        releaseStale = resolve;
-      },
-    );
-    const fresh: { teams: FeedFilterOption[]; requesters: FeedFilterOption[] } = {
+    let releaseStale: (value: {
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+    }) => void = () => {};
+    const stale = new Promise<{
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+    }>((resolve) => {
+      releaseStale = resolve;
+    });
+    const fresh: {
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+    } = {
       teams: [{ id: 1, label: 'Team One', requestCount: 3 }],
       requesters: [{ id: 7, label: 'User Seven', requestCount: 5 }],
+      providers: [],
     };
     let first = true;
     const getScopeOptions = vi.fn(() => (first ? (first = false, stale) : Promise.resolve(fresh)));
@@ -255,7 +284,7 @@ describe('Statistics scope options', () => {
     await Promise.resolve();
     const scopesBefore = page.ws.setScope.mock.calls.length;
 
-    releaseStale({ teams: [], requesters: [] });
+    releaseStale({ teams: [], requesters: [], providers: [] });
     await Promise.resolve();
     await Promise.resolve();
 

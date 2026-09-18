@@ -136,7 +136,7 @@ public class TeamActivityService {
         // the picker, and narrowing it by the current pick would leave no way
         // back to the others.
         payload.put("requesters", toScopeOptions(logEntryRepository.findRequestersWithTraffic(
-            since, Timestamp.from(now), teamId)));
+            since, Timestamp.from(now), teamId, null, false)));
         payload.put("requests", requests.get("requests"));
         payload.put("requests_total", requests.get("total"));
         payload.put("requests_has_more", requests.get("has_more"));

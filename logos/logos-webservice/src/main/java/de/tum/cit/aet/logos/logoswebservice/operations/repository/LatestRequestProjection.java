@@ -22,6 +22,8 @@ public interface LatestRequestProjection {
     String getTeamName();
     String getUsername();
     String getFullName();
+    String getApiKeyName();
+    String getApiKeyType();
     Long getPromptTokens();
     Long getCompletionTokens();
     Long getTotalTokens();

@@ -107,6 +107,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
    */
   @Input() filterUserId: number | null = null;
   @Input() filterTeamId: number | null = null;
+  @Input() filterProviderId: number | null = null;
+  @Input() filterErrorsOnly = false;
   /**
    * The lifecycle bucket the feed is narrowed to (queued/running/error/
    * finished), or null for all states. Like the user/team inputs it is owned
@@ -142,11 +144,17 @@ export class RecentRequests implements OnChanges, OnDestroy {
   private readonly _totalInRange = signal<number | null>(0);
   private readonly _filterUserId = signal<number | null>(null);
   private readonly _filterTeamId = signal<number | null>(null);
+  private readonly _filterProviderId = signal<number | null>(null);
+  private readonly _filterErrorsOnly = signal(false);
   private readonly _filterStatus = signal<string | null>(null);
 
   /** Only for the empty state, which reads differently once a filter is on. */
   readonly filterActive = computed(
-    () => this._filterUserId() !== null || this._filterTeamId() !== null,
+    () =>
+      this._filterUserId() !== null ||
+      this._filterTeamId() !== null ||
+      this._filterProviderId() !== null ||
+      this._filterErrorsOnly(),
   );
 
   /**
@@ -244,6 +252,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
     if (changes['totalInRange']) this._totalInRange.set(this.totalInRange);
     if (changes['filterUserId']) this._filterUserId.set(this.filterUserId);
     if (changes['filterTeamId']) this._filterTeamId.set(this.filterTeamId);
+    if (changes['filterProviderId']) this._filterProviderId.set(this.filterProviderId);
+    if (changes['filterErrorsOnly']) this._filterErrorsOnly.set(this.filterErrorsOnly);
     if (changes['filterStatus']) this._filterStatus.set(this.filterStatus);
     // A new range or a new scope invalidates every page cut out of the previous
     // one. No fetch follows: page 0 is the live feed either way, and the
@@ -251,6 +261,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
     const scopeChanged =
       (changes['filterUserId'] && !changes['filterUserId'].firstChange) ||
       (changes['filterTeamId'] && !changes['filterTeamId'].firstChange) ||
+      (changes['filterProviderId'] && !changes['filterProviderId'].firstChange) ||
+      (changes['filterErrorsOnly'] && !changes['filterErrorsOnly'].firstChange) ||
       (changes['filterStatus'] && !changes['filterStatus'].firstChange);
     if ((changes['range'] && !changes['range'].firstChange) || scopeChanged) {
       this.resetToFirstPage();
@@ -325,7 +337,9 @@ export class RecentRequests implements OnChanges, OnDestroy {
         range.startIso,
         range.endIso,
         PAGE_SIZE,
-        { userId: this._filterUserId(), teamId: this._filterTeamId(), status: this._filterStatus() },
+        { userId: this._filterUserId(), teamId: this._filterTeamId(),
+          providerId: this._filterProviderId(), errorsOnly: this._filterErrorsOnly(),
+          status: this._filterStatus() },
         cursor,
       );
       const rows = page.requests ?? [];

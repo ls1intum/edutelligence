@@ -50,6 +50,8 @@ class RequestLogControllerTest {
            // The feed shows a page of the range, so it reports how big the range is.
            .andExpect(jsonPath("$.total").value(2))
            .andExpect(jsonPath("$.has_more").value(false))
+           // Key name is what the recent-requests cards show next to the user.
+           .andExpect(jsonPath("$.requests[0].api_key_name").value("dev key"))
            // Nothing left to page to, so no cursor to page with.
            .andExpect(jsonPath("$.next_cursor").isEmpty());
     }
