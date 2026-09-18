@@ -21,6 +21,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProvid
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DrainLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LaneLoadStatusRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
@@ -186,6 +187,20 @@ public class ProviderController {
             return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
         try {
             return workerAdminClient.sleepLane(req.providerId(), req.laneId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/drain")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> drainLane(@RequestBody DrainLaneRequestDTO req) {
+        if (req.providerId() == null || req.laneId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return workerAdminClient.drainLane(req.providerId(), req.laneId());
         } catch (RestClientResponseException e) {
             return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
         } catch (Exception e) {

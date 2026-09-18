@@ -103,6 +103,11 @@ class InternalSleepLaneRequest(BaseModel):
     lane_id: str
 
 
+class InternalDrainLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
 class InternalWakeLaneRequest(BaseModel):
     provider_id: int
     lane_id: str

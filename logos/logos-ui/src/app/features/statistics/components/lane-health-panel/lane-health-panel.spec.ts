@@ -136,13 +136,14 @@ function lane(overrides: Partial<LaneSignalData> = {}): LaneSignalData {
 }
 
 /**
- * The Wake/Sleep buttons beside Unload.
+ * The Wake/Sleep/Drain buttons beside Unload.
  *
- * The buttons reach the two states the capacity planner also reaches on its
- * own, so they are offered only where they mean something: Wake on a lane
- * that is actually asleep, Sleep on one that is awake and idle. A busy lane
- * gets no Sleep button — the server would refuse it anyway, and the panel
- * would just display the refusal.
+ * The buttons reach the states the capacity planner also reaches on its own,
+ * so they are offered only where they mean something: Wake on a lane that is
+ * actually asleep, Sleep on one that is awake and idle, Drain on one that is
+ * still serving — Sleep is withheld from a busy lane (the click would block
+ * for the whole drain), and Drain is its busy counterpart: no new requests,
+ * wait for the in-flight ones, then sleep or unload.
  */
 describe('laneSleepAction', () => {
   it('offers Wake on a sleeping lane', () => {
@@ -159,13 +160,25 @@ describe('laneSleepAction', () => {
     expect(laneSleepAction(lane({ sleep_state: 'awake' }))).toBe('sleep');
   });
 
-  it('withholds Sleep from a lane that is serving', () => {
-    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 1 }))).toBeNull();
+  it('offers Drain on an awake lane that is serving', () => {
+    // The sleep button cannot take effect immediately on a busy lane, and
+    // the worker's wait-mode sleep would drop stragglers after its budget —
+    // Drain is the action that waits for the in-flight requests instead.
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 1 }))).toBe('drain');
   });
 
-  it('withholds both actions from a lane the backend cannot sleep', () => {
+  it('offers Drain on a busy lane even when its sleep capability is not reported yet', () => {
+    // A lane that never slept reports "unknown" until its first transition;
+    // the server decides sleep-versus-unload from the fresh snapshot.
+    expect(laneSleepAction(lane({ sleep_state: 'unknown', active_requests: 2 }))).toBe('drain');
+    expect(laneSleepAction(lane({ sleep_state: 'unsupported', active_requests: 2 }))).toBe('drain');
+    expect(laneSleepAction(lane({ sleep_state: null, active_requests: 2 }))).toBe('drain');
+  });
+
+  it('withholds both actions from an idle lane the backend cannot sleep', () => {
     // A lane with sleep mode disabled reports "unsupported"; a lane that
-    // never slept reports "unknown" until its first transition.
+    // never slept reports "unknown" until its first transition. Neither has
+    // anything to sleep while idle, and nothing to drain.
     expect(laneSleepAction(lane({ sleep_state: 'unsupported' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: 'unknown' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: null }))).toBeNull();

@@ -155,6 +155,7 @@ demand exceeds physical capacity**, requiring dynamic sleep/wake/load/stop orche
 | VRAM reclaim needed | loaded/running | sleeping | `_next_request_reclaim_action()` |
 | VRAM reclaim (last resort) | sleeping | stopped | `_next_request_reclaim_action()` |
 | Demand drain | running (busy) | sleeping | `_should_initiate_drain()` |
+| Manual drain (UI button) | running (busy) | sleeping, or stopped when RAM/sleep disallow | `drain_lane_manually()` — cold mark + bounded wait, then sleep or unload |
 
 ---
 
@@ -679,6 +680,8 @@ After a wake command fails (timeout or error), the lane enters a 15-second coold
 `self._marked_cold_lanes: set[tuple[int, str]]`
 
 Before executing sleep or stop on a lane, it's pre-marked as "cold" so the scheduler immediately stops routing new requests. This prevents the TOCTOU race where requests land on a lane between the idle check and the actual sleep/stop. Cold marks are cleared after the action completes (or fails).
+
+The statistics UI's **Drain** button runs the same recipe as a one-shot, operator-initiated action (`drain_lane_manually`): mark the lane cold so no new requests are routed to it, wait (bounded by `DRAIN_TIMEOUT_SECONDS`) for the in-flight ones to finish, then sleep the lane — or unload it when the host cannot afford a resident sleeper, or the lane's backend has no sleep mode. Unlike the executor's reclaim sleeps, the manual path clears the cold mark on **every** exit, including a successful sleep: the manual wake endpoint dispatches the command directly and never passes through the executor, so a mark left behind would strand a manually woken lane outside the rotation.
 
 ---
 

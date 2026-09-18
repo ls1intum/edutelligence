@@ -60,6 +60,19 @@
                         {{ sleepingLaneId() === row.laneId ? 'Sleeping…' : 'Sleep' }}
                       </button>
                     }
+                    @case ('drain') {
+                      <!-- The busy counterpart of Sleep: the lane keeps serving
+                           until the click, and the click then takes as long as
+                           the last in-flight request runs. -->
+                      <button
+                        class="btn-lane-action"
+                        [disabled]="drainingLaneId() !== null"
+                        (click)="handleDrain(row.laneId)"
+                        title="Stop sending new requests to this lane, wait for the in-flight ones to finish, then put it to sleep — or unload it when the host cannot hold it. Takes as long as the last request runs."
+                      >
+                        {{ drainingLaneId() === row.laneId ? 'Draining…' : 'Drain' }}
+                      </button>
+                    }
                   }
                 }
               </div>

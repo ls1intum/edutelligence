@@ -167,6 +167,22 @@ export class StatisticsService {
     }));
   }
 
+  /**
+   * Take a busy lane offline without dropping its in-flight requests. The
+   * server marks the lane out of the rotation, waits for the in-flight
+   * requests to finish, then sleeps the lane — or unloads it when the host
+   * cannot hold a resident sleeper. The call can take as long as the last
+   * request runs (plus the sleep), so the panel shows "Draining…" for the
+   * whole ride. A lane that does not drain in time answers an error and
+   * keeps serving, so the click can simply be retried.
+   */
+  drainLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/drain', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
   wakeLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/wake', {
       provider_id: providerId,

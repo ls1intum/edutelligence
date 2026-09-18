@@ -48,6 +48,18 @@ public class OrchestratorWorkerAdminClient {
     }
 
     /**
+     * Takes a busy lane offline without dropping its in-flight requests: the
+     * orchestrator marks the lane out of the rotation, waits for the in-flight
+     * requests to finish, and only then sleeps the lane (or unloads it when
+     * the host cannot hold a resident sleeper). The wait plus the sleep
+     * command stay under this client's read timeout, so a plain post is
+     * enough.
+     */
+    public ResponseEntity<Map> drainLane(int providerId, String laneId) {
+        return post("/internal/logosnode/lanes/drain", Map.of("provider_id", providerId, "lane_id", laneId));
+    }
+
+    /**
      * Requests a lane load. The orchestrator only accepts the request and loads
      * in the background — a model can take minutes — so this returns as quickly
      * as any other admin call and this client's read timeout is enough.
