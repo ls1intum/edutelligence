@@ -95,7 +95,7 @@ def _profile_auth(monkeypatch):
             resolved_proxy_model=None,
             role=role,
         )
-        monkeypatch.setattr(main, "authenticate_api_key", lambda headers: auth)
+        monkeypatch.setattr(main, "authenticate_api_key", lambda headers, **kwargs: auth)
 
         def fake_request_setup(headers, api_key_id, db=None):
             return (db.get_deployments_for_api_key(api_key_id), [1])
@@ -226,7 +226,7 @@ async def test_bad_json_is_rejected_before_any_db_access(monkeypatch):
 
     monkeypatch.setattr(main, "DBManager", _no_db)
     # Auth runs before body parsing; stub it so the 400 comes from the parse.
-    monkeypatch.setattr(main, "authenticate_api_key", lambda headers: SimpleNamespace(settings={}))
+    monkeypatch.setattr(main, "authenticate_api_key", lambda headers, **kwargs: SimpleNamespace(settings={}))
 
     with pytest.raises(main.HTTPException) as exc:
         await main.auth_parse_log(request, use_profile_auth=True, request_id="req-1")

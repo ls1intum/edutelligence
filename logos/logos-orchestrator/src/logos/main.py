@@ -67,10 +67,7 @@ from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineErro
 from logos.logosnode_snapshot import (
     _lane_served_context_window,
     _profile_native_context_length,
-    _safe_float,
-    _sample_snapshot_id,
     resolve_proxy_model_from_deployments,
-    _resolve_requested_model_name,
 )
 from logos.middleware import APIPrefixStripperMiddleware
 from logos.monitoring import prometheus_metrics as prom
@@ -2397,7 +2394,9 @@ async def _sync_response(
         # body is ``{"error": {"message", "type"}}`` under a wrapper, which is
         # the OpenAI shape ``coerce_upstream_error`` has already unwrapped it
         # to just above.
-        elif context.messages_upstream and exec_result.success and isinstance(response_payload, dict):
+        elif (
+            getattr(context, "messages_upstream", False) and exec_result.success and isinstance(response_payload, dict)
+        ):
             response_payload = from_message(response_payload, model_name=context.model_name)
 
         # Return dict for async jobs, JSONResponse for sync endpoints
