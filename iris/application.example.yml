@@ -34,6 +34,23 @@ memiris:
       local: gemma3
       cloud: gemma3
 
+course_memory:
+  enabled: true # Set to false to disable the Course Memory feature
+  alpha: 0.5 # Hybrid fusion weight (Weaviate convention: 0=BM25/keyword, 1=dense/vector)
+  similarity_threshold: 0.85 # Minimum cosine certainty (0-1) for a retrieved entry; certainty = (1 + cosine) / 2
+  result_limit: 5 # Max verified Q/A pairs returned per query
+  query_rewrite_enabled: true # Rewrite context-poor questions before retrieval
+  context_message_limit: 20 # Preceding thread messages used for context
+
+autonomous_tutor:
+  organizational_evidence_guard:
+    # Organizational/exam facts (dates, rooms, scope, deadlines, grading, registration) can only
+    # come from the course FAQ or a tutor-verified prior answer. When neither returned anything,
+    # the reply's confidence is capped so Artemis routes it to tutor review instead of publishing
+    # it. Artemis publishes at >= 0.85, reviews in [0.70, 0.85), discards below 0.70.
+    enabled: true
+    confidence_cap: 0.75
+
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:
@@ -204,6 +221,20 @@ llm_configuration:
       chat:
         local: oai-gpt-5-mini
         cloud: oai-gpt-5-mini-minimal
+      embedding: oai-embedding-small
+
+  course_memory_ingestion_pipeline:
+    default:
+      chat:
+        local: gpt-oss
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  course_memory_retrieval_pipeline:
+    default:
+      chat:
+        local: oai-gpt-5-mini
+        cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
 
   citation_pipeline:

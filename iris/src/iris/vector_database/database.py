@@ -8,6 +8,7 @@ from weaviate.classes.query import Filter
 from iris.common.logging_config import get_logger
 from iris.config import settings
 
+from .course_memory_schema import init_course_memory_schema
 from .faq_schema import init_faq_schema
 from .lecture_transcription_schema import init_lecture_transcription_schema
 from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
@@ -58,6 +59,7 @@ class VectorDatabase:
                     "lecture_segments": init_lecture_unit_segment_schema(client),
                     "lecture_units": init_lecture_unit_schema(client),
                     "faqs": init_faq_schema(client),
+                    "course_memory": init_course_memory_schema(client),
                 }
 
         self.client = VectorDatabase.static_client_instance
@@ -67,6 +69,7 @@ class VectorDatabase:
         self.lecture_segments = collections["lecture_segments"]
         self.lecture_units = collections["lecture_units"]
         self.faqs = collections["faqs"]
+        self.course_memory = collections["course_memory"]
 
     def delete_collection(self, collection_name):
         """

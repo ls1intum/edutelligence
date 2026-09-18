@@ -5,6 +5,9 @@ from typing import Dict, Type
 from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.competency_extraction_pipeline import CompetencyExtractionPipeline
+from iris.pipeline.course_memory_ingestion_pipeline import (
+    CourseMemoryIngestionPipeline,
+)
 from iris.pipeline.faq_ingestion_pipeline import FaqIngestionPipeline
 from iris.pipeline.inconsistency_check_pipeline import InconsistencyCheckPipeline
 from iris.pipeline.lecture_ingestion_update_pipeline import (
@@ -23,6 +26,7 @@ PipelineType = Type[
     | LectureIngestionUpdatePipeline
     | FaqIngestionPipeline
     | AutonomousTutorPipeline
+    | CourseMemoryIngestionPipeline
 ]
 
 PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
@@ -34,4 +38,5 @@ PIPELINE_BY_FEATURE: Dict[Features, PipelineType] = {
     Features.LECTURE_INGESTION: LectureIngestionUpdatePipeline,
     Features.FAQ_INGESTION: FaqIngestionPipeline,
     Features.AUTONOMOUS_TUTOR: AutonomousTutorPipeline,
+    Features.COURSE_MEMORY_INGESTION: CourseMemoryIngestionPipeline,
 }

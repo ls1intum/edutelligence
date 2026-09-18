@@ -17,7 +17,10 @@ def init():
     sample_rate = 0.01 if sentry_environment == "staging" else 1.0
 
     sentry_sdk.init(
-        dsn="https://17806b3674c44a10ac10345ba7201cc6@sentry.aet.cit.tum.de/8",
+        dsn=os.environ.get(
+            "SENTRY_DSN",
+            "https://17806b3674c44a10ac10345ba7201cc6@sentry.aet.cit.tum.de/8",
+        ),
         environment=sentry_environment,
         server_name=os.environ.get("SENTRY_SERVER_NAME", "localhost"),
         release=os.environ.get("SENTRY_RELEASE", None),
