@@ -141,6 +141,11 @@ def get_course_ingestion_census(
             LectureUnitSchema.QUALITY_SCORE.value,
         ],
     ).objects
+    # The unit-row scan is unscoped by unit (it discovers every unit in the
+    # course), so hitting the cap here can silently drop whole units from this
+    # response rather than just undercounting one -- surfaced at the course
+    # level rather than attributed to any single unit.
+    course_scan_truncated = len(unit_rows) >= _UNIT_ROW_LIMIT
     for row in unit_rows:
         # Skip object-store-only ghost unit rows: they are visible to this scan
         # but absent from the object store (and from retrieval), so counting them
@@ -222,6 +227,11 @@ def get_course_ingestion_census(
         ]
         pages = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_NUMBER.value)
         versions = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_VERSION.value)
+        # Scoped to this one unit, so a cap hit here only makes THIS unit's
+        # chunk_count/generation_count/page range unreliable, unlike the
+        # course-wide scan above.
+        if len(chunk_objects) >= _UNIT_ROW_LIMIT:
+            entry.truncated = True
         entry.chunk_count = len(real_rows)
         entry.generation_count = len(real_generations)
         entry.chunk_page_min = min(pages) if pages else None
@@ -287,5 +297,6 @@ def get_course_ingestion_census(
     return IngestionCensusDTO(
         courseId=course_id,
         currentPipelineVersion=INGESTION_PIPELINE_VERSION,
+        truncated=course_scan_truncated,
         units=[units[unit_id] for unit_id in sorted(units)],
     )

@@ -41,6 +41,9 @@ class IngestionCensusUnitDTO(BaseModel):
     segment_count: int = Field(default=0, alias="segmentCount")
     segment_page_min: Optional[int] = Field(default=None, alias="segmentPageMin")
     segment_page_max: Optional[int] = Field(default=None, alias="segmentPageMax")
+    # True when this unit's own page-chunk fetch hit the row cap: chunk_count,
+    # generation_count, and the page range may be undercounted rather than exact.
+    truncated: bool = Field(default=False, alias="truncated")
 
 
 class IngestionCensusDTO(BaseModel):
@@ -56,4 +59,9 @@ class IngestionCensusDTO(BaseModel):
     current_pipeline_version: Optional[int] = Field(
         default=None, alias="currentPipelineVersion"
     )
+    # True when the course-wide unit-row scan hit the row cap: some units' unit
+    # rows may not have been read at all, so their fields below look identical
+    # to "unit row missing" (unitRowCount 0, fingerprint None) even though the
+    # row exists -- a caller must not treat this response as exhaustive.
+    truncated: bool = Field(default=False, alias="truncated")
     units: list[IngestionCensusUnitDTO] = Field(default_factory=list)
