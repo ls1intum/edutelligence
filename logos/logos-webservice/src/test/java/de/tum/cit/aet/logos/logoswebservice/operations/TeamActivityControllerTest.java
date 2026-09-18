@@ -9,6 +9,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -202,6 +203,7 @@ class TeamActivityControllerTest {
     // Counts alone answer "is anything happening"; this answers "what".
 
     @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
     @Sql(scripts = "/sql/seed-operations-most-asked-questions.sql",
          executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
     void itGroupsAndCountsTheTeamsQuestions() throws Exception {
