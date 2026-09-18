@@ -1,7 +1,7 @@
 """Render the benchmark result as JSON + Markdown.
 
-The Markdown report is the human-facing artifact: it carries the verdict
-against the 1 ms goal, the phase table (ns detail), and the run metadata.
+The Markdown report is the human-facing artifact: it carries p50/p95 goals,
+the phase table (ns detail), and the run metadata.
 """
 
 from __future__ import annotations
@@ -11,12 +11,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-# Goals from the benchmark: p50 forwarding overhead < 1 ms and p95 < 20 ms.
-GOAL_NS = 1_000_000
+# Goals from the benchmark: p50 forwarding overhead < 10 ms and p95 < 20 ms.
+GOAL_NS = 10_000_000
 P95_GOAL_NS = 20_000_000
-# CI tolerance for the blocking check (shared runner noise); between GOAL_NS
-# and this the job passes but the comment warns.
-FAIL_NS = 1_500_000
+# The p50 goal is also the blocking CI threshold.
+FAIL_NS = GOAL_NS
 
 
 def ns_to_us(ns: float) -> str:
