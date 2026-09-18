@@ -289,6 +289,71 @@ When implementing a feature for a GitHub issue:
    - If tests fail, fix them before requesting review
    - Monitor until all checks pass
 8. Never merge directly to `main` without a PR
+9. **ALWAYS include a screenshot in every PR that touches the UI** — this is a
+   hard requirement (see below), not a nicety: desktop **and** mobile.
+
+### UI PRs Require a Screenshot (MANDATORY)
+Every pull request that changes the Logos UI (`logos/logos-ui/`) MUST include
+screenshots of the changed UI in the PR description under a `## Screenshots`
+section:
+
+- at least one **desktop** screenshot of the changed view, and
+- at least one **mobile** screenshot (e.g. 375px viewport) of the same view,
+  to prove the UI stays usable on small screens — the shared data tables drop
+  their header below 768px and fall back to per-cell `data-label`s, so a
+  mobile shot is the only way to see how a table actually renders there.
+
+Reviewers must be able to see the result without running the stack — a UI PR
+without screenshots (desktop **or** mobile) is not reviewable and will be sent
+back. Take the screenshots against a local dev stack (`docker
+compose -f docker-compose.dev.yaml up` + `ng serve`), log in with one of the
+seeded users (see below), and attach the images to the PR description.
+
+**Screenshots go into the PR description only — never commit them to the
+repository.** Host them in a public gist and embed the raw URLs.
+
+**Every screenshot must show the FULL page — a clipped viewport is not
+acceptable.** A shot that starts mid-view, omits the page header / tab bar, or
+cuts off the last table row is not acceptable: reviewers must see the page
+header, the tab bar, and the entire scrollable content (on mobile: top to
+bottom). The Logos UI scrolls inside an inner container, not the document, so
+a plain full-page browser screenshot only ever captures the first viewport.
+When scripting this (Playwright), first unlock the scroll containers — set
+`height: auto`, `max-height: none` and `overflow: visible` (all `!important`)
+on the content root's ancestors up to `<html>`/`<body>` **and** on every
+element whose computed `overflow-y` is `auto`/`scroll` — then take the
+screenshot with `fullPage: true`. Verify the result: the image must be at
+least as tall as the scrolled content (taller than the viewport when the page
+overflows).
+
+#### Hosting screenshots in a gist (do it this way or the images won't render)
+
+⚠️ The Gist REST API stores file `content` **literally** (it does NOT
+base64-decode it), and `gh gist create` refuses binary files outright.
+Uploading a PNG via `gh api` therefore stores the base64 string as ASCII
+text: the raw URL serves `text/plain`, and GitHub's PR description does not
+render the image (it silently shows nothing / a broken link).
+
+A gist is a git repository — push the binaries with git instead:
+
+```bash
+# 1) create a placeholder gist (text files ARE fine via the API)
+GIST_ID=$(echo "screenshots" | gh gist create - -p -f README.md | grep -oE '[0-9a-f]{32}')
+
+# 2) clone it with the gh token and push the real images
+git clone "https://x-access-token:$(gh auth token)@gist.github.com/$GIST_ID.git" /tmp/gist-$GIST_ID
+cp shot-desktop.png shot-mobile.png /tmp/gist-$GIST_ID/
+cd /tmp/gist-$GIST_ID && git add -A && git commit -m "screenshots" && git push
+
+# 3) embed in the PR description
+#    https://gist.githubusercontent.com/<your-user>/<GIST_ID>/raw/shot-desktop.png
+```
+
+**Always verify before finishing:**
+`curl -sI https://gist.githubusercontent.com/<user>/<GIST_ID>/raw/shot.png`
+must return `200 image/png`. If it says `text/plain`, the "image" is actually
+text — fix it via the git push above (no need to change the PR description
+URLs, the gist ID stays the same).
 
 ### PR Description Template
 ```markdown
@@ -296,6 +361,9 @@ When implementing a feature for a GitHub issue:
 
 ## Summary
 Brief description of what this PR implements.
+
+## Screenshots
+<!-- MANDATORY for UI-related PRs: embed screenshot(s) of the changed UI -->
 
 ## Changes
 - `file1.py`: Description of change
@@ -346,6 +414,15 @@ docker compose up --build
 
 # Database is at logos-db:5432/logosdb (user: postgres, pass: root)
 ```
+
+### Local Dev Login (Keycloak)
+The local Keycloak realm is seeded from `logos/keycloak/tum-realm.json`, which
+already contains **passwords for all dev users: `password`** (e.g. log in as
+`tobias.wasner` — has the `itg-admin` role, i.e. logos admin — or
+`alexandra.szuminska` for a regular developer). Don't try to set passwords via
+the Keycloak admin API: the admin clients have direct access grants disabled.
+Keycloak admin console (if ever needed): `admin` / `admin`
+(bootstrap admin, dev compose only).
 
 ## Operations Runbook
 
