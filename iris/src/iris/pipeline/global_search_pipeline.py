@@ -510,6 +510,13 @@ class GlobalSearchPipeline(SubPipeline):
                 s for s in grounded_sources if isinstance(s, EntitySourceDTO)
             ]
             if entity_grounded:
+                # The first call may have streamed a plausible-looking draft before
+                # this suppression discarded it; the fallback below runs a second,
+                # non-streamed LLM call, so without this the client would keep
+                # showing that discarded draft — markers and all — for the whole
+                # fallback round-trip instead of a thinking state.
+                if stream_handler is not None:
+                    stream_handler(None)
                 raw = self._generate_answer(
                     query, entity_grounded, access_context, navigate=True
                 )

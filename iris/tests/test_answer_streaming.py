@@ -1,11 +1,18 @@
 """Unit tests for the streaming answer contract: the !none! sentinel, the
 sentinel-gating stream handler, and the parameterized partial-result sender."""
 
+# pylint: disable=protected-access
+
+from types import SimpleNamespace
+
+from iris.domain.search.global_search_dto import EntitySourceDTO
 from iris.domain.status.global_search_status_update_dto import (
     GlobalSearchStatusUpdateDTO,
 )
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.pipeline.global_search_pipeline import (
+    GlobalSearchPipeline,
+    SearchIntent,
     _SentinelGateStreamHandler,
     parse_answer_response,
 )
@@ -103,3 +110,57 @@ class TestPartialResultSenderFactory:
         assert payload_info is not None
         payload, *_ = payload_info
         assert payload["partialResult"] == "token"
+
+
+class TestNavigateFallbackClearsTheStream:
+    """The null-to-navigate fallback reruns the answer LLM without streaming.
+
+    Without an explicit reset, whatever the first (discarded) call already
+    streamed keeps sitting as the client's last-known draft for the entire
+    fallback round-trip, markers and all, since nothing else calls
+    stream_handler again until the terminal result replaces it.
+    """
+
+    def _pipeline_with(self, *raw_answers):
+        # Bypasses __init__ (no real WeaviateClient/LLM needed): only the two
+        # methods __call__ actually invokes are stubbed, both as plain instance
+        # attributes so they run unbound (no implicit self is passed to them).
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        entity_grounded_source = EntitySourceDTO(
+            entity_type="exercise", snippet="Some exercise info", via_pointer_tier=False
+        )
+        pipeline._retrieve_sources = lambda *args, **kwargs: [entity_grounded_source]
+        answers = iter(raw_answers)
+        pipeline._generate_answer = lambda *args, **kwargs: next(answers)
+        return pipeline
+
+    def test_stream_handler_is_reset_before_the_fallback_call_runs(self):
+        pipeline = self._pipeline_with("!none!", "Yes, see the exercise.")
+        deltas: list = []
+
+        pipeline(
+            query="where is this covered",
+            intent=SearchIntent.TRIGGER_AI,
+            stream_handler=deltas.append,
+        )
+
+        # A reset (None) must reach the client BEFORE the fallback's answer is
+        # generated, not only after __call__ has already returned — otherwise the
+        # discarded first draft stays the last thing shown for the whole fallback.
+        assert None in deltas
+
+    def test_no_reset_when_the_first_call_already_answers(self):
+        pipeline = self._pipeline_with("The exam is worth 30 points.[1]")
+        deltas: list = []
+
+        pipeline(
+            query="how many points is the exam worth",
+            intent=SearchIntent.TRIGGER_AI,
+            stream_handler=deltas.append,
+        )
+
+        # No fallback ran, so nothing was ever discarded — an unconditional reset
+        # here would just flash the client back to a thinking state for no reason.
+        assert None not in deltas

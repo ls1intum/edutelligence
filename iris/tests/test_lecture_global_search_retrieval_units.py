@@ -10,6 +10,8 @@ that produced the original "vanishing answer" production complaint.
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from weaviate.classes.query import Filter
+
 from iris.config import settings
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     QWEN3_RETRIEVAL_INSTRUCTION,
@@ -18,6 +20,7 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
     _SearchTelemetry,
     _VisibilityPolicy,
 )
+from iris.vector_database.lecture_transcription_schema import LectureTranscriptionSchema
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 
 
@@ -165,6 +168,28 @@ class TestFetchLimitRegression:
             == "instance 6's unrelated unit"
         )
 
+    def test_fetch_lecture_units_sends_the_formula_limit_to_weaviate(self):
+        # The formula test above only checks max(100, n_ids * 10) in isolation; a
+        # regression that reverted the real call back to limit=len(unit_ids) (the
+        # exact vanishing-answer bug this exists to prevent) would pass it and the
+        # colliding-id test above unchanged, since that test's mock returns its
+        # fixture objects regardless of what limit was requested.
+        retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+        retrieval.lecture_unit_collection = Mock()
+        retrieval.lecture_unit_collection.query.fetch_objects.return_value = Mock(
+            objects=[]
+        )
+
+        unit_ids = list(range(92))
+        retrieval._fetch_lecture_units(unit_ids)
+
+        sent_limit = (
+            retrieval.lecture_unit_collection.query.fetch_objects.call_args.kwargs[
+                "limit"
+            ]
+        )
+        assert sent_limit == max(100, len(unit_ids) * 10)
+
 
 def test_retrieval_instruction_is_query_side_prefix():
     # The Qwen3 instruction must be a PREFIX applied to queries (asymmetric
@@ -223,7 +248,7 @@ def test_expansion_fetches_siblings_by_join_not_by_ranking():
         )
 
     retrieval._fetch_unit_objects = Mock(
-        side_effect=lambda collection, schema, ids: [
+        side_effect=lambda collection, schema, ids, extra_filter=None: [
             _props("http://a", "sibling"),
             _props("http://b", "wrong instance"),
         ]
@@ -249,3 +274,35 @@ def test_expansion_fetches_siblings_by_join_not_by_ranking():
         "wrong instance" not in snippets
     ), "a bare unit-id match from another Artemis instance must not leak"
     assert telemetry.expanded == 1
+
+
+def test_expansion_restricts_the_transcription_lane_to_slide_less_segments():
+    # A page-numbered transcription row is already represented by that page's
+    # slide segment (see _search_video_transcriptions' own page_number == -1
+    # filter for the identical reason); without the same restriction here, the
+    # join pulls it in a second time as a duplicate "video-only" moment and
+    # spends the per-unit expansion budget on content already shown once.
+    key = ("http://a", 1, 10)
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval.collection = object()
+    retrieval.transcription_collection = object()
+    retrieval._fetch_unit_objects = Mock(return_value=[])
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(return_value=[])
+
+    retrieval._expand_by_unit(
+        [_candidate(0.5, "anchor", key)],
+        _SearchTelemetry(),
+        _VisibilityPolicy.from_context(None),
+    )
+
+    calls = {
+        call.args[0]: call for call in retrieval._fetch_unit_objects.call_args_list
+    }
+    segment_call = calls[retrieval.collection]
+    transcription_call = calls[retrieval.transcription_collection]
+
+    assert len(segment_call.args) == 3, "the segment lane keeps every page"
+    assert transcription_call.args[3] == Filter.by_property(
+        LectureTranscriptionSchema.PAGE_NUMBER.value
+    ).equal(-1), "the transcription lane must skip rows a slide segment already covers"

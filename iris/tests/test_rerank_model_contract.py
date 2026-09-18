@@ -139,6 +139,7 @@ def test_request_handler_skips_documents_missing_the_content_field():
     # (`if not documents`) cannot fire here, so this actually exercises the filter
     # comprehension rather than a branch above it.
     documents = [_Doc("valid text"), _Doc(None)]
+    received_documents = []
     handler = RerankRequestHandler.model_construct(
         model_id="cloud-qwen3-reranker-8b",
         llm_manager=type(
@@ -149,9 +150,12 @@ def test_request_handler_skips_documents_missing_the_content_field():
                     "_OneDocReranker",
                     (),
                     {
-                        "rerank": lambda self, query, documents, top_n: RerankResponse(
-                            results=[{"index": 0, "relevance_score": 1.0}]
-                        )
+                        "rerank": lambda self, query, documents, top_n: (
+                            received_documents.append(documents),
+                            RerankResponse(
+                                results=[{"index": 0, "relevance_score": 1.0}]
+                            ),
+                        )[1]
                     },
                 )()
             },
@@ -160,8 +164,11 @@ def test_request_handler_skips_documents_missing_the_content_field():
 
     ranked = handler.rerank("q", documents, top_n=2, content_field_name="text")
 
-    # Only the valid document ever reaches the reranker; the one missing "text" was
-    # filtered out before the call, not passed through as empty content.
+    # Only the valid document's content ever reaches the reranker; the one missing
+    # "text" was filtered out before the call, not passed through as empty content.
+    # (Asserting only `ranked == [documents[0]]` would also pass if filtering were
+    # skipped entirely, since the stub always returns index 0 regardless of input.)
+    assert received_documents == [["valid text"]]
     assert ranked == [documents[0]]
 
 

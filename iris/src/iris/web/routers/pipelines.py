@@ -365,7 +365,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             dto.query[:120],
             intent,
             (
-                "calling LLM (HyDE + answer)"
+                "calling LLM (answer)"
                 if intent == SearchIntent.TRIGGER_AI
                 else "skipping LLM (sources only)"
             ),
@@ -449,7 +449,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
 )
 def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
     """
-    Answer a student's question using course content retrieved via HyDE.
+    Answer a student's question using retrieved course content.
 
     Returns 202 immediately. Sends webhook callbacks to Artemis:
       - TRIGGER_AI (LLM path, ~5-8s): thinking callback first, then result

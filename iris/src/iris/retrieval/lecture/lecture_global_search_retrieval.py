@@ -740,6 +740,13 @@ class LectureGlobalSearchRetrieval:
                 self.transcription_collection,
                 LectureTranscriptionSchema,
                 unit_ids,
+                # A page-numbered transcription row is already represented by that
+                # page's slide segment (see _search_video_transcriptions); without
+                # this, the join pulls it in a second time as a duplicate
+                # "video-only" moment and spends the per-unit expansion budget on it.
+                Filter.by_property(LectureTranscriptionSchema.PAGE_NUMBER.value).equal(
+                    -1
+                ),
             )
         # Only objects whose FULL key matches an anchor: a bare unit-id match can
         # belong to a different Artemis instance sharing this Weaviate.
@@ -796,14 +803,22 @@ class LectureGlobalSearchRetrieval:
 
     @staticmethod
     def _fetch_unit_objects(
-        collection: Any, schema: Any, unit_ids: list[int]
+        collection: Any,
+        schema: Any,
+        unit_ids: list[int],
+        extra_filter: Any | None = None,
     ) -> list[Any]:
         """Every object of the given units, fetched by join rather than ranked."""
         if not unit_ids:
             return []
+        unit_filter = Filter.by_property(schema.LECTURE_UNIT_ID.value).contains_any(
+            unit_ids
+        )
         return collection.query.fetch_objects(
-            filters=Filter.by_property(schema.LECTURE_UNIT_ID.value).contains_any(
-                unit_ids
+            filters=(
+                Filter.all_of([unit_filter, extra_filter])
+                if extra_filter is not None
+                else unit_filter
             ),
             limit=settings.global_search_expand_fetch_limit,
         ).objects
