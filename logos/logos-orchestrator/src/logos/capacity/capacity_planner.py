@@ -6908,9 +6908,7 @@ class CapacityPlanner:
             sleep_supported = sleep_state != "unsupported"
             host_ram_ok, eff_avail, required_mb = False, 0.0, 0.0
             if sleep_supported:
-                host_ram_ok, eff_avail, required_mb = self._check_host_ram_headroom_for_sleep(
-                    provider_id, 1, profile
-                )
+                host_ram_ok, eff_avail, required_mb = self._check_host_ram_headroom_for_sleep(provider_id, 1, profile)
 
             if sleep_supported and host_ram_ok:
                 # The lane is drained and cold-marked, so the worker's own

@@ -71,9 +71,7 @@ def _drain(monkeypatch, registry, planner_result: dict):
     monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     _patch_registry(monkeypatch, registry)
     monkeypatch.setattr(main_mod, "_capacity_planner", _planner(planner_result))
-    return internal_mod.internal_logosnode_drain_lane(
-        _payload(), _make_request("Bearer correct-secret")
-    )
+    return internal_mod.internal_logosnode_drain_lane(_payload(), _make_request("Bearer correct-secret"))
 
 
 # ── validation (mirrors the sleep endpoint) ──────────────────────────────────
@@ -134,9 +132,7 @@ async def test_returns_503_when_the_planner_is_not_ready(monkeypatch):
     monkeypatch.setattr(main_mod, "_capacity_planner", None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await internal_mod.internal_logosnode_drain_lane(
-            _payload(), _make_request("Bearer correct-secret")
-        )
+        await internal_mod.internal_logosnode_drain_lane(_payload(), _make_request("Bearer correct-secret"))
     assert exc_info.value.status_code == 503
 
 

@@ -16,8 +16,6 @@ from __future__ import annotations
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 
@@ -120,9 +118,7 @@ async def test_low_host_ram_escalates_the_sleep_to_an_unload(monkeypatch):
 
     assert result["status"] == "unloaded"
     assert "100MB available < 500MB required" in result["reason"]
-    planner._registry.send_command.assert_awaited_once_with(
-        1, "delete_lane", {"lane_id": "lane-1"}, timeout_seconds=30
-    )
+    planner._registry.send_command.assert_awaited_once_with(1, "delete_lane", {"lane_id": "lane-1"}, timeout_seconds=30)
     planner._registry.unmark_lane_cold.assert_called_once_with(1, "lane-1")
 
 
@@ -136,9 +132,7 @@ async def test_a_lane_without_sleep_mode_is_unloaded(monkeypatch):
     assert result["status"] == "unloaded"
     assert "does not support sleep mode" in result["reason"]
     ram_check.assert_not_called()
-    planner._registry.send_command.assert_awaited_once_with(
-        1, "delete_lane", {"lane_id": "lane-1"}, timeout_seconds=30
-    )
+    planner._registry.send_command.assert_awaited_once_with(1, "delete_lane", {"lane_id": "lane-1"}, timeout_seconds=30)
 
 
 # ── command failures still clear the mark ───────────────────────────────────
