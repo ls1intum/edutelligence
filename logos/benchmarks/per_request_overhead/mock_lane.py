@@ -20,11 +20,19 @@ Run: ``uvicorn mock_lane:app --host 127.0.0.1 --port <lane-port> --no-access-log
 from __future__ import annotations
 
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import FastAPI, Response
 from pydantic import BaseModel
+
+_E2E = Path(__file__).parents[2] / "e2e"
+if str(_E2E) not in sys.path:
+    sys.path.insert(0, str(_E2E))
+
+from harness.fake_vllm.protocol import chat_completion_payload, models_payload  # noqa: E402
 
 MODEL_NAME = os.environ.get("LOGOS_BENCH_MODEL", "bench-local-model")
 
@@ -53,17 +61,7 @@ async def health() -> Dict[str, Any]:
 
 @app.get("/v1/models")
 async def models() -> Dict[str, Any]:
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": MODEL_NAME,
-                "object": "model",
-                "created": 1700000000,
-                "owned_by": "bench",
-            }
-        ],
-    }
+    return models_payload(MODEL_NAME, owned_by="bench", created=1700000000)
 
 
 @app.get("/is_sleeping")
@@ -97,20 +95,14 @@ async def chat_completions(req: _ChatRequest) -> Dict[str, Any]:
     global _prompt_tokens_total, _completion_tokens_total
     _prompt_tokens_total += _USAGE["prompt_tokens"]
     _completion_tokens_total += _USAGE["completion_tokens"]
-    return {
-        "id": f"chatcmpl-bench-{_prompt_tokens_total}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": req.model or MODEL_NAME,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": _FILLER},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": dict(_USAGE),
-    }
+    return chat_completion_payload(
+        req.model or MODEL_NAME,
+        _FILLER,
+        request_id=f"chatcmpl-bench-{_prompt_tokens_total}",
+        created=int(time.time()),
+        prompt_tokens=_USAGE["prompt_tokens"],
+        completion_tokens=_USAGE["completion_tokens"],
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
