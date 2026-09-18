@@ -2238,11 +2238,10 @@ def _persist_response_block(
 ) -> None:
     """Non-billing half of the terminal response write, drained off the event
     loop (#980 O13). The billing-critical writes — usage tokens, model /
-    provider, terminal status (which fires the settled cost snapshot) — are
-    committed synchronously before the client gets its response; only the
-    payload JSONB and its side columns ride the write-behind queue, so a
-    crash after the response can no longer undercount the ledger (#980
-    review).
+    provider, terminal status — are committed synchronously before the client
+    gets its response; the payload JSONB, its side columns, and the derived
+    settled cost snapshot ride the write-behind queue (#980 O14), so a crash
+    after the response can no longer undercount the ledger (#980 review).
     """
     with DBManager() as db:
         db.store_response_payload(
@@ -2252,6 +2251,7 @@ def _persist_response_block(
             classified=classification_stats,
             queue_depth_at_arrival=queue_depth_at_arrival,
             utilization_at_arrival=utilization_at_arrival,
+            settle_cost=True,
         )
 
 
@@ -2438,8 +2438,9 @@ async def _sync_response(
                 # billing-critical half — usage tokens plus everything the
                 # settled cost snapshot reads — stays synchronous, committed
                 # before the client gets its response, so a crash in between
-                # cannot undercount the ledger. Only the payload JSONB is
-                # deferred to the write-behind thread (#980 O13).
+                # cannot undercount the ledger. The payload JSONB and the
+                # derived cost snapshot (which only reads what this commit
+                # made durable) ride the write-behind thread (#980 O13/O14).
                 with DBManager() as db:
                     # result_status rides the same UPDATE + commit as the
                     # billing columns (one fewer round-trip — #980), written

@@ -65,6 +65,7 @@ def _make_dummy_db(cost_micro_cents=None):
             classified=None,
             queue_depth_at_arrival=None,
             utilization_at_arrival=None,
+            settle_cost=None,
         ):
             self.store_calls.append(
                 {
@@ -74,6 +75,7 @@ def _make_dummy_db(cost_micro_cents=None):
                     "classified": classified,
                     "queue_depth_at_arrival": queue_depth_at_arrival,
                     "utilization_at_arrival": utilization_at_arrival,
+                    "settle_cost": settle_cost,
                 }
             )
 
@@ -444,6 +446,60 @@ async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
     content = json.loads(response.body)
     assert content["usage"]["prompt_tokens_details"]["cached_tokens"] == 6
     assert dummy_db.finalize_calls[0]["usage"]["prompt_cached_tokens"] == 6
+
+
+@pytest.mark.asyncio
+async def test_sync_response_settles_cost_on_the_queued_write(monkeypatch):
+    # #980 O14: the derived settled-cost snapshot must not take a second
+    # synchronous commit off the response path — it rides the queued
+    # payload write, which only reads what the billing commit made durable.
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def send_command(**kwargs):  # noqa: ARG001
+        return {
+            "status_code": 200,
+            "body": {
+                "id": "cmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            },
+            "headers": {"content-type": "application/json"},
+        }
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_command=send_command),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model", anthropic_dialect=None),
+        {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
+        45,
+        12,
+        27,
+        -1,
+        {"classified": True},
+        scheduling_stats={
+            "request_id": "req-sync-settle",
+            "provider_type": "logosnode",
+        },
+    )
+
+    assert response.status_code == 200
+    assert dummy_db.finalize_calls[0]["result_status"] == "success"
+    assert len(dummy_db.store_calls) == 1
+    assert dummy_db.store_calls[0]["settle_cost"] is True
 
 
 @pytest.mark.asyncio

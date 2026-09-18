@@ -4106,9 +4106,16 @@ class DBManager:
 
         The status write rides the same UPDATE and the same commit as the
         billing columns (one fewer round-trip than a separate
-        update_log_entry_metrics call — #980); the settled cost snapshot
-        still runs in its own commit afterwards, so a pricing failure can
-        never roll the status back to NULL.
+        update_log_entry_metrics call — #980). The settled cost snapshot is
+        deliberately NOT part of this write (#980 O14): it is a derived
+        value — ``logos_price_usage`` over the rows committed here — so it
+        settles in the queued `store_response_payload(settle_cost=True)`
+        instead of taking a second synchronous commit off the response
+        path. A crash in that small window leaves the ledger complete and
+        the snapshot unset (a slight billing deviation the overhead goal
+        explicitly accepts); the failure paths that persist the row
+        themselves still settle synchronously via
+        `update_log_entry_metrics`.
         """
         if not isinstance(log_id, int):
             return
@@ -4142,8 +4149,6 @@ class DBManager:
             params,
         )
         self.session.commit()
-        if status_value in {"success", "error", "timeout"}:
-            self._settle_cost_snapshot(log_id=log_id)
 
     def store_response_payload(
         self,
@@ -4154,12 +4159,23 @@ class DBManager:
         classified=None,
         queue_depth_at_arrival=None,
         utilization_at_arrival=None,
+        settle_cost: bool = False,
     ):
         """Non-billing half of the terminal response write (#980 O13 split):
         the response payload JSONB (privacy-gated) plus the classification /
         policy / queue-metric side columns. Safe to run off the event loop
         after `finalize_billing_row` has committed — neither the ledger nor
         the settled cost snapshot reads these columns.
+
+        ``settle_cost=True`` prices the row in this write (#980 O14): the
+        settled cost snapshot is a *derived* value — ``logos_price_usage``
+        over the usage rows and billing columns `finalize_billing_row`
+        already committed — so it rides the queue instead of taking a second
+        synchronous commit off the response path. It settles after the
+        payload commit in its own commit, so a pricing failure can never
+        roll the payload (or the billing row) back. The same treatment the
+        streaming path already gets via the request-id-keyed monitoring
+        flush.
         """
         if not isinstance(log_id, int):
             return
@@ -4194,6 +4210,8 @@ class DBManager:
             },
         )
         self.session.commit()
+        if settle_cost:
+            self._settle_cost_snapshot(log_id=log_id)
 
     def set_response_payload(
         self,
