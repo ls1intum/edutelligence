@@ -906,11 +906,6 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                      THEN le.input_payload -> 'messages'
                      WHEN jsonb_typeof(le.input_payload -> 'input') = 'array'
                      THEN le.input_payload -> 'input'
-                     -- The Responses API also allows a bare string input
-                     -- ({"input": "hello"}), which Logos persists as-is
-                     -- (see logos.pipeline.pipeline: isinstance(payload.get
-                     -- ("input"), str)). Wrap it as a synthetic single user
-                     -- turn so it flows through the same extraction below.
                      WHEN jsonb_typeof(le.input_payload -> 'input') = 'string'
                      THEN jsonb_build_array(
                          jsonb_build_object('role', 'user', 'content', le.input_payload -> 'input')
