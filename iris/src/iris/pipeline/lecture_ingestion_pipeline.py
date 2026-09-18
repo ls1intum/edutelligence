@@ -25,6 +25,7 @@ from iris.common.ingestion_errors import (
 )
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.config import settings
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
@@ -65,28 +66,10 @@ from .ingestion_quality import assess_page_chunks
 
 logger = get_logger(__name__)
 
-VISION_MAX_ATTEMPTS = 3
-
-# Reads above this many rows are treated as possibly truncated: the skip-check
-# then re-ingests rather than trusting a partial sample to look complete.
-_SKIP_CHECK_FETCH_LIMIT = 10_000
-
-# After write-then-purge, the unit must hold a single generation. If store
-# corruption leaves a stale generation the id-scoped purge missed, escalate to a
-# total delete + rewrite this many times before failing the run (so it converges
-# or hands off to the reconciler rather than certifying a dirty unit).
-_CONVERGENCE_MAX_ESCALATIONS = 2
-
 # Deterministic language detection: a fixed seed makes langdetect reproducible so
-# the same deck always resolves to the same language across runs.
+# the same deck always resolves to the same language across runs. This is a
+# correctness property, not a deployment tunable, so it is not configurable.
 DetectorFactory.seed = 0
-# Below this much aggregated deck text, detection is unreliable, so the deck is
-# treated as the default language rather than guessed from a scrap.
-_LANGUAGE_DETECTION_MIN_CHARS = 200
-# Detection reads at most this much text: enough for a confident verdict without
-# feeding a whole book to the detector.
-_LANGUAGE_DETECTION_MAX_CHARS = 10_000
-_DEFAULT_LANGUAGE = "en"
 
 
 def detect_course_language(page_texts: list[str]) -> str:
@@ -101,12 +84,12 @@ def detect_course_language(page_texts: list[str]) -> str:
     detection fails, it falls back to the default language instead of guessing.
     """
     sample = "\n".join(text for text in page_texts if text).strip()
-    if len(sample) < _LANGUAGE_DETECTION_MIN_CHARS:
-        return _DEFAULT_LANGUAGE
+    if len(sample) < settings.lecture_ingestion.language_detection_min_chars:
+        return settings.lecture_ingestion.default_language
     try:
-        return detect(sample[:_LANGUAGE_DETECTION_MAX_CHARS])
+        return detect(sample[: settings.lecture_ingestion.language_detection_max_chars])
     except LangDetectException:
-        return _DEFAULT_LANGUAGE
+        return settings.lecture_ingestion.default_language
 
 
 _UNICODE_BULLETS = (
@@ -427,7 +410,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         chunks = fetch_with_retry(
             lambda: self.collection.query.fetch_objects(
                 filters=self._get_page_chunk_filter(),
-                limit=_SKIP_CHECK_FETCH_LIMIT,
+                limit=settings.lecture_ingestion.skip_check_fetch_limit,
                 return_properties=[
                     LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                     LectureUnitPageChunkSchema.PAGE_VERSION.value,
@@ -443,7 +426,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         # A truncated read must never look "complete" and skip a genuinely
         # incomplete unit. If we hit the cap, re-ingest rather than trust a
         # possibly partial sample.
-        if len(chunks) >= _SKIP_CHECK_FETCH_LIMIT:
+        if len(chunks) >= settings.lecture_ingestion.skip_check_fetch_limit:
             return True
 
         pages: set[int] = set()
@@ -638,7 +621,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             self.collection,
             self._get_page_chunk_filter(),
             LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
-            limit=_SKIP_CHECK_FETCH_LIMIT,
+            limit=settings.lecture_ingestion.skip_check_fetch_limit,
             retry=retry,
         )
         return real_generations
@@ -654,7 +637,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         a unit that still will not converge fails the run so the reconciler retries
         rather than certifying a dirty unit.
         """
-        for escalation in range(_CONVERGENCE_MAX_ESCALATIONS):
+        for escalation in range(settings.lecture_ingestion.convergence_max_escalations):
             if len(self._distinct_page_run_ids(retry)) <= 1:
                 return
             logger.warning(
@@ -662,7 +645,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 "to a full delete-and-rewrite (escalation %d/%d)",
                 self.dto.lecture_unit.lecture_unit_name,
                 escalation + 1,
-                _CONVERGENCE_MAX_ESCALATIONS,
+                settings.lecture_ingestion.convergence_max_escalations,
             )
             delete_many_with_retry(
                 self.collection,
@@ -678,7 +661,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 STALE_CONTENT_DELETE_FAILED,
                 f"Lecture unit {self.dto.lecture_unit.lecture_unit_id} still holds "
                 f"multiple ingestion generations after "
-                f"{_CONVERGENCE_MAX_ESCALATIONS} full-rewrite escalations",
+                f"{settings.lecture_ingestion.convergence_max_escalations} "
+                f"full-rewrite escalations",
             )
 
     def chunk_data(
@@ -871,7 +855,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         )
 
         last_error = None
-        for attempt in range(1, VISION_MAX_ATTEMPTS + 1):
+        for attempt in range(1, settings.lecture_ingestion.vision_max_attempts + 1):
             try:
                 response = self.llm_chat.chat(
                     [iris_message],
@@ -901,13 +885,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 logger.warning(
                     "Slide vision attempt %d/%d failed: %s",
                     attempt,
-                    VISION_MAX_ATTEMPTS,
+                    settings.lecture_ingestion.vision_max_attempts,
                     e,
                 )
 
         raise IngestionStageError(
             SLIDE_VISION_FAILED,
-            f"Slide interpretation failed after {VISION_MAX_ATTEMPTS} attempts: "
+            f"Slide interpretation failed after "
+            f"{settings.lecture_ingestion.vision_max_attempts} attempts: "
             f"{last_error}",
         ) from last_error
 

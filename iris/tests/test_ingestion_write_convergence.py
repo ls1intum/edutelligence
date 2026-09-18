@@ -20,8 +20,8 @@ from iris.common.ingestion_errors import (
     VECTOR_STORE_WRITE_FAILED,
     IngestionStageError,
 )
+from iris.config import settings
 from iris.pipeline.lecture_ingestion_pipeline import (
-    VISION_MAX_ATTEMPTS,
     LectureUnitPageIngestionPipeline,
 )
 from iris.pipeline.lecture_ingestion_update_pipeline import (
@@ -406,7 +406,10 @@ def test_interpret_image_retries_then_fails_the_run():
         pipeline.interpret_image("aW1n", "", "Lecture", "en")
 
     assert exc_info.value.error_code == SLIDE_VISION_FAILED
-    assert pipeline.llm_chat.chat.call_count == VISION_MAX_ATTEMPTS
+    assert (
+        pipeline.llm_chat.chat.call_count
+        == settings.lecture_ingestion.vision_max_attempts
+    )
 
 
 def test_interpret_image_rejects_empty_descriptions():
@@ -427,7 +430,10 @@ def test_interpret_image_rejects_empty_descriptions():
         pipeline.interpret_image("aW1n", "", "Lecture", "en")
 
     assert exc_info.value.error_code == SLIDE_VISION_FAILED
-    assert pipeline.llm_chat.chat.call_count == VISION_MAX_ATTEMPTS
+    assert (
+        pipeline.llm_chat.chat.call_count
+        == settings.lecture_ingestion.vision_max_attempts
+    )
 
 
 def test_update_pipeline_forwards_stage_error_code_once():

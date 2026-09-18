@@ -176,6 +176,50 @@ class IngestionWorkerSettings(BaseModel):
     allowed_upstream_hosts: list[str] = Field(default_factory=list)
 
 
+class LectureIngestionSettings(BaseModel):
+    """Tunables for the lecture-ingestion pipeline: vision retries, read-completeness
+    guards, and language detection. Defaults match the pipeline's original
+    hardcoded values.
+    """
+
+    vision_max_attempts: int = Field(
+        default=3,
+        description="Max attempts to interpret a slide via the vision LLM before failing the run.",
+    )
+    skip_check_fetch_limit: int = Field(
+        default=10_000,
+        description=(
+            "Max rows read when checking whether a unit's stored chunks are already "
+            "current and complete, and when counting a unit's distinct ingestion "
+            "generations. A read that hits this cap is treated as possibly "
+            "truncated/incomplete rather than trusted as a full sample."
+        ),
+    )
+    convergence_max_escalations: int = Field(
+        default=2,
+        description=(
+            "After write-then-purge, how many times to escalate to a full "
+            "delete-and-rewrite if a stale generation the id-scoped purge missed is "
+            "still visible, before failing the run so the reconciler retries."
+        ),
+    )
+    language_detection_min_chars: int = Field(
+        default=200,
+        description=(
+            "Below this much aggregated deck text, language detection is unreliable "
+            "and default_language is used instead of guessing."
+        ),
+    )
+    language_detection_max_chars: int = Field(
+        default=10_000,
+        description="Max characters of deck text fed to the language detector per run.",
+    )
+    default_language: str = Field(
+        default="en",
+        description="Fallback language (ISO 639-1) when detection is skipped or fails.",
+    )
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -189,6 +233,9 @@ class Settings(BaseModel):
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
     ingestion_worker: IngestionWorkerSettings = Field(
         default_factory=IngestionWorkerSettings
+    )
+    lecture_ingestion: LectureIngestionSettings = Field(
+        default_factory=LectureIngestionSettings
     )
 
     @classmethod
