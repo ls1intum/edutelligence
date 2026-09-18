@@ -307,8 +307,10 @@ def _is_timeout_failure(
         return True
     if status_code == 504:
         return True
-    if error and "timeout" in error.lower():
-        return True
+    if error:
+        lowered = error.lower()
+        if "timeout" in lowered or "timed out" in lowered:
+            return True
     return False
 
 

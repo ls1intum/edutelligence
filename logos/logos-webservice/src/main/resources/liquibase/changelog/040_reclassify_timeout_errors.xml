@@ -19,16 +19,13 @@
             UPDATE log_entry
                SET result_status = 'timeout'
              WHERE result_status = 'error'
-               AND error_message ILIKE '%timeout%';
+               AND (error_message ILIKE '%timeout%'
+                    OR error_message ILIKE '%timed out%');
         </sql>
-        <rollback>
-            <sql>
-                UPDATE log_entry
-                   SET result_status = 'error'
-                 WHERE result_status = 'timeout'
-                   AND error_message ILIKE '%timeout%';
-            </sql>
-        </rollback>
+        <!-- Irreversible: a matching rollback would also flip timeouts the
+             orchestrator wrote after this migration, because we do not keep
+             the IDs this UPDATE touched. -->
+        <rollback/>
     </changeSet>
 
 </databaseChangeLog>

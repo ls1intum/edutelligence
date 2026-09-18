@@ -1006,6 +1006,7 @@ export class Statistics implements OnInit, OnDestroy {
     if (next === this.filterUserId()) return;
     this.filterUserId.set(next);
     this.applyScope();
+    void this.loadScopeOptions();
   }
 
   /**

@@ -159,13 +159,14 @@ export class RecentRequests implements OnChanges, OnDestroy {
 
   /**
    * The empty state, worded for the filters that are on. A state filter alone
-   * names the state; a team/user scope keeps its own wording, with the state
-   * folded in when both are active.
+   * names the state; any other scope (team, requester, provider, errors-only)
+   * uses neutral "matching" wording so provider/errors-only does not claim a
+   * requester or team was selected.
    */
   readonly emptyMessage = computed(() => {
     const state = this._filterStatus() ? `${this._filterStatus()} ` : '';
     return this.filterActive()
-      ? `No ${state}requests from this requester or team in the selected range.`
+      ? `No ${state}matching requests in the selected range.`
       : `No ${state}requests in this time range.`;
   });
 
@@ -181,6 +182,12 @@ export class RecentRequests implements OnChanges, OnDestroy {
    * of cursors already used.
    */
   private cursorForPage: (RequestCursor | null)[] = [null];
+
+  /**
+   * Bumped whenever the range or scope changes so an in-flight page fetch for
+   * the previous filter cannot write rows back onto the new one.
+   */
+  private pageFetchGeneration = 0;
 
   private readonly _pageRows = signal<RequestItem[]>([]);
   private readonly _pageTotal = signal<number | null>(null);
@@ -279,6 +286,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
   }
 
   private resetToFirstPage(): void {
+    this.pageFetchGeneration++;
     this.pageIndex.set(0);
     this.cursorForPage = [null];
     this._pageRows.set([]);
@@ -286,6 +294,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
     this._pageHasMore.set(false);
     this._pageNextCursor.set(null);
     this.error.set(null);
+    this.loading.set(false);
   }
 
   // ── Paging handlers ────────────────────────────────────────────────────────
@@ -330,6 +339,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
     const range = this.range;
     if (!range) return;
 
+    const generation = this.pageFetchGeneration;
     this.loading.set(true);
     this.error.set(null);
     try {
@@ -342,6 +352,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
           status: this._filterStatus() },
         cursor,
       );
+      // Scope or range moved on while we waited — drop the stale page.
+      if (generation !== this.pageFetchGeneration) return;
       const rows = page.requests ?? [];
       // An empty page past the first is a dead end — the range held exactly a
       // multiple of the page size, or rows fell out of it while the operator
@@ -358,11 +370,12 @@ export class RecentRequests implements OnChanges, OnDestroy {
       this._pageNextCursor.set(page.next_cursor ?? null);
       this.pageIndex.set(index);
     } catch (err: unknown) {
+      if (generation !== this.pageFetchGeneration) return;
       const e = err as { status?: number; error?: { error?: string; detail?: string } };
       const detail = e.error?.error ?? e.error?.detail ?? `HTTP ${e.status}`;
       this.error.set(`Could not load requests: ${detail}`);
     } finally {
-      this.loading.set(false);
+      if (generation === this.pageFetchGeneration) this.loading.set(false);
     }
   }
 

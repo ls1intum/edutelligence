@@ -10,6 +10,7 @@ def test_explicit_timed_out_flag():
 def test_error_text_containing_timeout():
     assert main._is_timeout_failure(error="Command timeout waiting for worker response")
     assert main._is_timeout_failure(error="Queue wait timeout after 30s")
+    assert main._is_timeout_failure(error="worker timed out")
 
 
 def test_http_504_is_a_timeout():
