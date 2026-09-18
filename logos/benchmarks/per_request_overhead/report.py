@@ -38,7 +38,7 @@ def build_markdown(result: Dict[str, Any]) -> str:
     phases = result.get("phases", {})
 
     lines: List[str] = []
-    lines.append("# Per-Request Forwarding Overhead (issue #980)")
+    lines.append("# Per-Request Forwarding Overhead")
     lines.append("")
     lines.append(
         f"**{icon} {verdict_str}** — overhead p50 = **{ns_to_us(ov['overhead_ns'])} µs** "

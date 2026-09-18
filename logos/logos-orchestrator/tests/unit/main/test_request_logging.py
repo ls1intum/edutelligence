@@ -39,6 +39,8 @@ def _make_dummy_db(cost_micro_cents=None):
             service_tier=None,
             set_first_token=False,
             request_id=None,
+            result_status=None,
+            error_message=None,
         ):
             self.finalize_calls.append(
                 {
@@ -49,6 +51,8 @@ def _make_dummy_db(cost_micro_cents=None):
                     "service_tier": service_tier,
                     "set_first_token": set_first_token,
                     "request_id": request_id,
+                    "result_status": result_status,
+                    "error_message": error_message,
                 }
             )
 
@@ -221,6 +225,17 @@ def _make_pipeline(
         @staticmethod
         def record_completion(**kwargs):
             completion_calls.append(kwargs)
+
+        @staticmethod
+        def settle_completion(**kwargs):
+            # The sync path settles on the event loop and defers only the DB
+            # write (write_completion) to the queue — same recorded kwargs.
+            completion_calls.append(kwargs)
+            return {}
+
+        @staticmethod
+        def write_completion(request_id, fields):  # noqa: ARG002
+            return None
 
     return DummyPipeline(), completion_calls, release_calls
 
@@ -1011,6 +1026,11 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     assert response.headers["x-request-id"] == "req-sync-error"
     assert dummy_db.ttft_calls == []
     assert dummy_db.finalize_calls[0]["set_first_token"] is False
+    # The terminal status rides the billing UPDATE itself — one write, no
+    # follow-up metrics UPDATE on the sync path.
+    assert dummy_db.finalize_calls[0]["result_status"] == "error"
+    assert dummy_db.finalize_calls[0]["error_message"] == "bad request"
+    assert dummy_db.metric_calls == []
     assert dummy_db.store_calls[0]["payload"] == {"error": "bad request"}
     assert completion_calls == [
         {

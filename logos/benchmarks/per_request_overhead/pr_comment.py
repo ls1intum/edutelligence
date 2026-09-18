@@ -82,7 +82,7 @@ def _comment_markdown(result: Dict[str, Any]) -> str:
     direct = result["summary"]["direct"]
     icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}[verdict(overhead)]
     lines = [
-        f"## {icon} {verdict(overhead)} — Per-request forwarding overhead (issue #980)",
+        f"## {icon} {verdict(overhead)} — Per-request forwarding overhead",
         "",
         f"**Overhead p50 = {overhead / 1000.0:,.1f} µs** — goal "
         f"< {GOAL_NS / 1000.0:,.0f} µs, CI fail threshold {FAIL_NS / 1000.0:,.0f} µs.",

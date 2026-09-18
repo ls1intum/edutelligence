@@ -63,6 +63,12 @@ class AuthContext:
     default_priority: int = 0
     cloud_rl: Optional[dict] = None
     local_rl: Optional[dict] = None
+    # Request-scoped, set by auth_parse_log: the proxy-mode model resolution
+    # ((model_id, canonical name) or None) run in the same DB session as the
+    # deployment lookup, so the request path does not need a second checkout
+    # (#980). None when the body names no model, or on callers that do not go
+    # through auth_parse_log — _execute_proxy_mode then resolves on its own.
+    resolved_proxy_model: Optional[tuple[int, str]] = None
 
 
 def _resolve_batch_credential(credential: str) -> Optional[Dict[str, Any]]:

@@ -129,3 +129,68 @@ def test_take_buffer_for_an_unknown_request_is_empty(monkeypatch):
     _patch_prom(monkeypatch)
 
     assert recorder.take_buffer("never-seen") == {}
+
+
+def test_settle_and_take_returns_the_terminal_write_without_db(monkeypatch):
+    """settle_and_take is the event-loop half of the split completion write:
+    it settles the request and pops the buffer, but performs no DB write —
+    the caller hands the dict to write_completion on the queue thread."""
+    recorder, calls = _make_recorder(monkeypatch, {27: "m"}, {13: "p"})
+    _patch_prom(monkeypatch)
+
+    _full_lifecycle(recorder)
+    fields = recorder.settle_and_take("req-buf", "success", error_message=None)
+
+    assert calls == []
+    assert fields["result_status"] == "success"
+    assert fields["provider_id"] == 13
+    assert "request_complete_ts" in fields
+    # The shared state is already finalised: nothing left in the buffer, and
+    # the in-flight gauge is down.
+    assert recorder_module._field_buffers == {}
+    assert recorder_module._request_states == {}
+
+
+def test_write_completion_writes_only_the_handover_dict(monkeypatch):
+    """write_completion is the queue-thread half: it must touch no shared
+    recorder state (the old bug: record_completion running on the write-queue
+    thread popped the event loop's dicts — the stale sweep could then raise
+    'dictionary changed size during iteration')."""
+    recorder, calls = _make_recorder(monkeypatch, {27: "m"}, {13: "p"})
+    _patch_prom(monkeypatch)
+
+    # A live request on the event loop, exactly the interleaving the race
+    # needs: the queue thread writes request A while the loop tracks B.
+    _full_lifecycle(recorder)
+    fields = recorder.settle_and_take("req-buf", "success")
+    recorder.record_enqueue(request_id="req-other", model_id=27, provider_id=13, initial_priority=None, queue_depth=0)
+
+    recorder.write_completion("req-buf", fields)
+
+    assert len(calls) == 1
+    assert calls[0] == {**fields, "request_id": "req-buf"}
+    # The event-loop request is untouched by the queue-thread write.
+    assert "req-other" in recorder_module._request_states
+    assert recorder_module._field_buffers["req-other"]
+
+
+def test_split_write_matches_record_complete(monkeypatch):
+    """record_complete (direct callers, e.g. streaming) must produce the same
+    DB write as settle_and_take + write_completion (queued sync path)."""
+    recorder, calls = _make_recorder(monkeypatch, {27: "m"}, {13: "p"})
+    _patch_prom(monkeypatch)
+
+    _full_lifecycle(recorder)
+    recorder.record_complete(request_id="req-buf", result_status="success", usage_tokens={"prompt_tokens": 3})
+    direct = calls.pop()
+
+    _full_lifecycle(recorder)
+    fields = recorder.settle_and_take("req-buf", "success", usage_tokens={"prompt_tokens": 3})
+    recorder.write_completion("req-buf", fields)
+    split = calls.pop()
+
+    # The two lifecycle runs stamp their own timestamps — drop both.
+    for call in (direct, split):
+        call.pop("request_complete_ts", None)
+        call.pop("scheduled_ts", None)
+    assert split == direct

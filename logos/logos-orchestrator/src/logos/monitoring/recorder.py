@@ -296,6 +296,27 @@ class MonitoringRecorder:
         error_message: Optional[str] = None,
         usage_tokens: Optional[Dict[str, int]] = None,
     ) -> None:
+        self._write(
+            request_id, **self._terminal_fields(request_id, result_status, cold_start, usage_tokens, error_message)
+        )
+
+    def _terminal_fields(
+        self,
+        request_id: str,
+        result_status: ResultStatus | str,
+        cold_start: Optional[bool],
+        usage_tokens: Optional[Dict[str, int]],
+        error_message: Optional[str],
+    ) -> Dict[str, Any]:
+        """The terminal accounting, without the DB write.
+
+        ``_settle`` and the buffer pop mutate ``_request_states`` /
+        ``_field_buffers`` — plain module dicts owned by the event loop. This
+        must therefore run on the event-loop thread; callers that defer the
+        write to another thread (the write-behind queue) use
+        ``settle_and_take`` + ``write_completion`` instead of calling
+        ``record_complete`` there.
+        """
         status_value = self._settle(request_id, result_status, cold_start, usage_tokens)
 
         payload = {
@@ -306,7 +327,33 @@ class MonitoringRecorder:
         }
         # One UPDATE per request: everything buffered since enqueue is
         # flushed together with the terminal fields.
-        self._write(request_id, **_field_buffers.pop(request_id, {}), **payload)
+        return {**_field_buffers.pop(request_id, {}), **payload}
+
+    def settle_and_take(
+        self,
+        request_id: str,
+        result_status: ResultStatus | str,
+        cold_start: Optional[bool] = None,
+        error_message: Optional[str] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """Terminal accounting for the event loop; returns the write's fields.
+
+        Run this on the event loop — it settles the request and pops its
+        buffered fields — and hand the returned dict to ``write_completion``
+        on whatever thread performs the write. The split keeps the shared
+        recorder state on a single thread while the DB round-trip still
+        rides the write-behind queue (#980).
+        """
+        return self._terminal_fields(request_id, result_status, cold_start, usage_tokens, error_message)
+
+    def write_completion(self, request_id: str, fields: Dict[str, Any]) -> None:
+        """The terminal metrics write for a ``settle_and_take`` result.
+
+        Safe on the write-behind queue thread: it touches no recorder state,
+        only the DB row keyed by request_id.
+        """
+        self._write(request_id, **fields)
 
     def record_provider(self, request_id: str, provider_id: int) -> None:
         """Attach provider_id once it is resolved (after scheduling)."""

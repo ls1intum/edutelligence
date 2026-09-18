@@ -655,6 +655,32 @@ class RequestPipeline:
             usage_tokens=usage_tokens,
         )
 
+    def settle_completion(
+        self,
+        request_id: str,
+        result_status: str,
+        error_message: Optional[str] = None,
+        cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """Terminal accounting on this (event-loop) thread; returns the write's fields.
+
+        The request path calls this and hands the dict to ``write_completion``
+        on the write-behind queue thread — the recorder's shared state must
+        never be mutated off the event loop.
+        """
+        return self._monitoring.settle_and_take(
+            request_id=request_id,
+            result_status=result_status,
+            error_message=error_message,
+            cold_start=cold_start,
+            usage_tokens=usage_tokens,
+        )
+
+    def write_completion(self, request_id: str, fields: Dict[str, Any]) -> None:
+        """Terminal metrics write for a ``settle_completion`` result (any thread)."""
+        self._monitoring.write_completion(request_id, fields)
+
     def discard_request(self, request_id: str, result_status: str) -> None:
         """Close out a request whose terminal log row was written elsewhere."""
         self._monitoring.discard(request_id, result_status)

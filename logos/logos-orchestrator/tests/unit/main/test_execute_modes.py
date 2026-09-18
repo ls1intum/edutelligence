@@ -48,7 +48,7 @@ async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
         await main._execute_proxy_mode(
             body={"stream": True},  # no "model" key
             headers={"Authorization": "Bearer x"},
-            auth=MagicMock(key_value="lg-key", api_key_id=1),
+            auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
             deployments=[{"model_id": 1, "provider_id": 1}],
             log_id=None,
             is_async_job=False,
@@ -331,7 +331,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
     result = await main._execute_proxy_mode(
         body={"model": "gemma2:2b", "stream": False},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[
             {"model_id": 27, "provider_id": 12},
             {"model_id": 99, "provider_id": 1},
@@ -378,7 +378,7 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
     result = await main._execute_proxy_mode(
         body={"model": "Qwen_Qwen2.5-0.5B-Instruct", "stream": True},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[
             {"model_id": 32, "provider_id": 13},
             {"model_id": 99, "provider_id": 1},
@@ -428,7 +428,7 @@ async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
     result = await main._execute_proxy_mode(
         body={"model": "local-most-powerful", "stream": True},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[
             {"model_id": 32, "provider_id": 13},
             {"model_id": 99, "provider_id": 1},
@@ -471,7 +471,7 @@ async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeyp
     result = await main._execute_proxy_mode(
         body={"model": "GEMMA2:2B", "stream": False},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[{"model_id": 27, "provider_id": 12}],
         log_id=None,
         is_async_job=False,

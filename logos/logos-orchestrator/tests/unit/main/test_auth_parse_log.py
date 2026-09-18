@@ -1,9 +1,11 @@
-"""auth_parse_log (#980): log insert and deployment lookup share one session.
+"""auth_parse_log (#980): log insert, deployment lookup, and proxy-mode
+model resolution share one session.
 
-The log row now carries request_id and timeout_s from the INSERT (no
-follow-up metrics UPDATE), and the deployment lookup runs in the same
-DBManager session, so the hot path checks out the pool once instead of
-twice.
+The log row carries request_id and timeout_s from the INSERT (no follow-up
+metrics UPDATE), and the deployment lookup — plus, when the body names a
+model, the proxy-mode resolution that the auth context carries to
+_execute_proxy_mode — runs in the same DBManager session, so the hot path
+checks out the pool once for all of it.
 """
 
 from __future__ import annotations
@@ -39,8 +41,14 @@ class _RecordingDB:
     def __init__(self):
         self.log_usage_kwargs = None
         self.deployments_calls = 0
+        self.resolve_calls = 0
+        # The DBManager context is entered exactly once per request: the log
+        # insert, the deployment lookup, and the proxy-mode resolution must
+        # all run inside that single checkout.
+        self.entries = 0
 
     def __enter__(self):
+        self.entries += 1
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -57,6 +65,10 @@ class _RecordingDB:
         self.deployments_calls += 1
         return [{"model_id": 1, "provider_id": 2}]
 
+    def resolve_proxy_model(self, api_key_id, requested_name):
+        self.resolve_calls += 1
+        return (7, requested_name)
+
 
 @pytest.fixture
 def _profile_auth(monkeypatch):
@@ -71,6 +83,7 @@ def _profile_auth(monkeypatch):
         environment="test",
         log_level="BILLING",
         settings={},
+        resolved_proxy_model=None,
     )
     monkeypatch.setattr(main, "authenticate_api_key", lambda headers: auth)
 
@@ -116,6 +129,34 @@ async def test_deployments_are_read_fresh_per_request(_profile_auth):
     )
     assert raw_deployments_again == [{"model_id": 1, "provider_id": 2}]
     assert _profile_auth.deployments_calls == 2  # fresh read, no cache
+
+
+@pytest.mark.asyncio
+async def test_proxy_model_resolution_rides_the_single_checkout(_profile_auth):
+    """The proxy-mode resolution runs inside the same DBManager checkout as
+    the log insert and the deployment lookup (#980): the request path must
+    not pay a second checkout to resolve the requested model."""
+    headers, auth, body, client_ip, log_id, _ = await main.auth_parse_log(
+        _request({"model": "m"}), use_profile_auth=True, request_id="req-1"
+    )
+
+    assert log_id == 42
+    assert _profile_auth.deployments_calls == 1
+    assert _profile_auth.resolve_calls == 1
+    assert auth.resolved_proxy_model == (7, "m")
+    # One checkout served the log insert, the deployments, and the resolve.
+    assert _profile_auth.entries == 1
+
+
+@pytest.mark.asyncio
+async def test_body_without_model_does_not_resolve(_profile_auth):
+    """Resource-mode bodies (no 'model' key) skip the resolution entirely."""
+    _, auth, *_ = await main.auth_parse_log(
+        _request({"messages": [{"role": "user", "content": "hi"}]}), use_profile_auth=True, request_id="req-1"
+    )
+
+    assert _profile_auth.resolve_calls == 0
+    assert auth.resolved_proxy_model is None
 
 
 @pytest.mark.asyncio

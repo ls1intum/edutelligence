@@ -455,34 +455,43 @@ class DBManager:
         if log_id is not None:
             params["log_id"] = log_id
             where_clause = "id = :log_id"
-            settled_where_clause = "le.id = :log_id"
         else:
             params["lookup_request_id"] = request_id
             where_clause = "request_id = :lookup_request_id"
-            settled_where_clause = "le.request_id = :lookup_request_id"
 
         sql = text(f"UPDATE log_entry SET {assignments} WHERE {where_clause}")
         self.session.execute(sql, params)
         self.session.commit()
 
-        # Pricing is the riskier half of finalisation (a function bug, a lock, a
-        # statement timeout). Run it only after the status write is durably
-        # committed and never let its failure surface, so a request cannot be
-        # left stuck at result_status NULL because the snapshot blew up.
         if update_data.get("result_status") in {"success", "error", "timeout"}:
-            try:
-                self.session.execute(
-                    text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause=settled_where_clause)),
-                    params,
-                )
-                self.session.commit()
-            except Exception as exc:  # noqa: BLE001 - snapshot must not break finalisation
-                self.session.rollback()
-                logger.warning(
-                    "settled-cost snapshot failed for %s: %s",
-                    log_id if log_id is not None else request_id,
-                    exc,
-                )
+            self._settle_cost_snapshot(log_id=log_id, request_id=request_id, params=params)
+
+    def _settle_cost_snapshot(self, *, log_id=None, request_id=None, params=None) -> None:
+        """Persist the settled cost snapshot, after the status write is durable.
+
+        Pricing is the riskier half of finalisation (a function bug, a lock, a
+        statement timeout). It runs only after the status write is durably
+        committed and its failure never surfaces, so a request cannot be left
+        stuck at result_status NULL because the snapshot blew up.
+
+        ``params`` carries the where-clause binding — the
+        update_log_entry_metrics path reuses the params dict it already built
+        (the snapshot SQL only binds the where clause, the rest is inert);
+        callers that only have the id let the helper build it.
+        """
+        if params is None:
+            params = {"log_id": log_id} if log_id is not None else {"lookup_request_id": request_id}
+        where_clause = "le.id = :log_id" if log_id is not None else "le.request_id = :lookup_request_id"
+        try:
+            self.session.execute(text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause=where_clause)), params)
+            self.session.commit()
+        except Exception as exc:  # noqa: BLE001 - snapshot must not break finalisation
+            self.session.rollback()
+            logger.warning(
+                "settled-cost snapshot failed for %s: %s",
+                log_id if log_id is not None else request_id,
+                exc,
+            )
 
     def update_request_log_metrics(
         self,
@@ -4078,41 +4087,58 @@ class DBManager:
         service_tier=None,
         set_first_token: bool = False,
         request_id=None,
+        result_status=None,
+        error_message=None,
     ):
         """Synchronous billing half of the terminal response write (#980 O13
         split, after review): the usage_tokens rows plus exactly the row
         columns the settled cost snapshot reads (model_id, provider_id,
-        service_tier, timestamp_response, time_at_first_token). This must be
+        service_tier, timestamp_response, time_at_first_token) — and, when
+        passed, the terminal result_status/error_message. This must be
         committed BEFORE the client gets its response — a crash in between
         must not be able to undercount the ledger. The non-billing half
         (`store_response_payload`) may run later on the write-behind queue.
+
+        The status write rides the same UPDATE and the same commit as the
+        billing columns (one fewer round-trip than a separate
+        update_log_entry_metrics call — #980); the settled cost snapshot
+        still runs in its own commit afterwards, so a pricing failure can
+        never roll the status back to NULL.
         """
         if not isinstance(log_id, int):
             return
         self._upsert_usage_tokens(log_id, usage)
-        sql = text("""
-                   UPDATE log_entry
-                   SET model_id            = COALESCE(:model_id, model_id),
-                       provider_id         = COALESCE(:provider_id, provider_id),
-                       service_tier        = COALESCE(:service_tier, service_tier),
-                       timestamp_response  = :timestamp,
-                       request_id          = COALESCE(:request_id, request_id),
-                       time_at_first_token = COALESCE(:first_token, time_at_first_token)
-                   WHERE id = :log_id
-                   """)
+        status_value = result_status.value if isinstance(result_status, ResultStatus) else result_status
+        assignments = [
+            "model_id            = COALESCE(:model_id, model_id)",
+            "provider_id         = COALESCE(:provider_id, provider_id)",
+            "service_tier        = COALESCE(:service_tier, service_tier)",
+            "timestamp_response  = :timestamp",
+            "request_id          = COALESCE(:request_id, request_id)",
+            "time_at_first_token = COALESCE(:first_token, time_at_first_token)",
+        ]
+        params = {
+            "model_id": model_id,
+            "provider_id": provider_id,
+            "service_tier": service_tier,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "log_id": log_id,
+            "request_id": request_id,
+            "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
+        }
+        if status_value is not None:
+            assignments.append("result_status     = :result_status")
+            params["result_status"] = status_value
+        if error_message is not None:
+            assignments.append("error_message     = :error_message")
+            params["error_message"] = _stringify_error_message(error_message)
         self.session.execute(
-            sql,
-            {
-                "model_id": model_id,
-                "provider_id": provider_id,
-                "service_tier": service_tier,
-                "timestamp": datetime.datetime.now(datetime.timezone.utc),
-                "log_id": log_id,
-                "request_id": request_id,
-                "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
-            },
+            text(f"UPDATE log_entry SET {', '.join(assignments)} WHERE id = :log_id"),
+            params,
         )
         self.session.commit()
+        if status_value in {"success", "error", "timeout"}:
+            self._settle_cost_snapshot(log_id=log_id)
 
     def store_response_payload(
         self,
