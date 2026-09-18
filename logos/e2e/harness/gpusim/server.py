@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from harness.fake_vllm.protocol import chat_completion_payload, models_payload
 from harness.gpusim import state as gpustate
 from harness.gpusim.scenario import VllmScript
 
@@ -152,19 +153,12 @@ class Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _models_payload(lane: Lane) -> dict[str, Any]:
-        return {
-            "object": "list",
-            "data": [
-                {
-                    "id": lane.model,
-                    "object": "model",
-                    "created": int(lane.started_at),
-                    "owned_by": "vllm",
-                    "root": lane.model,
-                    "max_model_len": 32768,
-                }
-            ],
-        }
+        return models_payload(
+            lane.model,
+            owned_by="vllm",
+            created=int(lane.started_at),
+            max_model_len=32768,
+        )
 
     def _completion(self, lane: Lane, path: str, body: dict[str, Any]) -> None:
         if lane.sleeping:
@@ -208,15 +202,21 @@ class Handler(BaseHTTPRequestHandler):
     def _final_payload(
         chat: bool, request_id: str, created: int, model: str, prompt_tokens: int, words: list[str]
     ) -> dict[str, Any]:
+        if chat:
+            return chat_completion_payload(
+                model,
+                " ".join(words),
+                request_id=request_id,
+                created=created,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=len(words),
+                prompt_tokens_details={"cached_tokens": 0},
+            )
         text = " ".join(words)
-        choice = (
-            {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
-            if chat
-            else {"index": 0, "text": text, "finish_reason": "stop"}
-        )
+        choice = {"index": 0, "text": text, "finish_reason": "stop"}
         return {
             "id": request_id,
-            "object": "chat.completion" if chat else "text_completion",
+            "object": "text_completion",
             "created": created,
             "model": model,
             "choices": [choice],

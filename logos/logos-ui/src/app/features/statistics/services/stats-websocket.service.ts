@@ -55,6 +55,8 @@ export interface StatsWsHandlers {
 export interface StatsScope {
   userId: number | null;
   teamId: number | null;
+  providerId: number | null;
+  errorsOnly: boolean;
 }
 
 export interface StatsWsConnectOptions {
@@ -143,6 +145,8 @@ export class StatsWebsocketService {
           action: 'set_scope',
           user_id: scope.userId,
           team_id: scope.teamId,
+          provider_id: scope.providerId,
+          errors_only: scope.errorsOnly || null,
         })
       );
     }
@@ -286,6 +290,8 @@ export class StatsWebsocketService {
           },
           user_id: current.scope?.userId ?? null,
           team_id: current.scope?.teamId ?? null,
+          provider_id: current.scope?.providerId ?? null,
+          errors_only: current.scope?.errorsOnly || null,
           status: current.feedStatus ?? null,
         })
       );

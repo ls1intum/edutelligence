@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import logging
 import os
 import subprocess
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
@@ -27,6 +29,7 @@ except Exception:  # noqa: BLE001
         pass
 
 
+from logos_worker_node import perf_trace as worker_perf
 from logos_worker_node import prometheus_metrics as prom
 from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.models import (
@@ -57,6 +60,16 @@ _MAX_CALIBRATION_LOG_DOWNLOAD_BYTES = 10 * 1024 * 1024
 # Commands that can grow this node's VRAM footprint. Refused while a
 # calibration session holds the GPU — see _execute_command.
 _VRAM_GROWING_ACTIONS = frozenset({"add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"})
+
+
+_NULL_PERF_PHASE = nullcontext()
+
+
+def _perf_phase(tracer: Any, name: str) -> Any:
+    """Traced phase when a tracer is active, a no-op context manager otherwise."""
+    if tracer is None:
+        return _NULL_PERF_PHASE
+    return tracer.phase(name)
 
 
 class _CalibrationSession:
@@ -128,6 +141,11 @@ class LogosBridgeClient:
         self._command_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
+        # One pooled relay client shared by every infer/stream command instead
+        # of a fresh AsyncClient (and a fresh TCP connection to the lane) per
+        # request. It outlives individual commands, so command finally-blocks
+        # must NOT close it — stop() does.
+        self._relay_client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         self._connected = False
         self._last_connected_at: datetime | None = None
         self._last_status_sent_at: datetime | None = None
@@ -193,20 +211,25 @@ class LogosBridgeClient:
             return
         if self._task is not None and not self._task.done():
             return
+        # stop() closes the shared relay client; a restarted bridge must not
+        # reuse it (httpx rejects requests on a closed client).
+        if self._relay_client.is_closed:
+            self._relay_client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         self._stopping.clear()
         self._task = asyncio.create_task(self._run(), name="logos-bridge")
         logger.info("Logos bridge started (worker_id=%s)", self.worker_id)
 
     async def stop(self) -> None:
         self._stopping.set()
-        if self._task is None:
-            return
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
+        task = self._task
         self._task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._relay_client.aclose()
         self._connected = False
         logger.info("Logos bridge stopped")
 
@@ -386,12 +409,17 @@ class LogosBridgeClient:
     async def _status_refresh_loop(self, ws) -> None:
         lane_manager = self._app.state.lane_manager
         revision = getattr(lane_manager, "status_revision", 0)
+        count_revision = getattr(lane_manager, "count_revision", 0)
         refresh_interval = max(1, self._cfg.status_refresh_interval_seconds)
         last_refresh = time.monotonic()
         while not self._stopping.is_set():
-            next_revision = await lane_manager.wait_for_status_revision(revision, timeout=1.0)
+            next_revision, next_count_revision = await lane_manager.wait_for_status_or_count_revision(
+                revision, count_revision, timeout=1.0
+            )
             changed = next_revision != revision
             revision = next_revision
+            count_bumped = next_count_revision != count_revision
+            count_revision = next_count_revision
             now = time.monotonic()
             # Periodic refresh ensures VRAM/host-memory telemetry reaches the
             # server even on idle workers (no lane churn → revision never
@@ -399,8 +427,21 @@ class LogosBridgeClient:
             # this cheap when nothing actually changed.
             interval_elapsed = (now - last_refresh) >= refresh_interval
             if changed or self._runtime_has_transient_lanes() or interval_elapsed:
+                # Lifecycle change or telemetry interval: rebuild the full
+                # status (probes every lane). The count watermark is
+                # deliberately NOT reset here: a bump that lands while the
+                # build is in flight is still above it, so the next pass
+                # pushes a patch carrying the post-build count.
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
+            elif count_bumped:
+                # Per-request counting must stay off the hot path :
+                # a full rebuild would re-probe every lane (nvidia-smi, HTTP,
+                # /proc) next to the relay. A count change only patches the
+                # fields a count touches in the last pushed payload, so the
+                # orchestrator still gets a status push per count change to
+                # reset its per-snapshot forward budget.
+                await self._send_count_update(ws)
 
     async def _vllm_metrics_loop(self, ws) -> None:
         """Periodically push this worker's merged vLLM ``/metrics`` upstream.
@@ -539,6 +580,41 @@ class LogosBridgeClient:
     async def _send_runtime_status(self, ws, force: bool = False) -> bool:
         runtime = await build_runtime_status(self._app)
         payload = runtime.model_dump(mode="json")
+        return await self._send_runtime_payload(ws, payload, force)
+
+    async def _send_count_update(self, ws) -> bool:
+        """Report an in-flight count change without rebuilding the status.
+
+        A full status build probes every lane (nvidia-smi, HTTP, /proc); doing
+        that on every increment/decrement would put the worker's biggest
+        per-request cost back on the request cycle . A count change
+        touches exactly two fields — each lane's active_requests and the
+        capacity total — so patch them from the live counters and re-send the
+        payload. Lane-set changes cannot reach this path: adding/removing a
+        lane bumps the status revision, which takes the full-build branch.
+        """
+        lane_manager = self._app.state.lane_manager
+        last = self._last_runtime_payload
+        if not last:
+            # No baseline yet (first pass before the initial push completed):
+            # fall back to a full build.
+            return await self._send_runtime_status(ws, force=True)
+        counts = await lane_manager.active_requests_snapshot()
+        payload = copy.deepcopy(last)
+        for lane in payload.get("lanes") or []:
+            if isinstance(lane, dict):
+                lane["active_requests"] = int(counts.get(lane.get("lane_id"), 0))
+        capacity = payload.get("capacity")
+        if isinstance(capacity, dict):
+            capacity["active_requests"] = sum(int(v) for v in counts.values())
+        # Forced: an increment and decrement can both land between the last
+        # push and this snapshot, leaving the patched payload identical to
+        # the previous one. Signature dedupe would then drop the push — but
+        # the orchestrator's per-snapshot forwarding budget resets only on a
+        # new status push, so a count-triggered update must always reach it.
+        return await self._send_runtime_payload(ws, payload, force=True)
+
+    async def _send_runtime_payload(self, ws, payload: dict[str, Any], force: bool = False) -> bool:
         # Every status repeats the live calibration state, so the server can
         # settle it without depending on a lifecycle event arriving. An event
         # is a one-shot signal: the one that ends a session can be dropped
@@ -2239,15 +2315,21 @@ class LogosBridgeClient:
         if not isinstance(payload, dict):
             raise ValueError("payload must be an object")
 
+        tracer = worker_perf.begin()
+
         # Atomically validate-and-count the lane (closes the dispatch-to-sleep
         # race: the lane cannot be slept/evicted between selection and counting).
-        lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
+        # Includes the per-request lane status build (the W2 optimisation
+        # target) — that is why the phase is named lane.acquire.
+        with _perf_phase(tracer, "lane.acquire"):
+            lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
         try:
-            request_path = params.get("request_path")
-            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
-            request_kwargs, request_headers = httpx_request_parts(payload)
-            async with httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT) as client:
-                upstream = await client.post(
+            with _perf_phase(tracer, "relay.prepare"):
+                request_path = params.get("request_path")
+                target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+                request_kwargs, request_headers = httpx_request_parts(payload)
+            with _perf_phase(tracer, "relay.post"):
+                upstream = await self._relay_client.post(
                     target_url,
                     headers=request_headers,
                     **request_kwargs,
@@ -2255,31 +2337,35 @@ class LogosBridgeClient:
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
         finally:
-            await lane_manager.decrement_active_requests(lane_id)
+            with _perf_phase(tracer, "lane.decrement"):
+                await lane_manager.decrement_active_requests(lane_id)
 
-        content_type = upstream.headers.get("content-type")
-        media_type = (content_type or "").partition(";")[0].strip().lower()
-        is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
-        is_successful_multipart = upstream.status_code < 400 and isinstance(payload.get(MULTIPART_PAYLOAD_KEY), dict)
-        is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
-        body_base64 = None
-        if is_successful_multipart:
-            if is_text_response:
-                body = upstream.text
-            elif is_json_response:
-                try:
-                    body = upstream.json()
-                except ValueError:
+        with _perf_phase(tracer, "relay.parse"):
+            content_type = upstream.headers.get("content-type")
+            media_type = (content_type or "").partition(";")[0].strip().lower()
+            is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
+            is_successful_multipart = upstream.status_code < 400 and isinstance(
+                payload.get(MULTIPART_PAYLOAD_KEY), dict
+            )
+            is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
+            body_base64 = None
+            if is_successful_multipart:
+                if is_text_response:
+                    body = upstream.text
+                elif is_json_response:
+                    try:
+                        body = upstream.json()
+                    except ValueError:
+                        body = None
+                        body_base64 = base64.b64encode(upstream.content).decode("ascii")
+                else:
                     body = None
                     body_base64 = base64.b64encode(upstream.content).decode("ascii")
             else:
-                body = None
-                body_base64 = base64.b64encode(upstream.content).decode("ascii")
-        else:
-            try:
-                body = upstream.json()
-            except ValueError:
-                body = upstream.text
+                try:
+                    body = upstream.json()
+                except ValueError:
+                    body = upstream.text
 
         headers = {}
         if content_type:
@@ -2292,6 +2378,8 @@ class LogosBridgeClient:
         if body_base64 is not None:
             result["body_base64"] = body_base64
             result["body_encoding"] = "base64"
+        if tracer is not None:
+            result["perf"] = tracer.finish()
         return result
 
     async def _execute_stream_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
@@ -2328,7 +2416,10 @@ class LogosBridgeClient:
             )
             return
 
-        client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
+        # Shared pooled client (see __init__): the finally below must NOT
+        # close it — only the streamed response, which is what makes vLLM
+        # abort the sequence. stop() closes the client itself.
+        client = self._relay_client
         upstream = None
         try:
             request_path = params.get("request_path")
@@ -2440,13 +2531,16 @@ class LogosBridgeClient:
                 },
             )
         finally:
-            # Decrement before aclose() so that a client-side disconnect that
-            # leaves httpx draining the upstream stream does not keep
-            # worker_active > 0 and falsely trigger proxy_stuck detection.
+            # Decrement before the response is closed so that a client-side
+            # disconnect that leaves httpx draining the upstream stream does
+            # not keep worker_active > 0 and falsely trigger proxy_stuck
+            # detection.
             #
-            # Guarded so a lane-manager failure cannot skip the aclose below:
+            # Guarded so a lane-manager failure cannot skip the close below:
             # on the cancellation path that close is the whole point — it is
             # what makes vLLM abort the sequence and release its KV blocks.
+            # Only the streamed response is closed; the pooled client is
+            # shared with every other command and outlives this one.
             try:
                 await lane_manager.decrement_active_requests(lane_id)
             except Exception:  # noqa: BLE001
@@ -2461,7 +2555,3 @@ class LogosBridgeClient:
                     await asyncio.wait_for(upstream.aclose(), timeout=5.0)
                 except Exception:  # noqa: BLE001
                     pass
-            try:
-                await asyncio.wait_for(client.aclose(), timeout=5.0)
-            except Exception:  # noqa: BLE001
-                pass

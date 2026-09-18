@@ -85,6 +85,11 @@
                   <i class="pi pi-user" aria-hidden="true"></i>{{ requesterOf(item) }}
                 </span>
               }
+              @if (item.api_key_name) {
+                <span class="rr-card__key" title="API key">
+                  <i class="pi pi-key" aria-hidden="true"></i>{{ item.api_key_name }}
+                </span>
+              }
             </div>
             @if (item.is_cloud && costLabelOf(item)) {
               <div class="rr-card__meta rr-card__cost">

@@ -54,6 +54,22 @@
           ariaLabel="Filter by requester"
           (valueChange)="setUserFilter($event)"
         />
+        <app-select
+          class="stats-scope__select"
+          [options]="providerFilterOptions()"
+          [value]="selectedProviderValue()"
+          [compact]="true"
+          ariaLabel="Filter by provider"
+          (valueChange)="setProviderFilter($event)"
+        />
+        <app-select
+          class="stats-scope__select"
+          [options]="outcomeFilterOptions"
+          [value]="selectedOutcomeValue()"
+          [compact]="true"
+          ariaLabel="Filter by outcome"
+          (valueChange)="setErrorsOnlyFilter($event)"
+        />
         @if (noRequestersInScope()) {
           <span class="stats-scope__note">no named requesters in this range</span>
         }
@@ -91,35 +107,8 @@
     @if (activeTab() === 'requests') {
 
 
-      <!-- ── Recent requests ───────────────────────────────────────────────── -->
-      <app-stats-chart-panel
-        title="Recent requests"
-        subtitle="Latest activity from the request log."
-      >
-        <span panelRight>
-          <!-- State filter for this list only — it sits with the feed, not in the
-               page scope, because it must not narrow the KPI cards and charts. -->
-          <app-select
-            class="stats-feed-status"
-            [options]="feedStatusOptions()"
-            [value]="selectedFeedStatusValue()"
-            [compact]="true"
-            ariaLabel="Filter requests by state"
-            (valueChange)="setFeedStatusFilter($event)"
-          />
-        </span>
-        <app-stats-recent-requests
-          [liveRequests]="latestRequests()"
-          [totalInRange]="requestFeedTotal()"
-          [range]="requestFeedRange()"
-          [pending]="requestsPending()"
-          [filterUserId]="filterUserId()"
-          [filterTeamId]="filterTeamId()"
-          [filterStatus]="feedStatus()"
-        />
-      </app-stats-chart-panel>
-
       <!-- ── KPI strip ─────────────────────────────────────────────────────── -->
+      <!-- KPIs sit first so the page opens on totals; the live feed follows. -->
       <!-- The period belongs here, once: inside a card label it wraps to a second
            line and every card in the row loses its alignment. -->
       <div class="stats-kpi-period">
@@ -221,6 +210,36 @@
         }
       </div>
 
+      <!-- ── Recent requests ───────────────────────────────────────────────── -->
+      <app-stats-chart-panel
+        title="Recent requests"
+        subtitle="Latest activity from the request log."
+      >
+        <span panelRight>
+          <!-- State filter for this list only — it sits with the feed, not in the
+               page scope, because it must not narrow the KPI cards and charts. -->
+          <app-select
+            class="stats-feed-status"
+            [options]="feedStatusOptions()"
+            [value]="selectedFeedStatusValue()"
+            [compact]="true"
+            ariaLabel="Filter requests by state"
+            (valueChange)="setFeedStatusFilter($event)"
+          />
+        </span>
+        <app-stats-recent-requests
+          [liveRequests]="latestRequests()"
+          [totalInRange]="requestFeedTotal()"
+          [range]="requestFeedRange()"
+          [pending]="requestsPending()"
+          [filterUserId]="filterUserId()"
+          [filterTeamId]="filterTeamId()"
+          [filterProviderId]="filterProviderId()"
+          [filterErrorsOnly]="errorsOnly()"
+          [filterStatus]="feedStatus()"
+        />
+      </app-stats-chart-panel>
+
       <!-- ── Row 2: Request volume ────────────────────────────────────────── -->
       <app-stats-chart-panel
         title="Request volume"
@@ -257,6 +276,7 @@
             [modelSeriesMap]="modelSeriesMap()"
             [modelLabelById]="modelLabelById()"
             [modelColors]="modelColors()"
+            [bucketMs]="volumeBucketMs()"
             [resetZoomTrigger]="resetZoomCounter()"
             (zoom)="setCustomRange($event)"
             (tooltipChange)="chartTooltip.set($event)"

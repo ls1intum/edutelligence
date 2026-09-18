@@ -38,6 +38,8 @@ const makeRequest = (overrides: Partial<RequestItem> = {}): RequestItem => ({
   team_name: null,
   username: 'test.user',
   full_name: 'Test User',
+  api_key_name: null,
+  api_key_type: null,
   prompt_tokens: null,
   completion_tokens: null,
   total_tokens: null,
@@ -55,6 +57,7 @@ const makePayload = (overrides: Partial<TeamActivityPayload> = {}): TeamActivity
   total_tokens: 0,
   total_requests: 0,
   requesters: [],
+  most_asked_questions: [],
   requests: [makeRequest()],
   requests_total: 1,
   requests_has_more: true,
@@ -177,6 +180,40 @@ describe('ActivityTabComponent', () => {
         { value: '', label: 'Everyone in this team' },
         { value: '11', label: 'Test User (40)' },
       ]);
+    });
+  });
+
+  describe('Most Asked Questions', () => {
+    it('renders each question with its count', () => {
+      component.activity.set(
+        makePayload({
+          most_asked_questions: [
+            { question: 'What is the capital of France?', count: 2 },
+            { question: 'When is my package arriving?', count: 1 },
+          ],
+        }),
+      );
+      fixture.detectChanges();
+
+      const rows = fixture.nativeElement.querySelectorAll('.most-asked-questions li');
+      expect(rows.length).toBe(2);
+      expect(rows[0].querySelector('.most-asked-questions__text').textContent).toContain(
+        'What is the capital of France?',
+      );
+      expect(rows[0].querySelector('.most-asked-questions__count').textContent).toContain('2');
+      expect(rows[1].querySelector('.most-asked-questions__text').textContent).toContain(
+        'When is my package arriving?',
+      );
+    });
+
+    it('shows an empty-state message when the team asked nothing', () => {
+      component.activity.set(makePayload({ most_asked_questions: [] }));
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.most-asked-questions li')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.most-asked-questions').textContent).toContain(
+        'No questions recorded for this team in the selected period.',
+      );
     });
   });
 
@@ -424,6 +461,8 @@ describe('ActivityTabComponent pagination', () => {
       team_name: 'Logos',
       username: 'tobias.wasner',
       full_name: null,
+      api_key_name: null,
+      api_key_type: null,
       prompt_tokens: null,
       completion_tokens: null,
       total_tokens: null,
@@ -448,6 +487,7 @@ describe('ActivityTabComponent pagination', () => {
       total_tokens: 0,
       total_requests: TOTAL,
       requesters: [],
+      most_asked_questions: [],
       requests: rows,
       requests_total: TOTAL,
       requests_has_more: hasNext,

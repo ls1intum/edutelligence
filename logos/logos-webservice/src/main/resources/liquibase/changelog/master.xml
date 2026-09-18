@@ -43,5 +43,6 @@
     <include file="liquibase/changelog/037_model_discovery_notifications.xml"/>
     <include file="liquibase/changelog/038_team_priority.xml"/>
     <include file="liquibase/changelog/039_api_key_priority_unset.xml"/>
+    <include file="liquibase/changelog/040_reclassify_timeout_errors.xml"/>
 
 </databaseChangeLog>

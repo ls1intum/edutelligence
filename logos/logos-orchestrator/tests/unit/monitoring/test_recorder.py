@@ -94,7 +94,9 @@ def _patch_prom(monkeypatch):
     return fake
 
 
-def test_recorder_updates_log_entry_metrics_by_request_id(monkeypatch):
+def test_recorder_buffers_lifecycle_fields_until_completion(monkeypatch):
+    """: enqueue/scheduled/provider events no longer pay a DB write each;
+    the single completion UPDATE carries the union of their fields."""
     recorder, calls = _make_recorder(monkeypatch, {27: "test-model"}, {12: "test-provider"})
     _patch_prom(monkeypatch)
 
@@ -114,23 +116,34 @@ def test_recorder_updates_log_entry_metrics_by_request_id(monkeypatch):
         queue_depth_at_schedule=1,
         provider_metrics={"available_vram_mb": 1024},
     )
+    recorder.record_provider("req-1", 12)
+    assert calls == [], "lifecycle events must not touch the DB before completion"
+
     recorder.record_complete(
         request_id="req-1",
         result_status="success",
         cold_start=False,
     )
 
-    assert calls[0]["request_id"] == "req-1"
-    assert calls[0]["initial_priority"] == "normal"
-    assert calls[0]["queue_depth_at_enqueue"] == 3
-    assert calls[0]["timeout_s"] == 60
-
-    assert calls[1]["priority_when_scheduled"] == "normal"
-    assert calls[1]["queue_depth_at_schedule"] == 1
-    assert calls[1]["available_vram_mb"] == 1024
-
-    assert calls[2]["result_status"] == "success"
-    assert calls[2]["cold_start"] is False
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["request_id"] == "req-1"
+    # Enqueue fields
+    assert call["model_id"] == 27
+    assert call["provider_id"] == 12
+    assert call["initial_priority"] == "normal"
+    assert call["queue_depth_at_enqueue"] == 3
+    assert call["timeout_s"] == 60
+    # Scheduled fields (including the one that makes the DB layer compute
+    # queue_wait_ms from timestamp_request, as before)
+    assert call["priority_when_scheduled"] == "normal"
+    assert call["queue_depth_at_schedule"] == 1
+    assert call["available_vram_mb"] == 1024
+    assert "scheduled_ts" in call
+    # Terminal fields
+    assert call["result_status"] == "success"
+    assert call["cold_start"] is False
+    assert "request_complete_ts" in call
 
 
 # ---------------------------------------------------------------------------
@@ -343,13 +356,24 @@ def test_malformed_usage_tokens_are_skipped_not_fatal(monkeypatch):
 
 def test_record_rate_limit_admission_persists_the_flag_both_ways(monkeypatch):
     """The /me/keys usage window must be able to tell an admitted request
-    from one the limiter rejected after scheduling. Both verdicts are
-    persisted verbatim — the DB layer drops None fields, so False must reach
-    it as False, not be swallowed like an unset value."""
+    from one the limiter rejected after scheduling. Both verdicts reach the
+    completion write verbatim — the DB layer drops None fields, so False
+    must survive the buffer as False, not be swallowed like an unset value.
+
+    The admission decision happens before execution, i.e. before any other
+    lifecycle record for these (unenqueued) requests, so the buffer must
+    hold the flag without a tracked state entry and still flush it on
+    completion."""
     recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
 
     recorder.record_rate_limit_admission("req-rl-admitted", admitted=True)
     recorder.record_rate_limit_admission("req-rl-rejected", admitted=False)
 
-    assert {"request_id": "req-rl-admitted", "rate_limit_admitted": True} in calls
-    assert {"request_id": "req-rl-rejected", "rate_limit_admitted": False} in calls
+    assert calls == []
+
+    recorder.record_complete("req-rl-admitted", result_status="success")
+    recorder.record_complete("req-rl-rejected", result_status="error")
+
+    flags = {call["request_id"]: call["rate_limit_admitted"] for call in calls}
+    assert flags == {"req-rl-admitted": True, "req-rl-rejected": False}
