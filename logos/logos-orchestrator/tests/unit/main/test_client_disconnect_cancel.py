@@ -148,10 +148,10 @@ async def test_streaming_requests_are_guarded_too(monkeypatch):
     """Resource mode can resolve to Whisper and answer synchronously even for stream: true."""
     guarded = []
 
-    async def fake_auth_parse_log(request, use_profile_auth=False):
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock()
         auth.api_key_id = 88
-        return {}, auth, {"stream": True}, "127.0.0.1", None
+        return {}, auth, {"stream": True}, "127.0.0.1", None, [{"model_id": 1}]
 
     async def fake_filter(deployments, payload=None):
         return deployments
@@ -160,16 +160,7 @@ async def test_streaming_requests_are_guarded_too(monkeypatch):
         guarded.append(kwargs)
         return "guarded"
 
-    class FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
     monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
-    monkeypatch.setattr(main, "DBManager", FakeDB)
-    monkeypatch.setattr(main, "request_setup", lambda headers, api_key_id, db=None: ([{"model_id": 1}], ["m"]))
     monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
     monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", fake_guard)
 

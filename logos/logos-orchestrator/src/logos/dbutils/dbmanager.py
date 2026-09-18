@@ -455,34 +455,43 @@ class DBManager:
         if log_id is not None:
             params["log_id"] = log_id
             where_clause = "id = :log_id"
-            settled_where_clause = "le.id = :log_id"
         else:
             params["lookup_request_id"] = request_id
             where_clause = "request_id = :lookup_request_id"
-            settled_where_clause = "le.request_id = :lookup_request_id"
 
         sql = text(f"UPDATE log_entry SET {assignments} WHERE {where_clause}")
         self.session.execute(sql, params)
         self.session.commit()
 
-        # Pricing is the riskier half of finalisation (a function bug, a lock, a
-        # statement timeout). Run it only after the status write is durably
-        # committed and never let its failure surface, so a request cannot be
-        # left stuck at result_status NULL because the snapshot blew up.
         if update_data.get("result_status") in {"success", "error", "timeout"}:
-            try:
-                self.session.execute(
-                    text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause=settled_where_clause)),
-                    params,
-                )
-                self.session.commit()
-            except Exception as exc:  # noqa: BLE001 - snapshot must not break finalisation
-                self.session.rollback()
-                logger.warning(
-                    "settled-cost snapshot failed for %s: %s",
-                    log_id if log_id is not None else request_id,
-                    exc,
-                )
+            self._settle_cost_snapshot(log_id=log_id, request_id=request_id, params=params)
+
+    def _settle_cost_snapshot(self, *, log_id=None, request_id=None, params=None) -> None:
+        """Persist the settled cost snapshot, after the status write is durable.
+
+        Pricing is the riskier half of finalisation (a function bug, a lock, a
+        statement timeout). It runs only after the status write is durably
+        committed and its failure never surfaces, so a request cannot be left
+        stuck at result_status NULL because the snapshot blew up.
+
+        ``params`` carries the where-clause binding — the
+        update_log_entry_metrics path reuses the params dict it already built
+        (the snapshot SQL only binds the where clause, the rest is inert);
+        callers that only have the id let the helper build it.
+        """
+        if params is None:
+            params = {"log_id": log_id} if log_id is not None else {"lookup_request_id": request_id}
+        where_clause = "le.id = :log_id" if log_id is not None else "le.request_id = :lookup_request_id"
+        try:
+            self.session.execute(text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause=where_clause)), params)
+            self.session.commit()
+        except Exception as exc:  # noqa: BLE001 - snapshot must not break finalisation
+            self.session.rollback()
+            logger.warning(
+                "settled-cost snapshot failed for %s: %s",
+                log_id if log_id is not None else request_id,
+                exc,
+            )
 
     def update_request_log_metrics(
         self,
@@ -1025,11 +1034,14 @@ class DBManager:
         permissions are NOT granted automatically — an admin assigns access per
         team via the models tab.
 
-        Returns ``{"new_models": [names of newly inserted model rows],
+        Returns ``{"new_models": [names], "new_model_ids": [ids],
         "changed": bool}``. ``changed`` is True when anything that affects
         routing changed (a link was inserted, an endpoint updated, or a stale
         link pruned) so the caller can refresh runtime state; ``new_models``
-        drives the (more expensive) classifier rebuild.
+        drives the (more expensive) classifier rebuild. ``new_model_ids``
+        covers every model that got a link to this provider in this pass —
+        including model rows that already existed globally, because their
+        per-provider price rows are created only on first link.
         """
         pid = int(provider_id)
         desired = {d["model_name"]: d["endpoint"] for d in deployments}
@@ -1057,6 +1069,7 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
+        newly_linked_ids: list[int] = []
         for model_name, endpoint in desired.items():
             row = self.session.execute(
                 text("SELECT id FROM models WHERE name = :name"),
@@ -1081,9 +1094,15 @@ class DBManager:
                 newly_inserted.append(model_name)
 
             # A new link for this provider, or an endpoint that drifted, changes
-            # routing and must be reflected in the runtime registry.
-            if model_name not in existing_by_name or existing_endpoint.get(model_name) != endpoint:
+            # routing and must be reflected in the runtime registry. The link
+            # is what gates the per-provider price rows, so every freshly
+            # linked model — even one whose row already existed globally —
+            # needs a price/capability refresh on the webservice side.
+            new_link = model_name not in existing_by_name
+            if new_link or existing_endpoint.get(model_name) != endpoint:
                 changed = True
+            if new_link:
+                newly_linked_ids.append(mid)
 
             # Upsert the link and refresh the endpoint; preserve any api_key override.
             self.session.execute(
@@ -1096,8 +1115,13 @@ class DBManager:
                 {"pid": pid, "mid": mid, "endpoint": endpoint},
             )
 
+        self._queue_discovery_notifications(newly_linked_ids)
         self.session.commit()
-        return {"new_models": newly_inserted, "changed": changed or bool(newly_inserted)}
+        return {
+            "new_models": newly_inserted,
+            "new_model_ids": newly_linked_ids,
+            "changed": changed or bool(newly_inserted),
+        }
 
     def get_cloud_sync_providers(self) -> list[Dict[str, Any]]:
         """Cloud providers whose model catalogue is discovered over ``/v1/models``.
@@ -1166,7 +1190,7 @@ class DBManager:
         automatically — an admin assigns access per team via the models tab, so
         a discovered model stays invisible to users until then.
 
-        Returns ``{"new_models": [...], "changed": bool}`` with the same
+        Returns ``{"new_models": [...], "new_model_ids": [...], "changed": bool}`` with the same
         meaning as :meth:`sync_azure_deployments`.
         """
         pid = int(provider_id)
@@ -1192,6 +1216,10 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
+        # Every model below receives a new link for this provider (existing
+        # links were skipped above), so each one needs a refresh — even when
+        # the models row already existed globally.
+        newly_linked_ids: list[int] = []
         for model_name in sorted(desired):
             if model_name in existing_by_name:
                 continue
@@ -1216,6 +1244,7 @@ class DBManager:
                     .id
                 )
                 newly_inserted.append(model_name)
+            newly_linked_ids.append(mid)
 
             self.session.execute(
                 text("""
@@ -1227,8 +1256,56 @@ class DBManager:
             )
             changed = True
 
+        self._queue_discovery_notifications(newly_linked_ids)
         self.session.commit()
-        return {"new_models": newly_inserted, "changed": changed}
+        return {"new_models": newly_inserted, "new_model_ids": newly_linked_ids, "changed": changed}
+
+    def _queue_discovery_notifications(self, model_ids: list[int]) -> None:
+        """Queue freshly linked models for a webservice refresh notification.
+
+        Runs in the caller's open transaction, so a queue row commits
+        atomically with the model_provider link that created the need for
+        it: a crash can never leave a freshly linked model whose price/
+        capability refresh was never queued and thus never retried.
+        """
+        for model_id in model_ids:
+            self.session.execute(
+                text("""
+                    INSERT INTO model_discovery_notifications (model_id)
+                    VALUES (:id)
+                    ON CONFLICT (model_id) DO NOTHING
+                    """),
+                {"id": model_id},
+            )
+
+    def get_pending_discovery_model_ids(self) -> list[int]:
+        """Model IDs still waiting for a webservice discovery notification.
+
+        The discovery syncs queue every newly linked model here (see
+        :meth:`_queue_discovery_notifications`); the notifier delivers the
+        whole queue on each pass and clears it only on acknowledgment, so a
+        webservice outage delays the refresh to the next pass instead of
+        losing it until the daily full refresh.
+        """
+        rows = self.session.execute(
+            text("SELECT model_id FROM model_discovery_notifications ORDER BY model_id")
+        ).fetchall()
+        return [row.model_id for row in rows]
+
+    def mark_discovery_notified(self, model_ids: list[int]) -> None:
+        """Drop queue entries the webservice has acknowledged.
+
+        The webservice refresh is idempotent, so if an ID is queued again
+        while the delivery is in flight (a re-link in a concurrent pass),
+        this only delays that refresh to the following pass.
+        """
+        if not model_ids:
+            return
+        self.session.execute(
+            text("DELETE FROM model_discovery_notifications WHERE model_id = ANY(:ids)"),
+            {"ids": list(model_ids)},
+        )
+        self.session.commit()
 
     def replace_cloud_model_context(self, provider_id: int, contexts: Dict[str, Dict[str, int]]) -> bool:
         """Store the context windows a cloud upstream reports for its models.
@@ -2209,7 +2286,14 @@ class DBManager:
                           p.provider_type    as type,
                           p.privacy_level    as privacy_level,
                           p.cloud_provider_type as cloud_provider_type,
-                          p.base_url         as base_url
+                          p.base_url         as base_url,
+                          m.name             as model_name,
+                          p.name             as provider_name,
+                          (
+                              SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                              FROM model_aliases a
+                              WHERE a.model_id = m.id
+                          ) AS aliases
                    FROM models m
                         JOIN model_provider mp ON m.id = mp.model_id
                         JOIN providers p ON mp.provider_id = p.id
@@ -3116,8 +3200,12 @@ class DBManager:
             self.session.execute(
                 text("""
                 SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
-                       ak.environment, ak.log, ak.settings, ak.default_priority
+                       ak.environment, ak.log, ak.settings, ak.default_priority,
+                       u.role,
+                       t.priority AS team_priority
                 FROM api_keys ak
+                         LEFT JOIN users u ON u.id = ak.user_id
+                         LEFT JOIN teams t ON t.id = ak.team_id
                 WHERE ak.id = :api_key_id AND ak.is_active = true
                 """),
                 {"api_key_id": int(api_key_id)},
@@ -3696,6 +3784,94 @@ class DBManager:
             for r in result
         ]
 
+    def resolve_proxy_model(
+        self,
+        api_key_id: int,
+        requested_name: str,
+    ) -> Optional[tuple[int, str]]:
+        """
+        Resolve a user-supplied model name to (model_id, canonical name) using
+        only the models this key may address.
+
+        Single query, same access semantics as get_models_info: logos_admin /
+        app_admin keys see every model, all other keys see the intersection of
+        their effective model and provider permissions (per-key permissions
+        when the key opts into custom permissions, the team's otherwise). The
+        name matching is delegated to the shared resolver so proxy mode and
+        the user-facing endpoints cannot drift apart.
+        """
+        # Imported here: logosnode_snapshot imports dbmanager at module scope,
+        # so a top-level import would be circular.
+        from logos.logosnode_snapshot import _resolve_requested_model_name
+
+        sql = text("""
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   COALESCE(u.role, '') AS user_role,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                                LEFT JOIN users u ON ak.user_id = u.id
+                            WHERE ak.id = :api_key_id
+                                AND ak.is_active = true
+                        ),
+                        effective_providers AS (
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        ),
+                        effective_models AS (
+                            SELECT akmp.model_id
+                            FROM api_key_model_permissions akmp, key_info ki
+                            WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tmp.model_id
+                            FROM team_model_permissions tmp, key_info ki
+                            WHERE tmp.team_id = ki.tid AND ki.custom = false
+                        )
+                   SELECT m.id,
+                          m.name,
+                          (
+                              SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                              FROM model_aliases a
+                              WHERE a.model_id = m.id
+                          ) AS aliases
+                   FROM models m
+                   WHERE EXISTS (SELECT 1 FROM key_info ki WHERE ki.user_role IN ('logos_admin', 'app_admin'))
+                      OR (
+                          m.id IN (SELECT model_id FROM effective_models)
+                          AND EXISTS (
+                              SELECT 1
+                              FROM model_provider mp
+                                   JOIN effective_providers ep ON ep.provider_id = mp.provider_id
+                              WHERE mp.model_id = m.id
+                          )
+                      )
+                   ORDER BY m.id
+                   """)
+        rows = self.session.execute(sql, {"api_key_id": api_key_id}).fetchall()
+        models = [
+            {
+                "id": r.id,
+                # Same fallback as get_models_info, so the resolver sees the
+                # same names in both paths.
+                "name": r.name or f"Model {r.id}",
+                "aliases": self._split_alias_list(r.aliases),
+            }
+            for r in rows
+        ]
+        model_name = _resolve_requested_model_name(requested_name, models)
+        if model_name is None:
+            return None
+        for model in models:
+            if model["name"] == model_name:
+                return model["id"], model["name"]
+        return None
+
     def get_model(self, model_id: int):
         sql = text("""
             SELECT *
@@ -3844,6 +4020,7 @@ class DBManager:
         input_payload=None,
         headers=None,
         request_id: Optional[str] = None,
+        timeout_s: Optional[float] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
@@ -3853,9 +4030,10 @@ class DBManager:
             text("""
                  INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
                                         environment, client_ip,
-                                        input_payload, headers, privacy_level, request_id)
+                                        input_payload, headers, privacy_level, request_id, timeout_s)
                  VALUES (:ts, :aki, :tid, :uid, :env,
-                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid) RETURNING id
+                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid, :timeout_s)
+                 RETURNING id
                  """),
             {
                 "ts": timestamp,
@@ -3868,6 +4046,7 @@ class DBManager:
                 "headers": headers_str,
                 "privacy": log_level,
                 "rid": request_id,
+                "timeout_s": timeout_s,
             },
         ).fetchone()
         self.session.commit()
@@ -3889,6 +4068,222 @@ class DBManager:
         self.session.commit()
         return {"result": "time_at_first_token set"}, 200
 
+    def _upsert_usage_tokens(self, log_id: int, usage) -> None:
+        """Token-type bookkeeping for one log row , no commit — the
+        caller owns the transaction.
+
+        Two roundtrips instead of a SELECT + (INSERT + commit) per token
+        type: one lookup for every name, one multi-row upsert for the
+        missing ones (auto-creation is preserved, e.g. Whisper's
+        audio_milliseconds), then one multi-row upsert for the positive
+        usage rows. token_types.name is UNIQUE, so the upsert is race-safe:
+        a concurrent creator wins, this side sees the row on the refetch
+        below.
+
+        Only strictly positive integer counts are billable — the same
+        invariant the batch settlement path enforces (billing.quantities):
+        `extract_token_usage` preserves negative integers, and a bare
+        truthiness check would upsert them as usage.
+        """
+        positive = {
+            name: count
+            for name, count in (usage or {}).items()
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0
+        }
+        if not usage:
+            return
+        # Every reported name registers its type (a metered response can
+        # report a quantity as 0 without the type being new); only strictly
+        # positive counts upsert a usage row.
+        type_ids = dict()
+        names = list(usage)
+        type_ids.update(
+            {
+                row.name: row.id
+                for row in self.session.execute(
+                    text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                    {"names": names},
+                ).fetchall()
+            }
+        )
+        missing = [name for name in names if name not in type_ids]
+        if missing:
+            type_ids.update(
+                {
+                    row.name: row.id
+                    for row in self.session.execute(
+                        text("""
+                        INSERT INTO token_types (name, description)
+                        SELECT v.name, v.description
+                        FROM unnest(:names, :descriptions) AS v(name, description)
+                        ON CONFLICT (name) DO NOTHING
+                        RETURNING id, name
+                        """),
+                        {"names": missing, "descriptions": ["" for _ in missing]},
+                    ).fetchall()
+                }
+            )
+            still_missing = [name for name in missing if name not in type_ids]
+            if still_missing:
+                type_ids.update(
+                    {
+                        row.name: row.id
+                        for row in self.session.execute(
+                            text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                            {"names": still_missing},
+                        ).fetchall()
+                    }
+                )
+        if not positive:
+            return
+
+        value_clauses = ", ".join(
+            f"(:log_entry_id, :type_id_{index}, :token_count_{index})" for index in range(len(positive))
+        )
+        usage_params = {"log_entry_id": log_id}
+        for index, (name, count) in enumerate(positive.items()):
+            usage_params[f"type_id_{index}"] = type_ids[name]
+            usage_params[f"token_count_{index}"] = count
+        self.session.execute(
+            text(f"""
+                INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+                VALUES {value_clauses}
+                ON CONFLICT (log_entry_id, type_id)
+                DO UPDATE SET token_count = EXCLUDED.token_count
+                """),
+            usage_params,
+        )
+
+    def finalize_billing_row(
+        self,
+        log_id: int,
+        usage,
+        *,
+        model_id=None,
+        provider_id=None,
+        service_tier=None,
+        set_first_token: bool = False,
+        request_id=None,
+        result_status=None,
+        error_message=None,
+    ):
+        """Synchronous billing half of the terminal response write : the usage_tokens rows plus exactly the row
+        columns the settled cost snapshot reads (model_id, provider_id,
+        service_tier, timestamp_response, time_at_first_token) — and, when
+        passed, the terminal result_status/error_message. This must be
+        committed BEFORE the client gets its response — a crash in between
+        must not be able to undercount the ledger. The non-billing half
+        (`store_response_payload`) may run later on the write-behind queue.
+
+        The status write rides the same UPDATE and the same commit as the
+        billing columns (one fewer round-trip than a separate
+        update_log_entry_metrics call — ). The settled cost snapshot is
+        deliberately NOT part of this write : it is a derived
+        value — ``logos_price_usage`` over the rows committed here — so it
+        settles in the queued `store_response_payload(settle_cost=True)`
+        instead of taking a second synchronous commit off the response
+        path. A crash in that small window leaves the ledger complete and
+        the snapshot unset (a slight billing deviation the overhead goal
+        explicitly accepts); the failure paths that persist the row
+        themselves still settle synchronously via
+        `update_log_entry_metrics`.
+        """
+        if not isinstance(log_id, int):
+            return
+        self._upsert_usage_tokens(log_id, usage)
+        status_value = result_status.value if isinstance(result_status, ResultStatus) else result_status
+        assignments = [
+            "model_id            = COALESCE(:model_id, model_id)",
+            "provider_id         = COALESCE(:provider_id, provider_id)",
+            "service_tier        = COALESCE(:service_tier, service_tier)",
+            "timestamp_response  = :timestamp",
+            "request_id          = COALESCE(:request_id, request_id)",
+            "time_at_first_token = COALESCE(:first_token, time_at_first_token)",
+        ]
+        params = {
+            "model_id": model_id,
+            "provider_id": provider_id,
+            "service_tier": service_tier,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "log_id": log_id,
+            "request_id": request_id,
+            "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
+        }
+        if status_value is not None:
+            assignments.append("result_status     = :result_status")
+            params["result_status"] = status_value
+        if error_message is not None:
+            assignments.append("error_message     = :error_message")
+            params["error_message"] = _stringify_error_message(error_message)
+        self.session.execute(
+            text(f"UPDATE log_entry SET {', '.join(assignments)} WHERE id = :log_id"),
+            params,
+        )
+        self.session.commit()
+
+    def store_response_payload(
+        self,
+        log_id: int,
+        payload: dict,
+        *,
+        policy_id=-1,
+        classified=None,
+        queue_depth_at_arrival=None,
+        utilization_at_arrival=None,
+        settle_cost: bool = False,
+    ):
+        """Non-billing half of the terminal response write :
+        the response payload JSONB (privacy-gated) plus the classification /
+        policy / queue-metric side columns. Safe to run off the event loop
+        after `finalize_billing_row` has committed — neither the ledger nor
+        the settled cost snapshot reads these columns.
+
+        ``settle_cost=True`` prices the row in this write : the
+        settled cost snapshot is a *derived* value — ``logos_price_usage``
+        over the usage rows and billing columns `finalize_billing_row`
+        already committed — so it rides the queue instead of taking a second
+        synchronous commit off the response path. It settles after the
+        payload commit in its own commit, so a pricing failure can never
+        roll the payload (or the billing row) back. The same treatment the
+        streaming path already gets via the request-id-keyed monitoring
+        flush.
+        """
+        if not isinstance(log_id, int):
+            return
+        if classified is None:
+            classified = dict()
+        result = self.session.execute(
+            text("SELECT privacy_level FROM log_entry WHERE id = :log_id"),
+            {"log_id": log_id},
+        ).fetchone()
+        if result is None:
+            return
+        if result[0] != "FULL":
+            payload = None
+        sql = text("""
+                   UPDATE log_entry
+                   SET response_payload          = :payload,
+                       policy_id                 = COALESCE(:policy_id, policy_id),
+                       classification_statistics = :classification_statistics,
+                       queue_depth_at_arrival    = COALESCE(:queue_depth, queue_depth_at_arrival),
+                       utilization_at_arrival    = COALESCE(:utilization, utilization_at_arrival)
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(
+            sql,
+            {
+                "payload": _json_for_jsonb(payload) if payload else None,
+                "log_id": log_id,
+                "policy_id": policy_id if policy_id != -1 else None,
+                "classification_statistics": _json_for_jsonb(classified),
+                "queue_depth": queue_depth_at_arrival,
+                "utilization": utilization_at_arrival,
+            },
+        )
+        self.session.commit()
+        if settle_cost:
+            self._settle_cost_snapshot(log_id=log_id)
+
     def set_response_payload(
         self,
         log_id: int,
@@ -3899,6 +4294,7 @@ class DBManager:
         policy_id=-1,
         classified=None,
         service_tier=None,
+        set_first_token: bool = False,
         **kwargs,
     ):
         # Hole Privacy-Level
@@ -3919,28 +4315,7 @@ class DBManager:
         if result[0] != "FULL":
             payload = None
 
-        type_ids = dict()
-        for token_type, token_count in usage.items() if usage is not None else dict().items():
-            r, c = self.add_token_type(token_type, "")
-            if "error" in r:
-                return r, c
-            type_ids[token_type] = r["token-type-id"]
-
-        for token_type in type_ids:
-            if usage[token_type]:
-                self.session.execute(
-                    text("""
-                        INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
-                        VALUES (:log_entry_id, :type_id, :token_count)
-                        ON CONFLICT (log_entry_id, type_id)
-                        DO UPDATE SET token_count = EXCLUDED.token_count
-                        """),
-                    {
-                        "log_entry_id": log_id,
-                        "type_id": type_ids[token_type],
-                        "token_count": usage[token_type],
-                    },
-                )
+        self._upsert_usage_tokens(log_id, usage)
 
         sql = text("""
                    UPDATE log_entry
@@ -3953,7 +4328,8 @@ class DBManager:
                        request_id = COALESCE(:request_id, request_id),
                        queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
                        utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival),
-                       service_tier = COALESCE(:service_tier, service_tier)
+                       service_tier = COALESCE(:service_tier, service_tier),
+                       time_at_first_token = COALESCE(:first_token, time_at_first_token)
                    WHERE id = :log_id
                    """)
         self.session.execute(
@@ -3970,6 +4346,7 @@ class DBManager:
                 "queue_depth": kwargs.get("queue_depth_at_arrival"),
                 "utilization": kwargs.get("utilization_at_arrival"),
                 "service_tier": service_tier,
+                "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
             },
         )
         self.session.commit()
@@ -4088,9 +4465,11 @@ class DBManager:
                         ak.default_priority,
                         ak.is_active,
                         ak.use_custom_permissions,
-                        u.role
+                        u.role,
+                        t.priority AS team_priority
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
+                          LEFT JOIN teams t ON t.id = ak.team_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
                  """),
@@ -4101,11 +4480,12 @@ class DBManager:
             return None
 
         data = dict(row._mapping)
-        # Admin keys are no longer special-cased: a logos_admin's key resolves
-        # its rate limits and budget from its team / key settings like any other
-        # key. Drop the joined role column so callers see a plain api_key row.
-        data.pop("role", None)
-
+        # The joined columns (u.role, t.team_priority) are part of the auth
+        # context now: queue ordering needs the caller's role as a tiebreak
+        # and the team's admin-set priority as its queue level. Callers that
+        # only want key data ignore the extra keys.
+        # The role is also used to distinguish the admin proxy-mode resolver
+        # from the permission-scoped in-memory resolver.
         return data
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:

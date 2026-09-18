@@ -41,7 +41,7 @@ def test_translation_openapi_declares_multipart_contract():
 async def test_audio_authentication_happens_before_multipart_parsing(monkeypatch):
     parsed = False
 
-    def reject_auth(_headers):
+    def reject_auth(_headers, client_ip=None):
         raise HTTPException(status_code=401, detail="invalid key")
 
     async def parse_upload(_request):
@@ -97,7 +97,7 @@ async def test_audio_job_persists_only_sanitized_request_data(monkeypatch):
 
     async def fake_auth_parse_log(_request, use_profile_auth=False):
         assert use_profile_auth
-        return {"authorization": "Bearer lg-secret"}, auth, payload, "127.0.0.1", None
+        return {"authorization": "Bearer lg-secret"}, auth, payload, "127.0.0.1", None, []
 
     def fake_create_job(submission):
         nonlocal persisted
@@ -148,6 +148,9 @@ async def test_audio_translation_job_does_not_add_stream_field(monkeypatch):
 
         def __exit__(self, exc_type, exc, tb):
             return False
+
+        def get_deployments_for_api_key(self, api_key_id):
+            return []
 
     monkeypatch.setattr(main, "DBManager", FakeDB)
 

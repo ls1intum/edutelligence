@@ -232,9 +232,20 @@ def _is_tls_request(request: Request) -> bool:
 
 def _require_tls_request(request: Request) -> None:
     if not _is_tls_request(request):
+        # Name what actually arrived. A worker that dials https:// and still
+        # lands here was stripped of its TLS signal somewhere in the proxy
+        # chain (an untrusted hop rewrites X-Forwarded-Proto to the plain
+        # scheme of its own entrypoint), and without these two values the
+        # rejection is indistinguishable from a genuinely cleartext caller.
         raise HTTPException(
             status_code=400,
-            detail="TLS is required for logosnode auth/session endpoints",
+            detail=(
+                "TLS is required for logosnode auth/session endpoints "
+                f"(request arrived with scheme={request.url.scheme!r}, "
+                f"x-forwarded-proto={request.headers.get('x-forwarded-proto', '')!r}; "
+                "if the caller used https, a reverse-proxy hop is dropping the "
+                "forwarded headers)"
+            ),
         )
 
 

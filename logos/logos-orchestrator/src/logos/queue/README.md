@@ -14,6 +14,29 @@ The Priority Queue subsystem provides multi-level priority queue management for 
 - **Escalation Support**: Methods to move tasks between priority levels
 - **Metadata Tracking**: Enqueue time, escalation count, wait time
 
+### Ordering
+
+Inside the queue, entries are ordered by:
+
+1. **Bucket** — the `Priority` level the entry's `raw_priority` maps to
+   (`Priority.from_int`: 10→HIGH, 1→LOW, everything else→NORMAL). A HIGH
+   entry always dequeues before any NORMAL entry, regardless of the values
+   below.
+2. **Raw priority** — the full-precision integer the request resolved to on
+   the 1..10 scale (key override > team priority > policy priority, see
+   `pipeline.resolve_queue_priority`). The raw value refines ordering *inside*
+   a bucket: a team at priority 7 dequeues before a plain 5 in NORMAL.
+3. **Role rank** — the caller's tiebreak rank from
+   `pipeline.queue_role_rank`: application keys (2) before admin keys (1),
+   before developer/service traffic (0). This is the default intra-team
+   ordering *application > app admin > developer*; unknown callers rank 0.
+4. **FIFO** — enqueue time breaks remaining ties.
+
+`enqueue` takes `raw_priority` (defaults to the bucket's level) and
+`role_rank` (default 0). `move_priority` keeps the entry's role rank across
+the escalated bucket. Note that log/monitoring consumers report the *bucket*
+name (low/normal/high), so a raw 7 is logged as "normal".
+
 ### Queue Metrics Logging
 
 Queue depths and request priorities are **logged to the database** by the pipeline (not by the queue itself):
@@ -27,7 +50,9 @@ Queue depths and request priorities are **logged to the database** by the pipeli
 Three priority levels: `Priority.LOW` (1), `Priority.NORMAL` (5), `Priority.HIGH` (10)
 
 ### QueueEntry (Data Class)
-Metadata wrapper for queued tasks with tracking of enqueue time, escalation count, and wait time.
+Metadata wrapper for queued tasks with tracking of enqueue time, escalation
+count, wait time, the entry's `raw_priority` (full-precision queue value) and
+`role_rank` (caller tiebreak rank).
 
 ### QueueStatePerPriority (Data Class)
 Queue depth breakdown: `low`, `normal`, `high` counts plus `total` property.
@@ -37,7 +62,8 @@ Thread-safe queue manager providing:
 
 ```python
 # Core Operations
-entry_id = queue_mgr.enqueue(task, model_id, priority)
+entry_id = queue_mgr.enqueue(task, model_id, priority,
+                             raw_priority=5, role_rank=0)
 task = queue_mgr.dequeue(model_id)  # Highest priority
 task, entry = queue_mgr.dequeue_with_entry(model_id)
 

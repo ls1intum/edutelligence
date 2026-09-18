@@ -22,7 +22,7 @@ not affect connectedness — patch
 import datetime
 from typing import Any, Dict, Optional
 
-from logos.dbutils.dbmanager import derived_reported_context_length
+from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
 from logos.timeouts import _env_int
 
 # Kept here (rather than in ``timeouts.py`` with the other ``_LOGOSNODE_*``
@@ -204,6 +204,54 @@ def _resolve_requested_model_name(
         return None
     if len(replica_matches) == 1:
         return next(iter(replica_matches))
+    return None
+
+
+def resolve_proxy_model_from_deployments(
+    deployments: list[Dict[str, Any]],
+    requested_name: str,
+) -> Optional[tuple[int, str]]:
+    """Resolve a user-supplied model name over already-fetched deployment rows.
+
+    In-memory twin of ``DBManager.resolve_proxy_model`` for non-admin keys
+    : ``get_deployments_for_api_key`` returns exactly the models
+    the SQL resolver's non-admin branch returns (same key_info /
+    effective-model / effective-provider CTEs, and the same model_aliases
+    column), so feeding the distinct (model_id, model_name, aliases) rows
+    into the shared ``_resolve_requested_model_name`` yields the same
+    (model_id, canonical name) without a second round-trip.
+
+    ``deployments`` are the raw rows, one per model/provider pair; rows
+    without a model_id are ignored. Returns None on no or ambiguous match,
+    mirroring the SQL method. The admin bypass (admins address every model,
+    not just the permitted set) is deliberately NOT covered — callers route
+    those keys to the SQL method instead.
+    """
+    candidates: list[Dict[str, Any]] = []
+    seen: set[int] = set()
+    for deployment in deployments or []:
+        if not isinstance(deployment, dict):
+            continue
+        model_id = deployment.get("model_id")
+        if model_id is None:
+            continue
+        model_id = int(model_id)
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        candidates.append(
+            {
+                "id": model_id,
+                "name": deployment.get("model_name") or f"Model {model_id}",
+                "aliases": DBManager._split_alias_list(deployment.get("aliases")),
+            }
+        )
+    model_name = _resolve_requested_model_name(requested_name, candidates)
+    if model_name is None:
+        return None
+    for candidate in candidates:
+        if candidate["name"] == model_name:
+            return candidate["id"], candidate["name"]
     return None
 
 
@@ -424,6 +472,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
                 "error_lane_count": 0,
                 "active_requests": 0,
                 "effective_vram_mb": 0.0,
+                "host_ram_mb": 0.0,
                 "reported_vram_mb": 0.0,
                 "pid_vram_mb": 0.0,
                 "device_vram_mb": 0.0,
@@ -473,6 +522,14 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "pid_vram_mb": _safe_float(lane.get("pid_vram_mb")) or 0.0,
             "device_vram_mb": _safe_float(lane.get("device_vram_mb")) or 0.0,
             "vram_source": lane.get("vram_source"),
+            # Host RAM of the lane's process tree, the counterpart to
+            # effective_vram_mb above. The worker measures it per lane (PSS where
+            # it can read it, RSS otherwise, hence the source); carrying it here
+            # is what lets the statistics page break host RAM down by model the
+            # same way it breaks down VRAM, instead of only showing the host
+            # total in provider_signals.
+            "host_ram_mb": _safe_float(lane.get("host_ram_mb")) or 0.0,
+            "host_ram_source": lane.get("host_ram_source"),
             "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
             "requests_running": _safe_float(backend_metrics.get("requests_running")),
             "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
@@ -512,6 +569,7 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
 
         entry["active_requests"] += active_requests
         entry["effective_vram_mb"] += _safe_float(lane.get("effective_vram_mb")) or 0.0
+        entry["host_ram_mb"] += _safe_float(lane.get("host_ram_mb")) or 0.0
         entry["reported_vram_mb"] += _safe_float(lane.get("reported_vram_mb")) or 0.0
         entry["pid_vram_mb"] += _safe_float(lane.get("pid_vram_mb")) or 0.0
         entry["device_vram_mb"] += _safe_float(lane.get("device_vram_mb")) or 0.0

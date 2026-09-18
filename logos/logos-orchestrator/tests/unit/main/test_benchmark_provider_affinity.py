@@ -395,28 +395,12 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
 
 @pytest.mark.asyncio
 async def test_sync_request_records_affinity_http_errors_on_the_request_log(monkeypatch):
-    async def fake_auth_parse_log(request, use_profile_auth=False):
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock(api_key_id=5)
-        return {}, auth, {"model": "org/model"}, "127.0.0.1", 99
-
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def update_log_entry_metrics(self, **kwargs):
-            pass
+        return {}, auth, {"model": "org/model"}, "127.0.0.1", 99, [{"provider_id": 20, "model_id": 1}]
 
     failure = MagicMock()
     monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
-    monkeypatch.setattr(main, "DBManager", DummyDB)
-    monkeypatch.setattr(
-        main,
-        "request_setup",
-        lambda headers, api_key_id, db=None: ([{"provider_id": 20, "model_id": 1}], ["org/model"]),
-    )
     monkeypatch.setattr(
         main,
         "_benchmark_provider_affinity",

@@ -27,9 +27,13 @@ export type RequestLogResponse = {
   rows?: RequestLogRow[];
 };
 
+/**
+ * The statistics tabs. 'local-providers' is the default and stays out of the URL.
+ */
+export type StatsTab = 'local-providers' | 'requests';
+
 // RequestLogStats from logos-ui-old/components/statistics/types.ts
 export type RequestLogStats = {
-  lastEventTs: string | null;
   totals: {
     requests: number;
     cloudRequests: number;
@@ -59,23 +63,11 @@ export type RequestLogStats = {
     local: number;
     total: number;
     avgRunSeconds: number | null;
-    avgVram: number | null;
   }>;
   modelTimeSeries?: Array<{
     timestamp: number; // Unix ts (ms)
     modelId: number;
     modelName: string;
-    count: number;
-  }>;
-  queueDepth: {
-    avgEnqueueDepth: number | null;
-    avgScheduleDepth: number | null;
-    p95EnqueueDepth: number | null;
-    p95ScheduleDepth: number | null;
-  } | null;
-  runtimeByColdStart: Array<{
-    type: "cold" | "warm";
-    avgRunSeconds: number | null;
     count: number;
   }>;
 };
@@ -116,6 +108,14 @@ export type LaneSignalData = {
   num_parallel: number | null;
   active_requests: number;
   effective_vram_mb: number;
+  /**
+   * Host RAM of the lane's process tree (MiB), the counterpart to
+   * effective_vram_mb. Optional: workers that predate the field, and hosts whose
+   * runtime cannot read process memory, report nothing rather than 0 — the page
+   * has to tell "no lane RAM reported" apart from "a lane using no RAM".
+   */
+  host_ram_mb?: number;
+  host_ram_source?: string | null;
   gpu_cache_usage_percent: number | null;
   ttft_p95_seconds: number | null;
   queue_waiting: number | null;
@@ -200,27 +200,7 @@ export interface TimelineInitPayload {
   range?: { start: string; end: string };
   bucketSeconds?: number;
   stats?: RequestLogStats;
-  events?: Array<{
-    request_id: string;
-    enqueue_ts: string;
-    timestamp_ms: number;
-    is_cloud: boolean;
-  }>;
-  cursor?: { enqueue_ts?: string; request_id?: string };
   error?: string;
-}
-
-// TimelineDeltaPayload from logos-ui-old/hooks/use-stats-websocket-v2.ts
-export interface TimelineDeltaPayload {
-  events?: Array<{
-    request_id: string;
-    enqueue_ts: string;
-    timestamp_ms: number;
-    is_cloud: boolean;
-  }>;
-  cursor?: { enqueue_ts?: string; request_id?: string };
-  bucketSeconds?: number;
-  range?: { start: string; end: string };
 }
 
 // TimelineRequestConfig from logos-ui-old/hooks/use-stats-websocket-v2.ts
@@ -242,14 +222,6 @@ export type VramSeriesPoint = {
   loaded_model_names?: string[];
   loaded_models?: Array<{ name: string; size_gb: number }>;
   _empty?: boolean;
-};
-
-// TimelineEnqueueEvent from logos-ui-old/app/statistics.tsx lines 68-108
-export type TimelineEnqueueEvent = {
-  request_id: string;
-  enqueue_ts: string;
-  timestamp_ms: number;
-  is_cloud: boolean;
 };
 
 // VramProviderMeta from logos-ui-old/app/statistics.tsx lines 68-108
@@ -301,6 +273,8 @@ export interface RequestItem {
   team_name: string | null;
   username: string | null;
   full_name: string | null;
+  api_key_name: string | null;
+  api_key_type: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;

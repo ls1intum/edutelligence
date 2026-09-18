@@ -4,8 +4,35 @@
   <div class="stats-header">
     <h1 class="page-title">Statistics</h1>
     <p class="page-subtitle">
-      Real-time request volume, VRAM, and lane health across all providers.
+      @if (activeTab() === 'requests') {
+        Request volume, model mix, and outcomes across all providers.
+      } @else {
+        Live VRAM, host RAM, lane health, and hardware per local provider.
+      }
     </p>
+
+    <!-- Two tabs, because the page answers two unrelated questions with two
+         unrelated refresh rates: what traffic did in a chosen period, and what
+         the hardware is doing right now. Splitting them keeps each tab to one
+         question and stops the infrastructure panels from being read as if the
+         time range applied to them - it does not; they always show the latest
+         sample. -->
+    <nav class="stats-tabs" role="tablist" aria-label="Statistics sections">
+      @for (tab of TABS; track tab.id) {
+        <button
+          class="stats-tabs__tab"
+          [class.stats-tabs__tab--active]="activeTab() === tab.id"
+          type="button"
+          role="tab"
+          [attr.aria-selected]="activeTab() === tab.id"
+          (click)="setActiveTab(tab.id)"
+        >{{ tab.label }}</button>
+      }
+    </nav>
+
+    <!-- Scope and time range drive the request-derived panels only, so they show
+         up with them rather than hanging over a tab they cannot change. -->
+    @if (activeTab() === 'requests') {
     <div class="stats-header__controls">
       <!-- Scope. Sits with the time range because it does the same kind of job:
            both narrow every request-derived panel on the page at once. -->
@@ -26,6 +53,22 @@
           [disabled]="noRequestersInScope()"
           ariaLabel="Filter by requester"
           (valueChange)="setUserFilter($event)"
+        />
+        <app-select
+          class="stats-scope__select"
+          [options]="providerFilterOptions()"
+          [value]="selectedProviderValue()"
+          [compact]="true"
+          ariaLabel="Filter by provider"
+          (valueChange)="setProviderFilter($event)"
+        />
+        <app-select
+          class="stats-scope__select"
+          [options]="outcomeFilterOptions"
+          [value]="selectedOutcomeValue()"
+          [compact]="true"
+          ariaLabel="Filter by outcome"
+          (valueChange)="setErrorsOnlyFilter($event)"
         />
         @if (noRequestersInScope()) {
           <span class="stats-scope__note">no named requesters in this range</span>
@@ -49,6 +92,7 @@
         (offsetChange)="setOffset($event)"
       />
     </div>
+    }
   </div>
 
   <!-- ── Fatal error ──────────────────────────────────────────────────────── -->
@@ -59,447 +103,377 @@
     </div>
   } @else {
 
-    <!-- ── KPI strip ─────────────────────────────────────────────────────── -->
-    <!-- The period belongs here, once: inside a card label it wraps to a second
-         line and every card in the row loses its alignment. -->
-    <div class="stats-kpi-period">
-      Totals for <strong>{{ customRange() ? rangeLabel() : periodLabel() }}</strong>
-      @if (filterActive()) {
-        <!-- Named here rather than left to the dropdowns: these totals are the
-             thing most likely to be read at a glance and misremembered as
-             platform-wide once the filter scrolls out of view. -->
-        · <strong>{{ filterLabel() }}</strong> only
-      }
-    </div>
+    <!-- ── Requests: what traffic did in the selected period ──────────── -->
+    @if (activeTab() === 'requests') {
 
-    <div class="stats-kpi-strip">
 
-      <!-- Total requests -->
-      @if (statsReady()) {
-        <app-stats-kpi-card
-          label="Requests"
-          [accent]="CHART_ROLE.total"
-          [value]="totalRequests().toLocaleString()"
-        >
-          <app-stats-sparkline kpiRight [data]="sparkTotal()" [color]="CHART_ROLE.total" />
-          <span kpiHint>
-            avg run <strong>{{ avgRunSeconds.toFixed(2) }}s</strong>
-            · queue <strong>{{ avgQueueSeconds.toFixed(2) }}s</strong>
-          </span>
-        </app-stats-kpi-card>
-      } @else {
-        <app-stats-skeleton variant="kpi" />
-      }
-
-      <!-- Cloud share -->
-      @if (statsReady()) {
-        <app-stats-kpi-card
-          label="Cloud share"
-          [accent]="CHART_ROLE.cloud"
-          [value]="cloudPct() + '%'"
-        >
-          <app-stats-sparkline kpiRight [data]="sparkCloud()" [color]="CHART_ROLE.cloud" />
-          <span kpiHint>
-            <strong>{{ cloudRequests().toLocaleString() }}</strong> cloud ·
-            <strong>{{ localRequests().toLocaleString() }}</strong> local
-          </span>
-        </app-stats-kpi-card>
-      } @else {
-        <app-stats-skeleton variant="kpi" />
-      }
-
-      <!-- Cold starts -->
-      @if (statsReady()) {
-        <app-stats-kpi-card
-          label="Cold starts"
-          [accent]="CHART_ROLE.local"
-          [value]="formatColdPct()"
-        >
-          <app-stats-sparkline kpiRight [data]="sparkLocal()" [color]="CHART_ROLE.local" />
-          <span kpiHint>
-            <strong>{{ coldStarts() }}</strong> of
-            <strong>{{ coldDenominator().toLocaleString() }}</strong> local starts
-          </span>
-        </app-stats-kpi-card>
-      } @else {
-        <app-stats-skeleton variant="kpi" />
-      }
-
-      <!-- Active lanes -->
-      @if (vramReady()) {
-        <app-stats-kpi-card
-          label="Active lanes"
-          [accent]="getLaneStateColor('loaded')"
-          [value]="derivedActiveLanes() + ' active'"
-        >
-          <!-- mini lane bars -->
-          @if (allLanesForKpi().length > 0) {
-            <div kpiRight class="stats-lane-bars">
-              @for (lane of allLanesForKpi().slice(0, 12); track $index) {
-                <div
-                  class="stats-lane-bar"
-                  [style.height.px]="laneBarHeight(lane)"
-                  [style.background]="laneBarColor(lane)"
-                ></div>
-              }
-            </div>
-          }
-          <!-- hint -->
-          @if (totalLanesAcrossProviders() > 0) {
-            <div kpiHint class="stats-lane-hint">
-              <div class="stats-lane-hint__states">
-                @if ((laneStateCounts().loaded + laneStateCounts().running) > 0) {
-                  <span>
-                    <strong [style.color]="getLaneStateColor('loaded')">
-                      {{ laneStateCounts().loaded + laneStateCounts().running }}
-                    </strong>
-                    <span class="stats-lane-hint__lbl"> loaded</span>
-                  </span>
-                }
-                @if (laneStateCounts().starting > 0) {
-                  <span>
-                    <strong [style.color]="getLaneStateColor('starting')">
-                      {{ laneStateCounts().starting }}
-                    </strong>
-                    <span class="stats-lane-hint__lbl"> starting</span>
-                  </span>
-                }
-                @if (laneStateCounts().sleeping > 0) {
-                  <span>
-                    <strong [style.color]="getLaneStateColor('sleeping')">
-                      {{ laneStateCounts().sleeping }}
-                    </strong>
-                    <span class="stats-lane-hint__lbl"> sleeping</span>
-                  </span>
-                }
-                @if (laneStateCounts().cold > 0) {
-                  <span>
-                    <strong [style.color]="getLaneStateColor('cold')">
-                      {{ laneStateCounts().cold }}
-                    </strong>
-                    <span class="stats-lane-hint__lbl"> cold</span>
-                  </span>
-                }
-                @if ((laneStateCounts().stopped + laneStateCounts().error) > 0) {
-                  <span>
-                    <strong [style.color]="STATUS_COLOR.error">
-                      {{ laneStateCounts().stopped + laneStateCounts().error }}
-                    </strong>
-                    <span class="stats-lane-hint__lbl"> stopped</span>
-                  </span>
-                }
-              </div>
-              @if (allProviderVramSummary().totalGb > 0) {
-                <div>
-                  <strong>{{ allProviderVramSummary().usedGb.toFixed(1) }}</strong>
-                  /
-                  <strong>{{ allProviderVramSummary().totalGb.toFixed(0) }} GB</strong>
-                  VRAM
-                </div>
-              }
-              @if (allProviderRamSummary().reported) {
-                <div>
-                  <strong>{{ allProviderRamSummary().usedGb.toFixed(1) }}</strong>
-                  /
-                  <strong>{{ allProviderRamSummary().totalGb.toFixed(0) }} GB</strong>
-                  RAM
-                </div>
-              }
-            </div>
-          }
-        </app-stats-kpi-card>
-      } @else {
-        <app-stats-skeleton variant="kpi" />
-      }
-
-      <!-- Tokens processed (historic, selected range) -->
-      @if (statsReady()) {
-        <app-stats-kpi-card
-          label="Tokens"
-          [accent]="CHART_ROLE.total"
-          [value]="formatTokenCount(totalTokens())"
-        >
-          <span kpiHint>
-            processed
-            @if (cloudRequests() > 0) {
-              (cloud incl.)
-            }
-          </span>
-        </app-stats-kpi-card>
-      } @else {
-        <app-stats-skeleton variant="kpi" />
-      }
-
-      <!-- Cloud cost (historic, selected range) -->
-      @if (statsReady()) {
-        <app-stats-kpi-card
-          label="Cloud cost"
-          [accent]="CHART_ROLE.cloud"
-          [value]="formatCloudCost(cloudCostMicroCents())"
-        >
-          <span kpiHint>
-            across
-            <strong>{{ cloudRequests().toLocaleString() }}</strong> cloud requests
-          </span>
-        </app-stats-kpi-card>
-      } @else {
-        <app-stats-skeleton variant="kpi" />
-      }
-    </div>
-
-    <!-- ── Provider-scoped glass row ─────────────────────────────────────── -->
-    <div class="stats-glass-row">
-      <!-- Shared provider selector -->
-      <div class="stats-glass-row__header">
-        <span class="stats-glass-row__label">Provider</span>
-        <app-select
-          [options]="vramProviderOptions()"
-          [value]="selectedVramProvider()"
-          [compact]="true"
-          [collapseWhenSingle]="true"
-          ariaLabel="Select provider"
-          (valueChange)="setSelectedVramProvider($event)"
-        />
-        @if (vramReady() && !selectedProviderCalibrating() && selectedProviderFreeVramLabel()) {
-          <span
-            class="stats-provider-vram-badge"
-            title="Free VRAM of the selected provider (latest sample)"
-          >{{ selectedProviderFreeVramLabel() }}</span>
-        }
-        @if (selectedProviderCalibrating()) {
-          <span class="stats-provider-badge stats-provider-badge--calibrating">
-            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Calibrating…
-          </span>
+      <!-- ── KPI strip ─────────────────────────────────────────────────────── -->
+      <!-- KPIs sit first so the page opens on totals; the live feed follows. -->
+      <!-- The period belongs here, once: inside a card label it wraps to a second
+           line and every card in the row loses its alignment. -->
+      <div class="stats-kpi-period">
+        Totals for <strong>{{ customRange() ? rangeLabel() : periodLabel() }}</strong>
+        @if (filterActive()) {
+          <!-- Named here rather than left to the dropdowns: these totals are the
+               thing most likely to be read at a glance and misremembered as
+               platform-wide once the filter scrolls out of view. -->
+          · <strong>{{ filterLabel() }}</strong> only
         }
       </div>
 
-      <!-- Three chart panels -->
-      <div class="stats-three-col">
+      <div class="stats-kpi-strip">
 
-        <!-- VRAM utilization -->
-        <app-stats-chart-panel
-          title="VRAM utilization"
-          [subtitle]="selectedVramProvider()
-            ? selectedVramProvider()! + (vramSummary().modelsLoaded
-                ? ' · ' + vramSummary().modelsLoaded + ' model' + (vramSummary().modelsLoaded === 1 ? '' : 's') + ' loaded'
-                : '')
-            : 'Memory across local providers.'"
-        >
-          @if (!vramReady()) {
-            <app-stats-skeleton variant="donut" />
-          } @else if (hasSelectedProviderLanes()) {
-            <app-stats-lane-vram-pie
-              [lanes]="selectedProviderLanes()"
-              [totalVramMb]="selectedProviderTotalVramMb()"
-              [freeVramMb]="selectedProviderFreeVramMb()"
-            />
-          } @else if (!vramPieData().length) {
-            <app-stats-empty-state message="No memory data yet." />
-          } @else {
-            <app-stats-vram-donut
-              [data]="vramPieData()"
-              centerTop="used"
-              [centerMiddle]="vramSummary().usedGb.toFixed(1) + ' GB'"
-              [centerBottom]="'of ' + vramSummary().totalGb.toFixed(1) + ' GB'"
-              valueSuffix=" GB"
-              [valueDecimals]="2"
-            />
-          }
-        </app-stats-chart-panel>
-
-        <!-- Lane health -->
-        <app-stats-chart-panel
-          title="Lane health"
-          subtitle="Per-lane runtime state, KV cache, and TTFT."
-        >
-          <span panelRight>
-            @if (vramReady() && totalLanesAcrossProviders() > 0) {
-              <span class="stats-panel-badge">
-                {{ totalLanesAcrossProviders() }} lane{{ totalLanesAcrossProviders() === 1 ? '' : 's' }}
-              </span>
-            }
-          </span>
-          @if (!vramReady()) {
-            <app-stats-skeleton variant="lane" />
-          } @else {
-            <app-stats-lane-health-panel
-              [lanesByProvider]="lanesByProvider()"
-              [providerMeta]="vramProviderMetaByName()"
-              [selectedProvider]="selectedVramProvider()"
-            />
-          }
-        </app-stats-chart-panel>
-
-        <!-- Workers & GPUs -->
-        <app-stats-chart-panel
-          title="Workers &amp; GPUs"
-          subtitle="Per-device hardware metrics from local providers."
-        >
-          @if (!vramReady()) {
-            <app-stats-skeleton variant="gpu" />
-          } @else {
-            <app-stats-worker-gpu-panel
-              [providerLatestSamples]="latestSampleByProvider()"
-              [providerDevices]="devicesByProvider()"
-              [providerMeta]="vramProviderMetaByName()"
-              [lanesByProvider]="lanesByProvider()"
-              [activeProvider]="selectedVramProvider()"
-              [nowMs]="nowMs()"
-            />
-          }
-        </app-stats-chart-panel>
-
-      </div>
-
-      <!-- VRAM remaining — provider-scoped, so it lives with the provider
-           selector instead of at the bottom of the page, and it follows the
-           global time range (no range control of its own). -->
-      <app-stats-chart-panel
-        title="VRAM remaining"
-        [subtitle]="selectedVramProvider()
-          ? 'Free VRAM on ' + selectedVramProvider() + ' over the selected time range.'
-          : 'Free VRAM over the selected time range.'"
-      >
-        @if (!vramReady()) {
-          <app-stats-skeleton variant="area" />
+        <!-- Total requests -->
+        @if (statsReady()) {
+          <app-stats-kpi-card
+            label="Requests"
+            [accent]="CHART_ROLE.total"
+            [value]="totalRequests().toLocaleString()"
+          >
+            <app-stats-sparkline kpiRight [data]="sparkTotal()" [color]="CHART_ROLE.total" />
+            <span kpiHint>
+              avg run <strong>{{ avgRunSeconds.toFixed(2) }}s</strong>
+              · queue <strong>{{ avgQueueSeconds.toFixed(2) }}s</strong>
+            </span>
+          </app-stats-kpi-card>
         } @else {
-          <app-stats-vram-remaining-chart
-            [vramDataByProvider]="selectedProviderVramData()"
-            [timeRange]="selectedTimeRangeMs()"
-            [isVramLoading]="isVramLoading()"
-            [vramError]="vramError()"
-            [nowMs]="nowMs()"
-            (refresh)="onRefresh()"
+          <app-stats-skeleton variant="kpi" />
+        }
+
+        <!-- Cloud share -->
+        @if (statsReady()) {
+          <app-stats-kpi-card
+            label="Cloud share"
+            [accent]="CHART_ROLE.cloud"
+            [value]="cloudPct() + '%'"
+          >
+            <app-stats-sparkline kpiRight [data]="sparkCloud()" [color]="CHART_ROLE.cloud" />
+            <span kpiHint>
+              <strong>{{ cloudRequests().toLocaleString() }}</strong> cloud ·
+              <strong>{{ localRequests().toLocaleString() }}</strong> local
+            </span>
+          </app-stats-kpi-card>
+        } @else {
+          <app-stats-skeleton variant="kpi" />
+        }
+
+        <!-- Cold starts -->
+        @if (statsReady()) {
+          <app-stats-kpi-card
+            label="Cold starts"
+            [accent]="CHART_ROLE.local"
+            [value]="formatColdPct()"
+          >
+            <app-stats-sparkline kpiRight [data]="sparkLocal()" [color]="CHART_ROLE.local" />
+            <span kpiHint>
+              <strong>{{ coldStarts() }}</strong> of
+              <strong>{{ coldDenominator().toLocaleString() }}</strong> local starts
+            </span>
+          </app-stats-kpi-card>
+        } @else {
+          <app-stats-skeleton variant="kpi" />
+        }
+
+
+        <!-- Tokens processed (historic, selected range) -->
+        @if (statsReady()) {
+          <app-stats-kpi-card
+            label="Tokens"
+            [accent]="CHART_ROLE.total"
+            [value]="formatTokenCount(totalTokens())"
+          >
+            <span kpiHint>
+              processed
+              @if (cloudRequests() > 0) {
+                (cloud incl.)
+              }
+            </span>
+          </app-stats-kpi-card>
+        } @else {
+          <app-stats-skeleton variant="kpi" />
+        }
+
+        <!-- Cloud cost (historic, selected range) -->
+        @if (statsReady()) {
+          <app-stats-kpi-card
+            label="Cloud cost"
+            [accent]="CHART_ROLE.cloud"
+            [value]="formatCloudCost(cloudCostMicroCents())"
+          >
+            <span kpiHint>
+              across
+              <strong>{{ cloudRequests().toLocaleString() }}</strong> cloud requests
+            </span>
+          </app-stats-kpi-card>
+        } @else {
+          <app-stats-skeleton variant="kpi" />
+        }
+      </div>
+
+      <!-- ── Recent requests ───────────────────────────────────────────────── -->
+      <app-stats-chart-panel
+        title="Recent requests"
+        subtitle="Latest activity from the request log."
+      >
+        <span panelRight>
+          <!-- State filter for this list only — it sits with the feed, not in the
+               page scope, because it must not narrow the KPI cards and charts. -->
+          <app-select
+            class="stats-feed-status"
+            [options]="feedStatusOptions()"
+            [value]="selectedFeedStatusValue()"
+            [compact]="true"
+            ariaLabel="Filter requests by state"
+            (valueChange)="setFeedStatusFilter($event)"
+          />
+        </span>
+        <app-stats-recent-requests
+          [liveRequests]="latestRequests()"
+          [totalInRange]="requestFeedTotal()"
+          [range]="requestFeedRange()"
+          [pending]="requestsPending()"
+          [filterUserId]="filterUserId()"
+          [filterTeamId]="filterTeamId()"
+          [filterProviderId]="filterProviderId()"
+          [filterErrorsOnly]="errorsOnly()"
+          [filterStatus]="feedStatus()"
+        />
+      </app-stats-chart-panel>
+
+      <!-- ── Row 2: Request volume ────────────────────────────────────────── -->
+      <app-stats-chart-panel
+        title="Request volume"
+        subtitle="Per-bucket throughput across cloud and local providers."
+      >
+        <span panelRight>
+          <!-- The chart deliberately stays mounted across a range change (it owns
+               the provider/model toggle and the hidden-series state), so it says
+               so instead of silently passing off the previous range's bars. -->
+          @if (statsPending()) {
+            <span class="stats-panel-badge">
+              <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Updating…
+            </span>
+          } @else if (customRange()) {
+            <span class="stats-range-badge">
+              <span class="stats-range-badge__label">{{ rangeLabel() }}</span>
+              <button
+                class="stats-range-badge__clear"
+                (click)="clearCustomRange()"
+                aria-label="Clear selected range"
+              >✕</button>
+            </span>
+          }
+        </span>
+        @if (!statsLoaded()) {
+          <app-stats-skeleton variant="bars" />
+        } @else if (!stats()?.timeSeries?.length) {
+          <app-stats-empty-state message="No request volume data in the selected range." />
+        } @else {
+          <app-stats-request-volume-chart
+            [totalLineData]="totalLineData()"
+            [cloudLineData]="cloudLineData()"
+            [localLineData]="localLineData()"
+            [modelSeriesMap]="modelSeriesMap()"
+            [modelLabelById]="modelLabelById()"
+            [modelColors]="modelColors()"
+            [bucketMs]="volumeBucketMs()"
+            [resetZoomTrigger]="resetZoomCounter()"
+            (zoom)="setCustomRange($event)"
+            (tooltipChange)="chartTooltip.set($event)"
           />
         }
       </app-stats-chart-panel>
-    </div>
 
-    <!-- ── Recent requests ───────────────────────────────────────────────── -->
-    <app-stats-chart-panel
-      title="Recent requests"
-      subtitle="Latest activity from the request log."
-    >
-      <span panelRight>
-        <!-- State filter for this list only — it sits with the feed, not in the
-             page scope, because it must not narrow the KPI cards and charts. -->
-        <app-select
-          class="stats-feed-status"
-          [options]="feedStatusOptions()"
-          [value]="selectedFeedStatusValue()"
-          [compact]="true"
-          ariaLabel="Filter requests by state"
-          (valueChange)="setFeedStatusFilter($event)"
-        />
-      </span>
-      <app-stats-recent-requests
-        [liveRequests]="latestRequests()"
-        [totalInRange]="requestFeedTotal()"
-        [range]="requestFeedRange()"
-        [pending]="requestsPending()"
-        [filterUserId]="filterUserId()"
-        [filterTeamId]="filterTeamId()"
-        [filterStatus]="feedStatus()"
-      />
-    </app-stats-chart-panel>
+      <!-- ── Row 3: Distribution - Request type / Model share / Status ─────── -->
+      <div class="stats-row stats-row--1-1-1">
 
-    <!-- ── Row 2: Request volume ────────────────────────────────────────── -->
-    <app-stats-chart-panel
-      title="Request volume"
-      subtitle="Per-bucket throughput across cloud and local providers."
-    >
-      <span panelRight>
-        <!-- The chart deliberately stays mounted across a range change (it owns
-             the provider/model toggle and the hidden-series state), so it says
-             so instead of silently passing off the previous range's bars. -->
-        @if (statsPending()) {
-          <span class="stats-panel-badge">
-            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Updating…
-          </span>
-        } @else if (customRange()) {
-          <span class="stats-range-badge">
-            <span class="stats-range-badge__label">{{ rangeLabel() }}</span>
-            <button
-              class="stats-range-badge__clear"
-              (click)="clearCustomRange()"
-              aria-label="Clear selected range"
-            >✕</button>
-          </span>
-        }
-      </span>
-      @if (!statsLoaded()) {
-        <app-stats-skeleton variant="bars" />
-      } @else if (!stats()?.timeSeries?.length) {
-        <app-stats-empty-state message="No request volume data in the selected range." />
-      } @else {
-        <app-stats-request-volume-chart
-          [totalLineData]="totalLineData()"
-          [cloudLineData]="cloudLineData()"
-          [localLineData]="localLineData()"
-          [modelSeriesMap]="modelSeriesMap()"
-          [modelLabelById]="modelLabelById()"
-          [modelColors]="modelColors()"
-          [resetZoomTrigger]="resetZoomCounter()"
-          (zoom)="setCustomRange($event)"
-          (tooltipChange)="chartTooltip.set($event)"
-        />
-      }
-    </app-stats-chart-panel>
+        <!-- Request type donut -->
+        <div class="stats-col">
+          <app-stats-chart-panel title="Request type" subtitle="Cloud vs local share.">
+            @if (!statsReady()) {
+              <app-stats-skeleton variant="donut" />
+            } @else if (!providerPieData().length) {
+              <app-stats-empty-state message="No requests in range." />
+            } @else {
+              <app-stats-vram-donut
+                [data]="providerPieData()"
+                centerTop="cloud"
+                [centerMiddle]="cloudPct() + '%'"
+                valueSuffix=" req"
+                [valueDecimals]="0"
+              />
+            }
+          </app-stats-chart-panel>
+        </div>
 
-    <!-- ── Row 3: Distribution - Request type / Model share / Status ─────── -->
-    <div class="stats-row stats-row--1-1-1">
+        <!-- Model share donut -->
+        <div class="stats-col">
+          <app-stats-chart-panel title="Model share" subtitle="Top models in the selected range.">
+            @if (!statsReady()) {
+              <app-stats-skeleton variant="donut" />
+            } @else if (!modelPieData().length) {
+              <app-stats-empty-state message="No requests in range." />
+            } @else {
+              <app-stats-vram-donut
+                [data]="modelPieData()"
+                centerTop="models"
+                [centerMiddle]="modelPieData().length + ''"
+                valueSuffix=" req"
+                [valueDecimals]="0"
+              />
+            }
+          </app-stats-chart-panel>
+        </div>
 
-      <!-- Request type donut -->
-      <div class="stats-col">
-        <app-stats-chart-panel title="Request type" subtitle="Cloud vs local share.">
-          @if (!statsReady()) {
-            <app-stats-skeleton variant="donut" />
-          } @else if (!providerPieData().length) {
-            <app-stats-empty-state message="No requests in range." />
-          } @else {
-            <app-stats-vram-donut
-              [data]="providerPieData()"
-              centerTop="cloud"
-              [centerMiddle]="cloudPct() + '%'"
-              valueSuffix=" req"
-              [valueDecimals]="0"
-            />
-          }
-        </app-stats-chart-panel>
+        <!-- Status bars -->
+        <div class="stats-col">
+          <app-stats-chart-panel title="Status" subtitle="Outcome of requests in range.">
+            @if (!statsReady()) {
+              <app-stats-skeleton variant="status" />
+            } @else {
+              <app-stats-status-bars [counts]="statusCounts()" />
+            }
+          </app-stats-chart-panel>
+        </div>
+
       </div>
 
-      <!-- Model share donut -->
-      <div class="stats-col">
-        <app-stats-chart-panel title="Model share" subtitle="Top models in the selected range.">
-          @if (!statsReady()) {
-            <app-stats-skeleton variant="donut" />
-          } @else if (!modelPieData().length) {
-            <app-stats-empty-state message="No requests in range." />
-          } @else {
-            <app-stats-vram-donut
-              [data]="modelPieData()"
-              centerTop="models"
-              [centerMiddle]="modelPieData().length + ''"
-              valueSuffix=" req"
-              [valueDecimals]="0"
-            />
+
+    <!-- ── Local Providers: what the hardware is doing right now ──────── -->
+    } @else {
+
+      <!-- ── Provider-scoped glass row ─────────────────────────────────────── -->
+      <div class="stats-glass-row">
+        <!-- Shared provider selector -->
+        <div class="stats-glass-row__header">
+          <span class="stats-glass-row__label">Provider</span>
+          <app-select
+            [options]="vramProviderOptions()"
+            [value]="selectedVramProvider()"
+            [compact]="true"
+            [collapseWhenSingle]="true"
+            ariaLabel="Select provider"
+            (valueChange)="setSelectedVramProvider($event)"
+          />
+          @if (vramReady() && !selectedProviderCalibrating() && selectedProviderFreeVramLabel()) {
+            <span
+              class="stats-provider-vram-badge"
+              title="Free VRAM of the selected provider (latest sample)"
+            >{{ selectedProviderFreeVramLabel() }}</span>
           }
-        </app-stats-chart-panel>
+          @if (selectedProviderCalibrating()) {
+            <span class="stats-provider-badge stats-provider-badge--calibrating">
+              <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Calibrating…
+            </span>
+          }
+        </div>
+
+        <!-- Three chart panels -->
+        <div class="stats-panel-row">
+
+          <!-- VRAM utilization -->
+          <app-stats-chart-panel
+            title="VRAM utilization"
+            [subtitle]="selectedVramProvider()
+              ? selectedVramProvider()! + (vramSummary().modelsLoaded
+                  ? ' · ' + vramSummary().modelsLoaded + ' model' + (vramSummary().modelsLoaded === 1 ? '' : 's') + ' loaded'
+                  : '')
+              : 'Memory across local providers.'"
+          >
+            @if (!vramReady()) {
+              <app-stats-skeleton variant="donut" />
+            } @else if (hasSelectedProviderLanes()) {
+              <app-stats-lane-memory-pie
+                metric="vram"
+                [lanes]="selectedProviderLanes()"
+                [totalMb]="selectedProviderTotalVramMb()"
+                [freeMb]="selectedProviderFreeVramMb()"
+              />
+            } @else if (!vramPieData().length) {
+              <app-stats-empty-state message="No memory data yet." />
+            } @else {
+              <app-stats-vram-donut
+                [data]="vramPieData()"
+                centerTop="used"
+                [centerMiddle]="vramSummary().usedGb.toFixed(1) + ' GB'"
+                [centerBottom]="'of ' + vramSummary().totalGb.toFixed(1) + ' GB'"
+                valueSuffix=" GB"
+                [valueDecimals]="2"
+              />
+            }
+          </app-stats-chart-panel>
+
+          <!-- RAM utilization -->
+          <!-- Host RAM gets the same per-model breakdown as the GPU memory
+               beside it: sleeping lanes keep their weights in it and the
+               worker's model cache draws from it, so which model is holding the
+               host's memory is as real a question as it is for the card. -->
+          <app-stats-chart-panel
+            title="RAM utilization"
+            [subtitle]="selectedVramProvider()
+              ? selectedVramProvider()! + ' · host memory'
+              : 'Host memory across local providers.'"
+          >
+            @if (!vramReady()) {
+              <app-stats-skeleton variant="donut" />
+            } @else if (!selectedProviderRamMb().reported) {
+              <app-stats-empty-state message="This provider does not report host RAM." />
+            } @else {
+              <app-stats-lane-memory-pie
+                metric="ram"
+                [lanes]="hasSelectedProviderLaneRam() ? selectedProviderLanes() : {}"
+                [totalMb]="selectedProviderRamMb().totalMb"
+                [freeMb]="selectedProviderRamMb().freeMb"
+              />
+            }
+          </app-stats-chart-panel>
+
+          <!-- Lane health -->
+          <app-stats-chart-panel
+            title="Lane health"
+            subtitle="Per-lane runtime state, KV cache, and TTFT."
+          >
+            <span panelRight>
+              @if (vramReady() && totalLanesAcrossProviders() > 0) {
+                <span class="stats-panel-badge">
+                  {{ totalLanesAcrossProviders() }} lane{{ totalLanesAcrossProviders() === 1 ? '' : 's' }}
+                </span>
+              }
+            </span>
+            @if (!vramReady()) {
+              <app-stats-skeleton variant="lane" />
+            } @else {
+              <app-stats-lane-health-panel
+                [lanesByProvider]="lanesByProvider()"
+                [providerMeta]="vramProviderMetaByName()"
+                [selectedProvider]="selectedVramProvider()"
+              />
+            }
+          </app-stats-chart-panel>
+
+          <!-- Workers & GPUs -->
+          <app-stats-chart-panel
+            title="Workers &amp; GPUs"
+            subtitle="Per-device hardware metrics from local providers."
+          >
+            @if (!vramReady()) {
+              <app-stats-skeleton variant="gpu" />
+            } @else {
+              <app-stats-worker-gpu-panel
+                [providerLatestSamples]="latestSampleByProvider()"
+                [providerDevices]="devicesByProvider()"
+                [providerMeta]="vramProviderMetaByName()"
+                [lanesByProvider]="lanesByProvider()"
+                [activeProvider]="selectedVramProvider()"
+                [nowMs]="nowMs()"
+              />
+            }
+          </app-stats-chart-panel>
+
+        </div>
       </div>
 
-      <!-- Status bars -->
-      <div class="stats-col">
-        <app-stats-chart-panel title="Status" subtitle="Outcome of requests in range.">
-          @if (!statsReady()) {
-            <app-stats-skeleton variant="status" />
-          } @else {
-            <app-stats-status-bars [counts]="statusCounts()" />
-          }
-        </app-stats-chart-panel>
-      </div>
-
-    </div>
-
+    }
   }
 
   <!-- ── Chart tooltip portal (outside glass panels so backdrop-filter doesn't trap position:fixed) -->

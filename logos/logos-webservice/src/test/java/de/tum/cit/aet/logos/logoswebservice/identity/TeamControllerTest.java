@@ -183,6 +183,76 @@ class TeamControllerTest {
            .andExpect(status().isOk());
     }
 
+    // Team queue priority is a platform-level decision, so only logos admins
+    // may set it; app admins (even team owners) and developers must not.
+
+    @Test
+    void updateTeamPriority_succeeds_for_logos_admin() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isOk());
+        mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.id == 2001)].priority").value(7));
+    }
+
+    @Test
+    void updateTeamPriority_forbidden_for_app_admin() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void updateTeamPriority_forbidden_for_developer() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void updateTeamPriority_rejects_out_of_range() throws Exception {
+        for (String value : new String[]{"0", "11", "-1"}) {
+            mvc.perform(patch("/teams/2001/priority")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"priority\":" + value + "}"))
+               .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    void updateTeamPriority_null_resets_to_unset() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isOk());
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":null}"))
+           .andExpect(status().isOk());
+        mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.id == 2001)].priority").value((Object) null));
+    }
+
+    @Test
+    void updateTeamPriority_not_found_for_unknown_team() throws Exception {
+        mvc.perform(patch("/teams/9999/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isNotFound());
+    }
+
     // Owners must hold the app_admin or logos_admin role: the team-management
     // endpoints and UI are gated on those roles, so an app_developer owner
     // could never manage the team they own. Every path that grants ownership

@@ -56,6 +56,14 @@ Save the response values — you will need both:
 
 ## 3. Configure credentials (.env)
 
+If you are following this guide from a repository checkout, enter the
+worker directory first — the Compose file, `.env` and `config.yml` all live
+there (in production deployments it is already the working directory):
+
+```bash
+cd logos/logos-workernode
+```
+
 Copy `.env.example` to `.env` and fill in the required values:
 
 ```bash
@@ -101,16 +109,33 @@ engines:
 
 ## 5. Start the worker
 
+(From the worker directory entered in step 3.) The production Compose file
+pulls `${REGISTRY}/logos-workernode-vllm` from
+the project's registry (Harbor for team deployments — set `REGISTRY` and
+`IMAGE_TAG` in `.env` and log in). Without registry access, build the image
+first (this directory is the build context). Put the values in `.env` and
+export them in the shell as well — the Docker CLI does not read `.env`:
+
+```bash
+export REGISTRY=<your-registry> IMAGE_TAG=<tag>
+docker build -t "$REGISTRY/logos-workernode-vllm:$IMAGE_TAG" .
+```
+
+Then start the worker:
+
 ```bash
 docker compose up -d
 ```
 
 ## 6. Verify the local worker
 
+The worker API only exposes its root (plus FastAPI's `/docs`); it has no
+`/health` or `/admin/*` endpoints. Runtime state is pushed to Logos over the
+outbound session — check it on the server side in step 7:
+
 ```bash
-curl http://localhost:8444/health
-curl http://localhost:8444/admin/runtime
-curl http://localhost:8444/admin/lanes
+# Service info (the production worker listens on port 80)
+curl http://localhost:80/
 ```
 
 ## 7. Verify the Logos session
@@ -123,10 +148,9 @@ curl -X POST https://logos.example.com/logosdb/providers/logosnode/status \
 
 ## 8. Connect a model to the provider
 
-Use the normal Logos DB endpoints:
-- `POST /logosdb/get_models`
-- `POST /logosdb/connect_model_provider`
-- `POST /logosdb/connect_profile_model`
+Use the Logos UI (Providers → connect model) or the webservice's admin API
+(`/api/logosdb/connect_model_provider`, Keycloak-authenticated — the
+orchestrator no longer exposes these paths with a plain API key).
 
 ## 9. Scheduling & Capacity Management
 
@@ -155,7 +179,7 @@ Both are enabled by default. No worker-side configuration needed.
   Check that `LOGOS_URL` is reachable from the worker host and that the URL is `https://`.
 
 - **lane never becomes `loaded`**
-  Call `GET /admin/runtime` and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics`.
+  Call `POST /logosdb/providers/logosnode/status` (step 7) and inspect `runtime.lanes[*].runtime_state`, `effective_vram_mb`, and `backend_metrics` in the returned snapshot.
 
 - **`IsADirectoryError: /app/config.yml`**
   The `config.yml` file is missing on the host. Ansible must create it before the first deploy.

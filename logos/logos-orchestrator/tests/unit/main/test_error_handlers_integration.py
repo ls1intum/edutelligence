@@ -40,7 +40,7 @@ def _stub_auth(monkeypatch):
         default_priority=5,
     )
 
-    def fake_authenticate(headers):
+    def fake_authenticate(headers, client_ip=None):
         return fake_auth
 
     monkeypatch.setattr("logos.auth.authenticate_api_key", fake_authenticate)
@@ -79,6 +79,12 @@ def _stub_db(monkeypatch):
         def set_response_payload(self, *a, **k):
             pass
 
+        def finalize_billing_row(self, *a, **k):
+            pass
+
+        def store_response_payload(self, *a, **k):
+            pass
+
         def get_team(self, team_id):
             return {
                 "id": team_id,
@@ -104,6 +110,9 @@ def _stub_db(monkeypatch):
         def get_models_info(self, api_key_id):
             return [(1, "test-model")]
 
+        def get_deployments_for_api_key(self, api_key_id):
+            return [{"model_id": 1, "provider_id": 1, "type": "openai"}]
+
         def get_model(self, model_id):
             return {"id": model_id, "name": "test-model"}
 
@@ -125,10 +134,7 @@ def _stub_request_setup(monkeypatch):
     monkeypatch.setattr(
         main,
         "request_setup",
-        lambda headers, api_key_id, db=None: (
-            [{"model_id": 1, "provider_id": 1, "type": "openai"}],
-            [1],
-        ),
+        lambda headers, api_key_id, db=None: ([{"model_id": 1, "provider_id": 1, "type": "openai"}], [1]),
         raising=False,
     )
     monkeypatch.setattr(
@@ -274,6 +280,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -332,6 +339,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -384,6 +392,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -444,6 +453,7 @@ class TestStreamingErrors:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
