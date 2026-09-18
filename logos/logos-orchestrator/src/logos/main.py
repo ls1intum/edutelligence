@@ -290,6 +290,30 @@ def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> N
         logger.debug("Failed to record rate-limit admission for %s", request_id, exc_info=True)
 
 
+def _is_timeout_failure(
+    *,
+    timed_out: bool = False,
+    error: Optional[str] = None,
+    status_code: Optional[int] = None,
+) -> bool:
+    """Whether a failed execution should settle as ``timeout``, not ``error``.
+
+    Queue wait already records ``timeout`` on ``QueueTimeoutError``. Execution
+    used to leave ``timed_out`` stuck at False, so worker command timeouts,
+    HTTP 504s, and error text that named a timeout all landed as ``error`` —
+    which is why the statistics Status chart's Timeout row stayed at zero.
+    """
+    if timed_out:
+        return True
+    if status_code == 504:
+        return True
+    if error:
+        lowered = error.lower()
+        if "timeout" in lowered or "timed out" in lowered:
+            return True
+    return False
+
+
 def _record_log_failure(
     log_id,
     request_id: Optional[str],
@@ -2236,8 +2260,9 @@ async def _sync_response(
                     content_type=rpc_content_type,
                 )
             except LogosNodeOfflineError as exc:
-                status_override = 503
-                _, coerced_body = coerce_upstream_error(503, {"error": str(exc)})
+                timed_out = _is_timeout_failure(error=str(exc))
+                status_override = 504 if timed_out else 503
+                _, coerced_body = coerce_upstream_error(status_override, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
                     response=coerced_body,
@@ -2247,8 +2272,9 @@ async def _sync_response(
                     headers=None,
                 )
             except LogosNodeCommandError as exc:
-                status_override = 502
-                _, coerced_body = coerce_upstream_error(502, {"error": str(exc)})
+                timed_out = _is_timeout_failure(error=str(exc))
+                status_override = 504 if timed_out else 502
+                _, coerced_body = coerce_upstream_error(status_override, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
                     response=coerced_body,
@@ -2291,6 +2317,18 @@ async def _sync_response(
                 f"Request failed (model_id={model_id}, provider_id={provider_id}): "
                 f"{exec_result.error}, response={response_payload}"
             )
+            # Worker command timeouts used to land here with timed_out still
+            # False (the flag was never set), so they settled as error. Catch
+            # them from the error text and from HTTP 504 as well.
+            if not timed_out:
+                timed_out = _is_timeout_failure(
+                    error=exec_result.error,
+                    status_code=status_override if status_override is not None else exec_result.status_code,
+                )
+                if timed_out:
+                    error_message = exec_result.error
+                    if status_override is None:
+                        status_override = 504
 
         if exec_result.success and context.provider_type == "cloud":
             response_payload, _ = _response_with_cost(
@@ -2619,7 +2657,11 @@ async def _proxy_sync_response(
                 log_id=log_id,
                 provider_id=provider_id,
                 model_id=model_id,
-                result_status="success" if exec_result.success else "error",
+                result_status=(
+                    "timeout"
+                    if _is_timeout_failure(error=exec_result.error, status_code=exec_result.status_code)
+                    else ("success" if exec_result.success else "error")
+                ),
                 error_message=None if exec_result.success else exec_result.error,
             )
 
@@ -2819,7 +2861,7 @@ async def _execute_resource_mode(
             provider_id=result.provider_id,
             classification_stats=result.classification_stats,
             scheduling_stats=result.scheduling_stats,
-            result_status="timeout" if "timeout" in error_msg.lower() else "error",
+            result_status="timeout" if _is_timeout_failure(error=error_msg) else "error",
         )
         if is_async_job:
             return {"status_code": 503, "data": {"error": error_msg}}

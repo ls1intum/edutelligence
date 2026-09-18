@@ -64,7 +64,7 @@ class StatsV2WebSocketHandlerLivePushTest {
      */
     @SuppressWarnings("unchecked")
     private static void stubLatestRequests(RequestLogService service, Map<String, Object> template) {
-        when(service.getLatestRequests(any(), any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean()))
+        when(service.getLatestRequests(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean()))
             .thenAnswer(inv -> Map.of("requests", List.of(new HashMap<>(template))));
     }
 
@@ -73,7 +73,7 @@ class StatsV2WebSocketHandlerLivePushTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any()))
+        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));

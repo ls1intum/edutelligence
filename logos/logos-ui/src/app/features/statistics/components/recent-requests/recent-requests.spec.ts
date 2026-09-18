@@ -156,6 +156,8 @@ describe('totalCount for a filtered feed without a bucket total yet', () => {
     team_name: 'Team 1',
     username: 'operator',
     full_name: 'The Operator',
+    api_key_name: 'dev key',
+    api_key_type: 'developer',
     prompt_tokens: 1200,
     completion_tokens: 42,
     total_tokens: 1242,
