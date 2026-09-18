@@ -39,7 +39,11 @@ services:
       # entrypoint; a forged header from anywhere else is stripped first.
       # Comma-delimited (see the prod compose): Traefik's CLI wants commas,
       # and the in-stack nginx gateway normalises commas to spaces itself.
-      - "--entrypoints.internal8090.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
+      # Same split as the prod compose: the in-stack hop trusts every private
+      # range (the gateway's bridge subnet comes from the Docker address pool
+      # and is not 172.16.0.0/12 on every host), the public entrypoint keeps
+      # the narrow operator-facing list.
+      - "--entrypoints.internal8090.forwardedHeaders.trustedIPs=${LOGOS_INTERNAL_HOP_TRUSTED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
       - "--entrypoints.web8080.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--api.dashboard=false"
     ports:

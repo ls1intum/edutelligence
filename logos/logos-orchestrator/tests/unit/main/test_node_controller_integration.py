@@ -491,6 +491,11 @@ async def test_logosnode_auth_requires_tls(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await logosnode_mod.logosnode_auth(req, request)
     assert exc.value.status_code == 400
+    # The rejection has to name what arrived: a worker dialling https:// and
+    # still landing here was stripped of its TLS signal by a proxy hop, and
+    # only these two values tell that apart from a genuinely cleartext caller.
+    assert "scheme='http'" in exc.value.detail
+    assert "x-forwarded-proto=''" in exc.value.detail
 
 
 @pytest.mark.asyncio
