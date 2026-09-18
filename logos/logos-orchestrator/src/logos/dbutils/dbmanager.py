@@ -2220,7 +2220,12 @@ class DBManager:
                           p.cloud_provider_type as cloud_provider_type,
                           p.base_url         as base_url,
                           m.name             as model_name,
-                          p.name             as provider_name
+                          p.name             as provider_name,
+                          (
+                              SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                              FROM model_aliases a
+                              WHERE a.model_id = m.id
+                          ) AS aliases
                    FROM models m
                         JOIN model_provider mp ON m.id = mp.model_id
                         JOIN providers p ON mp.provider_id = p.id
@@ -4384,11 +4389,11 @@ class DBManager:
             return None
 
         data = dict(row._mapping)
-        # Admin keys are no longer special-cased: a logos_admin's key resolves
-        # its rate limits and budget from its team / key settings like any other
-        # key. Drop the joined role column so callers see a plain api_key row.
-        data.pop("role", None)
-
+        # The joined role is kept (not persisted anywhere — this row feeds
+        # AuthContext only): proxy-mode model resolution must apply the admin
+        # bypass (admins address every model, not just the permitted set)
+        # exactly like resolve_proxy_model does in SQL. Admin keys are still
+        # no longer special-cased for rate limits or budget. (#980 O17)
         return data
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:

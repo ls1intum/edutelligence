@@ -69,6 +69,11 @@ class AuthContext:
     # (#980). None when the body names no model, or on callers that do not go
     # through auth_parse_log — _execute_proxy_mode then resolves on its own.
     resolved_proxy_model: Optional[tuple[int, str]] = None
+    # The key owner's users.role (NULL when the key has no user). Read from
+    # the auth row, never persisted: it only routes proxy-mode resolution
+    # between the admin bypass (SQL, sees every model) and the in-memory
+    # resolution over the key's permitted deployments (#980 O17).
+    role: Optional[str] = None
 
 
 def _resolve_batch_credential(credential: str) -> Optional[Dict[str, Any]]:
@@ -110,6 +115,10 @@ def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
         # Preserve 0 (the webservice/UI "not set" sentinel) so the pipeline
         # can fall back to the policy-level priority.
         default_priority=row.get("default_priority") or 0,
+        # Absent on the batch-credential row shape (get_api_key_by_id selects
+        # no users join): None routes resolution to the permitted set, which
+        # is exactly what the SQL fallback computes for non-admins.
+        role=row.get("role"),
     )
 
 

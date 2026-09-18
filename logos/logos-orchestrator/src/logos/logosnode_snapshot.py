@@ -22,7 +22,7 @@ not affect connectedness — patch
 import datetime
 from typing import Any, Dict, Optional
 
-from logos.dbutils.dbmanager import derived_reported_context_length
+from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
 from logos.timeouts import _env_int
 
 # Kept here (rather than in ``timeouts.py`` with the other ``_LOGOSNODE_*``
@@ -204,6 +204,54 @@ def _resolve_requested_model_name(
         return None
     if len(replica_matches) == 1:
         return next(iter(replica_matches))
+    return None
+
+
+def resolve_proxy_model_from_deployments(
+    deployments: list[Dict[str, Any]],
+    requested_name: str,
+) -> Optional[tuple[int, str]]:
+    """Resolve a user-supplied model name over already-fetched deployment rows.
+
+    In-memory twin of ``DBManager.resolve_proxy_model`` for non-admin keys
+    (#980 O17): ``get_deployments_for_api_key`` returns exactly the models
+    the SQL resolver's non-admin branch returns (same key_info /
+    effective-model / effective-provider CTEs, and the same model_aliases
+    column), so feeding the distinct (model_id, model_name, aliases) rows
+    into the shared ``_resolve_requested_model_name`` yields the same
+    (model_id, canonical name) without a second round-trip.
+
+    ``deployments`` are the raw rows, one per model/provider pair; rows
+    without a model_id are ignored. Returns None on no or ambiguous match,
+    mirroring the SQL method. The admin bypass (admins address every model,
+    not just the permitted set) is deliberately NOT covered — callers route
+    those keys to the SQL method instead.
+    """
+    candidates: list[Dict[str, Any]] = []
+    seen: set[int] = set()
+    for deployment in deployments or []:
+        if not isinstance(deployment, dict):
+            continue
+        model_id = deployment.get("model_id")
+        if model_id is None:
+            continue
+        model_id = int(model_id)
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        candidates.append(
+            {
+                "id": model_id,
+                "name": deployment.get("model_name") or f"Model {model_id}",
+                "aliases": DBManager._split_alias_list(deployment.get("aliases")),
+            }
+        )
+    model_name = _resolve_requested_model_name(requested_name, candidates)
+    if model_name is None:
+        return None
+    for candidate in candidates:
+        if candidate["name"] == model_name:
+            return candidate["id"], candidate["name"]
     return None
 
 

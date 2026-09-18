@@ -66,6 +66,7 @@ from logos.logosnode_snapshot import (
     _profile_native_context_length,
     _safe_float,
     _sample_snapshot_id,
+    resolve_proxy_model_from_deployments,
 )
 from logos.middleware import APIPrefixStripperMiddleware
 from logos.monitoring import prometheus_metrics as prom
@@ -3732,7 +3733,21 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
                 requested_model_name = str(body.get("model") or "").strip()
                 if requested_model_name:
                     with perf_trace.phase(request_id, "mode.resolve_model"):
-                        auth.resolved_proxy_model = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
+                        if auth.role in ("logos_admin", "app_admin"):
+                            # Admin bypass: the SQL resolver sees every model,
+                            # while the deployment rows above carry only the
+                            # permitted set — the bypass must stay on its own
+                            # query to keep the same row set (#980 O17).
+                            auth.resolved_proxy_model = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
+                        else:
+                            # In-memory twin of the SQL non-admin branch: the
+                            # deployment rows came from the same
+                            # key_info / effective-model / effective-provider
+                            # CTEs, so resolving over them is 1:1 — and saves
+                            # a round-trip on the hot path (#980 O17).
+                            auth.resolved_proxy_model = resolve_proxy_model_from_deployments(
+                                raw_deployments, requested_model_name
+                            )
 
         return headers, auth, body, client_ip, log_id, raw_deployments
 
