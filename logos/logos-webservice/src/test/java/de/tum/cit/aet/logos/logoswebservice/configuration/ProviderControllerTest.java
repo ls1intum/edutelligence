@@ -35,6 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
@@ -73,6 +74,7 @@ class ProviderControllerTest {
     @MockitoBean OrchestratorNotificationService orchestratorNotificationService;
     // Mocked so the status endpoint is testable without an orchestrator URL.
     @MockitoBean OrchestratorModelSyncClient modelSyncClient;
+    @MockitoBean ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -293,6 +295,7 @@ class ProviderControllerTest {
         // Without this refresh a freshly linked cloud model kept reporting a
         // cost of zero until the next daily full refresh.
         verify(priceUpdaterService).updatePricesForModelAsync(5002);
+        verify(modelCapabilitiesUpdaterService).updateCapabilitiesForModelAsync(5002, "gpt-3.5");
     }
 
     @Test
