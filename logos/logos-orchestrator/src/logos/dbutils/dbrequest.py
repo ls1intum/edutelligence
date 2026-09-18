@@ -102,6 +102,10 @@ class InternalCalibrateRequest(BaseModel):
     provider_id: int
 
 
+class InternalStopCalibrationRequest(BaseModel):
+    provider_id: int
+
+
 class InternalDeleteLaneRequest(BaseModel):
     provider_id: int
     lane_id: str

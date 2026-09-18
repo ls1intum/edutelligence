@@ -645,6 +645,7 @@ class LogosNodeDataProvider:
                 sleep_mode_disabled=data.get("sleep_mode_disabled"),
                 calibration_unsupported=data.get("calibration_unsupported"),
                 calibration_unsupported_reason=data.get("calibration_unsupported_reason"),
+                metal_capacity_floor_mb=data.get("metal_capacity_floor_mb"),
             )
 
         if isinstance(raw_lanes, list):

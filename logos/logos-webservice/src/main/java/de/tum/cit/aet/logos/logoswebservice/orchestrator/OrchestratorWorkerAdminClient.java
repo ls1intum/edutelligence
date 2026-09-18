@@ -35,6 +35,10 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/calibrate_uncalibrated", Map.of("provider_id", providerId));
     }
 
+    public ResponseEntity<Map> stopCalibration(int providerId) {
+        return post("/internal/logosnode/stop_calibration", Map.of("provider_id", providerId));
+    }
+
     public ResponseEntity<Map> deleteLane(int providerId, String laneId) {
         return post("/internal/logosnode/lanes/delete", Map.of("provider_id", providerId, "lane_id", laneId));
     }
