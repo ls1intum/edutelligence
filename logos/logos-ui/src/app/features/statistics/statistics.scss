@@ -69,19 +69,41 @@
 
 .stats-header__controls {
   display: flex;
+  // Center within a single-row toolbar (filters + pills + period nav). When
+  // the period nav used to wrap, centering left a dead band above the chips —
+  // keep flex-start only in the narrow breakpoint below.
   align-items: center;
   gap: 12px;
   // Keep scope filters and the time range on one row whenever the content
   // width allows; wrapping used to put the four filters on a line of their
   // own and the time bar underneath, which reads as two toolbars.
   flex-wrap: nowrap;
-  margin-top: 8px;
+  // Sit tight under the tab rail — 8–14px here stacked with the tabs and
+  // read as a dead band above the toolbar.
+  margin-top: 6px;
   min-width: 0;
 }
 
 .stats-time-range {
   flex: 1 1 auto;
   min-width: 0;
+
+  // Prefer pills + period nav on one row next to the filters. Wrapping the
+  // nav under the pills made the shorter filter chips look vertically stranded
+  // even when top-aligned.
+  ::ng-deep .time-controls {
+    flex-wrap: nowrap;
+    gap: 10px;
+  }
+
+  ::ng-deep .pill {
+    padding-inline: 10px;
+  }
+
+  ::ng-deep .period-label {
+    min-width: 0;
+    padding-inline: 8px;
+  }
 }
 
 // ── Scope (team / requester / provider / outcome) ─────────────────────────────
@@ -93,15 +115,17 @@
   // The four filters must stay on one line — wrapping them into a 2×2 grid
   // (especially once provider + outcome joined the row) was the regression.
   flex-wrap: nowrap;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
-// Shrink rather than wrap: long team/user labels truncate inside the select.
+// Size to the label, not a shared flex basis — a fixed 170px basis left empty
+// host width beside short labels ("All teams") and looked like uneven gaps.
 .stats-scope__select {
-  flex: 0 1 170px;
-  min-width: 120px;
+  flex: 0 0 auto;
+  width: max-content;
   max-width: 200px;
+  min-width: 0;
 }
 
 // The feed's state filter, in the recent-requests panel header. Its entries are
@@ -448,6 +472,7 @@
   // Time range drops under the filter row; the four filters stay on one line.
   .stats-header__controls {
     flex-wrap: wrap;
+    align-items: flex-start;
   }
 
   .stats-scope {
@@ -456,12 +481,16 @@
 
   .stats-scope__select {
     flex: 1 1 0;
-    min-width: 0;
+    width: auto;
     max-width: none;
   }
 
   .stats-time-range {
     flex: 1 1 100%;
+
+    ::ng-deep .time-controls {
+      flex-wrap: wrap;
+    }
   }
 }
 
