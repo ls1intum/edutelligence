@@ -186,13 +186,22 @@ export type LaneSleepAction = 'sleep' | 'drain' | 'wake' | null;
  * makes the sleep-versus-unload decision with the fresh snapshot, and a lane
  * that does not drain in time simply keeps serving and can be retried.
  *
+ * "Busy" mirrors the strict drain's own completion condition, which waits for
+ * every activity counter to read zero: active_requests (the requests Logos is
+ * proxying) plus vLLM's requests_running and queue_waiting, which can hold
+ * work internally. A lane with active_requests at zero but queued vLLM work
+ * would otherwise get a best-effort Sleep, whose bounded wait can reach its
+ * budget and drop that work — Drain is the safe choice there.
+ *
  * Lanes that are awake and idle with no sleep mode (sleep mode disabled
  * reports sleep_state "unsupported", a lane that never slept reports
  * "unknown") offer neither — there is nothing to sleep and nothing to drain.
  */
 export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   if (lane.sleep_state === 'sleeping') return 'wake';
-  if (lane.active_requests > 0) return 'drain';
+  if (lane.active_requests > 0 || (lane.requests_running ?? 0) > 0 || (lane.queue_waiting ?? 0) > 0) {
+    return 'drain';
+  }
   if (lane.sleep_state === 'awake') return 'sleep';
   return null;
 }

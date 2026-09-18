@@ -6849,10 +6849,15 @@ class CapacityPlanner:
             if lane_id:
                 self._release_load_lane_id(provider_id, lane_id)
 
-    def _peek_lane(self, provider_id: int, lane_id: str) -> Optional[Dict[str, Any]]:
-        """The lane's current snapshot entry, or None when it is not there."""
-        snap = self._registry.peek_runtime_snapshot(provider_id)
-        lanes = ((snap or {}).get("runtime") or {}).get("lanes") or []
+    def _peek_lane(self, snapshot: Optional[Dict[str, Any]], lane_id: str) -> Optional[Dict[str, Any]]:
+        """The lane's entry in ``snapshot``, or None when the snapshot is
+        missing or does not contain the lane.
+
+        Callers that must tell the two apart (the manual drain must not call a
+        worker disconnect an unload) check the snapshot's availability first
+        and pass it in.
+        """
+        lanes = ((snapshot or {}).get("runtime") or {}).get("lanes") or []
         return next(
             (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id") or "") == str(lane_id)),
             None,
@@ -6923,11 +6928,23 @@ class CapacityPlanner:
                 # decision: the snapshot the endpoint validated can be a beat
                 # stale, and both the sleep decision and the profile lookup
                 # need the current view.
-                lane = self._peek_lane(provider_id, lane_id)
+                snap = self._registry.peek_runtime_snapshot(provider_id)
+                if snap is None:
+                    # The worker dropped mid-drain. A missing snapshot is not
+                    # proof the lane is offline — do not claim it is.
+                    return {
+                        "status": "error",
+                        "lane_id": lane_id,
+                        "error": (
+                            f"The worker disconnected while the drain of lane {lane_id} was "
+                            "finishing; its final state is unknown."
+                        ),
+                    }
+                lane = self._peek_lane(snap, lane_id)
                 if lane is None:
-                    # A direct admin unload (which bypasses this lock) can
-                    # remove the lane mid-drain; the operator's goal — the
-                    # lane offline — is already met.
+                    # A valid snapshot without the lane: a direct admin unload
+                    # (which bypasses this lock) removed it mid-drain, and the
+                    # operator's goal — the lane offline — is already met.
                     return {
                         "status": "unloaded",
                         "lane_id": lane_id,
@@ -6985,7 +7002,19 @@ class CapacityPlanner:
                 # Read the terminal state from the lane itself: the executor's
                 # host-RAM recheck can escalate a sleep to a stop, in which
                 # case the lane is gone and that is an unload, not a failure.
-                lane_after = self._peek_lane(provider_id, lane_id)
+                snap_after = self._registry.peek_runtime_snapshot(provider_id)
+                if snap_after is None:
+                    # The worker dropped after the terminal command: the state
+                    # is unknown, so do not report a success.
+                    return {
+                        "status": "error",
+                        "lane_id": lane_id,
+                        "error": (
+                            f"The worker disconnected before the drain of lane {lane_id} could be "
+                            "confirmed; its final state is unknown."
+                        ),
+                    }
+                lane_after = self._peek_lane(snap_after, lane_id)
                 if lane_after is not None and str(lane_after.get("sleep_state") or "").strip().lower() == "sleeping":
                     logger.info(
                         "Manual drain of lane %s on worker=%s ended in a sleep",

@@ -175,6 +175,21 @@ describe('laneSleepAction', () => {
     expect(laneSleepAction(lane({ sleep_state: null, active_requests: 2 }))).toBe('drain');
   });
 
+  it('offers Drain when vLLM holds work even though active_requests is zero', () => {
+    // The strict drain waits for every activity counter to read zero, so a
+    // lane with queued/running vLLM work is busy even with no proxied
+    // requests: a best-effort Sleep could reach its budget and drop that
+    // work, so Drain is the action offered.
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 0, queue_waiting: 5 }))).toBe('drain');
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 0, requests_running: 2 }))).toBe('drain');
+  });
+
+  it('offers Sleep on an awake lane that is idle across every counter', () => {
+    expect(
+      laneSleepAction(lane({ sleep_state: 'awake', active_requests: 0, queue_waiting: 0, requests_running: 0 })),
+    ).toBe('sleep');
+  });
+
   it('withholds both actions from an idle lane the backend cannot sleep', () => {
     // A lane with sleep mode disabled reports "unsupported"; a lane that
     // never slept reports "unknown" until its first transition. Neither has

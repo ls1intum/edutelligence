@@ -254,3 +254,26 @@ async def test_a_lane_removed_mid_drain_is_reported_unloaded(monkeypatch):
     executor.assert_not_awaited()
     planner._registry.unmark_lane_cold.assert_called_once_with(1, "lane-1")
     assert planner._marked_cold_lanes == set()
+
+
+# ── a worker disconnect is an unknown state, not a success ──────────────────
+
+
+async def test_a_worker_disconnect_during_drain_is_an_error_not_an_unload(monkeypatch):
+    lane = _lane()
+    lanes = [lane]
+    planner = _planner(lanes)
+    planner._drain_lane = AsyncMock(return_value=True)  # reports drained
+    _patch_ram_headroom(planner, monkeypatch, ok=True)
+    executor = _executor(planner, lanes, _sleep)
+    # The worker drops after the drain: the snapshot is unavailable, so the
+    # lane's state is unknown — not provably offline.
+    planner._registry.peek_runtime_snapshot = lambda pid: None
+
+    result = await planner.drain_lane_manually(1, "lane-1")
+
+    assert result["status"] == "error"
+    assert "disconnected" in result["error"]
+    executor.assert_not_awaited()
+    planner._registry.unmark_lane_cold.assert_called_once_with(1, "lane-1")
+    assert planner._marked_cold_lanes == set()
