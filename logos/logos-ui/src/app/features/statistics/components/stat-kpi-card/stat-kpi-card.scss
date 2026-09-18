@@ -1,11 +1,21 @@
 @use 'styles/glass' as *;
 
+// The strip (align-items: stretch) gives every host the row's height, but only
+// as high as its tallest member. Filling that height is the card's job:
+// without this, a card whose hint wraps or whose right slot is absent keeps a
+// shorter glass surface and the row's bottoms come out ragged.
+:host {
+  display: flex;
+}
+
 .kpi-card {
   @include glass-surface;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 18px 20px;
+  flex: 1;
+  min-width: 0;
 }
 
 // Row 1: accent dot + uppercase label
@@ -67,7 +77,11 @@
 
 // Row 3: hint slot
 .kpi-row-3 {
-  // Uses .kpi-sub styling via projection
+  // Uses .kpi-sub styling via projection.
+  // Once the card fills the row's height, the leftover space lands here: the
+  // hint pins to the card's bottom edge so it aligns across the whole strip
+  // instead of drifting with each card's value-row height.
+  margin-top: auto;
 }
 
 ::ng-deep .kpi-row-3 {
