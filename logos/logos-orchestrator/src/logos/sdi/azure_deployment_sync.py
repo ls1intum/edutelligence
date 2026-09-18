@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from logos.dbutils.dbmanager import DBManager
+from logos.sdi.model_discovery_notifier import deliver_discovery_notifications
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,14 @@ class AzureDeploymentSyncService:
         try:
             with DBManager() as db:
                 result = db.sync_azure_deployments(pid, planned)
+                try:
+                    await deliver_discovery_notifications(db)
+                except Exception:  # noqa: BLE001
+                    # A queue read/delivery failure must not fail the pass —
+                    # the IDs stay queued and are retried on the next pass.
+                    logger.exception(
+                        "Azure deployment sync: discovery notification delivery failed for provider %s (%s)", pid, name
+                    )
         except Exception:  # noqa: BLE001
             logger.exception("Azure deployment sync: DB upsert failed for provider %s (%s)", pid, name)
             return False, False
