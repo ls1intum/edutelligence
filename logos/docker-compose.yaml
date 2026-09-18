@@ -24,8 +24,28 @@ services:
       # The gateway is a reverse proxy on this second hop: trust its
       # container address so the first hop's X-Forwarded-Proto/-For survive.
       # Without this Traefik strips them, and services lose the TLS signal
-      # (the logosnode auth/session endpoints reject non-TLS callers).
-      - "--entrypoints.internal8090.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
+      # (the logosnode auth/session endpoints reject non-TLS callers with
+      # "TLS is required for logosnode auth/session endpoints", so every
+      # worker node fails to authenticate).
+      #
+      # The trusted range is the whole private address space, and it is
+      # DELIBERATELY not the operator-facing LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS
+      # below. Two reasons, both of which took production down:
+      #  * `ratelimit` is a plain Docker bridge, so its subnet comes from the
+      #    daemon's address pool — 172.17-172.31 while those are free, then
+      #    192.168.x. A host with enough networks (this stack alone brings
+      #    internal, ratelimit and the two agent networks) hands the gateway
+      #    a 192.168 address, which a hardcoded 172.16.0.0/12 does not match.
+      #  * A deployment behind an outer proxy is documented to put THAT
+      #    proxy's CIDR in LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS; when the value
+      #    replaces the default instead of extending it, the gateway loses
+      #    the trust it needs here.
+      # Trusting every private range costs nothing extra: this entrypoint has
+      # no published host port, so its only reachable clients are containers
+      # of this stack — the same trust domain that already speaks cleartext
+      # to the database and the service APIs. Public clients reach the stack
+      # solely through the entrypoints below, where the narrow list applies.
+      - "--entrypoints.internal8090.forwardedHeaders.trustedIPs=${LOGOS_INTERNAL_HOP_TRUSTED_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
       # First hop: only sources in those ranges may set X-Forwarded-For;
       # everyone else's header is stripped before it enters the stack, so
       # the gateway's per-IP budgeting cannot be fooled by a forged header.
@@ -38,13 +58,10 @@ services:
       # proxy untrusted (or invalidate the static config). The in-stack
       # nginx gateway normalises commas to spaces itself, so one value
       # serves both consumers.
-      # One list is shared with internal8090 and the gateway's real-IP
-      # configuration on purpose: the only source on internal8090 is the
-      # gateway itself (its peer list is this network and Traefik), so an
-      # outer-proxy entry there matches no reachable source; and in the
-      # gateway, real_ip_recursive resolves the client as the rightmost
-      # UNtrusted address in the chain, which is always the real client —
-      # a forged entry sits to its left and is never reached.
+      # One list serves both public entrypoints and the gateway's real-IP
+      # configuration: in the gateway, real_ip_recursive resolves the client
+      # as the rightmost UNtrusted address in the chain, which is always the
+      # real client — a forged entry sits to its left and is never reached.
       - "--entrypoints.websecure.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--entrypoints.secure8080.forwardedHeaders.trustedIPs=${LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
@@ -156,7 +173,7 @@ services:
       # Deliberately NOT on `internal`: the gateway's only peer must be
       # Traefik, so it cannot reach the database, Keycloak, or the service
       # APIs on its own. Its container address on this network is what the
-      # internal8090 entrypoint trusts (LOGOS_GATEWAY_TRUSTED_PROXY_CIDRS).
+      # internal8090 entrypoint trusts (LOGOS_INTERNAL_HOP_TRUSTED_CIDRS).
       - ratelimit
 
   logos-orchestrator:
