@@ -45,7 +45,7 @@ The older Process/Profile hierarchy (`process`, `profiles`, `profile_model_permi
 - **Commit messages**: `Logos: Description starting with capital letter (#issue_number)`.
 - **Branch names**: `feature/logos/description` or `logos/description`.
 - Never merge to `main` without a PR. After opening a PR, check `gh pr checks` and fix failures immediately.
-- **Every PR that changes the UI must include full-page desktop AND mobile screenshots** in the PR description (never committed to the repo). The exact capture/hosting procedure is in `SKILLS.md`.
+- **Every PR that changes the UI must include full-page desktop AND mobile screenshots** in the PR description (never committed to the repo). The exact capture/hosting procedure is the `ui-screenshots` skill (see below).
 
 ### Conventions
 
@@ -68,4 +68,8 @@ Log in with a seeded Keycloak user (e.g. `tobias.wasner` / `password` — logos 
 
 ## Skills
 
-Task-specific playbooks live in `SKILLS.md`. Currently: gathering full-page UI screenshots for PRs and documentation.
+Task-specific playbooks live in `.claude/skills/<name>/SKILL.md`, in the [Agent Skills](https://agentskills.io) format. Agents that do not discover skills on their own can read the file directly.
+
+| Skill | Use it for |
+|-------|------------|
+| [`ui-screenshots`](.claude/skills/ui-screenshots/SKILL.md) | Full-page desktop + mobile screenshots of the web application for PRs and documentation. |

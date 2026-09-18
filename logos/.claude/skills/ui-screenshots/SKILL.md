@@ -1,18 +1,21 @@
-# SKILLS.md — Logos Task Playbooks for AI Agents
+---
+name: ui-screenshots
+description: Capture full-page desktop and mobile screenshots of the Logos Angular web application and host them so they render in a pull request or in the documentation. Use whenever a change touches logos-ui/, when a PR needs UI screenshots, or when adding UI imagery to docs — it covers unlocking the inner scroll containers for a true full-page capture and the gist hosting gotcha that otherwise serves the images as text.
+compatibility: Requires the Logos dev stack (Docker Compose), the GitHub CLI (`gh`) authenticated, and a browser automation tool such as Playwright.
+---
 
-Reusable, non-obvious procedures. Each skill says when to use it, then gives the exact steps.
+# Gathering UI screenshots (for PRs and documentation)
 
-## Skill: Gathering UI screenshots (for PRs and documentation)
+Reviewers must be able to see the result without running the stack; a UI PR without screenshots is not reviewable.
 
-**When to use**: any PR that changes `logos-ui/` (mandatory — see `AGENTS.md`), or when adding UI imagery to documentation. Reviewers must be able to see the result without running the stack; a UI PR without screenshots is not reviewable.
+## Requirements
 
-**Requirements**:
 - At least one **desktop** screenshot of the changed view.
 - At least one **mobile** screenshot (375px viewport) of the same view — the shared data tables drop their header below 768px and fall back to per-cell `data-label`s, so a mobile shot is the only way to see how a table actually renders there.
 - **Every screenshot must show the FULL page** — page header, tab bar, and the entire scrollable content. A shot that starts mid-view or cuts off the last table row is not acceptable.
 - Screenshots go into the PR description (or docs) only — **never commit them to the repository**.
 
-### 1. Run the stack and log in
+## 1. Run the stack and log in
 
 ```bash
 docker compose -f docker-compose.dev.yaml up --build   # from logos/
@@ -21,7 +24,7 @@ cd logos-ui && ng serve                                 # UI on http://localhost
 
 Log in with a seeded Keycloak user (all passwords `password`), e.g. `tobias.wasner` (logos admin). See `README.md` for the full user table and team provisioning.
 
-### 2. Capture a true full-page screenshot
+## 2. Capture a true full-page screenshot
 
 The Logos UI scrolls inside an inner container, not the document — a plain full-page browser screenshot only captures the first viewport. When scripting the capture (Playwright), first unlock the scroll containers, then screenshot with `fullPage: true`:
 
@@ -30,7 +33,7 @@ The Logos UI scrolls inside an inner container, not the document — a plain ful
 
 Verify the result: the image must be taller than the viewport whenever the page overflows.
 
-### 3. Host the images in a gist (do it this way or they won't render)
+## 3. Host the images in a gist (do it this way or they won't render)
 
 ⚠️ The Gist REST API stores file `content` **literally** (no base64 decode), and `gh gist create` refuses binary files outright. Uploading a PNG via `gh api` therefore stores the base64 string as ASCII text: the raw URL serves `text/plain` and the image silently doesn't render. A gist is a git repository — push the binaries with git instead:
 
@@ -55,6 +58,6 @@ curl -sI https://gist.githubusercontent.com/<your-user>/<GIST_ID>/raw/shot-deskt
 
 If it says `text/plain`, the "image" is text — re-push via git as above (the gist ID and PR URLs stay the same).
 
-### 4. Embed in the PR description
+## 4. Embed in the PR description
 
 Add a `## Screenshots` section with the raw gist URLs, one per line, labelled desktop/mobile.
