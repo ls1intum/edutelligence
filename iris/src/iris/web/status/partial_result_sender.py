@@ -1,7 +1,8 @@
 """Ephemeral partial-result status callback sender."""
 
+import contextvars
 from threading import Event, Lock, Thread
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -36,11 +37,18 @@ class PartialResultSender(Thread):
         url: str,
         run_id: str,
         interval_seconds: float = 0.35,
+        transform: Optional[Callable[[str], str]] = None,
     ):
+        """
+        Args:
+            transform: Applied to the accumulated draft before posting.
+        """
         super().__init__(daemon=True)
         self.url = url
         self.run_id = run_id
         self.interval_seconds = interval_seconds
+        self._transform = transform
+        self._context = contextvars.copy_context()
         self._lock = Lock()
         self._stop_event = Event()
         self._accumulated = ""
@@ -82,6 +90,9 @@ class PartialResultSender(Thread):
             )
 
     def run(self) -> None:
+        self._context.run(self._run_loop)
+
+    def _run_loop(self) -> None:
         while not self._stop_event.wait(self.interval_seconds):
             payload_info = self._next_payload()
             if payload_info is None:
@@ -95,9 +106,22 @@ class PartialResultSender(Thread):
         with self._lock:
             if self._stopped_permanently:
                 return None
-
-            text = self._accumulated
+            raw = self._accumulated
             epoch = self._epoch
+
+        try:
+            text = self._transform(raw) if self._transform is not None else raw
+        except Exception as exc:  # pragma: no cover - defensive thread boundary
+            self._handle_failure(None, exc)
+            return None
+
+        with self._lock:
+            if self._stopped_permanently:
+                return None
+
+            # Resets invalidate the snapshot; ordinary appended deltas do not.
+            if epoch != self._epoch:
+                return None
 
             # Already delivered exactly this text at this epoch -> nothing new.
             if text == self._last_posted_text and epoch == self._last_posted_epoch:
