@@ -217,6 +217,27 @@ def confirmed_generations(
     return real_generations, objects
 
 
+def confirmed_rows(
+    collection, rows: list, *, retry: Optional[WeaviateWriteRetry] = None
+) -> list:
+    """Keep only rows the object store confirms, for a collection with no run-id
+    property to group by (segments, the unit row): unlike :func:`confirmed_generations`,
+    there is no generation to amortize the check over, so each row is checked directly.
+    Row counts here are small (one segment per slide, one row expected per unit), so this
+    stays cheap.
+    """
+    retry = retry or WeaviateWriteRetry.for_request()
+    confirmed = []
+    for row in rows:
+        found = fetch_with_retry(
+            lambda uid=row.uuid: collection.query.fetch_object_by_id(uid),
+            retry=retry,
+        )
+        if found is not None:
+            confirmed.append(row)
+    return confirmed
+
+
 def purge_other_rows(
     collection,
     unit_filter,

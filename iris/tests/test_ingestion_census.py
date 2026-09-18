@@ -6,23 +6,17 @@ from unittest.mock import MagicMock, patch
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from iris.vector_database.lecture_transcription_schema import (
+    LectureTranscriptionSchema,
+)
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
+from iris.vector_database.lecture_unit_segment_schema import (
+    LectureUnitSegmentSchema,
+)
 from iris.web.routers.ingestion_census import get_course_ingestion_census
-
-
-def _aggregate_group(unit_id: int, total_count: int, **metrics) -> SimpleNamespace:
-    properties = {
-        name: SimpleNamespace(minimum=bounds[0], maximum=bounds[1])
-        for name, bounds in metrics.items()
-    }
-    return SimpleNamespace(
-        grouped_by=SimpleNamespace(value=str(unit_id)),
-        total_count=total_count,
-        properties=properties,
-    )
 
 
 def _aggregating_collection(groups: list) -> SimpleNamespace:
@@ -136,12 +130,34 @@ def test_census_merges_all_collections_and_reports_orphans():
         _chunk_row(9, "r9", (index % 2) + 1, 1, f"u9-{index}") for index in range(5)
     ]
     present = {row.uuid for row in unit3_rows + unit9_rows}
+    transcription_rows = [
+        SimpleNamespace(
+            uuid=f"t3-{index}",
+            properties={
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value: 3,
+                LectureTranscriptionSchema.INGESTION_RUN_ID.value: "t3",
+            },
+        )
+        for index in range(7)
+    ]
+    segment_rows = [
+        SimpleNamespace(
+            uuid=f"s3-{index}",
+            properties={
+                LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 3,
+                LectureUnitSegmentSchema.PAGE_NUMBER.value: index + 1,
+            },
+        )
+        for index in range(4)
+    ]
     db = SimpleNamespace(
         lecture_units=_unit_rows_collection([unit_row]),
         lectures=_chunk_collection([(3, unit3_rows), (9, unit9_rows)], present),
-        transcriptions=_aggregating_collection([_aggregate_group(3, 7)]),
-        lecture_segments=_aggregating_collection(
-            [_aggregate_group(3, 4, page_number=(1, 4))]
+        transcriptions=_chunk_collection(
+            [(3, transcription_rows)], {row.uuid for row in transcription_rows}
+        ),
+        lecture_segments=_chunk_collection(
+            [(3, segment_rows)], {row.uuid for row in segment_rows}
         ),
     )
 
@@ -168,6 +184,62 @@ def test_census_merges_all_collections_and_reports_orphans():
     assert orphan.content_fingerprint is None
     assert orphan.chunk_count == 5
     assert orphan.generation_count == 1
+
+
+def test_census_excludes_ghost_transcription_and_segment_rows():
+    # A scan-visible, object-store-missing row must not inflate transcription_count
+    # or segment_count (or the segment page range), the same ghost-row protection
+    # the page-chunk loop already has.
+    real_transcription = SimpleNamespace(
+        uuid="t-real",
+        properties={
+            LectureTranscriptionSchema.LECTURE_UNIT_ID.value: 5,
+            LectureTranscriptionSchema.INGESTION_RUN_ID.value: "run-5",
+        },
+    )
+    ghost_transcription = SimpleNamespace(
+        uuid="t-ghost",
+        properties={
+            LectureTranscriptionSchema.LECTURE_UNIT_ID.value: 5,
+            # A distinct, entirely-ghost generation: confirmed_generations must
+            # never confirm it live and must exclude the whole thing. A ghost
+            # sharing a generation with a real row is a different, separately
+            # tracked gap (this session's PRRT_kwDOOBIthc6jlPU1 thread).
+            LectureTranscriptionSchema.INGESTION_RUN_ID.value: "run-ghost",
+        },
+    )
+    real_segment = SimpleNamespace(
+        uuid="s-real",
+        properties={
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 5,
+            LectureUnitSegmentSchema.PAGE_NUMBER.value: 2,
+        },
+    )
+    ghost_segment = SimpleNamespace(
+        uuid="s-ghost",
+        properties={
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 5,
+            LectureUnitSegmentSchema.PAGE_NUMBER.value: 9,
+        },
+    )
+    db = SimpleNamespace(
+        lecture_units=_unit_rows_collection([]),
+        lectures=_aggregating_collection([]),
+        transcriptions=_chunk_collection(
+            [(5, [real_transcription, ghost_transcription])], {"t-real"}
+        ),
+        lecture_segments=_chunk_collection(
+            [(5, [real_segment, ghost_segment])], {"s-real"}
+        ),
+    )
+
+    with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
+        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+
+    entry = census.units[0]
+    assert entry.transcription_count == 1
+    assert entry.segment_count == 1
+    assert (entry.segment_page_min, entry.segment_page_max) == (2, 2)
 
 
 def test_census_reports_interior_page_gap_and_null_display():

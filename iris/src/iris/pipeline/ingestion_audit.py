@@ -27,7 +27,11 @@ from iris.common.logging_config import get_logger
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
-from iris.vector_database.batch_verify import confirmed_generations, fetch_with_retry
+from iris.vector_database.batch_verify import (
+    confirmed_generations,
+    confirmed_rows,
+    fetch_with_retry,
+)
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -178,21 +182,7 @@ class IngestionAudit:
         )
 
     def _confirmed_rows(self, collection, rows: list) -> list:
-        """Keep only rows the object store confirms, for a collection with no
-        run-id property to group by (segments, the unit row): unlike
-        ``confirmed_generations``, there is no generation to amortize the check
-        over, so each row is checked directly. Row counts here are small (one
-        segment per slide, one row expected per unit), so this stays cheap.
-        """
-        confirmed = []
-        for row in rows:
-            found = fetch_with_retry(
-                lambda uid=row.uuid: collection.query.fetch_object_by_id(uid),
-                retry=self._retry,
-            )
-            if found is not None:
-                confirmed.append(row)
-        return confirmed
+        return confirmed_rows(collection, rows, retry=self._retry)
 
     def _verify_page_chunks(
         self, dto: IngestionPipelineExecutionDto, manifest: IngestionManifest

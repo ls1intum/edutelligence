@@ -14,7 +14,6 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Depends
 from fastapi.params import Query
 from weaviate.classes.aggregate import GroupByAggregate
-from weaviate.classes.query import Metrics
 from weaviate.collections.classes.filters import Filter
 
 from iris.common.ingestion_version import INGESTION_PIPELINE_VERSION
@@ -25,7 +24,7 @@ from iris.domain.ingestion.ingestion_census_dto import (
     IngestionCensusUnitDTO,
 )
 
-from ...vector_database.batch_verify import confirmed_generations
+from ...vector_database.batch_verify import confirmed_generations, confirmed_rows
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -56,8 +55,9 @@ def _discover_unit_ids(collection, schema, course_id: int, base_url: str) -> set
 
     The ``group_by`` is used only to *enumerate* which units are present — its
     per-group counts are unreliable in Weaviate (a course-wide group_by over- and
-    under-reports per-unit totals versus a direct filtered aggregate), so the
-    actual counting is done one unit at a time by :func:`_aggregate_one_unit`.
+    under-reports per-unit totals versus a direct filtered fetch/aggregate), so
+    the actual counting is done one unit at a time, confirmed against the object
+    store, by each of this endpoint's per-collection loops.
     """
     groups = collection.aggregate.over_all(
         filters=_course_filter(schema, course_id, base_url),
@@ -69,32 +69,6 @@ def _discover_unit_ids(collection, schema, course_id: int, base_url: str) -> set
         for group in groups
         if group.grouped_by.value is not None
     }
-
-
-def _aggregate_one_unit(
-    collection, schema, course_id: int, base_url: str, unit_id: int, metrics
-):
-    """Exact count and metrics for a single unit via a direct filtered aggregate.
-
-    A per-unit filtered aggregate is accurate, unlike the course-wide group_by whose
-    per-group counts Weaviate reports inaccurately. The reconciler compares these
-    counts against each unit's certified expectation, so an inflated or deflated
-    count would re-queue a healthy unit; counting per unit keeps the census exact.
-    """
-    return collection.aggregate.over_all(
-        filters=_course_filter(schema, course_id, base_url)
-        & Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(unit_id),
-        total_count=True,
-        return_metrics=metrics,
-    )
-
-
-def _metric(group, property_name: str, metric_name: str):
-    metric = group.properties.get(property_name)
-    if metric is None:
-        return None
-    value = getattr(metric, metric_name, None)
-    return int(value) if value is not None else None
 
 
 def _int_values(rows, property_name: str) -> list[int]:
@@ -260,39 +234,54 @@ def get_course_ingestion_census(
     for unit_id in _discover_unit_ids(
         db.transcriptions, LectureTranscriptionSchema, course_id, decoded_base_url
     ):
-        result = _aggregate_one_unit(
+        # Ghost-aware, like the page-chunk loop above: a raw aggregate total_count
+        # also counts object-store-missing rows.
+        real_generations, all_transcription_objects = confirmed_generations(
             db.transcriptions,
-            LectureTranscriptionSchema,
-            course_id,
-            decoded_base_url,
-            unit_id,
-            [],
+            _course_filter(LectureTranscriptionSchema, course_id, decoded_base_url)
+            & Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(unit_id),
+            LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+            limit=_UNIT_ROW_LIMIT,
         )
-        unit(unit_id).transcription_count = result.total_count or 0
+        entry = unit(unit_id)
+        if len(all_transcription_objects) >= _UNIT_ROW_LIMIT:
+            entry.truncated = True
+        confirmed_transcriptions = [
+            row
+            for row in all_transcription_objects
+            if row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
+            in real_generations
+        ]
+        entry.transcription_count = len(confirmed_transcriptions)
 
     for unit_id in _discover_unit_ids(
         db.lecture_segments, LectureUnitSegmentSchema, course_id, decoded_base_url
     ):
         entry = unit(unit_id)
-        result = _aggregate_one_unit(
-            db.lecture_segments,
-            LectureUnitSegmentSchema,
-            course_id,
-            decoded_base_url,
-            unit_id,
-            [
-                Metrics(LectureUnitSegmentSchema.PAGE_NUMBER.value).integer(
-                    minimum=True, maximum=True
-                )
-            ],
+        # Segments carry no ingestion-generation property, so each row is
+        # confirmed directly instead of grouping by generation (same approach
+        # the ingestion audit uses for segments and the unit row).
+        all_segment_rows = db.lecture_segments.query.fetch_objects(
+            filters=_course_filter(
+                LectureUnitSegmentSchema, course_id, decoded_base_url
+            )
+            & Filter.by_property(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value).equal(
+                unit_id
+            ),
+            limit=_UNIT_ROW_LIMIT,
+            return_properties=[LectureUnitSegmentSchema.PAGE_NUMBER.value],
+        ).objects
+        if len(all_segment_rows) >= _UNIT_ROW_LIMIT:
+            entry.truncated = True
+        real_segment_rows = confirmed_rows(db.lecture_segments, all_segment_rows)
+        segment_pages = _int_values(
+            real_segment_rows, LectureUnitSegmentSchema.PAGE_NUMBER.value
         )
-        entry.segment_count = result.total_count or 0
-        entry.segment_page_min = _metric(
-            result, LectureUnitSegmentSchema.PAGE_NUMBER.value, "minimum"
-        )
-        entry.segment_page_max = _metric(
-            result, LectureUnitSegmentSchema.PAGE_NUMBER.value, "maximum"
-        )
+        entry.segment_count = len(real_segment_rows)
+        entry.segment_page_min = min(segment_pages) if segment_pages else None
+        entry.segment_page_max = max(segment_pages) if segment_pages else None
 
     return IngestionCensusDTO(
         courseId=course_id,
