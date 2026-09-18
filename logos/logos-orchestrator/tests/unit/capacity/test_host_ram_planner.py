@@ -52,6 +52,7 @@ except ImportError:
 
 from logos import CapacityPlanner  # noqa: E402
 from logos.capacity.host_ram_ledger import HostRamLedger  # noqa: E402
+from logos.sdi.models import CapacityPlanAction  # noqa: E402
 
 
 def _bare_planner(snapshot: dict | None = None) -> CapacityPlanner:
@@ -250,9 +251,27 @@ def test_cold_estimate_uses_live_same_model_ceiling_over_lean_profile():
             "runtime": {
                 "host_memory": {"source": "proc-meminfo", "available_mb": 200_000.0},
                 "lanes": [
-                    {"lane_id": "old", "model": "Qwen/Qwen3.8-27B", "host_ram_mb": 80_000.0},
-                    {"lane_id": "new", "model": "Qwen/Qwen3.8-27B", "host_ram_mb": 5_500.0},
-                    {"lane_id": "other", "model": "other/model", "host_ram_mb": 90_000.0},
+                    {
+                        "lane_id": "old",
+                        "model": "Qwen/Qwen3.8-27B",
+                        "host_ram_mb": 80_000.0,
+                        "sleep_state": "awake",
+                        "runtime_state": "loaded",
+                    },
+                    {
+                        "lane_id": "new",
+                        "model": "Qwen/Qwen3.8-27B",
+                        "host_ram_mb": 5_500.0,
+                        "sleep_state": "awake",
+                        "runtime_state": "loaded",
+                    },
+                    {
+                        "lane_id": "other",
+                        "model": "other/model",
+                        "host_ram_mb": 90_000.0,
+                        "sleep_state": "awake",
+                        "runtime_state": "loaded",
+                    },
                 ],
             },
         }
@@ -285,9 +304,47 @@ def test_cold_estimate_falls_back_to_profile_when_no_siblings():
     assert projected == 12_000.0
 
 
-def test_sleep_precheck_uses_live_lane_pss_when_residual_is_lean():
-    """Calibrated residual can be weight-sized while live PSS includes sticky
-    shm that sleep→wake does not clear — residency must follow the live value."""
+def test_cold_estimate_ignores_sleeping_sibling_host_ram():
+    """Sleeping PSS includes weight backups — not the awake sticky ceiling."""
+    p = _bare_planner(
+        {
+            "runtime": {
+                "host_memory": {"source": "proc-meminfo", "available_mb": 200_000.0},
+                "lanes": [
+                    {
+                        "lane_id": "asleep",
+                        "model": "Qwen/Qwen3.8-27B",
+                        "host_ram_mb": 80_000.0,
+                        "sleep_state": "sleeping",
+                        "runtime_state": "sleeping",
+                    },
+                    {
+                        "lane_id": "awake",
+                        "model": "Qwen/Qwen3.8-27B",
+                        "host_ram_mb": 6_000.0,
+                        "sleep_state": "awake",
+                        "runtime_state": "loaded",
+                    },
+                ],
+            },
+        }
+    )
+    profile = _profile(host_ram_mb=5_000.0)
+
+    projected = p._estimate_lane_host_ram_mb(
+        1,
+        "cold-lane",
+        "Qwen/Qwen3.8-27B",
+        profile,
+        runtime_state="cold",
+    )
+
+    assert projected == 6_000.0
+
+
+def test_sleep_precheck_does_not_double_count_live_sticky_pss():
+    """Live sticky PSS is already in MemAvailable — charging it again as
+    required residency would falsely escalate every heavy lane to stop."""
     p = _bare_planner(
         {
             "runtime": {
@@ -306,22 +363,84 @@ def test_sleep_precheck_uses_live_lane_pss_when_residual_is_lean():
         lane_id="heavy",
     )
 
-    assert ok is False
-    assert required >= 70_000.0
+    assert ok is True
+    assert required == p.HOST_RAM_SAFETY_MARGIN_MB + 2_000.0
 
 
-def test_sleep_precheck_uses_profile_awake_ceiling_without_lane_id():
-    p = _bare_planner(_snapshot_with_host_memory(50_000.0))
+def test_sleep_precheck_charges_incremental_weight_relocation_beyond_live():
+    """Lean live hold + large residual → sleep still needs room for weights."""
+    p = _bare_planner(
+        {
+            "runtime": {
+                "host_memory": {"source": "proc-meminfo", "available_mb": 30_000.0},
+                "lanes": [
+                    {"lane_id": "lean", "model": "Qwen/Qwen3.8-27B", "host_ram_mb": 5_000.0},
+                ],
+            },
+        }
+    )
 
     ok, _eff, required = p._check_host_ram_headroom_for_sleep(
         1,
         1,
-        _profile(
-            sleep_l1_transient_host_ram_mb=2_000.0,
-            host_ram_residual_mb=8_000.0,
-            host_ram_mb=65_000.0,
-        ),
+        _profile(sleep_l1_transient_host_ram_mb=2_000.0, host_ram_residual_mb=40_000.0),
+        lane_id="lean",
     )
 
+    # incremental = 40k - 5k = 35k; transient 2k → required = margin + 35k
     assert ok is False
-    assert required >= 65_000.0
+    assert required == p.HOST_RAM_SAFETY_MARGIN_MB + 35_000.0
+
+
+async def test_sleep_action_escalates_to_stop_when_incremental_host_ram_does_not_fit():
+    """Executor must turn sleep_l1 into stop when the host-RAM gate denies."""
+    profile = _profile(
+        sleep_l1_transient_host_ram_mb=2_000.0,
+        host_ram_residual_mb=40_000.0,
+        sleeping_residual_mb=1_000.0,
+        loaded_vram_mb=80_000.0,
+        engine="vllm",
+        base_residency_mb=40_000.0,
+    )
+    p = _bare_planner(
+        {
+            "runtime": {
+                "host_memory": {"source": "proc-meminfo", "available_mb": 30_000.0},
+                "lanes": [
+                    {"lane_id": "lean", "model": "Qwen/Qwen3.8-27B", "host_ram_mb": 5_000.0},
+                ],
+            },
+        }
+    )
+    p._facade = MagicMock()
+    p._facade.get_provider_name.return_value = "worker-a"
+    p._safe_get_profiles = MagicMock(return_value={"Qwen/Qwen3.8-27B": profile})
+    p._safe_get_capacity = MagicMock(return_value=None)
+    p._lane_gpu_devices_str = MagicMock(return_value=None)
+    p._get_per_gpu_free = MagicMock(return_value=None)
+    p._release_vram = MagicMock()
+    p._vram_ledger = MagicMock()
+
+    escalated: list[CapacityPlanAction] = []
+
+    async def _capture_confirmation(action, timeout_seconds=60.0):
+        escalated.append(action)
+        return True
+
+    p._execute_action_with_confirmation = _capture_confirmation
+
+    sleep_action = CapacityPlanAction(
+        action="sleep_l1",
+        provider_id=1,
+        lane_id="lean",
+        model_name="Qwen/Qwen3.8-27B",
+        reason="reclaim",
+    )
+    ok = await CapacityPlanner._execute_action_core(p, sleep_action, timeout_seconds=5.0)
+
+    assert ok is True
+    assert len(escalated) == 1
+    assert escalated[0].action == "stop"
+    assert escalated[0].lane_id == "lean"
+    assert escalated[0].bypass_load_cooldown is True
+    assert "host RAM headroom too low" in escalated[0].reason

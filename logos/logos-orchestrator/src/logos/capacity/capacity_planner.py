@@ -1387,12 +1387,13 @@ class CapacityPlanner:
             estimate from ``disk_size_bytes`` when that is missing (the
             weight transfer dominates l2), and a flat
             ``HOST_RAM_SLEEP_HEADROOM_MB`` for pre-calibration profiles.
-          * the *residency* the lane keeps for as long as it stays asleep —
-            the max of calibrated ``host_ram_residual_mb``, the profile's
-            awake ``host_ram_mb`` ceiling, and the lane's live process-tree
-            PSS when *lane_id* is known. Long-lived EngineCores accumulate
-            sticky host shared-memory that sleep→wake does not clear; the
-            calibrated residual alone understates that lasting footprint.
+          * the *incremental* residency sleep will add on top of what the
+            lane already holds on the host. Lasting post-sleep footprint is
+            ``max(host_ram_residual_mb, live PSS)`` — sticky EngineCore shm
+            survives sleep→wake, and sleep_l1 also relocates weights to the
+            host. Live PSS is already reflected in ``MemAvailable``, so only
+            ``max(0, lasting − live)`` is charged here (not the full lasting
+            footprint, which would double-count).
 
         Only the transient used to be counted, which asks "can this sleep
         complete" and never "what does it leave behind". A worker could pass
@@ -1425,19 +1426,21 @@ class CapacityPlanner:
         if transient_mb is None:
             transient_mb = self.HOST_RAM_SLEEP_HEADROOM_MB
 
-        residency_mb = 0.0
-        if profile is not None and profile.host_ram_residual_mb:
-            residency_mb = max(float(profile.host_ram_residual_mb), 0.0)
-        if profile is not None:
-            awake_ceiling = getattr(profile, "host_ram_mb", None)
-            if awake_ceiling and awake_ceiling > 0:
-                residency_mb = max(residency_mb, float(awake_ceiling))
+        live_mb = 0.0
         if lane_id:
-            live_mb = self._lane_host_ram_from_snapshot(provider_id, lane_id)
-            if live_mb > 0:
-                residency_mb = max(residency_mb, live_mb)
+            live_mb = max(self._lane_host_ram_from_snapshot(provider_id, lane_id), 0.0)
 
-        required = self.HOST_RAM_SAFETY_MARGIN_MB + max(transient_mb, residency_mb)
+        lasting_mb = 0.0
+        if profile is not None and profile.host_ram_residual_mb:
+            lasting_mb = max(float(profile.host_ram_residual_mb), 0.0)
+        if live_mb > lasting_mb:
+            lasting_mb = live_mb
+
+        # MemAvailable already subtracts live PSS; only the growth sleep adds
+        # (weight relocation beyond current host hold) is incremental demand.
+        incremental_mb = max(0.0, lasting_mb - live_mb)
+
+        required = self.HOST_RAM_SAFETY_MARGIN_MB + max(transient_mb, incremental_mb)
         return effective_available >= required, effective_available, required
 
     async def _stop_sleeping_lanes_for_headroom(
@@ -8038,11 +8041,13 @@ class CapacityPlanner:
         provider_id: int,
         model_name: str,
     ) -> float:
-        """Max live host_ram_mb among lanes serving *model_name* on a provider.
+        """Max awake host_ram_mb among lanes serving *model_name* on a provider.
 
         Sticky awake growth means two replicas of the same calibrated profile
-        are not equal on the host axis; the heaviest live sibling is the
-        planning ceiling for another cold load of that model.
+        are not equal on the host axis; the heaviest awake sibling is the
+        planning ceiling for another cold load of that model. Sleeping lanes
+        are skipped: their PSS includes sleep_l1 weight backups that are not
+        the awake sticky-shm ceiling a new cold load is expected to grow into.
         """
         if self._registry is None or not model_name:
             return 0.0
@@ -8057,6 +8062,10 @@ class CapacityPlanner:
             if not isinstance(lane, dict):
                 continue
             if str(lane.get("model") or "") != model_name:
+                continue
+            if str(lane.get("sleep_state") or "") == "sleeping":
+                continue
+            if str(lane.get("runtime_state") or "") == "sleeping":
                 continue
             try:
                 measured = float(lane.get("host_ram_mb") or 0.0)
