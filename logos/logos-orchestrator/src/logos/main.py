@@ -291,7 +291,7 @@ def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> N
 
 
 def _record_log_failure(
-    log_id: Optional[int],
+    log_id,
     request_id: Optional[str],
     error_message: str,
     *,
@@ -331,8 +331,11 @@ def _record_log_failure(
 
     try:
         with DBManager() as db:
+            actual_log_id = _materialize_log_id(db, log_id)
+            if actual_log_id is None:
+                return
             db.set_response_payload(
-                log_id,
+                actual_log_id,
                 payload,
                 provider_id,
                 model_id,
@@ -359,7 +362,7 @@ def _record_log_failure(
                 if value is not None:
                     metrics_fields[key] = value
             db.update_log_entry_metrics(
-                log_id=log_id,
+                log_id=actual_log_id,
                 request_id=request_id,
                 **metrics_fields,
             )
@@ -380,6 +383,18 @@ _live_streams = _LiveStreamRegistry()
 # scaled by 1e11 = 1e8 micro-cents x 1e3 per-1k. No exchange rate is applied
 # anywhere in the stack, so reporting these amounts as EUR mislabelled them.
 _MICRO_CENTS_PER_USD = 100_000_000
+
+
+@dataclass(frozen=True)
+class _PendingLog:
+    fields: Dict[str, Any]
+
+
+def _materialize_log_id(db, log_ref) -> Optional[int]:
+    if isinstance(log_ref, _PendingLog):
+        result, status = db.log_usage(**log_ref.fields)
+        return int(result["log-id"]) if status == 200 else None
+    return int(log_ref) if log_ref else None
 
 
 def _response_with_cost(
@@ -2077,7 +2092,7 @@ async def _streaming_response(
 
 
 def _persist_terminal_response(
-    log_id: int,
+    log_id,
     usage_tokens,
     model_id: int,
     provider_id: int,
@@ -2095,8 +2110,11 @@ def _persist_terminal_response(
 ) -> None:
     """Persist the terminal billing and payload fields off the event loop."""
     with DBManager() as db:
+        actual_log_id = _materialize_log_id(db, log_id)
+        if actual_log_id is None:
+            return
         db.finalize_billing_row(
-            log_id,
+            actual_log_id,
             usage_tokens,
             model_id=model_id,
             provider_id=provider_id,
@@ -2107,7 +2125,7 @@ def _persist_terminal_response(
             error_message=error_message,
         )
         db.store_response_payload(
-            log_id,
+            actual_log_id,
             response_payload,
             policy_id=policy_id,
             classified=classification_stats,
@@ -3547,63 +3565,64 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         if local_rpm is not None or local_tpm is not None:
             auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
 
-        with DBManager() as db:
-            with perf_trace.phase(request_id, "auth.log_usage_insert"):
-                r_log, c_log = db.log_usage(
-                    api_key_id=auth.api_key_id,
-                    team_id=auth.team_id,
-                    user_id=auth.user_id,
-                    environment=auth.environment,
-                    log_level=auth.log_level,
-                    client_ip=client_ip,
-                    input_payload=sanitized_payload_for_logging(body),
-                    headers=sanitized_headers_for_persistence(headers),
-                    request_id=request_id,
-                    timeout_s=body.get("timeout_s"),
-                )
+        deployment_cache = refcache.get_ref_cache()
+        cached_deployments = deployment_cache.get(("deployments", auth.api_key_id))
+        log_fields = {
+            "api_key_id": auth.api_key_id,
+            "team_id": auth.team_id,
+            "user_id": auth.user_id,
+            "environment": auth.environment,
+            "log_level": auth.log_level,
+            "client_ip": client_ip,
+            "input_payload": sanitized_payload_for_logging(body),
+            "headers": sanitized_headers_for_persistence(headers),
+            "request_id": request_id,
+            "timeout_s": body.get("timeout_s"),
+        }
+        can_defer_log = (
+            cached_deployments is not refcache._MISSING
+            and auth.role not in ("logos_admin", "app_admin")
+            and not payload_requests_streaming(body)
+        )
+        if can_defer_log:
+            raw_deployments, _ = cached_deployments
+            log_id = _PendingLog(log_fields)
+        else:
+            with DBManager() as db:
+                with perf_trace.phase(request_id, "auth.log_usage_insert"):
+                    r_log, c_log = db.log_usage(**log_fields)
 
-            if c_log == 200:
-                log_id = int(r_log["log-id"])
+                if c_log == 200:
+                    log_id = int(r_log["log-id"])
 
-                with perf_trace.phase(request_id, "setup.deployments"):
-                    # Warm requests reuse the normalized deployment snapshot.
-                    # A cache miss still reads the current permissions in the
-                    # same session as the log insert.
-                    deployment_cache = refcache.get_ref_cache()
-                    cached_deployments = deployment_cache.get(("deployments", auth.api_key_id))
-                    if cached_deployments is refcache._MISSING:
-                        raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-                        deployment_cache.set(
-                            ("deployments", auth.api_key_id),
-                            (raw_deployments, allowed_models),
-                        )
-                    else:
-                        raw_deployments, _ = cached_deployments
-
-                # Proxy-mode model resolution in the SAME session: it is the
-                # same permission data as the deployment rows, so this
-                # checkout serves both — no second one for the resolve .
-                # Carried on the request-scoped auth context;
-                # _execute_proxy_mode falls back to its own fresh DB read
-                # when it is not set (no "model" in the body, other callers).
-                requested_model_name = str(body.get("model") or "").strip()
-                if requested_model_name:
-                    with perf_trace.phase(request_id, "mode.resolve_model"):
-                        if auth.role in ("logos_admin", "app_admin"):
-                            # Admin bypass: the SQL resolver sees every model,
-                            # while the deployment rows above carry only the
-                            # permitted set — the bypass must stay on its own
-                            # query to keep the same row set .
-                            auth.resolved_proxy_model = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
-                        else:
-                            # In-memory twin of the SQL non-admin branch: the
-                            # deployment rows came from the same
-                            # key_info / effective-model / effective-provider
-                            # CTEs, so resolving over them is 1:1 — and saves
-                            # a round-trip on the hot path .
-                            auth.resolved_proxy_model = resolve_proxy_model_from_deployments(
-                                raw_deployments, requested_model_name
+                    with perf_trace.phase(request_id, "setup.deployments"):
+                        if cached_deployments is refcache._MISSING:
+                            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+                            deployment_cache.set(
+                                ("deployments", auth.api_key_id),
+                                (raw_deployments, allowed_models),
                             )
+                        else:
+                            raw_deployments, _ = cached_deployments
+
+                    requested_model_name = str(body.get("model") or "").strip()
+                    if requested_model_name:
+                        with perf_trace.phase(request_id, "mode.resolve_model"):
+                            if auth.role in ("logos_admin", "app_admin"):
+                                auth.resolved_proxy_model = db.resolve_proxy_model(
+                                    auth.api_key_id, requested_model_name
+                                )
+                            else:
+                                auth.resolved_proxy_model = resolve_proxy_model_from_deployments(
+                                    raw_deployments, requested_model_name
+                                )
+        if can_defer_log:
+            requested_model_name = str(body.get("model") or "").strip()
+            if requested_model_name:
+                with perf_trace.phase(request_id, "mode.resolve_model"):
+                    auth.resolved_proxy_model = resolve_proxy_model_from_deployments(
+                        raw_deployments, requested_model_name
+                    )
 
         return headers, auth, body, client_ip, log_id, raw_deployments
 
