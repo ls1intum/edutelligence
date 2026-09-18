@@ -2861,7 +2861,7 @@ async def _execute_resource_mode(
             provider_id=result.provider_id,
             classification_stats=result.classification_stats,
             scheduling_stats=result.scheduling_stats,
-            result_status="timeout" if "timeout" in error_msg.lower() else "error",
+            result_status="timeout" if _is_timeout_failure(error=error_msg) else "error",
         )
         if is_async_job:
             return {"status_code": 503, "data": {"error": error_msg}}
