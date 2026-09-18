@@ -85,7 +85,7 @@
               @if (row.lane.gpu_cache_usage_percent != null) {
                 <div class="kv-section">
                   <div class="kv-header">
-                    <span class="stat-label">KV cache</span>
+                    <span class="stat-label" title="Share of the GPU KV block pool held by in-flight requests. Idle prefix-cached blocks are not included in this gauge (vLLM does not expose a separate prefix-cache fill metric yet).">KV cache</span>
                     <span class="stat-value" [style.color]="row.kvColor">{{ row.lane.gpu_cache_usage_percent.toFixed(1) }}%</span>
                   </div>
                   <div class="bar-track">
@@ -102,7 +102,7 @@
                   <span class="stat-label">TTFT p95 <span class="stat-value" [style.color]="row.ttftColor">{{ row.ttftLabel }}</span></span>
                 }
                 @if (row.lane.prefix_cache_hit_rate != null) {
-                  <span class="stat-label">Prefix hit <span class="stat-value neutral">{{ (row.lane.prefix_cache_hit_rate * 100).toFixed(1) }}%</span></span>
+                  <span class="stat-label" title="Fraction of prompt tokens served from the automatic prefix cache over this lane's lifetime. This is a hit rate, not how full the cache is — vLLM has no prefix-cache occupancy gauge yet.">Prefix hit <span class="stat-value neutral">{{ (row.lane.prefix_cache_hit_rate * 100).toFixed(1) }}%</span></span>
                 }
                 @if (row.lane.mtp_acceptance_rate != null) {
                   <span class="stat-label">MTP accept <span class="stat-value neutral">{{ (row.lane.mtp_acceptance_rate * 100).toFixed(1) }}%</span></span>
