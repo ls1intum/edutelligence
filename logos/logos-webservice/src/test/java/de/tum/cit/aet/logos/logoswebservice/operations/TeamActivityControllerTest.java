@@ -211,12 +211,17 @@ class TeamActivityControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            // 9020 and 9021 ask the same question under FULL logging: one
-           // entry, counted twice. 9022 asks a different question but is
-           // BILLING-only, so it must not surface at all.
-           .andExpect(jsonPath("$.most_asked_questions.length()").value(1))
+           // entry, counted twice, ranked first. 9022 asks a different
+           // question but is BILLING-only, so it must not surface at all.
+           // 9023 uses the Responses API's bare-string input shape
+           // ({"input": "hello"}) rather than a messages array — it must
+           // still be normalized into its own ranked entry, not dropped.
+           .andExpect(jsonPath("$.most_asked_questions.length()").value(2))
            .andExpect(jsonPath("$.most_asked_questions[0].question")
                .value("What is the capital of France?"))
-           .andExpect(jsonPath("$.most_asked_questions[0].count").value(2));
+           .andExpect(jsonPath("$.most_asked_questions[0].count").value(2))
+           .andExpect(jsonPath("$.most_asked_questions[1].question").value("hello"))
+           .andExpect(jsonPath("$.most_asked_questions[1].count").value(1));
     }
 
     @Test

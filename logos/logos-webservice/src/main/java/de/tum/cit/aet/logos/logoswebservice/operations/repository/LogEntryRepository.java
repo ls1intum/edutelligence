@@ -895,9 +895,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             SELECT CASE jsonb_typeof(elem -> 'content')
                        WHEN 'string' THEN elem ->> 'content'
                        WHEN 'array' THEN (
-                           SELECT string_agg(part ->> 'text', E'\n')
-                           FROM jsonb_array_elements(elem -> 'content') AS part
-                           WHERE part ->> 'type' IN ('text', 'input_text', 'output_text')
+                           SELECT string_agg(part_elem ->> 'text', E'\n' ORDER BY part_ord)
+                           FROM jsonb_array_elements(elem -> 'content') WITH ORDINALITY AS part(part_elem, part_ord)
+                           WHERE part_elem ->> 'type' IN ('text', 'input_text', 'output_text')
                        )
                        ELSE NULL
                    END AS content
@@ -906,6 +906,15 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                      THEN le.input_payload -> 'messages'
                      WHEN jsonb_typeof(le.input_payload -> 'input') = 'array'
                      THEN le.input_payload -> 'input'
+                     -- The Responses API also allows a bare string input
+                     -- ({"input": "hello"}), which Logos persists as-is
+                     -- (see logos.pipeline.pipeline: isinstance(payload.get
+                     -- ("input"), str)). Wrap it as a synthetic single user
+                     -- turn so it flows through the same extraction below.
+                     WHEN jsonb_typeof(le.input_payload -> 'input') = 'string'
+                     THEN jsonb_build_array(
+                         jsonb_build_object('role', 'user', 'content', le.input_payload -> 'input')
+                     )
                      ELSE '[]'::jsonb
                 END
             ) WITH ORDINALITY AS t(elem, ord)

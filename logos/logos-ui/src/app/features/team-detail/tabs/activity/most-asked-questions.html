@@ -5,8 +5,10 @@
         <ol>
             @for (q of questions; track trackByQuestion($index, q)) {
                 <li>
-                    <span class="most-asked-questions__text">{{ q.question }}</span>
-                    <span class="most-asked-questions__count">{{ q.count }}</span>
+                    <div class="most-asked-questions__row">
+                        <span class="most-asked-questions__text">{{ q.question }}</span>
+                        <span class="most-asked-questions__count">{{ q.count }}</span>
+                    </div>
                 </li>
             }
         </ol>

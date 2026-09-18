@@ -181,6 +181,40 @@ describe('ActivityTabComponent', () => {
     });
   });
 
+  describe('Most Asked Questions', () => {
+    it('renders each question with its count', () => {
+      component.activity.set(
+        makePayload({
+          most_asked_questions: [
+            { question: 'What is the capital of France?', count: 2 },
+            { question: 'When is my package arriving?', count: 1 },
+          ],
+        }),
+      );
+      fixture.detectChanges();
+
+      const rows = fixture.nativeElement.querySelectorAll('.most-asked-questions li');
+      expect(rows.length).toBe(2);
+      expect(rows[0].querySelector('.most-asked-questions__text').textContent).toContain(
+        'What is the capital of France?',
+      );
+      expect(rows[0].querySelector('.most-asked-questions__count').textContent).toContain('2');
+      expect(rows[1].querySelector('.most-asked-questions__text').textContent).toContain(
+        'When is my package arriving?',
+      );
+    });
+
+    it('shows an empty-state message when the team asked nothing', () => {
+      component.activity.set(makePayload({ most_asked_questions: [] }));
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.most-asked-questions li')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.most-asked-questions').textContent).toContain(
+        'No questions recorded for this team in the selected period.',
+      );
+    });
+  });
+
   // ── Loading ────────────────────────────────────────────────────────────────
 
   describe('loading', () => {
