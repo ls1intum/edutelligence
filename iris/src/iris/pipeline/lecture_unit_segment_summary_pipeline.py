@@ -100,6 +100,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
+        written_uuids = []
         total_slides = slide_number_end - slide_number_start + 1
         for slide_index in range(slide_number_start, slide_number_end + 1):
             if self.callback is not None:
@@ -142,28 +143,43 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             self._upsert_lecture_object(
                 slide_index, summary, display_page_number, hidden_until
             )
-        self._prune_stale_segments(slide_number_start, slide_number_end)
+            written_uuids.append(self._segment_uuid(slide_index))
+        self._prune_stale_segments(slide_number_start, slide_number_end, written_uuids)
         return summaries, self.tokens
 
-    def _prune_stale_segments(self, slide_number_start: int, slide_number_end: int):
+    def _prune_stale_segments(
+        self, slide_number_start: int, slide_number_end: int, keep_uuids=()
+    ):
         """Remove segments for slides that no longer exist.
 
         Segments are upserted per slide, so a unit whose PDF shrank would keep
         summaries for the removed slides forever without this sweep.
+
+        Also removes any same-slide row that is not one of ``keep_uuids`` (the
+        deterministic ids this run just upserted): a row written before the
+        deterministic-uuid scheme existed used a random uuid for the same slide,
+        so it falls inside the valid page range and would otherwise coexist with
+        its replacement forever -- an upsert by a *different* id is never a
+        replace, and this range check alone never looks at ids. Callers that
+        don't pass ``keep_uuids`` (e.g. existing unit tests) get exactly the
+        prior range-only behavior.
         """
+        conditions = [
+            Filter.by_property(LectureUnitSegmentSchema.PAGE_NUMBER.value).less_than(
+                slide_number_start
+            ),
+            Filter.by_property(LectureUnitSegmentSchema.PAGE_NUMBER.value).greater_than(
+                slide_number_end
+            ),
+        ]
+        if keep_uuids:
+            conditions.append(
+                ~Filter.by_id().contains_any([str(uuid) for uuid in keep_uuids])
+            )
         stale_filter = Filter.all_of(
             [
                 self._get_segment_unit_filter(),
-                Filter.any_of(
-                    [
-                        Filter.by_property(
-                            LectureUnitSegmentSchema.PAGE_NUMBER.value
-                        ).less_than(slide_number_start),
-                        Filter.by_property(
-                            LectureUnitSegmentSchema.PAGE_NUMBER.value
-                        ).greater_than(slide_number_end),
-                    ]
-                ),
+                Filter.any_of(conditions),
             ]
         )
         delete_result = delete_many_with_retry(

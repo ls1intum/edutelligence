@@ -740,3 +740,130 @@ def test_stale_segment_prune_failure_fails_the_run():
         pipeline._prune_stale_segments(1, 5)
 
     assert exc_info.value.error_code == STALE_CONTENT_DELETE_FAILED
+
+
+def test_prune_without_keep_uuids_only_filters_by_page_range():
+    # No keep_uuids (the calling convention of the two tests above, and any other
+    # caller that doesn't have a set of ids to protect): the filter must stay
+    # exactly the prior range-only shape, with no id-based condition added.
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    captured = {}
+
+    def delete_many(where):
+        captured["where"] = where
+        return _delete_result(matches=0)
+
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(delete_many=delete_many)
+    )
+
+    pipeline._prune_stale_segments(1, 5)
+
+    range_conditions = captured["where"].filters[1]
+    assert len(range_conditions.filters) == 2
+
+
+def test_prune_with_keep_uuids_also_excludes_non_matching_ids_in_range():
+    # A same-slide row from before the deterministic-uuid scheme existed (a
+    # random uuid, not one of keep_uuids) falls inside the valid page range, so
+    # the range check alone can never catch it -- this is finding 7: live-
+    # verified against a real Weaviate instance (a legacy random-uuid row for
+    # an in-range page survived indefinitely without this condition, and was
+    # correctly removed once it was added, with an out-of-range page and an
+    # unrelated in-range page both unaffected either way).
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    captured = {}
+
+    def delete_many(where):
+        captured["where"] = where
+        return _delete_result(matches=1)
+
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(delete_many=delete_many)
+    )
+    keep_uuid = pipeline._segment_uuid(1)
+
+    pipeline._prune_stale_segments(1, 5, [keep_uuid])
+
+    range_conditions = captured["where"].filters[1]
+    assert len(range_conditions.filters) == 3
+
+
+def test_prune_with_empty_keep_uuids_behaves_like_no_keep_uuids():
+    # An empty list (e.g. a caller that computed no uuids for some reason) must
+    # fall back to the safe range-only filter, not build a filter that treats
+    # every existing row as "not kept" and delete the whole unit's segments.
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    captured = {}
+
+    def delete_many(where):
+        captured["where"] = where
+        return _delete_result(matches=0)
+
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(delete_many=delete_many)
+    )
+
+    pipeline._prune_stale_segments(1, 5, [])
+
+    range_conditions = captured["where"].filters[1]
+    assert len(range_conditions.filters) == 2
+
+
+def test_call_passes_every_written_uuid_to_the_stale_prune(monkeypatch):
+    # Confirms __call__ actually wires the uuids it just wrote through to the
+    # prune step (the fix depends on this, not just on _prune_stale_segments'
+    # own logic in isolation).
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    pipeline.callback = None
+    pipeline.tokens = []
+    monkeypatch.setattr(pipeline, "_get_slide_range", lambda: (1, 3))
+    monkeypatch.setattr(pipeline, "_get_transcriptions", lambda *_a, **_k: [])
+    monkeypatch.setattr(pipeline, "_get_slides", lambda *_a, **_k: [])
+    monkeypatch.setattr(pipeline, "_create_summary", lambda *_a, **_k: "summary")
+    monkeypatch.setattr(pipeline, "_upsert_lecture_object", lambda *_a, **_k: None)
+    prune_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "_prune_stale_segments",
+        lambda *args: prune_calls.append(args),
+    )
+
+    pipeline()
+
+    assert len(prune_calls) == 1
+    start, end, keep_uuids = prune_calls[0]
+    assert (start, end) == (1, 3)
+    assert keep_uuids == [
+        pipeline._segment_uuid(1),
+        pipeline._segment_uuid(2),
+        pipeline._segment_uuid(3),
+    ]
