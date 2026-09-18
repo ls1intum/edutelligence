@@ -89,9 +89,8 @@ async def test_sync_response_is_returned_as_an_anthropic_message(monkeypatch):
 
     # The ledger keeps the upstream's own field names, so billing and the
     # statistics page are unaffected by the translation.
-    logged = dummy_db.payload_calls[0]
-    assert logged["payload"]["choices"][0]["message"]["content"] == "OK"
-    assert logged["usage"]["prompt_tokens"] == 18
+    assert dummy_db.store_calls[0]["payload"]["choices"][0]["message"]["content"] == "OK"
+    assert dummy_db.finalize_calls[0]["usage"]["prompt_tokens"] == 18
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,10 @@
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from logos import batch_credential
+from logos import batch_credential, refcache
 from logos.dbutils.dbmanager import DBManager
 
 
@@ -73,6 +74,17 @@ class AuthContext:
     team_priority: int = 0
     cloud_rl: Optional[dict] = None
     local_rl: Optional[dict] = None
+    # Request-scoped, set by auth_parse_log: the proxy-mode model resolution
+    # ((model_id, canonical name) or None) run in the same DB session as the
+    # deployment lookup, so the request path does not need a second checkout
+    # . None when the body names no model, or on callers that do not go
+    # through auth_parse_log — _execute_proxy_mode then resolves on its own.
+    resolved_proxy_model: Optional[tuple[int, str]] = None
+    # The key owner's users.role (NULL when the key has no user). Read from
+    # the auth row, never persisted: it only routes proxy-mode resolution
+    # between the admin bypass (SQL, sees every model) and the in-memory
+    # resolution over the key's permitted deployments .
+    role: Optional[str] = None
 
 
 def _resolve_batch_credential(credential: str) -> Optional[Dict[str, Any]]:
@@ -119,7 +131,22 @@ def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
         user_role=row.get("role"),
         # NULL (admin never set one) or no team both read as 0 = not set.
         team_priority=row.get("team_priority") or 0,
+        # Absent on the batch-credential row shape (get_api_key_by_id selects
+        # no users join): None routes resolution to the permitted set, which
+        # is exactly what the SQL fallback computes for non-admins.
+        role=row.get("role"),
     )
+
+
+def _lookup_api_key_row(logos_key: str) -> Optional[Dict[str, Any]]:
+    # The digest keeps the bearer value out of cache keys and diagnostics.
+    cache_key = hashlib.sha256(logos_key.encode("utf-8")).hexdigest()
+
+    def _load() -> Optional[Dict[str, Any]]:
+        with DBManager() as db:
+            return db.get_api_key_by_value(logos_key)
+
+    return refcache.get_ref_cache().load(("api_key", cache_key), _load)
 
 
 def authenticate_api_key(headers: Optional[Dict[str, str]], client_ip: Optional[str] = None) -> AuthContext:
@@ -141,8 +168,7 @@ def authenticate_api_key(headers: Optional[Dict[str, str]], client_ip: Optional[
     enforce_auth_failure_budget(client_ip)
     try:
         logos_key = _resolve_logos_key(headers)
-        with DBManager() as db:
-            row = db.get_api_key_by_value(logos_key)
+        row = _lookup_api_key_row(logos_key)
         if row is None:
             raise HTTPException(status_code=401, detail="Invalid or inactive logos key")
         release_auth_failure_reservation(client_ip)
@@ -173,8 +199,8 @@ def authenticate_batch_api_key(headers: Optional[Dict[str, str]]) -> AuthContext
     admin-owned key, the role-gated routes — for its whole TTL.
     """
     logos_key = _resolve_logos_key(headers)
-    with DBManager() as db:
-        row = db.get_api_key_by_value(logos_key)
+    # Same revocation semantics as authenticate_api_key: fresh row per call.
+    row = _lookup_api_key_row(logos_key)
     if row is None:
         # A key value that is not a key value: try the scoped credential the
         # batch proxy exchanged for the key.
