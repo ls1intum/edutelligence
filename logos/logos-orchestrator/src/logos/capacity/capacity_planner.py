@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Dict, List, Optional
 
-from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, LogosNodeRuntimeRegistry
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.latency_store import LatencyStore
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
@@ -6849,6 +6849,15 @@ class CapacityPlanner:
             if lane_id:
                 self._release_load_lane_id(provider_id, lane_id)
 
+    def _peek_lane(self, provider_id: int, lane_id: str) -> Optional[Dict[str, Any]]:
+        """The lane's current snapshot entry, or None when it is not there."""
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        lanes = ((snap or {}).get("runtime") or {}).get("lanes") or []
+        return next(
+            (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id") or "") == str(lane_id)),
+            None,
+        )
+
     async def drain_lane_manually(self, provider_id: int, lane_id: str) -> Dict[str, Any]:
         """Operator-initiated drain of a busy lane ("Drain" in the statistics UI).
 
@@ -6863,12 +6872,18 @@ class CapacityPlanner:
            no new requests are routed to it from here on;
         2. wait (``DRAIN_TIMEOUT_SECONDS``) for the in-flight ones to finish,
            aborting without touching the lane when they do not;
-        3. once drained, put the lane to sleep (level 1, ``mode="wait"`` — the
-           worker's final interlock still skips the sleep if a request
-           slipped into the gap between this check and the command), or
-           unload it when the host cannot afford a resident sleeper or the
-           lane's backend has no sleep mode at all — the same escalation the
-           executor applies to its own reclaim sleeps;
+        3. once drained, hand the terminal step to the confirmed executor — a
+           ``sleep_l1`` (level 1 keeps the weights resident for a fast wake),
+           or a ``stop`` when the host cannot afford a resident sleeper or the
+           lane's backend has no sleep mode at all. Routing it through the
+           executor is what keeps the manual path consistent with a planned
+           one: the executor syncs the desired-lane set (an additive remove,
+           or ``apply_lanes`` with the lane dropped when additive loads are
+           off), keeps the VRAM ledger current, and waits for the worker to
+           actually confirm the state — so this never reports ``slept`` or
+           ``unloaded`` on the strength of a command that was merely sent.
+           The lane is already drained and cold-marked by step 2, so the
+           executor's own drain is an immediate no-op;
         4. clear the cold mark on every exit, so a lane the drain could not
            finish keeps serving exactly as before. The executor's reclaim
            sleeps keep their mark until a wake clears it, but the manual wake
@@ -6877,81 +6892,127 @@ class CapacityPlanner:
            woken lane outside the rotation, so the manual paths always clear
            it themselves.
 
+        The whole run holds the per-lane lock the executor's own stop/sleep
+        actions take, so a planned reclaim of this lane cannot interleave a
+        second terminal command under the drain. Without it, ``_drain_lane``
+        would read a lane the executor removed mid-drain as "already drained"
+        and dispatch a terminal command at a lane that is gone.
+
+        The terminal status is read from the lane itself, not from the
+        executor's flag: its host-RAM recheck can escalate a ``sleep_l1`` to a
+        ``stop`` a beat after step 3 decided, and a lane the drain ends with
+        gone is an ``unloaded``, not an error.
+
         Returns a result dict; the endpoint maps it onto a status code.
         """
-        self._mark_lane_cold(provider_id, lane_id)
-        try:
-            drained = await self._drain_lane(provider_id, lane_id, timeout_seconds=self.DRAIN_TIMEOUT_SECONDS)
-            if not drained:
+        async with self._lane_lock(provider_id, lane_id):
+            self._mark_lane_cold(provider_id, lane_id)
+            try:
+                drained = await self._drain_lane(provider_id, lane_id, timeout_seconds=self.DRAIN_TIMEOUT_SECONDS)
+                if not drained:
+                    return {
+                        "status": "drain_timeout",
+                        "lane_id": lane_id,
+                        "error": (
+                            f"Lane {lane_id} did not drain within {int(self.DRAIN_TIMEOUT_SECONDS)}s; "
+                            "its requests keep running and the lane keeps serving."
+                        ),
+                    }
+
+                # Re-read the lane under the lock, right before the terminal
+                # decision: the snapshot the endpoint validated can be a beat
+                # stale, and both the sleep decision and the profile lookup
+                # need the current view.
+                lane = self._peek_lane(provider_id, lane_id)
+                if lane is None:
+                    # A direct admin unload (which bypasses this lock) can
+                    # remove the lane mid-drain; the operator's goal — the
+                    # lane offline — is already met.
+                    return {
+                        "status": "unloaded",
+                        "lane_id": lane_id,
+                        "reason": "the lane was removed while the drain was in flight",
+                    }
+                sleep_state = str(lane.get("sleep_state") or "").strip().lower()
+                model = str(lane.get("model") or "")
+                profile = self._safe_get_profiles(provider_id).get(model) if model else None
+
+                sleep_supported = sleep_state != "unsupported"
+                host_ram_ok, eff_avail, required_mb = False, 0.0, 0.0
+                if sleep_supported:
+                    host_ram_ok, eff_avail, required_mb = self._check_host_ram_headroom_for_sleep(
+                        provider_id, 1, profile
+                    )
+
+                unload_reason: Optional[str] = None
+                if sleep_supported and host_ram_ok:
+                    terminal = CapacityPlanAction(
+                        action="sleep_l1",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model,
+                        reason="manual drain: the operator took a busy lane offline",
+                    )
+                else:
+                    unload_reason = (
+                        "the lane's backend does not support sleep mode"
+                        if not sleep_supported
+                        else f"host RAM headroom too low ({eff_avail:.0f}MB available < {required_mb:.0f}MB required)"
+                    )
+                    logger.warning(
+                        "Manual drain of lane %s on worker=%s escalates to an unload: %s",
+                        lane_id,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        unload_reason,
+                    )
+                    terminal = CapacityPlanAction(
+                        action="stop",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model,
+                        reason=f"manual drain unload: {unload_reason}",
+                        # A manual unload is an explicit operator action; the
+                        # load-cooldown gate exists to keep the planner from
+                        # reclaiming a lane it just placed, not to refuse an
+                        # operator taking a lane offline.
+                        bypass_load_cooldown=True,
+                    )
+
+                # The executor owns the desired-lane sync, the VRAM ledger, and
+                # the confirmation wait for this step (see the docstring).
+                await self._execute_action_with_confirmation(terminal, timeout_seconds=30.0)
+
+                # Read the terminal state from the lane itself: the executor's
+                # host-RAM recheck can escalate a sleep to a stop, in which
+                # case the lane is gone and that is an unload, not a failure.
+                lane_after = self._peek_lane(provider_id, lane_id)
+                if lane_after is not None and str(lane_after.get("sleep_state") or "").strip().lower() == "sleeping":
+                    logger.info(
+                        "Manual drain of lane %s on worker=%s ended in a sleep",
+                        lane_id,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                    )
+                    return {"status": "slept", "lane_id": lane_id}
+                if lane_after is None:
+                    return {
+                        "status": "unloaded",
+                        "lane_id": lane_id,
+                        "reason": unload_reason
+                        or "the executor escalated the sleep to a full unload (host RAM headroom)",
+                    }
+                # Still awake: the terminal command did not take effect (worker
+                # refused, lost, or still settling). The finally below clears
+                # the mark, so the lane keeps serving exactly as before.
                 return {
-                    "status": "drain_timeout",
+                    "status": "error",
                     "lane_id": lane_id,
                     "error": (
-                        f"Lane {lane_id} did not drain within {int(self.DRAIN_TIMEOUT_SECONDS)}s; "
-                        "its requests keep running and the lane keeps serving."
+                        f"The worker did not complete the drain's terminal step on lane {lane_id}; "
+                        "it is still awake and serving. See the orchestrator logs for the underlying error."
                     ),
                 }
-
-            # Re-read the lane right before the terminal decision: the
-            # snapshot the endpoint validated can be a beat stale, and both
-            # the sleep decision and the profile lookup need the current view.
-            snap = self._registry.peek_runtime_snapshot(provider_id)
-            lanes = ((snap or {}).get("runtime") or {}).get("lanes") or []
-            lane = next(
-                (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id") or "") == str(lane_id)),
-                {},
-            )
-            sleep_state = str(lane.get("sleep_state") or "").strip().lower()
-            model = str(lane.get("model") or "")
-            profile = self._safe_get_profiles(provider_id).get(model) if model else None
-
-            sleep_supported = sleep_state != "unsupported"
-            host_ram_ok, eff_avail, required_mb = False, 0.0, 0.0
-            if sleep_supported:
-                host_ram_ok, eff_avail, required_mb = self._check_host_ram_headroom_for_sleep(provider_id, 1, profile)
-
-            if sleep_supported and host_ram_ok:
-                # The lane is drained and cold-marked, so the worker's own
-                # wait-mode drain returns immediately; mode="wait" is kept for
-                # the final interlock, which is what skips the sleep rather
-                # than severing a request admitted in the last gap.
-                await self._registry.send_command(
-                    provider_id,
-                    "sleep_lane",
-                    {"lane_id": lane_id, "level": 1, "mode": "wait"},
-                    timeout_seconds=60,
-                )
-                logger.info(
-                    "Manual drain of lane %s on worker=%s ended in a sleep",
-                    lane_id,
-                    self._facade.get_provider_name(provider_id) or provider_id,
-                )
-                return {"status": "slept", "lane_id": lane_id}
-
-            reason = (
-                "the lane's backend does not support sleep mode"
-                if not sleep_supported
-                else f"host RAM headroom too low ({eff_avail:.0f}MB available < {required_mb:.0f}MB required)"
-            )
-            logger.warning(
-                "Manual drain of lane %s on worker=%s escalates to an unload: %s",
-                lane_id,
-                self._facade.get_provider_name(provider_id) or provider_id,
-                reason,
-            )
-            await self._registry.send_command(
-                provider_id,
-                "delete_lane",
-                {"lane_id": lane_id},
-                timeout_seconds=30,
-            )
-            return {"status": "unloaded", "lane_id": lane_id, "reason": reason}
-        except LogosNodeOfflineError as exc:
-            return {"status": "error", "lane_id": lane_id, "error": str(exc)}
-        except LogosNodeCommandError as exc:
-            return {"status": "error", "lane_id": lane_id, "error": str(exc)}
-        finally:
-            self._unmark_lane_cold(provider_id, lane_id)
+            finally:
+                self._unmark_lane_cold(provider_id, lane_id)
 
     def _build_load_params(
         self,
