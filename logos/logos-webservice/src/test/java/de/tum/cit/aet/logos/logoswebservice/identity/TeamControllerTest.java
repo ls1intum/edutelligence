@@ -1,5 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity;
 
+import static org.hamcrest.Matchers.contains;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -51,6 +53,13 @@ class TeamControllerTest {
         mvc.perform(get("/teams").with(TestJwt.adminUser()))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$").isArray());
+    }
+
+    @Test
+    void listTeams_is_sorted_by_name() throws Exception {
+        mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[*].name", contains("kc-team", "test-team")));
     }
 
     @Test
