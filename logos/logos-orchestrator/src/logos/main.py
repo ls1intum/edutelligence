@@ -2076,8 +2076,16 @@ async def _streaming_response(
     )
 
 
-def _persist_response_block(
+def _persist_terminal_response(
     log_id: int,
+    usage_tokens,
+    model_id: int,
+    provider_id: int,
+    service_tier,
+    set_first_token: bool,
+    request_id: Optional[str],
+    result_status: str,
+    error_message: Optional[str],
     response_payload,
     policy_id,
     classification_stats,
@@ -2085,14 +2093,19 @@ def _persist_response_block(
     queue_depth_at_arrival=None,
     utilization_at_arrival=None,
 ) -> None:
-    """Non-billing half of the terminal response write, drained off the event
-    loop . The billing-critical writes — usage tokens, model /
-    provider, terminal status — are committed synchronously before the client
-    gets its response; the payload JSONB, its side columns, and the derived
-    settled cost snapshot ride the write-behind queue , so a crash
-    after the response can no longer undercount the ledger .
-    """
+    """Persist the terminal billing and payload fields off the event loop."""
     with DBManager() as db:
+        db.finalize_billing_row(
+            log_id,
+            usage_tokens,
+            model_id=model_id,
+            provider_id=provider_id,
+            service_tier=service_tier,
+            set_first_token=set_first_token,
+            request_id=request_id,
+            result_status=result_status,
+            error_message=error_message,
+        )
         db.store_response_payload(
             log_id,
             response_payload,
@@ -2282,47 +2295,23 @@ async def _sync_response(
         if log_id:
             _result_status = "timeout" if timed_out else ("success" if exec_result.success else "error")
             _error_message = error_message if timed_out else (exec_result.error if not exec_result.success else None)
-            with perf_trace.phase(request_id, "db.response_block"):
-                # Split terminal write : the
-                # billing-critical half — usage tokens plus everything the
-                # settled cost snapshot reads — stays synchronous, committed
-                # before the client gets its response, so a crash in between
-                # cannot undercount the ledger. The payload JSONB and the
-                # derived cost snapshot (which only reads what this commit
-                # made durable) ride the write-behind thread .
-                with DBManager() as db:
-                    # result_status rides the same UPDATE + commit as the
-                    # billing columns (one fewer round-trip — ), written
-                    # directly by log_id (not via the request_id-keyed
-                    # monitoring flush below): that flush only runs when
-                    # scheduling_stats is present, which left cloud requests
-                    # with no scheduling stats — e.g. a failed Azure call —
-                    # at result_status NULL, rendering grey (neither success
-                    # nor error) on the statistics page.
-                    db.finalize_billing_row(
-                        log_id,
-                        usage_tokens,
-                        model_id=model_id,
-                        provider_id=provider_id,
-                        service_tier=extract_service_tier(response_payload),
-                        set_first_token=exec_result.success,
-                        request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
-                        result_status=_result_status,
-                        error_message=_error_message,
-                    )
-                write_queue.get_write_queue().enqueue(
-                    _persist_response_block,
-                    log_id,
-                    response_payload,
-                    policy_id,
-                    classification_stats,
-                    queue_depth_at_arrival=(
-                        scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
-                    ),
-                    utilization_at_arrival=(
-                        scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
-                    ),
-                )
+            write_queue.get_write_queue().enqueue(
+                _persist_terminal_response,
+                log_id,
+                usage_tokens,
+                model_id,
+                provider_id,
+                extract_service_tier(response_payload),
+                exec_result.success,
+                scheduling_stats.get("request_id") if scheduling_stats else None,
+                _result_status,
+                _error_message,
+                response_payload,
+                policy_id,
+                classification_stats,
+                queue_depth_at_arrival=(scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None),
+                utilization_at_arrival=(scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None),
+            )
 
         if scheduling_stats:
             status = "timeout" if timed_out else ("success" if exec_result.success else "error")
