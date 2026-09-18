@@ -15,7 +15,7 @@ npm run e2e            # Playwright suite — needs the full stack up via ../e2e
 
 ## Conventions
 
-- **Screenshots are MANDATORY for every UI PR** (desktop + mobile, full page, hosted in a gist, embedded in the PR description, never committed). Follow the `ui-screenshots` skill (`../.claude/skills/ui-screenshots/SKILL.md`) exactly.
+- **Screenshots are MANDATORY for every UI PR** (desktop + mobile, full page, hosted in a gist, embedded in the PR description, never committed). Follow the `ui-screenshots` skill (`../.agents/skills/ui-screenshots/SKILL.md`) exactly.
 - The shared data tables drop their header below 768px and fall back to per-cell `data-label`s — verify tables at a 375px viewport.
 - The app scrolls inside an inner container, not the document — the `ui-screenshots` skill has the unlock procedure for a true full-page screenshot.
 - Login during local dev goes through Keycloak; seeded users (all password `password`) are listed in `../README.md` (`tobias.wasner` = logos admin).
