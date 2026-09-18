@@ -696,7 +696,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       })
       .catch((err: unknown) => {
         if (generation !== this.loadStatusPollGeneration) return;
-        // A blip is fine — the next tick retries. 404/501 means the backend
+        // A blip is fine — the next tick retries. 404/501 means the application server
         // predates the load_status route, where the poll can never succeed:
         // stop and fall back to the lane-appearance check.
         const e = err as { status?: number };

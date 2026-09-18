@@ -32,6 +32,9 @@ export interface LatestRequestsPage {
 export interface RequestFilter {
   userId: number | null;
   teamId: number | null;
+  providerId: number | null;
+  /** Keep only error/timeout outcomes when true. */
+  errorsOnly: boolean;
   /** One lifecycle bucket (queued/running/error/finished), or null for all. */
   status: string | null;
 }
@@ -43,10 +46,11 @@ export interface ScopeOption {
   requestCount: number;
 }
 
-/** What the filter dropdowns should offer for the current range and team. */
+/** What the filter dropdowns should offer for the current range and scope. */
 export interface ScopeOptions {
   teams: ScopeOption[];
   requesters: ScopeOption[];
+  providers: ScopeOption[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -67,11 +71,23 @@ export class StatisticsService {
    * unsearchable in a native select, and mostly made up of people who have never
    * sent a request.
    */
-  getScopeOptions(startIso: string, endIso: string, teamId: number | null): Promise<ScopeOptions> {
+  getScopeOptions(
+    startIso: string,
+    endIso: string,
+    scope: {
+      teamId: number | null;
+      userId: number | null;
+      providerId: number | null;
+      errorsOnly: boolean;
+    },
+  ): Promise<ScopeOptions> {
     return firstValueFrom(this.http.post<ScopeOptions>('/api/logosdb/request_log_scope_options', {
       start_date: startIso,
       end_date: endIso,
-      team_id: teamId,
+      team_id: scope.teamId,
+      user_id: scope.userId,
+      provider_id: scope.providerId,
+      errors_only: scope.errorsOnly || null,
     }));
   }
 
@@ -100,6 +116,8 @@ export class StatisticsService {
         limit,
         user_id: filter.userId,
         team_id: filter.teamId,
+        provider_id: filter.providerId,
+        errors_only: filter.errorsOnly || null,
         status: filter.status,
         cursor_ts: cursor?.ts ?? null,
         cursor_id: cursor?.request_id ?? null,
@@ -193,6 +211,17 @@ export class StatisticsService {
   calibrateUncalibrated(providerId: number): Promise<{ count?: number; models?: string[]; error?: string }> {
     return firstValueFrom(this.http.post<{ count?: number; models?: string[]; error?: string }>(
       '/api/logosdb/providers/logosnode/calibrate_uncalibrated',
+      {
+        provider_id: providerId,
+      }
+    ));
+  }
+
+  stopCalibration(
+    providerId: number
+  ): Promise<{ was_active?: boolean; current_model?: string; error?: string }> {
+    return firstValueFrom(this.http.post<{ was_active?: boolean; current_model?: string; error?: string }>(
+      '/api/logosdb/providers/logosnode/stop_calibration',
       {
         provider_id: providerId,
       }

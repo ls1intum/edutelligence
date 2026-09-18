@@ -19,15 +19,19 @@ import { firstValueFrom } from 'rxjs';
 
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { Model } from '../../shared/models/model.model';
+import { ModelProviderPrices } from '../../shared/models/model-price.model';
 import {
   GuideLlmStatusDistributionSummary,
   ModelBenchmarkPair,
   ModelBenchmarkRun,
   ModelProviderBenchmark,
 } from '../../shared/models/provider.model';
+import { priceProviderCards } from './model-prices';
+import { ModelPricesTab } from './model-prices-tab';
 
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { ModelAccess } from '../model-access/model-access';
 import {
   benchmarkConfigurationRows,
   servingCommand,
@@ -41,7 +45,9 @@ import {
 type ModelErrorTab =
   | 'error_report'
   | 'complete_logs'
-  | 'performance';
+  | 'performance'
+  | 'access'
+  | 'prices';
 
 type CalibrationStatus =
   | 'success'
@@ -258,6 +264,8 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
     ScrollingModule,
     ErrorMessageComponent,
     DataTableComponent,
+    ModelAccess,
+    ModelPricesTab,
   ],
 
   templateUrl: './model-error-report.html',
@@ -370,6 +378,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   private performancePollTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
 
+  readonly priceProviders = signal<readonly ModelProviderPrices[]>([]);
+  readonly pricesLoading = signal(false);
+  readonly pricesError = signal(false);
+  /** True once a price response arrived — only then is "no cloud provider" a fact. */
+  readonly pricesLoaded = signal(false);
+
   // ==========================================================================
   // Tabs
   // ==========================================================================
@@ -377,12 +391,16 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly tabs: readonly ModelErrorTab[] = [
     'complete_logs',
     'performance',
+    'access',
+    'prices',
   ];
 
   readonly tabLabel: Record<ModelErrorTab, string> = {
     error_report: 'Error Report',
     complete_logs: 'Complete Logs',
     performance: 'Performance',
+    access: 'Access',
+    prices: 'Prices',
   };
 
   readonly hasAnyLogText = computed(() => {
@@ -395,8 +413,24 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   readonly showSelectedFailure = computed(() => this.selectedLog()?.success === false);
 
-  readonly visibleTabs =
-    computed<readonly ModelErrorTab[]>(() => this.tabs);
+  /**
+   * The Prices tab only exists for cloud models: a model served solely by
+   * local (logosnode) providers has no catalogue pricing to show. Until a
+   * successful response proves that, the tab stays visible so its loading
+   * and error states remain reachable.
+   */
+  readonly visibleTabs = computed<readonly ModelErrorTab[]>(() => {
+    const hasCloudProvider = this.priceProviders().some(
+      provider => provider.provider_type === 'cloud'
+    );
+    if (hasCloudProvider || !this.pricesLoaded()) return this.tabs;
+    return this.tabs.filter(tab => tab !== 'prices');
+  });
+
+  /** Cloud providers of this model with their price rows grouped for display. */
+  readonly priceProviderCards = computed(() =>
+    priceProviderCards(this.priceProviders())
+  );
 
 
   // ==========================================================================
@@ -585,6 +619,13 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
     this.modelId.set(id);
 
+    // Model rows deep-link to the access tab (?tab=access); only known tabs
+    // override the default, everything else falls back to complete logs.
+    const tabParam = this.route.snapshot.queryParamMap.get('tab') as ModelErrorTab | null;
+    if (tabParam != null && this.tabs.includes(tabParam)) {
+      this.activeTab.set(tabParam);
+    }
+
     await this.fetchModel(id);
   }
 
@@ -620,9 +661,12 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
       this.model.set(foundModel);
 
+      // loadPrices runs alongside the other tab loaders: the tab bar needs
+      // the provider list to decide whether the Prices tab exists at all.
       await Promise.all([
         this.loadCalibrationLogs(foundModel.name),
         this.loadPerformance(id),
+        this.loadPrices(id),
       ]);
 
       const logs = this.availableLogs();
@@ -680,6 +724,22 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       this.rawLogsByProviderId.set(new Map());
       this.summaryByProviderId.set(new Map());
       this.calibrationResults.set([]);
+    }
+  }
+
+  private async loadPrices(modelId: number): Promise<void> {
+    this.pricesLoading.set(true);
+    this.pricesError.set(false);
+
+    try {
+      const response = await this.modelService.getModelPrices(modelId);
+      this.priceProviders.set(response.providers ?? []);
+      this.pricesLoaded.set(true);
+    } catch {
+      this.priceProviders.set([]);
+      this.pricesError.set(true);
+    } finally {
+      this.pricesLoading.set(false);
     }
   }
 

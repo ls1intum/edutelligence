@@ -23,7 +23,6 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import de.tum.cit.aet.logos.logoswebservice.operations.service.EnqueueEventService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.VramService;
@@ -80,9 +79,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile int targetBuckets = DEFAULT_TARGET_BUCKETS;
         volatile int bucketSeconds = 60;
         volatile boolean timelineLive = true;
-        volatile boolean deltaEnabled = true;
-        volatile String cursorTs = null;
-        volatile String cursorId = "";
 
         // Who the page is looking at. Null means the whole platform, which is
         // where every session starts. Applies to everything derived from
@@ -92,6 +88,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // rather than merely useless.
         volatile Integer scopeUserId = null;
         volatile Integer scopeTeamId = null;
+        volatile Integer scopeProviderId = null;
+        volatile boolean scopeErrorsOnly = false;
 
         // One lifecycle bucket the request feed is narrowed to (queued, running,
         // error, finished); null shows all states. Deliberately not part of the
@@ -124,8 +122,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
             timelineEnd = now.toInstant().toString();
             timelineStart = now.minusDays(DEFAULT_WINDOW_DAYS).toInstant().toString();
-            cursorTs = timelineEnd;
-            cursorId = "";
             timelineLive = true;
         }
 
@@ -140,8 +136,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 timelineEnd = e.toInstant().toString();
                 targetBuckets = Math.max(1, buckets);
                 timelineLive = now.toEpochSecond() - e.toEpochSecond() <= 120;
-                cursorTs = timelineEnd;
-                cursorId = "";
                 return true;
             } catch (Exception ex) { return false; }
         }
@@ -150,7 +144,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private final VramService vramService;
     private final RequestLogService requestLogService;
     private final RequestLogStatsService statsService;
-    private final EnqueueEventService enqueueService;
     private final OrchestratorLiveStreamClient liveStreamClient;
     private final ObjectMapper objectMapper;
 
@@ -161,13 +154,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     public StatsV2WebSocketHandler(VramService vramService,
                                    RequestLogService requestLogService,
                                    RequestLogStatsService statsService,
-                                   EnqueueEventService enqueueService,
                                    OrchestratorLiveStreamClient liveStreamClient,
                                    ObjectMapper objectMapper) {
         this.vramService = vramService;
         this.requestLogService = requestLogService;
         this.statsService = statsService;
-        this.enqueueService = enqueueService;
         this.liveStreamClient = liveStreamClient;
         this.objectMapper = objectMapper;
         this.scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -225,9 +216,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         Object dayObj = msg.get("vram_day");
         String vramDay = (dayObj instanceof String s && !s.isBlank()) ? s : null;
 
-        Object tdObj = msg.get("timeline_deltas");
-        state.deltaEnabled = tdObj == null || coerceBool(tdObj, true);
-
         // Carried on init as well as through set_scope, so a reconnect restores
         // the filter the page is showing instead of silently widening back to
         // the whole platform under an unchanged pair of dropdowns.
@@ -272,10 +260,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
      */
     private void handleSetScope(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         applyScope(state, msg);
-        // The cursor points into the old scope's event stream; deltas resumed
-        // from it would skip everything the new scope should have seen.
-        state.cursorTs = state.timelineEnd;
-        state.cursorId = "";
         // The init re-push below already carries the new scope's aggregates.
         state.prevScopeSig = "";
         pushTimelineInit(session, state);
@@ -285,6 +269,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static void applyScope(SessionState state, Map<String, Object> msg) {
         state.scopeUserId = msg.get("user_id") instanceof Number n ? n.intValue() : null;
         state.scopeTeamId = msg.get("team_id") instanceof Number n ? n.intValue() : null;
+        state.scopeProviderId = msg.get("provider_id") instanceof Number n ? n.intValue() : null;
+        state.scopeErrorsOnly = Boolean.TRUE.equals(msg.get("errors_only"));
     }
 
     /**
@@ -353,9 +339,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             try {
                 if (t % 2 == 0) {
                     pushRequests(session, state, false);
-                    if (state.deltaEnabled && state.timelineLive) {
-                        pushTimelineDelta(session, state);
-                    }
                 }
                 // VRAM deltas ride every tick: a lane the worker just loaded
                 // reaches the UI within one second of its status report
@@ -508,18 +491,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         try {
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n ? n.intValue() : 60;
 
-            Map<String, Object> events = enqueueService.getInRange(
-                state.timelineStart, state.timelineEnd, 200_000,
-                state.scopeUserId, state.scopeTeamId);
-
-            Map<String, Object> payload = new LinkedHashMap<>(stats);
-            payload.put("cursor",  Map.of("enqueue_ts", state.cursorTs != null ? state.cursorTs : "",
-                                          "request_id", state.cursorId));
-            payload.put("events", events.get("events"));
-            send(session, Map.of("type", "timeline_init", "payload", payload));
+            send(session, Map.of("type", "timeline_init", "payload", stats));
         } catch (Exception e) {
             send(session, Map.of("type", "timeline_init", "payload", Map.of("error", "Failed to load timeline data")));
         }
@@ -528,21 +503,20 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     /**
      * Re-send the aggregates for the session's range.
      *
-     * Deliberately not {@link #pushTimelineInit}: that one also ships every
-     * enqueue event in the range (up to 200k rows), which is fine once on
-     * connect and far too much to repeat while the page is open. The client
-     * keeps its event list current from the deltas instead.
+     * Identical in content to {@link #pushTimelineInit}; it is a separate
+     * message only so the client can tell a range change (which invalidates
+     * what is on screen) from a periodic refresh of the range it already shows.
      */
     private void pushStats(WebSocketSession session, SessionState state) {
         try {
             // A live selection keeps growing, so it has to be queried up to now,
-            // the same way pushRequests and pushTimelineDelta do it. Only the end
-            // moves; the start stays where the preset put it.
+            // the same way pushRequests does. Only the end moves; the start
+            // stays where the preset put it.
             if (state.timelineLive) state.timelineEnd = Instant.now().toString();
 
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
                 ? n.intValue() : state.bucketSeconds;
             send(session, Map.of("type", "stats", "payload", stats));
@@ -551,52 +525,17 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private void pushTimelineDelta(WebSocketSession session, SessionState state) {
-        try {
-            String untilIso = Instant.now().toString();
-            Map<String, Object> result = enqueueService.getDeltas(
-                state.cursorTs, state.cursorId, untilIso, 5000,
-                state.scopeUserId, state.scopeTeamId);
-
-            @SuppressWarnings("unchecked")
-            var events = (java.util.List<?>) result.get("events");
-            if (events == null || events.isEmpty()) return;
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> cursor = (Map<String, Object>) result.get("cursor");
-            String newTs = (String) cursor.get("enqueue_ts");
-            String newId = (String) cursor.get("request_id");
-            if (newTs != null && !newTs.isBlank()) { state.cursorTs = newTs; state.cursorId = newId; }
-
-            // Only the end moves. Re-anchoring the start to now-windowSeconds
-            // would turn every calendar-anchored preset into a rolling window:
-            // picking "Today" at 00:20 gives a 20-minute span, so an hour later
-            // the view would cover 01:00–01:20 instead of the whole day.
-            state.timelineEnd = untilIso;
-
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("events", events);
-            payload.put("cursor", Map.of("enqueue_ts", state.cursorTs != null ? state.cursorTs : "",
-                                         "request_id", state.cursorId));
-            payload.put("bucketSeconds", state.bucketSeconds);
-            payload.put("range", Map.of("start", state.timelineStart, "end", state.timelineEnd));
-            send(session, Map.of("type", "timeline_delta", "payload", payload));
-        } catch (Exception e) {
-            log.warn("[ws/stats/v2] timeline_delta error: {}", e.getMessage());
-        }
-    }
-
     private void pushRequests(WebSocketSession session, SessionState state, boolean force) {
         try {
             // A live selection ("last 30 days", "today", …) keeps growing while
             // the page is open, so the request list has to query up to *now*.
-            // state.timelineEnd is only advanced by pushTimelineDelta, which the
-            // statistics page disables (timelineDeltas: false) — reading it here
-            // would pin the list to the instant the range was set and no request
-            // enqueued after page load would ever show up.
+            // state.timelineEnd is only moved by a range change, so reading it
+            // here would pin the list to the instant the range was set and no
+            // request enqueued after page load would ever show up.
             String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
             Map<String, Object> payload = requestLogService.getLatestRequests(
                 state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                state.scopeProviderId, state.scopeErrorsOnly,
                 state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false);
             mergeLiveStreams(payload);
             String sig = requestsSig(payload);
@@ -613,7 +552,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             boolean scopeMoved = false;
             if (state.feedStatus != null) {
                 String scopeSig = requestLogService.scopeMovementSig(
-                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId);
+                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                    state.scopeProviderId, state.scopeErrorsOnly);
                 if (scopeSig != null && !scopeSig.equals(state.prevScopeSig)) {
                     // The first probe after a fresh baseline (init, scope or
                     // range change re-pushed the aggregates moments ago) just
@@ -642,6 +582,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 if (state.feedStatus != null && (force || rowsChanged)) {
                     payload.put("total", requestLogService.countFeedRows(
                         state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                        state.scopeProviderId, state.scopeErrorsOnly,
                         state.feedStatus));
                 }
                 state.prevReqSig = sig;
@@ -799,16 +740,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private static boolean coerceBool(Object v, boolean def) {
-        if (v instanceof Boolean b) return b;
-        if (v instanceof Number n)  return n.intValue() != 0;
-        if (v instanceof String s)  return switch (s.strip().toLowerCase()) {
-            case "true","1","yes","on" -> true;
-            case "false","0","no","off" -> false;
-            default -> def;
-        };
-        return def;
-    }
 
     @PreDestroy
     public void shutdown() { scheduler.shutdownNow(); }

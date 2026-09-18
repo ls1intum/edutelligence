@@ -1,0 +1,8 @@
+{
+  "name": "Quadro RTX 5000",
+  "compute_cap": "7.5",
+  "memory_total_mb": 16384,
+  "idle_power_w": 19.0,
+  "idle_temp_c": 36.0,
+  "fan_speed": "34"
+}

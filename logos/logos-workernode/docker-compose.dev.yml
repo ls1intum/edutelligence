@@ -61,7 +61,7 @@ services:
       - ./data:/app/data
       # Same backward-compatible model-volume resolution as production — see
       # docker-compose.yml (LOGOS_MODELS_MOUNT → OLLAMA_MODELS_MOUNT →
-      # the pre-existing `ollama-models` volume, for one release).
+      # the pre-existing model volume, for one release).
       - ${LOGOS_MODELS_MOUNT:-${OLLAMA_MODELS_MOUNT:-ollama-models}}:/usr/share/logos/models
       - ./certs:/app/certs:ro
       - ./logos_worker_node:/app/logos_worker_node:ro

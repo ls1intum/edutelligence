@@ -18,6 +18,7 @@ import random
 import time
 from typing import Dict, List, Optional, Tuple
 
+from logos import perf_trace
 from logos.context_budget import estimate_prompt_tokens
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
@@ -163,28 +164,34 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         5. Azure candidates: accept if not UNAVAILABLE
         6. If none immediately available: queue on best logosnode candidate
         """
-        affinity = self._resolve_affinity(request)
+        with perf_trace.phase(request.request_id, "schedule.affinity"):
+            affinity = self._resolve_affinity(request)
         deployments = request.deployments
         if request.required_provider_id is not None:
             deployments = [
                 deployment for deployment in deployments if deployment["provider_id"] == request.required_provider_id
             ]
 
-        input_tokens = estimate_prompt_tokens(request.payload)
-        scored = self._compute_candidate_scores(
-            request.classified_models or [],
-            deployments,
-            affinity,
-            input_tokens=input_tokens,
-        )
+        with perf_trace.phase(request.request_id, "schedule.tokens"):
+            input_tokens = estimate_prompt_tokens(request.payload)
+        with perf_trace.phase(request.request_id, "schedule.score"):
+            scored = self._compute_candidate_scores(
+                request.classified_models or [],
+                deployments,
+                affinity,
+                input_tokens=input_tokens,
+                request_id=request.request_id,
+            )
 
         # Try immediate selection
-        best = self._try_immediate_select(scored, request.request_id)
+        with perf_trace.phase(request.request_id, "schedule.reserve"):
+            best = self._try_immediate_select(scored, request.request_id)
         if best is not None:
             model_id, provider_id, provider_type, score, priority_int, ettft = best
             self._record_affinity(request, model_id, provider_id, provider_type, affinity)
             self._log_decision(request.request_id, scored, request.classified_models or [], best, False)
-            self._record_scheduling_metrics(model_id, provider_id, ettft)
+            with perf_trace.phase(request.request_id, "schedule.metrics"):
+                self._record_scheduling_metrics(model_id, provider_id, ettft)
             result = self._create_result(
                 model_id,
                 provider_id,
@@ -308,6 +315,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         deployments: list,
         affinity: Optional[Dict[int, int]] = None,
         input_tokens: int = 0,
+        request_id: Optional[str] = None,
     ) -> list:
         """Build scored list with ETTFT annotations.
 
@@ -360,7 +368,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     )
                     continue
 
-                ettft = self._estimate_ettft(model_id, provider_id, provider_type, input_tokens=input_tokens)
+                ettft = self._estimate_ettft(
+                    model_id, provider_id, provider_type, input_tokens=input_tokens, request_id=request_id
+                )
 
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
                     logger.debug(
@@ -484,22 +494,28 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         )
 
     def _estimate_ettft(
-        self, model_id: int, provider_id: int, provider_type: str, input_tokens: int = 0
+        self,
+        model_id: int,
+        provider_id: int,
+        provider_type: str,
+        input_tokens: int = 0,
+        request_id: Optional[str] = None,
     ) -> EttftEstimate:
         """Get ETTFT estimate for a model using the appropriate provider facade."""
         if provider_type == "logosnode":
-            try:
-                view = self._logosnode.get_model_scheduler_view(model_id, provider_id)
-            except KeyError:
-                view = None
-            except Exception:
-                logger.warning(
-                    "Unexpected error getting scheduler view for model=%s worker=%s",
-                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                    self._logosnode.get_provider_name(provider_id) or provider_id,
-                    exc_info=True,
-                )
-                view = None
+            with perf_trace.phase(request_id, "schedule.view"):
+                try:
+                    view = self._logosnode.get_model_scheduler_view(model_id, provider_id)
+                except KeyError:
+                    view = None
+                except Exception:
+                    logger.warning(
+                        "Unexpected error getting scheduler view for model=%s worker=%s",
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                        exc_info=True,
+                    )
+                    view = None
 
             if view is None:
                 # No lanes visible — treat as COLD (capacity planner can
@@ -558,49 +574,57 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     warmth_state=-1,
                 )
 
-            # Gather infrastructure data for VRAM-aware estimation
-            effective_parallel = 1
-            try:
-                effective_parallel, _ = self._logosnode.get_parallel_capacity(model_id, provider_id)
-            except (KeyError, Exception):
-                pass
+            with perf_trace.phase(request_id, "schedule.infra"):
+                # Gather infrastructure data for VRAM-aware estimation
+                with perf_trace.phase(request_id, "schedule.capacity"):
+                    effective_parallel = 1
+                    try:
+                        with perf_trace.phase(request_id, "schedule.capacity.par"):
+                            effective_parallel, _ = self._logosnode.get_parallel_capacity(model_id, provider_id)
+                    except (KeyError, Exception):
+                        pass
 
-            available_vram_mb = float("inf")
-            try:
-                cap = self._logosnode.get_capacity_info(provider_id)
-                available_vram_mb = float(cap.available_vram_mb)
-            except (KeyError, Exception):
-                pass
+                    available_vram_mb = float("inf")
+                    try:
+                        with perf_trace.phase(request_id, "schedule.capacity.info"):
+                            cap = self._logosnode.get_capacity_info(provider_id)
+                            available_vram_mb = float(cap.available_vram_mb)
+                    except (KeyError, Exception):
+                        pass
 
-            model_vram_mb = 0.0
-            kv_budget_mb = 0.0
-            tp_size = 1
-            try:
-                model_name = self._logosnode.get_model_name(model_id, provider_id)
-                if model_name:
-                    profiles = self._logosnode.get_model_profiles(provider_id)
-                    if model_name in profiles:
-                        profile = profiles[model_name]
-                        model_vram_mb = profile.estimate_vram_mb()
-                        kv_budget_mb = float(profile.kv_budget_mb or 0)
-                        tp_size = int(profile.tensor_parallel_size or 1)
-            except (KeyError, Exception):
-                pass
+                with perf_trace.phase(request_id, "schedule.profiles"):
+                    model_vram_mb = 0.0
+                    kv_budget_mb = 0.0
+                    tp_size = 1
+                    try:
+                        with perf_trace.phase(request_id, "schedule.profiles.name"):
+                            model_name = self._logosnode.get_model_name(model_id, provider_id)
+                        if model_name:
+                            with perf_trace.phase(request_id, "schedule.profiles.fetch"):
+                                profiles = self._logosnode.get_model_profiles(provider_id)
+                            if model_name in profiles:
+                                profile = profiles[model_name]
+                                model_vram_mb = profile.estimate_vram_mb()
+                                kv_budget_mb = float(profile.kv_budget_mb or 0)
+                                tp_size = int(profile.tensor_parallel_size or 1)
+                    except (KeyError, Exception):
+                        pass
 
-            scheduler_queue_depth = self._queue_mgr.get_total_depth_by_deployment(
-                model_id,
-                provider_id,
-            )
+                with perf_trace.phase(request_id, "schedule.signals"):
+                    scheduler_queue_depth = self._queue_mgr.get_total_depth_by_deployment(
+                        model_id,
+                        provider_id,
+                    )
 
-            # Observed e2e latency p50 for queue wait estimation
-            observed_e2e_p50_s = view.warmest_e2e_latency_p50_seconds
+                    # Observed e2e latency p50 for queue wait estimation
+                    observed_e2e_p50_s = view.warmest_e2e_latency_p50_seconds
 
-            # All lanes on this provider for reclaim context
-            all_provider_lanes = None
-            try:
-                all_provider_lanes = self._logosnode.get_all_provider_lane_signals(provider_id)
-            except (KeyError, Exception):
-                pass
+                    # All lanes on this provider for reclaim context
+                    all_provider_lanes = None
+                    try:
+                        all_provider_lanes = self._logosnode.get_all_provider_lane_signals(provider_id)
+                    except (KeyError, Exception):
+                        pass
 
             # Build per-tier overhead overrides from the latency store when
             # available. COLD and SLEEPING always get an override (prior or
@@ -611,51 +635,55 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             overhead_overrides: dict[ReadinessTier, float] | None = None
             learned_ttft: Optional[float] = None
             estimated_prefill_s: Optional[float] = None
-            if self._latency_store is not None:
-                model_name_for_store = view.model_name or ""
-                _store_kwargs = dict(
-                    model_vram_mb=model_vram_mb,
-                    tp_size=tp_size,
-                )
-                overhead_overrides = {
-                    tier: self._latency_store.get_overhead_s(model_name_for_store, provider_id, tier, **_store_kwargs)
-                    for tier in (ReadinessTier.COLD, ReadinessTier.SLEEPING)
-                }
-                for tier in (ReadinessTier.COLD_RECLAIM, ReadinessTier.SLEEPING_RECLAIM):
-                    if self._latency_store.get_observation_count(model_name_for_store, provider_id, tier) > 0:
-                        overhead_overrides[tier] = self._latency_store.get_overhead_s(
+            with perf_trace.phase(request_id, "schedule.latency"):
+                if self._latency_store is not None:
+                    model_name_for_store = view.model_name or ""
+                    _store_kwargs = dict(
+                        model_vram_mb=model_vram_mb,
+                        tp_size=tp_size,
+                    )
+                    overhead_overrides = {
+                        tier: self._latency_store.get_overhead_s(
                             model_name_for_store, provider_id, tier, **_store_kwargs
                         )
-                # Replace the live e2e p50 with the learned value when the
-                # store has sufficient history (learned value is more stable
-                # across the session than a single-lane histogram p50).
-                learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store, provider_id)
-                if learned_e2e is not None:
-                    observed_e2e_p50_s = learned_e2e
-                # Learned TTFT (decode-only first-token time) for this provider —
-                # added once for this request (queue_wait already embeds TTFT of
-                # preceding requests via e2e_p50 as service time, no double-counting).
-                learned_ttft = self._latency_store.get_ttft_s(model_name_for_store, provider_id)
-                # Estimated prefill: context-length-dependent prompt-ingestion cost.
-                # learned_ttft intentionally excludes prefill; this is the separate
-                # component that scales with input_tokens.
-                if input_tokens > 0:
-                    estimated_prefill_s = self._latency_store.get_prefill_s(
-                        model_name_for_store, provider_id, input_tokens
-                    )
+                        for tier in (ReadinessTier.COLD, ReadinessTier.SLEEPING)
+                    }
+                    for tier in (ReadinessTier.COLD_RECLAIM, ReadinessTier.SLEEPING_RECLAIM):
+                        if self._latency_store.get_observation_count(model_name_for_store, provider_id, tier) > 0:
+                            overhead_overrides[tier] = self._latency_store.get_overhead_s(
+                                model_name_for_store, provider_id, tier, **_store_kwargs
+                            )
+                    # Replace the live e2e p50 with the learned value when the
+                    # store has sufficient history (learned value is more stable
+                    # across the session than a single-lane histogram p50).
+                    learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store, provider_id)
+                    if learned_e2e is not None:
+                        observed_e2e_p50_s = learned_e2e
+                    # Learned TTFT (decode-only first-token time) for this provider —
+                    # added once for this request (queue_wait already embeds TTFT of
+                    # preceding requests via e2e_p50 as service time, no double-counting).
+                    learned_ttft = self._latency_store.get_ttft_s(model_name_for_store, provider_id)
+                    # Estimated prefill: context-length-dependent prompt-ingestion cost.
+                    # learned_ttft intentionally excludes prefill; this is the separate
+                    # component that scales with input_tokens.
+                    if input_tokens > 0:
+                        estimated_prefill_s = self._latency_store.get_prefill_s(
+                            model_name_for_store, provider_id, input_tokens
+                        )
 
-            estimate = estimate_ettft_local(
-                view,
-                effective_parallel=effective_parallel,
-                generation_time_s=DEFAULT_GENERATION_TIME_S,
-                available_vram_mb=available_vram_mb,
-                model_vram_mb=model_vram_mb,
-                kv_budget_mb=kv_budget_mb,
-                scheduler_queue_depth=scheduler_queue_depth,
-                observed_e2e_p50_s=observed_e2e_p50_s,
-                all_provider_lanes=all_provider_lanes,
-                overhead_overrides=overhead_overrides,
-            )
+            with perf_trace.phase(request_id, "schedule.ettft"):
+                estimate = estimate_ettft_local(
+                    view,
+                    effective_parallel=effective_parallel,
+                    generation_time_s=DEFAULT_GENERATION_TIME_S,
+                    available_vram_mb=available_vram_mb,
+                    model_vram_mb=model_vram_mb,
+                    kv_budget_mb=kv_budget_mb,
+                    scheduler_queue_depth=scheduler_queue_depth,
+                    observed_e2e_p50_s=observed_e2e_p50_s,
+                    all_provider_lanes=all_provider_lanes,
+                    overhead_overrides=overhead_overrides,
+                )
             if (learned_ttft is not None or estimated_prefill_s is not None) and (
                 estimate.tier != ReadinessTier.UNAVAILABLE
             ):
@@ -925,6 +953,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             priority,
             is_cold_at_queue=is_cold_at_queue,
             provider_affinity=request.required_provider_id,
+            raw_priority=priority_int,
+            role_rank=request.role_rank,
         )
         # Start the hold timer immediately after enqueue so that logging,
         # queue-depth reads, and the capacity-task setup are included in the

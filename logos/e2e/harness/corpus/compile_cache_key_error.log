@@ -1,0 +1,7 @@
+INFO 06-18 11:02:41 [api_server.py:1000] vLLM API server version 0.11.0
+ERROR 06-18 11:02:58 [core.py:712] EngineCore failed to start.
+ERROR 06-18 11:02:58 [core.py:712] Traceback (most recent call last):
+ERROR 06-18 11:02:58 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/compilation/caching.py", line 188, in lookup
+ERROR 06-18 11:02:58 [core.py:712]     entry = self._index[cache_key]
+ERROR 06-18 11:02:58 [core.py:712] KeyError: 'backbone-dynamic-4f21ab90'
+Process EngineCore_DP0: exited with code 1

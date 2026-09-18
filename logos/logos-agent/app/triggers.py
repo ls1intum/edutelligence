@@ -32,7 +32,7 @@ The trade is minutes of latency for work whose whole premise is "when the
 GPUs are idle anyway".
 
 **Remembered by reference, forever.** Every reaction is recorded on the
-session as the thing it reacted to — `issue-812`, `pr-772-assigned`,
+session as the thing it reacted to — `<issue-id>`, `pr-<number>-assigned`,
 `pr-772-review-5085681761`, `thread-772-3910035243`. A reference that
 already has a session is never queued again, so an issue that stays assigned
 does not produce a second pull request next week, and an answered question
@@ -89,6 +89,9 @@ CREATED_BY = "logos-agent (trigger)"
 
 # Where a session writes an answer for the runner to post.
 REPLY_FILE = "reply.md"
+# One directory per answered review: one file per inline comment, named
+# after the comment's id, so each answer can be posted into its own thread.
+REPLY_DIR = "replies"
 
 # The head of a pull request the pass could not read. Not the same as None:
 # None is an answer — the lookup succeeded and the head is confirmed not
@@ -107,7 +110,7 @@ def workspace_name(kind: str, number: int, title: str) -> str:
 
     The name is not decoration: it becomes part of the branch a session
     pushes (`logos/agent/<workspace>/session-42`) and the first column of
-    the workspace list. `auto-2` tells nobody anything; `issue-812-oom-on-
+    the workspace list. `auto-2` tells nobody anything; `<issue-id>-oom-on-
     startup` says what the checkout is for, in the branch as well as in the
     UI.
 
@@ -263,6 +266,10 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
     nothing in the body and everything in the inline comments, so a task
     built from the body alone would ask an agent to fix nothing in
     particular.
+
+    The comment's own id travels with it too. The answer goes back into the
+    comment's own thread, and the file that carries it is named after the
+    id — an agent that cannot name the comment cannot answer it.
     """
     rendered: list[str] = []
     for comment in comments:
@@ -273,10 +280,16 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
             continue
         if len(body) > MAX_COMMENT_CHARS:
             body = body[:MAX_COMMENT_CHARS] + " […]"
-        rendered.append(f"- {path}:{line}\n  {body}")
+        comment_id = comment.get("id")
+        prefix = f"[comment {comment_id}] " if isinstance(comment_id, int) else ""
+        rendered.append(f"- {prefix}{path}:{line}\n  {body}")
     if not rendered:
         return ""
-    return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
+    # Every comment is shown, whatever the review carries: the answer is
+    # owed for each of them, and a comment the task never showed cannot be
+    # answered. A long review is a long task; an incomplete one is a
+    # session that can never deliver.
+    return "Inline comments:\n\n" + "\n\n".join(rendered) + "\n\n"
 
 
 async def review_request_task(number: int, title: str, body: str, requester: str, *, branch: str | None = None) -> str:
@@ -339,10 +352,16 @@ async def review_task(
         f"Check each point against the current code before you change anything — lines "
         f"move, and some of it may already be addressed. Fix what is still valid, add "
         f"regression coverage for it, and run the tests and linters of the part you "
-        f"touched. Write your reply to the review into `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` "
-        f"— in English, saying for each point what you changed and how you verified it, "
-        f"or why it needed no change; the runner posts it for you. Do not merge the pull "
-        f"request and do not force-push."
+        f"touched.\n\n"
+        f"Answer each inline comment where it was made: one file per comment under "
+        f"`$LOGOS_ARTIFACT_DIR/{REPLY_DIR}/`, named after the id the comment is listed "
+        f"with — `{REPLY_DIR}/<comment id>.md`. Each one in English, saying what you "
+        f"changed and how you verified it, or why it needed no change; the runner posts "
+        f"it into that comment's own thread, resolves the thread, and asks the reviewer "
+        f"to look at the pull request again. Only a point that no inline comment "
+        f"carries — one that lives in the review body alone — goes into "
+        f"`$LOGOS_ARTIFACT_DIR/{REPLY_FILE}`, where the runner posts it as a single "
+        f"comment. Do not merge the pull request and do not force-push."
     )
 
 
@@ -1163,7 +1182,7 @@ class TriggerPoller:
             # about something: asked on a pull request, the answer is about
             # that pull request's code, and it used to be written from a
             # checkout of the default branch by an agent that had never
-            # seen the diff. Its title was `#882` for the same reason.
+            # seen the diff. Its title was `` for the same reason.
             other = None if pull else await self._pull_request(number)
             title = pull["title"] if pull else str((other or {}).get("title") or f"#{number}")
             # About a pull request's code when it is one this runner

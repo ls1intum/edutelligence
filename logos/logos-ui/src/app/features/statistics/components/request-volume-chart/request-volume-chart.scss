@@ -77,6 +77,14 @@
   &:hover {
     opacity: 1;
   }
+
+  &--dimmed {
+    opacity: var(--opacity-dimmed);
+  }
+
+  &--highlight {
+    opacity: 1;
+  }
 }
 
 // ── Total request line ────────────────────────────────────────────────────────
@@ -148,6 +156,14 @@
   transition: opacity 0.15s;
 
   &--off {
+    opacity: var(--opacity-dimmed);
+  }
+
+  &--hovered {
+    color: rgb(var(--color-typography-100));
+  }
+
+  &--dimmed {
     opacity: var(--opacity-dimmed);
   }
 }

@@ -277,7 +277,7 @@ planner-<sanitized>-3      # replica 3
 
 In the cold-load branch of `_compute_demand_actions`, the first lane of a model on a worker keeps the full load semantics (demand floor, queued requests, announced use, eviction allowed). An **additional** lane on a worker that already runs the model awake is speculative scale-out and gets the same deal as the cross-provider replication pass (`_compute_replication_actions`):
 
-- behind `LOGOS_REPLICATE_ON_FREE_VRAM` (default off),
+- enabled by `LOGOS_REPLICATE_ON_FREE_VRAM` (on by default; set to `false` to opt out),
 - sustained demand: `eff ≥ DEMAND_REPLICATION_FLOOR` (2.0),
 - free VRAM **without eviction** — an extra copy must never push out another model's lane.
 
