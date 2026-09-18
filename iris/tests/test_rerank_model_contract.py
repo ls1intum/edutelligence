@@ -135,7 +135,84 @@ def test_request_handler_reorders_documents_for_a_non_cohere_reranker():
 
 
 def test_request_handler_skips_documents_missing_the_content_field():
+    # A non-empty list with one document missing "text": the empty-list early return
+    # (`if not documents`) cannot fire here, so this actually exercises the filter
+    # comprehension rather than a branch above it.
+    documents = [_Doc("valid text"), _Doc(None)]
+    handler = RerankRequestHandler.model_construct(
+        model_id="cloud-qwen3-reranker-8b",
+        llm_manager=type(
+            "_Manager",
+            (),
+            {
+                "get_llm_by_id": lambda self, _id: type(
+                    "_OneDocReranker",
+                    (),
+                    {
+                        "rerank": lambda self, query, documents, top_n: RerankResponse(
+                            results=[{"index": 0, "relevance_score": 1.0}]
+                        )
+                    },
+                )()
+            },
+        )(),
+    )
+
+    ranked = handler.rerank("q", documents, top_n=2, content_field_name="text")
+
+    # Only the valid document ever reaches the reranker; the one missing "text" was
+    # filtered out before the call, not passed through as empty content.
+    assert ranked == [documents[0]]
+
+
+def test_request_handler_missing_content_field_alone_returns_empty():
     handler = RerankRequestHandler.model_construct(
         model_id="cloud-qwen3-reranker-8b", llm_manager=None
     )
-    assert handler.rerank("q", [], top_n=2, content_field_name="text") == []
+    assert handler.rerank("q", [_Doc(None)], top_n=2, content_field_name="text") == []
+
+
+def test_request_handler_degrades_gracefully_when_the_model_id_is_not_configured():
+    # get_llm_by_id returns None (no matching entry) rather than raising — a typo'd
+    # id, or an entry commented out of llm_config.local.yml, which is exactly what
+    # happened on this branch until it was manually uncommented for testing.
+    handler = RerankRequestHandler.model_construct(
+        model_id="not-a-configured-model",
+        llm_manager=type("_Manager", (), {"get_llm_by_id": lambda self, _id: None})(),
+    )
+    documents = [_Doc("a"), _Doc("b"), _Doc("c")]
+
+    ranked = handler.rerank("q", documents, top_n=2, content_field_name="text")
+
+    assert ranked == documents[:2]
+    # A missing config entry is permanent, not the transient failure this flag exists
+    # to back off from; it must not disable reranking process-wide for every model_id.
+    # (Read through the instance: Pydantic's private-attr descriptor, not the real
+    # value, is what a bare class-level access returns before any instance sets it.)
+    assert handler._rerank_available is True
+
+
+def test_missing_model_id_does_not_disable_a_different_working_reranker():
+    RerankRequestHandler._rerank_available = True  # isolate from other tests' state
+    missing = RerankRequestHandler.model_construct(
+        model_id="not-a-configured-model",
+        llm_manager=type("_Manager", (), {"get_llm_by_id": lambda self, _id: None})(),
+    )
+    missing.rerank("q", [_Doc("a")], top_n=1, content_field_name="text")
+
+    working = RerankRequestHandler.model_construct(
+        model_id="a-working-model",
+        llm_manager=type(
+            "_Manager",
+            (),
+            {"get_llm_by_id": lambda self, _id: _StubReranker()},
+        )(),
+    )
+    documents = [_Doc("a"), _Doc("b"), _Doc("c")]
+
+    ranked = working.rerank("q", documents, top_n=2, content_field_name="text")
+
+    # _StubReranker's fixed response (index 2 then 0) proves the real reranker path
+    # ran, rather than the unranked fallback the missing-model handler would have
+    # left every subsequent handler stuck on if the class-wide flag had flipped.
+    assert ranked == [documents[2], documents[0]]

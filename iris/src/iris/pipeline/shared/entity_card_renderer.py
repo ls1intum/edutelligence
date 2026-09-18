@@ -51,6 +51,12 @@ _SECONDS_PER_MINUTE = 60
 def _format_date(value: datetime | None) -> str | None:
     if value is None:
         return None
+    # EntityCandidateDTO already normalizes these to UTC-aware at the DTO boundary, but
+    # .astimezone() on a naive datetime silently assumes the SERVER's local timezone
+    # rather than UTC, so a naive value reaching this function directly (e.g. a test
+    # using model_construct(), which skips validation) must not be handed to it as-is.
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).strftime("%A, %d %B %Y at %H:%M UTC")
 
 

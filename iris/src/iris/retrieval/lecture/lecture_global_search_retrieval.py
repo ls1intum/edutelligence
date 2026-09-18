@@ -496,9 +496,9 @@ class LectureGlobalSearchRetrieval:
         trans_objects: list[Any],
         telemetry: "_SearchTelemetry",
     ) -> tuple[
-        dict[int, Any],
-        dict[tuple[int, int], float],
-        dict[tuple[int, int], list[Any]],
+        dict[tuple[str, int], Any],
+        dict[tuple[str, int, int], float],
+        dict[tuple[str, int, int], list[Any]],
     ]:
         """Fetch unit metadata, slide-sync timestamps and slide visibility."""
         seg_unit_ids: set[int] = set()
@@ -538,9 +538,9 @@ class LectureGlobalSearchRetrieval:
         self,
         seg_objects: list[Any],
         trans_objects: list[Any],
-        units_by_id: dict[int, Any],
-        start_times: dict[tuple[int, int], float],
-        slides_by_display_page: dict[tuple[int, int], list[Any]],
+        units_by_id: dict[tuple[str, int], Any],
+        start_times: dict[tuple[str, int, int], float],
+        slides_by_display_page: dict[tuple[str, int, int], list[Any]],
         telemetry: "_SearchTelemetry",
         policy: "_VisibilityPolicy",
     ) -> list[_Candidate]:
@@ -998,8 +998,11 @@ class LectureGlobalSearchRetrieval:
 
     def _fetch_transcription_start_times(
         self, unit_page_pairs: list[tuple[int, int]]
-    ) -> dict[tuple[int, int], float]:
-        """Batch-fetch min start_time per (unit_id, page_number) for slide-sync detection."""
+    ) -> dict[tuple[str, int, int], float]:
+        """Batch-fetch min start_time per (base_url, unit_id, page_number) for slide-sync
+        detection. base_url is part of the key for the same reason as _fetch_lecture_units:
+        the numeric unit_id alone can collide across Artemis instances sharing one Weaviate.
+        """
         if not unit_page_pairs:
             return {}
         unit_ids = list({uid for uid, _ in unit_page_pairs})
@@ -1009,27 +1012,30 @@ class LectureGlobalSearchRetrieval:
             ).contains_any(unit_ids),
             limit=10_000,
         ).objects
-        result: dict[tuple[int, int], float] = {}
+        result: dict[tuple[str, int, int], float] = {}
         for t in transcriptions:
             props = t.properties
+            base_url = props.get(LectureTranscriptionSchema.BASE_URL.value)
             uid = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
             page = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
             start = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
             if uid is None or page is None or start is None or page == -1:
                 continue
-            key = (int(uid), int(page))
+            key = (base_url, int(uid), int(page))
             if key not in result or start < result[key]:
                 result[key] = float(start)
         return result
 
-    def _fetch_lecture_units(self, unit_ids: list[int]) -> dict[int, Any]:
+    def _fetch_lecture_units(self, unit_ids: list[int]) -> dict[tuple[str, int], Any]:
         """Fetch lecture unit metadata for the given IDs in a single Weaviate query.
 
-        The limit is deliberately larger than ``len(unit_ids)``: multiple Artemis
-        instances can share one Weaviate, their numeric unit ids collide, and one
-        id may map to several LectureUnits rows. With ``limit=len(unit_ids)``
-        those duplicates crowd out other requested ids, which then look like
-        missing metadata and get their hits silently dropped.
+        Keyed by (base_url, unit_id), not the bare id: multiple Artemis instances can
+        share one Weaviate, their numeric unit ids collide, and keying by id alone let
+        one instance's row silently overwrite another's in the result — a hit from
+        instance A would then be enriched with instance B's unrelated unit's title and
+        link. The limit is deliberately larger than ``len(unit_ids)`` for the same
+        reason: with ``limit=len(unit_ids)`` those collisions crowd out other requested
+        ids, which then look like missing metadata and get their hits silently dropped.
         """
         if not unit_ids:
             return {}
@@ -1040,12 +1046,14 @@ class LectureGlobalSearchRetrieval:
             limit=max(100, len(unit_ids) * 10),
         ).objects
         result = {
-            lecture_unit.properties[
-                LectureUnitSchema.LECTURE_UNIT_ID.value
-            ]: lecture_unit.properties
+            (
+                lecture_unit.properties.get(LectureUnitSchema.BASE_URL.value),
+                lecture_unit.properties[LectureUnitSchema.LECTURE_UNIT_ID.value],
+            ): lecture_unit.properties
             for lecture_unit in lecture_units
         }
-        missing = set(unit_ids) - set(result)
+        found_ids = {key[1] for key in result}
+        missing = set(unit_ids) - found_ids
         if len(lecture_units) > len(result) or missing:
             logger.info(
                 "[LectureSearch] lecture_units_fetch requested=%d rows=%d "
@@ -1060,12 +1068,14 @@ class LectureGlobalSearchRetrieval:
 
     def _fetch_slides_by_display_page(
         self, unit_ids: list[int]
-    ) -> dict[tuple[int, int], list[Any]]:
+    ) -> dict[tuple[str, int, int], list[Any]]:
         """Group each unit's slides by the display page they are shown on.
 
         A display page can carry several physical slides (an overlay build),
         and a transcription segment is only visible when every slide behind
         its display page is visible, so all of them are returned per key.
+        Keyed by (base_url, unit_id, display_page): the numeric unit_id alone
+        can collide across Artemis instances sharing one Weaviate.
         """
         if not unit_ids:
             return {}
@@ -1079,11 +1089,13 @@ class LectureGlobalSearchRetrieval:
                 LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                 LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
                 LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
+                LectureUnitPageChunkSchema.BASE_URL.value,
             ],
         ).objects
-        by_physical_page: dict[tuple[int, int], dict[int, Any]] = {}
+        by_physical_page: dict[tuple[str, int, int], dict[int, Any]] = {}
         for chunk in chunks:
             properties = chunk.properties
+            base_url = properties.get(LectureUnitPageChunkSchema.BASE_URL.value)
             unit_id = properties.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
             physical_page = properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)
             display_page = properties.get(
@@ -1091,15 +1103,15 @@ class LectureGlobalSearchRetrieval:
             )
             if unit_id is None or display_page is None or physical_page is None:
                 continue
-            key = (int(unit_id), int(display_page))
+            key = (base_url, int(unit_id), int(display_page))
             by_physical_page.setdefault(key, {})[int(physical_page)] = properties
         return {key: list(slides.values()) for key, slides in by_physical_page.items()}
 
     @staticmethod
     def _segment_to_dto(
         props: dict[str, Any],
-        lecture_unit_by_id: dict[int, Any],
-        transcription_start_times: dict[tuple[int, int], float],
+        lecture_unit_by_id: dict[tuple[str, int], Any],
+        transcription_start_times: dict[tuple[str, int, int], float],
         policy: "_VisibilityPolicy | None" = None,
     ) -> tuple[LectureSearchResultDTO | None, str | None]:
         """Map a segment hit to a DTO; on failure return (None, drop_reason)."""
@@ -1113,7 +1125,10 @@ class LectureGlobalSearchRetrieval:
 
         course_id = props.get(LectureUnitSegmentSchema.COURSE_ID.value)
         unit_id = props.get(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value)
-        lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
+        base_url = props.get(LectureUnitSegmentSchema.BASE_URL.value)
+        lecture_unit = (
+            lecture_unit_by_id.get((base_url, unit_id)) if unit_id is not None else None
+        )
         if lecture_unit is None:
             return None, "missing_unit_metadata"
         if not policy.release_bypassed(course_id) and not is_unit_released(
@@ -1131,7 +1146,9 @@ class LectureGlobalSearchRetrieval:
         ):
             return None, "bad_page_or_ids"
 
-        start_time = transcription_start_times.get((int(unit_id), int(page_number)))
+        start_time = transcription_start_times.get(
+            (base_url, int(unit_id), int(page_number))
+        )
         if start_time is not None:
             source_type = "lecture_unit_slide_video"
             query_params: dict[str, str | int | float] = {
@@ -1173,8 +1190,8 @@ class LectureGlobalSearchRetrieval:
     @staticmethod
     def _transcription_to_dto(
         props: dict[str, Any],
-        lecture_unit_by_id: dict[int, Any],
-        slides_by_display_page: dict[tuple[int, int], list[Any]] | None = None,
+        lecture_unit_by_id: dict[tuple[str, int], Any],
+        slides_by_display_page: dict[tuple[str, int, int], list[Any]] | None = None,
         policy: "_VisibilityPolicy | None" = None,
     ) -> tuple[LectureSearchResultDTO | None, str | None]:
         """Map a transcription hit to a DTO; on failure return (None, drop_reason)."""
@@ -1188,7 +1205,10 @@ class LectureGlobalSearchRetrieval:
 
         course_id = props.get(LectureTranscriptionSchema.COURSE_ID.value)
         unit_id = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
-        lecture_unit = lecture_unit_by_id.get(unit_id) if unit_id is not None else None
+        base_url = props.get(LectureTranscriptionSchema.BASE_URL.value)
+        lecture_unit = (
+            lecture_unit_by_id.get((base_url, unit_id)) if unit_id is not None else None
+        )
         if lecture_unit is None:
             return None, "missing_unit_metadata"
         # A transcription segment inherits the visibility of the slide shown
@@ -1200,7 +1220,7 @@ class LectureGlobalSearchRetrieval:
             if page_number is not None:
                 try:
                     associated_slides = slides_by_display_page.get(
-                        (int(unit_id), int(page_number))
+                        (base_url, int(unit_id), int(page_number))
                     )
                 except (TypeError, ValueError):
                     return None, "bad_page_or_ids"

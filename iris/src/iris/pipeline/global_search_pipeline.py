@@ -499,13 +499,6 @@ class GlobalSearchPipeline(SubPipeline):
         )
         answer, used_indices = parse_answer_response(raw, len(grounded_sources))
         used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
-        # Markers referenced the context numbering; the response carries only
-        # the used sources, so renumber them onto the returned list.
-        ordered_used = sorted(used_indices)
-        answer = renumber_citation_markers(
-            answer,
-            {old + 1: new + 1 for new, old in enumerate(ordered_used)},
-        )
 
         # Null-to-navigate fallback: the grounded prompt answered null but
         # entity sources exist — retry once as navigation over just those.
@@ -526,6 +519,18 @@ class GlobalSearchPipeline(SubPipeline):
                 ]
                 if answer:
                     logger.info("[global-search] outcome=navigate_fallback")
+
+        # Markers referenced the numbering of whichever context produced the final
+        # answer (grounded_sources normally, entity_grounded after the fallback
+        # above replaces both answer and used_indices); the response carries only
+        # the used sources, so renumber onto that list. Must run AFTER the
+        # fallback — renumbering before it left a fallback answer's markers
+        # pointing at the wrong (or out-of-range) position in the final list.
+        ordered_used = sorted(used_indices)
+        answer = renumber_citation_markers(
+            answer,
+            {old + 1: new + 1 for new, old in enumerate(ordered_used)},
+        )
 
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE

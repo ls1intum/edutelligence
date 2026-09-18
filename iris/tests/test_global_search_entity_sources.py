@@ -4,7 +4,7 @@ the pointer tier, and the pipeline's context labeling."""
 
 # pylint: disable=protected-access
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -27,7 +27,10 @@ from iris.pipeline.global_search_pipeline import (
     GlobalSearchPipeline,
     _source_label,
     _today_line,
+    parse_answer_response,
+    renumber_citation_markers,
 )
+from iris.pipeline.prompts.global_search_prompts import navigate_system_prompt
 from iris.pipeline.shared.entity_card_renderer import (
     is_pointer_candidate,
     render_entity_card,
@@ -122,6 +125,18 @@ class TestEntityCardRenderer:
         assert not is_pointer_candidate(_candidate_dto(description="text"))
         assert not is_pointer_candidate(_candidate_dto(entityType="channel"))
 
+    def test_renders_a_naive_date_as_utc_not_the_server_local_zone(self):
+        # model_construct() bypasses validation (and alias resolution, hence the
+        # snake_case kwargs here) so it also bypasses the DTO's own UTC-normalizing
+        # validator. This exercises _format_date's independent, second-layer defense
+        # against exactly the naive input .astimezone() would otherwise misinterpret.
+        candidate = EntityCandidateDTO.model_construct(
+            entity_type="exercise",
+            title="RNN and LSTM Fundamentals",
+            due_date=datetime(2026, 5, 17, 18, 24),
+        )
+        assert "due Sunday, 17 May 2026 at 18:24 UTC" in render_entity_card(candidate)
+
 
 # ------------------------------------------------------------------ wire shapes
 
@@ -171,6 +186,21 @@ class TestWireShapes:
         )
         data = status.model_dump(by_alias=True)
         assert len(data["entitySources"]) == 1
+
+    def test_candidate_date_without_an_offset_is_assumed_utc_not_local(self):
+        # Artemis already normalizes these (WeaviateDateUtil), but the DTO must not
+        # depend on that: a naive datetime must never be reinterpreted through
+        # .astimezone(), which would silently assume the SERVER's local timezone.
+        candidate = _candidate_dto(dueDate=datetime(2026, 5, 17, 18, 24))
+        assert candidate.due_date == datetime(2026, 5, 17, 18, 24, tzinfo=timezone.utc)
+
+    def test_candidate_date_with_a_non_utc_offset_is_converted_to_utc(self):
+        munich = timezone(timedelta(hours=2))
+        candidate = _candidate_dto(dueDate=datetime(2026, 5, 17, 20, 24, tzinfo=munich))
+        assert candidate.due_date == datetime(2026, 5, 17, 18, 24, tzinfo=timezone.utc)
+
+    def test_candidate_date_none_stays_none(self):
+        assert _candidate_dto(dueDate=None).due_date is None
 
 
 # ------------------------------------------------------- rerank pool and gating
@@ -329,6 +359,40 @@ class TestSemesterTwinDedup:
             [_candidate_dto(startDate="2026-03-01T10:00:00")]
         )[0]
         assert source.reference_date == datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc)
+
+    def test_fallback_answer_markers_renumber_onto_the_fallback_source_list(self):
+        # Encodes the exact mechanism __call__ must apply after the null-to-navigate
+        # fallback: the fallback's raw answer numbers markers against ITS OWN context
+        # (entity_grounded), not the original grounded_sources, so renumbering must run
+        # against the fallback's used_indices, not be skipped because it already ran once.
+        entity_grounded = ["entity_A_course_info", "entity_B_the_actual_exercise"]
+        raw_navigate_answer = (
+            '{"answer": "Yes, see the exercise.[2]", "used_sources": [2]}'
+        )
+
+        answer, used_indices = parse_answer_response(
+            raw_navigate_answer, len(entity_grounded)
+        )
+        ordered_used = sorted(used_indices)
+        answer = renumber_citation_markers(
+            answer, {old + 1: new + 1 for new, old in enumerate(ordered_used)}
+        )
+        used_sources = [s for i, s in enumerate(entity_grounded) if i in used_indices]
+
+        assert used_sources == ["entity_B_the_actual_exercise"]
+        # [2] referenced entity_grounded's context position; renumbered onto the
+        # 1-item final list it must become [1], not stay out of range.
+        assert answer == "Yes, see the exercise.[1]"
+
+    def test_navigate_prompt_is_internally_consistent_about_the_no_answer_sentinel(
+        self,
+    ):
+        # A model that read an internal rule saying "return null" (JSON-style) instead
+        # of the actual !none! contract would output the literal word "null" as its
+        # answer text; the parser only recognizes "!none!", so that word would be shown
+        # to a student as a real one-word answer with every source falsely attached.
+        assert "null" not in navigate_system_prompt.lower()
+        assert navigate_system_prompt.count("!none!") >= 2
 
 
 # --------------------------------------------------------------- pipeline logic

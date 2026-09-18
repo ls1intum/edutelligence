@@ -76,6 +76,17 @@ class RerankRequestHandler(RequestHandler):
         )
 
         reranker = self.llm_manager.get_llm_by_id(self.model_id)
+        if reranker is None:
+            # A missing config entry (typo'd id, or the entry commented out) is permanent,
+            # not the transient failure _rerank_available exists to back off from — conflating
+            # the two hides a config error behind a generic "reranking failed" for the rest of
+            # the process, with no lead pointing at the actual model_id that isn't configured.
+            logger.warning(
+                "No LLM entry configured for reranker model_id '%s'; returning top %d unranked documents.",
+                self.model_id,
+                top_n,
+            )
+            return valid_documents[:top_n]
 
         try:
             response = reranker.rerank(

@@ -52,7 +52,7 @@ class TestSegmentToDto:
 
     def test_maps_valid_segment(self):
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            _segment_props(), {1: _unit_props(1)}, {}
+            _segment_props(), {(None, 1): _unit_props(1)}, {}
         )
         assert reason is None
         assert dto is not None
@@ -63,14 +63,14 @@ class TestSegmentToDto:
         # unit ids made hits vanish without a trace. The mapper must return
         # an explicit drop reason so the loss is visible in logs.
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            _segment_props(unit_id=99), {1: _unit_props(1)}, {}
+            _segment_props(unit_id=99), {(None, 1): _unit_props(1)}, {}
         )
         assert dto is None
         assert reason == "missing_unit_metadata"
 
     def test_negative_page_is_dropped_with_reason(self):
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            _segment_props(page=-1), {1: _unit_props(1)}, {}
+            _segment_props(page=-1), {(None, 1): _unit_props(1)}, {}
         )
         assert dto is None
         assert reason == "bad_page_or_ids"
@@ -78,16 +78,42 @@ class TestSegmentToDto:
     def test_slide_with_transcription_becomes_slide_video(self):
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
             _segment_props(unit_id=1, page=4),
-            {1: _unit_props(1)},
-            {(1, 4): 125.0},
+            {(None, 1): _unit_props(1)},
+            {(None, 1, 4): 125.0},
         )
         assert reason is None
         assert dto is not None
         assert dto.lecture_unit.source_type == "lecture_unit_slide_video"
         assert dto.lecture_unit.query_params["timestamp"] == 125.0
 
+    def test_lecture_units_with_the_same_id_from_different_instances_do_not_collide(
+        self,
+    ):
+        # Regression: keying by (base_url, unit_id) instead of the bare id — two
+        # different Artemis instances sharing one Weaviate can have a lecture unit
+        # with the same numeric id, and must not silently overwrite each other.
+        units_by_id = {
+            ("http://instance-a", 411): _unit_props(411, name="Instance A's unit"),
+            ("http://instance-b", 411): _unit_props(
+                411, name="Instance B's unrelated unit"
+            ),
+        }
+        props = _segment_props(unit_id=411)
+        props["base_url"] = "http://instance-a"
+
+        dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
+            props, units_by_id, {}
+        )
+
+        assert reason is None
+        assert dto is not None
+        assert dto.lecture_unit.name == "Instance A's unit"
+
 
 class TestFetchLimitRegression:
+    """Regressions in the metadata fetch: the over-fetch limit and the
+    (base_url, id) keying that keeps colliding instances' rows distinct."""
+
     def test_metadata_fetch_limit_survives_duplicate_unit_ids(self):
         # Regression for the vanishing-answer bug: with limit=len(unit_ids),
         # duplicate rows from a shared Weaviate crowd out requested ids. The
@@ -96,6 +122,48 @@ class TestFetchLimitRegression:
             limit = max(100, n_ids * 10)
             assert limit >= n_ids * 2, "limit must tolerate duplicate rows per id"
             assert limit >= 100, "small requests must still over-fetch"
+
+    def test_fetch_lecture_units_keeps_both_instances_rows_for_a_colliding_id(self):
+        # Regression: two DIFFERENT Artemis instances sharing one Weaviate can each
+        # have a lecture unit with the same numeric id (auto-increment ids restart
+        # per database). Keying the result by the bare id let one instance's row
+        # silently overwrite the other's, attaching the wrong instance's title/link
+        # to a search hit. Keying by (base_url, id) must keep both.
+        retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+        instance_0_unit = SimpleNamespace(
+            properties={
+                LectureUnitSchema.LECTURE_UNIT_ID.value: 411,
+                LectureUnitSchema.BASE_URL.value: "http://localhost:8080",
+                LectureUnitSchema.LECTURE_UNIT_NAME.value: "instance 0's unit",
+            }
+        )
+        instance_6_unit = SimpleNamespace(
+            properties={
+                LectureUnitSchema.LECTURE_UNIT_ID.value: 411,
+                LectureUnitSchema.BASE_URL.value: "http://localhost:8086",
+                LectureUnitSchema.LECTURE_UNIT_NAME.value: "instance 6's unrelated unit",
+            }
+        )
+        retrieval.lecture_unit_collection = Mock()
+        retrieval.lecture_unit_collection.query.fetch_objects.return_value = Mock(
+            objects=[instance_0_unit, instance_6_unit]
+        )
+
+        result = retrieval._fetch_lecture_units([411])
+
+        assert len(result) == 2
+        assert (
+            result[("http://localhost:8080", 411)][
+                LectureUnitSchema.LECTURE_UNIT_NAME.value
+            ]
+            == "instance 0's unit"
+        )
+        assert (
+            result[("http://localhost:8086", 411)][
+                LectureUnitSchema.LECTURE_UNIT_NAME.value
+            ]
+            == "instance 6's unrelated unit"
+        )
 
 
 def test_retrieval_instruction_is_query_side_prefix():

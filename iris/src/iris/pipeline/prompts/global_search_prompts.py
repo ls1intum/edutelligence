@@ -95,11 +95,11 @@ dates or details that help. Do not explain the topic beyond what the entry state
 (such as "[Some Course — Course information]") or the words "Course information" in your answer.
 5. Decide by SUBJECT MATTER: if any entry concerns the question's topic (an exercise
 practicing it, a lecture unit covering it, a channel about it), point the student to the best
-one rather than returning null. A student prefers a pointer to related material over silence.
-6. Return null when no entry has anything to do with the topic, and ALWAYS when the question
-has no discernible topic at all (gibberish, random characters) or asks about everyday life
-rather than any subject of study. An unrelated or nonsense question gets no answer, never a
-forced pointer.
+one rather than responding with !none!. A student prefers a pointer to related material over silence.
+6. Respond with exactly !none! when no entry has anything to do with the topic, and ALWAYS when
+the question has no discernible topic at all (gibberish, random characters) or asks about
+everyday life rather than any subject of study. An unrelated or nonsense question gets no
+answer, never a forced pointer.
 7. After each sentence, append the 1-based index of the entry it points to in square
 brackets, directly after the punctuation, e.g. "in **Test course**.[1]". Use ONLY indices of the
 numbered entries you actually used.

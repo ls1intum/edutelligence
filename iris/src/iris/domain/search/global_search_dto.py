@@ -125,6 +125,33 @@ class EntityCandidateDTO(BaseModel):
     faq_state: str | None = Field(default=None, alias="faqState")
     channel_is_public: bool | None = Field(default=None, alias="channelIsPublic")
 
+    @field_validator(
+        "release_date",
+        "start_date",
+        "due_date",
+        "end_date",
+        "visible_date",
+        "exam_visible_date",
+        "exam_start_date",
+        "exam_end_date",
+    )
+    @classmethod
+    def _normalize_to_utc(cls, value: datetime | None) -> datetime | None:
+        """Guarantee UTC regardless of what the wire carried.
+
+        Artemis already normalizes these through WeaviateDateUtil before sending
+        them, but this is a service boundary: a naive datetime is assumed UTC
+        (never the interpreting server's local zone, which .astimezone() would
+        otherwise assume) and an offset-aware one is converted to UTC, so a
+        downstream comparison or display never depends on which offset happened
+        to arrive.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
 
 class EntitySourceDTO(BaseModel):
     """An entity source in the answer response.

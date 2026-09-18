@@ -106,7 +106,7 @@ def test_global_search_filters_hidden_slide_aggregate():
 
     dto, drop_reason = LectureGlobalSearchRetrieval._segment_to_dto(
         props,
-        {10: lecture_unit()},
+        {("https://artemis.example", 10): lecture_unit()},
         {},
     )
     assert dto is None
@@ -127,14 +127,14 @@ def test_global_search_filters_unreleased_transcription_but_not_released_one():
 
     hidden_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
         props,
-        {10: lecture_unit(future)},
+        {("https://artemis.example", 10): lecture_unit(future)},
     )
     assert hidden_dto is None
     assert drop_reason == "transcription_hidden"
 
     visible_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
         props,
-        {10: lecture_unit()},
+        {("https://artemis.example", 10): lecture_unit()},
     )
     assert visible_dto is not None
     assert drop_reason is None
@@ -168,8 +168,8 @@ def test_hidden_slide_transcription_is_filtered_across_retrieval_paths():
     assert not is_transcription_visible(props, unit, associated_slides)
     dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
         props,
-        {10: unit},
-        {(10, 8): associated_slides},
+        {("https://artemis.example", 10): unit},
+        {("https://artemis.example", 10, 8): associated_slides},
     )
     assert dto is None
     assert drop_reason == "transcription_hidden"
@@ -675,6 +675,7 @@ def _segment_object(course_id=30, hidden_until=None):
     props = {
         LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: "Segment summary",
         LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 10,
+        LectureUnitSegmentSchema.BASE_URL.value: "https://artemis.example",
         LectureUnitSegmentSchema.COURSE_ID.value: course_id,
         LectureUnitSegmentSchema.LECTURE_ID.value: 20,
         LectureUnitSegmentSchema.PAGE_NUMBER.value: 1,
@@ -691,7 +692,9 @@ def _retriever_returning(unit, segment=None):
     retrieval.llm_embedding.embed.return_value = [0.1]
     retrieval._search_segments = Mock(return_value=[segment or _segment_object()])
     retrieval._search_video_transcriptions = Mock(return_value=[])
-    retrieval._fetch_lecture_units = Mock(return_value={10: unit})
+    retrieval._fetch_lecture_units = Mock(
+        return_value={("https://artemis.example", 10): unit}
+    )
     retrieval._fetch_transcription_start_times = Mock(return_value={})
     retrieval._fetch_slides_by_display_page = Mock(return_value={})
     retrieval._safe_rerank = Mock(return_value=None)
