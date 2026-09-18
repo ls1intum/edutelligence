@@ -7,6 +7,7 @@ import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -50,6 +51,7 @@ public class GatewayBudgetService {
      */
     private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
+    @Autowired
     public GatewayBudgetService(
             NamedParameterJdbcTemplate jdbc,
             @Value("${logos.gateway.budget-cache-ttl-seconds:15}") long ttlSeconds) {
