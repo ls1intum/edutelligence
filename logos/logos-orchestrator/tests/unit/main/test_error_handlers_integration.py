@@ -40,7 +40,7 @@ def _stub_auth(monkeypatch):
         default_priority=5,
     )
 
-    def fake_authenticate(headers):
+    def fake_authenticate(headers, client_ip=None):
         return fake_auth
 
     monkeypatch.setattr("logos.auth.authenticate_api_key", fake_authenticate)
@@ -280,6 +280,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -338,6 +339,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -390,6 +392,7 @@ class TestUpstreamErrorForwarding:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -450,6 +453,7 @@ class TestStreamingErrors:
             provider_type="openai",
             lane_id=None,
             anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):

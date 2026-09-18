@@ -12,15 +12,15 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { ActivatedRoute, Router } from '@angular/router';
+import type { Subscription } from 'rxjs';
 
 import { StatsWebsocketService } from './services/stats-websocket.service';
 
 import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './statistics.constants';
 
 import {
-  aggregateEventsToVolumeSeries,
   applyTimeSeriesLabels,
-  chooseDynamicBucketMs,
   chooseDynamicTargetBuckets,
   extractProviderHostRamMb,
   extractProviderVramMb,
@@ -48,8 +48,7 @@ import type {
   LaneSignalData,
   RequestItem,
   RequestLogStats,
-  TimelineDeltaPayload,
-  TimelineEnqueueEvent,
+  StatsTab,
   TimelineInitPayload,
   VramProviderMeta,
   VramV2Payload,
@@ -60,7 +59,7 @@ import type {
 import { ChartPanel } from './components/chart-panel/chart-panel';
 import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
-import { LaneVramPieComponent } from './components/lane-vram-pie/lane-vram-pie';
+import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
 import { StatisticsService } from './services/statistics.service';
@@ -70,18 +69,10 @@ import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
 import { VramDonutComponent } from './components/vram-donut/vram-donut';
-import { VramRemainingChartComponent } from './components/vram-remaining-chart/vram-remaining-chart';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
-
-/**
- * Ceiling on the accumulated enqueue events the volume chart re-buckets. Matches
- * the server's own cap on the initial load, so a session that has been open for
- * hours holds no more than a fresh one would.
- */
-const TIMELINE_EVENT_CAP = 200_000;
 
 @Component({
   selector: 'app-statistics',
@@ -91,7 +82,7 @@ const TIMELINE_EVENT_CAP = 200_000;
     ChartPanel,
     EmptyState,
     LaneHealthPanel,
-    LaneVramPieComponent,
+    LaneMemoryPieComponent,
     SelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
@@ -100,7 +91,6 @@ const TIMELINE_EVENT_CAP = 200_000;
     StatusBars,
     StatsSkeletonComponent,
     VramDonutComponent,
-    VramRemainingChartComponent,
     WorkerGpuPanel,
     TimeRangeBarComponent,
   ],
@@ -111,6 +101,46 @@ const TIMELINE_EVENT_CAP = 200_000;
 export class Statistics implements OnInit, OnDestroy {
   private statsWs = inject(StatsWebsocketService);
   private statisticsService = inject(StatisticsService);
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  /**
+   * The page carries two sections that share nothing but a websocket: the state
+   * of the local providers right now, and request traffic over a chosen period.
+   * They are split because reading them together invites the wrong conclusion —
+   * the time range in the header narrows the request panels and has no bearing
+   * at all on the VRAM, RAM, lane and GPU panels, which always show the latest
+   * sample.
+   *
+   * The active tab is mirrored into ?tab= so a link points at the section it was
+   * copied from, and each switch is a history entry so Back returns to the tab
+   * it came from.
+   */
+  readonly TABS: ReadonlyArray<{ id: StatsTab; label: string }> = [
+    { id: 'local-providers', label: 'Local Providers' },
+    { id: 'requests', label: 'Requests' },
+  ];
+  readonly activeTab = signal<StatsTab>('local-providers');
+
+  setActiveTab(tab: StatsTab): void {
+    if (this.activeTab() === tab) return;
+    // The signal is not set here: the query-parameter subscription below owns
+    // it, so a tab reached by Back, by a pasted link or by this click all take
+    // the same path and cannot disagree.
+    this.router.navigate([], {
+      relativeTo: this.route,
+      // The default stays out of the URL rather than decorating every link with
+      // a parameter that changes nothing.
+      queryParams: { tab: tab === 'local-providers' ? null : tab },
+      queryParamsHandling: 'merge',
+    });
+  }
+
+  /** Resolves a ?tab= value, falling back to the default for anything unknown. */
+  private tabFromParam(raw: string | null): StatsTab {
+    return this.TABS.some((t) => t.id === raw) ? (raw as StatsTab) : 'local-providers';
+  }
 
   /** Filter options, loaded once on init. */
   readonly feedUsers = signal<FeedFilterOption[]>([]);
@@ -241,7 +271,6 @@ export class Statistics implements OnInit, OnDestroy {
   readonly vramProviderMetaByName = signal<Record<string, VramProviderMeta>>({});
   readonly devicesByProvider = signal<Record<string, DeviceInfo[]>>({});
   readonly latestRequests = signal<RequestItem[]>([]);
-  readonly timelineEvents = signal<TimelineEnqueueEvent[]>([]);
   readonly selectedVramProvider = signal<string | null>(null);
   readonly customRange = signal<{ start: Date; end: Date } | null>(null);
   readonly error = signal<string | null>(null);
@@ -286,6 +315,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Ticker ────────────────────────────────────────────────────────────────────
   private nowInterval: ReturnType<typeof setInterval> | null = null;
+  private routeSub: Subscription | null = null;
 
   // ── wsTimelineConfig ─────────────────────────────────────────────────────────
   readonly wsTimelineConfig = computed(() => {
@@ -483,6 +513,28 @@ export class Statistics implements OnInit, OnDestroy {
   });
 
   /**
+   * Host RAM of the selected provider, the counterpart to the two above.
+   *
+   * `reported` rather than a total of 0 for the missing case: a worker that
+   * predates the field or cannot read the host's memory reports nothing, and
+   * drawing that as a fully free host would be worse than drawing nothing.
+   */
+  readonly selectedProviderRamMb = computed(() => {
+    const prov = this.selectedVramProvider();
+    if (!prov) return { reported: false, totalMb: 0, freeMb: 0, usedMb: 0 };
+    return extractProviderHostRamMb(this.latestSampleByProvider()[prov]);
+  });
+
+  /**
+   * Whether any lane of the selected provider reports its host-RAM footprint.
+   * The per-model breakdown needs it; without it the panel can still show the
+   * host total, but not who is holding it.
+   */
+  readonly hasSelectedProviderLaneRam = computed(() =>
+    Object.values(this.selectedProviderLanes()).some((l) => typeof l.host_ram_mb === 'number'),
+  );
+
+  /**
    * Badge text for the selected provider's free VRAM, or null when there is no
    * sample to report. A provider whose memory is exhausted legitimately reports
    * 0 MB free, so absence has to be the missing sample rather than the value —
@@ -564,69 +616,25 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Volume line data ──────────────────────────────────────────────────────────
 
+  /**
+   * The request-volume series, taken as-is from the server's bucketed
+   * aggregate.
+   *
+   * It used to be re-derived in the browser from the raw enqueue events of
+   * every request in the range. That was wrong at production scale: the server
+   * capped the event list at 200k rows ordered oldest-first, so any range
+   * holding more than that — the default 30 days holds 417k — lost everything
+   * after the cut. The chart went flat for the most recent 13 days while the
+   * KPI card above it still counted all 417k requests.
+   *
+   * `stats.timeSeries` has neither problem: it is aggregated in the database
+   * over the whole range, it arrives already bucketed, and it costs a few
+   * kilobytes rather than 25 MB.
+   */
   readonly volumeSeries = computed(() => {
-    const s = this.stats();
-    if (!s?.timeSeries) {
+    const series = this.stats()?.timeSeries;
+    if (!series?.length) {
       return { totalLineData: [], cloudLineData: [], localLineData: [] };
-    }
-
-    const tsSeries = s.timeSeries;
-    const cr = this.customRange();
-
-    const fallbackStart = tsSeries[0]?.timestamp ?? Date.now() - 30 * 24 * 3600 * 1000;
-    const fallbackEnd = tsSeries[tsSeries.length - 1]?.timestamp ?? Date.now();
-    const rangeStartMs = cr
-      ? cr.start.getTime()
-      : Math.min(this.timelineRangeMs?.startMs ?? fallbackStart, fallbackStart);
-    const rangeEndMs = cr
-      ? cr.end.getTime()
-      : Math.max(this.timelineRangeMs?.endMs ?? fallbackEnd, fallbackEnd);
-
-    if (
-      !Number.isFinite(rangeStartMs) ||
-      !Number.isFinite(rangeEndMs) ||
-      rangeEndMs <= rangeStartMs
-    ) {
-      return { totalLineData: [], cloudLineData: [], localLineData: [] };
-    }
-
-    const bucketMs = chooseDynamicBucketMs(rangeEndMs - rangeStartMs);
-    const events = this.timelineEvents();
-    let series: RequestLogStats['timeSeries'] = [];
-
-    if (events.length > 0) {
-      series = aggregateEventsToVolumeSeries(events, rangeStartMs, rangeEndMs, bucketMs);
-    } else {
-      const alignedStart = Math.floor(rangeStartMs / bucketMs) * bucketMs;
-      const alignedEnd = Math.ceil(rangeEndMs / bucketMs) * bucketMs;
-      const buckets = new Map<number, { total: number; cloud: number; local: number }>();
-      for (let ts = alignedStart; ts <= alignedEnd; ts += bucketMs) {
-        buckets.set(ts, { total: 0, cloud: 0, local: 0 });
-      }
-      for (const point of tsSeries) {
-        if (point.timestamp < alignedStart || point.timestamp > alignedEnd) continue;
-        const bucketTs = Math.floor(point.timestamp / bucketMs) * bucketMs;
-        const current = buckets.get(bucketTs) || { total: 0, cloud: 0, local: 0 };
-        current.total += point.total || 0;
-        current.cloud += point.cloud || 0;
-        current.local += point.local || 0;
-        buckets.set(bucketTs, current);
-      }
-      series = applyTimeSeriesLabels(
-        Array.from(buckets.entries())
-          .map(([timestamp, v]) => ({
-            timestamp,
-            label: '',
-            total: v.total,
-            cloud: v.cloud,
-            local: v.local,
-            avgRunSeconds: null,
-            avgVram: null,
-          }))
-          .sort((a, b) => a.timestamp - b.timestamp),
-        new Date(alignedStart),
-        new Date(alignedEnd),
-      );
     }
 
     return {
@@ -915,20 +923,23 @@ export class Statistics implements OnInit, OnDestroy {
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
   ngOnInit(): void {
+    // Subscribed, not read once: Angular reuses this component for a
+    // query-parameter navigation, so a snapshot read in ngOnInit would leave
+    // the URL naming one tab while the page still showed the other.
+    this.routeSub = this.route.queryParamMap.subscribe((params) => {
+      this.activeTab.set(this.tabFromParam(params.get('tab')));
+    });
+
     const cfg = this.wsTimelineConfig();
     this.statsWs.connect({
       vramDayOffset: -1, // web path → vram_day = 'all'
       timeline: cfg,
-      // Enabled: without the deltas the volume chart is drawn once from the
-      // events of the initial load and then never moves again.
-      timelineDeltas: true,
       scope: { userId: this.filterUserId(), teamId: this.filterTeamId() },
       feedStatus: this.feedStatus(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
         onVramDelta: (p) => this.handleVramWsDeltaV2(p),
         onTimelineInit: (p) => this.handleTimelineInitV2(p),
-        onTimelineDelta: (p) => this.handleTimelineDeltaV2(p),
         onStats: (p) => this.handleStatsRefreshV2(p),
         onRequestsData: (p) => this.handleRequestsWsData(p),
       },
@@ -1035,6 +1046,8 @@ export class Statistics implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.statsWs.disconnect();
+    this.routeSub?.unsubscribe();
+    this.routeSub = null;
     if (this.nowInterval !== null) {
       clearInterval(this.nowInterval);
       this.nowInterval = null;
@@ -1060,25 +1073,6 @@ export class Statistics implements OnInit, OnDestroy {
   }
 
   /**
-   * The user-selected time range in epoch ms — the VRAM-remaining chart
-   * windows its (always-live 'all') samples over this global range instead of
-   * maintaining its own day offset.
-   */
-  readonly selectedTimeRangeMs = computed(() => {
-    const cfg = this.wsTimelineConfig();
-    const cfgEndMs = new Date(cfg.end).getTime();
-    // Follow the ticker while the selection is live. wsTimelineConfig only
-    // recomputes when the preset, offset or zoom changes, so its end is the
-    // instant the range was picked — and the chart drops every sample past its
-    // window end, which would leave the curve standing still on an open page.
-    const nowMs = this.nowMs();
-    return {
-      startMs: new Date(cfg.start).getTime(),
-      endMs: this.isLiveEnd(cfgEndMs, nowMs) ? Math.max(cfgEndMs, nowMs) : cfgEndMs,
-    };
-  });
-
-  /**
    * Whether a range end means "up to now" rather than a fixed past instant.
    * Same 120 s tolerance the websocket applies, so the client and the server
    * agree on which selections keep growing.
@@ -1102,18 +1096,6 @@ export class Statistics implements OnInit, OnDestroy {
       startIso: cfg.start,
       endIso: this.isLiveEnd(endMs, Date.now()) ? '' : cfg.end,
     };
-  });
-
-  /**
-   * VRAM samples of the selected provider only. The remaining-VRAM chart sits
-   * in the provider-scoped section, so it shows that provider's curve — every
-   * other panel in that section is scoped the same way.
-   */
-  readonly selectedProviderVramData = computed<Record<string, VramV2Sample[]>>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return {};
-    const samples = this.vramRawDataByProvider()[prov];
-    return samples ? { [prov]: samples } : {};
   });
 
   /** True while the selected provider's worker is running a calibration session. */
@@ -1274,8 +1256,6 @@ export class Statistics implements OnInit, OnDestroy {
       bucketMs,
     };
 
-    this.replaceTimelineEvents(payload.events || []);
-
     const labeled = applyTimeSeriesLabels(payload.stats.timeSeries || [], rangeStart, rangeEnd);
     this.stats.set({ ...payload.stats, timeSeries: labeled });
     this.error.set(null);
@@ -1312,28 +1292,6 @@ export class Statistics implements OnInit, OnDestroy {
 
     const labeled = applyTimeSeriesLabels(payload.stats.timeSeries || [], rangeStart, rangeEnd);
     this.stats.set({ ...payload.stats, timeSeries: labeled });
-  }
-
-  /**
-   * Newly enqueued requests, appended to the event list the volume chart
-   * re-buckets. Without this the chart would sit still while the counters
-   * beside it moved on every aggregate push.
-   */
-  private handleTimelineDeltaV2(payload: TimelineDeltaPayload): void {
-    if (!payload.events?.length) return;
-    // Same race as the aggregate push: a delta still in flight belongs to the
-    // range being left. `timeline_init` replaces the whole event list anyway.
-    if (this.statsPending()) return;
-    // Range first: `timelineRangeMs` is a plain field, so the series only picks
-    // a new end up when a signal it also reads changes. Appending the events is
-    // that signal — do it second or the chart trails the data by one delta.
-    if (payload.range?.end) {
-      const endMs = new Date(payload.range.end).getTime();
-      if (Number.isFinite(endMs) && this.timelineRangeMs) {
-        this.timelineRangeMs = { ...this.timelineRangeMs, endMs };
-      }
-    }
-    this.appendTimelineEvents(payload.events);
   }
 
   // ── Raw-series updaters ───────────────────────────────────────────────────────
@@ -1450,56 +1408,6 @@ export class Statistics implements OnInit, OnDestroy {
       next[provider.name] = capped;
     }
     if (next !== prev) this.vramRawDataByProvider.set(next);
-  }
-
-  /** Request ids already in `timelineEvents`, so a delta can dedupe in O(1). */
-  private readonly knownEventIds = new Set<string>();
-
-  private replaceTimelineEvents(events: TimelineEnqueueEvent[]): void {
-    const nextMap = new Map<string, TimelineEnqueueEvent>();
-    for (const event of events || []) {
-      if (!event?.request_id || !Number.isFinite(Number(event.timestamp_ms))) continue;
-      nextMap.set(event.request_id, event);
-    }
-    const merged = Array.from(nextMap.values()).sort((a, b) => a.timestamp_ms - b.timestamp_ms);
-    this.knownEventIds.clear();
-    for (const event of merged) this.knownEventIds.add(event.request_id);
-    this.timelineEvents.set(merged);
-  }
-
-  /**
-   * Append delta events to the list the volume chart re-buckets.
-   *
-   * Appended rather than merged and re-sorted: the server hands out deltas from
-   * a cursor that only ever moves forward, starting at the end of the initially
-   * loaded range, so every delta event is newer than everything already here.
-   * That matters at this cadence — re-sorting a list that can hold 200k events
-   * every two seconds would be felt on the UI thread.
-   *
-   * Capped, dropping the oldest: a long session on a busy range would otherwise
-   * grow without bound. Losing the oldest thins out the left edge of the chart
-   * rather than its live end, which is the side being watched, and
-   * `stats.timeSeries` — refreshed alongside — still covers the whole range for
-   * anyone reading totals.
-   */
-  private appendTimelineEvents(events: TimelineEnqueueEvent[]): void {
-    const fresh: TimelineEnqueueEvent[] = [];
-    for (const event of events) {
-      if (!event?.request_id || !Number.isFinite(Number(event.timestamp_ms))) continue;
-      if (this.knownEventIds.has(event.request_id)) continue;
-      this.knownEventIds.add(event.request_id);
-      fresh.push(event);
-    }
-    if (fresh.length === 0) return;
-
-    const current = this.timelineEvents();
-    let next = [...current, ...fresh];
-    if (next.length > TIMELINE_EVENT_CAP) {
-      const dropped = next.slice(0, next.length - TIMELINE_EVENT_CAP);
-      for (const event of dropped) this.knownEventIds.delete(event.request_id);
-      next = next.slice(next.length - TIMELINE_EVENT_CAP);
-    }
-    this.timelineEvents.set(next);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────────

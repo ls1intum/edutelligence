@@ -6,5 +6,4 @@ public interface TimeSeriesProjection {
     Long getCloud();
     Long getLocal();
     Double getAvgRunSeconds();
-    Double getAvgVram();
 }

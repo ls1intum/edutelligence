@@ -25,10 +25,13 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelPro
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LaneLoadStatusRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.StopCalibrationRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
@@ -39,13 +42,17 @@ public class ProviderController {
 
     private final ProviderService providerService;
     private final PriceUpdaterService priceUpdaterService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
+    private final ModelRepository modelRepository;
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final OrchestratorModelSyncClient modelSyncClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
         this.priceUpdaterService = priceUpdaterService;
+        this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
+        this.modelRepository = modelRepository;
         this.workerAdminClient = workerAdminClient;
         this.modelSyncClient = modelSyncClient;
         this.objectMapper = objectMapper;
@@ -101,6 +108,8 @@ public class ProviderController {
         // refresh, so freshly connected cloud models reported a cost of zero.
         if (req.modelId() != null) {
             priceUpdaterService.updatePricesForModelAsync(req.modelId());
+            modelRepository.findById(req.modelId()).ifPresent(model ->
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), model.getName()));
         }
         return response;
     }
@@ -160,6 +169,19 @@ public class ProviderController {
             return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
         } catch (Exception e) {
             return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/stop_calibration")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> stopCalibration(@RequestBody StopCalibrationRequestDTO req) {
+        if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
+        try {
+            return workerAdminClient.stopCalibration(req.providerId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
         }
     }
 

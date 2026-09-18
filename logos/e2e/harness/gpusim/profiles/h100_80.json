@@ -1,0 +1,8 @@
+{
+  "name": "NVIDIA H100 80GB HBM3",
+  "compute_cap": "9.0",
+  "memory_total_mb": 81559,
+  "idle_power_w": 74.0,
+  "idle_temp_c": 30.0,
+  "fan_speed": "[N/A]"
+}

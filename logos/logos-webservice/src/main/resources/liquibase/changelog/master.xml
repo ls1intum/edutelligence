@@ -38,5 +38,10 @@
     <include file="liquibase/changelog/032_batch_runner.xml"/>
     <include file="liquibase/changelog/033_batch_settlement.xml"/>
     <include file="liquibase/changelog/034_model_capabilities_max_input_tokens.xml"/>
+    <include file="liquibase/changelog/035_log_entry_hourly_stats.xml"/>
+    <include file="liquibase/changelog/036_log_entry_model_provider_recent_index.xml"/>
+    <include file="liquibase/changelog/037_model_discovery_notifications.xml"/>
+    <include file="liquibase/changelog/038_team_priority.xml"/>
+    <include file="liquibase/changelog/039_api_key_priority_unset.xml"/>
 
 </databaseChangeLog>

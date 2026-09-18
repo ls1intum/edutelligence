@@ -118,6 +118,8 @@ class DummyDB:
         self.synced: Dict[int, List[str]] = {}
         self.contexts: Dict[int, Dict[str, Dict[str, int]]] = {}
         self.types: Dict[int, str] = {}
+        self.pending_discovery_ids: List[int] = []
+        self.notified_discovery_ids: List[int] = []
         DummyDB.instances.append(self)
 
     def __enter__(self):
@@ -139,6 +141,12 @@ class DummyDB:
 
     def set_cloud_provider_type(self, provider_id, value):
         self.types[provider_id] = value
+
+    def get_pending_discovery_model_ids(self):
+        return list(self.pending_discovery_ids)
+
+    def mark_discovery_notified(self, model_ids):
+        self.notified_discovery_ids.extend(model_ids)
 
 
 def _run(monkeypatch, providers, fetch, **service_kwargs):

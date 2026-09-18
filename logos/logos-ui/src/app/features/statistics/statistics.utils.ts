@@ -1,4 +1,4 @@
-import type { RequestLogStats, VramV2Sample, TimelineEnqueueEvent, VramSeriesPoint, VramProviderPayload } from './statistics.models';
+import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
 import { cssVar } from './statistics.constants';
 
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
@@ -682,85 +682,4 @@ export const chooseDynamicTargetBuckets = (spanMs: number): number => {
   if (spanMs > 7 * day) return 96;
   if (spanMs > day) return 108;
   return 120;
-};
-
-export const chooseDynamicBucketMs = (spanMs: number): number => {
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const safeSpanMs = Math.max(spanMs, minute);
-  const targetBuckets = chooseDynamicTargetBuckets(safeSpanMs);
-  const rawBucketMs = Math.max(safeSpanMs / targetBuckets, minute);
-  const niceCandidates = [
-    minute,
-    5 * minute,
-    15 * minute,
-    30 * minute,
-    hour,
-    3 * hour,
-    6 * hour,
-    12 * hour,
-    day,
-  ];
-
-  return niceCandidates.reduce((best, candidate) =>
-    Math.abs(candidate - rawBucketMs) < Math.abs(best - rawBucketMs)
-      ? candidate
-      : best
-  );
-};
-
-export const aggregateEventsToVolumeSeries = (
-  events: TimelineEnqueueEvent[],
-  startMs: number,
-  endMs: number,
-  bucketMs: number
-): RequestLogStats['timeSeries'] => {
-  const safeBucketMs = Math.max(bucketMs, 30 * 1000);
-  const alignedStart = Math.floor(startMs / safeBucketMs) * safeBucketMs;
-  const alignedEnd = Math.ceil(endMs / safeBucketMs) * safeBucketMs;
-  const buckets = new Map<
-    number,
-    { cloud: number; local: number; total: number }
-  >();
-
-  for (let ts = alignedStart; ts <= alignedEnd; ts += safeBucketMs) {
-    buckets.set(ts, { cloud: 0, local: 0, total: 0 });
-  }
-
-  for (const event of events) {
-    const ts = Number(event.timestamp_ms);
-    if (!Number.isFinite(ts) || ts < alignedStart || ts > alignedEnd)
-      continue;
-    const bucketTs = Math.floor(ts / safeBucketMs) * safeBucketMs;
-    const bucket = buckets.get(bucketTs) || {
-      cloud: 0,
-      local: 0,
-      total: 0,
-    };
-    if (event.is_cloud) bucket.cloud += 1;
-    else bucket.local += 1;
-    bucket.total += 1;
-    buckets.set(bucketTs, bucket);
-  }
-
-  const rawSeries: RequestLogStats['timeSeries'] = [];
-  for (const [timestamp, bucket] of buckets.entries()) {
-    rawSeries.push({
-      timestamp,
-      label: '',
-      cloud: bucket.cloud,
-      local: bucket.local,
-      total: bucket.total,
-      avgRunSeconds: null,
-      avgVram: null,
-    });
-  }
-
-  rawSeries.sort((a, b) => a.timestamp - b.timestamp);
-  return applyTimeSeriesLabels(
-    rawSeries,
-    new Date(alignedStart),
-    new Date(alignedEnd)
-  );
 };
