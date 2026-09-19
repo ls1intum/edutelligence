@@ -879,3 +879,77 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     expect(panel.unloadingLaneId()).toBeNull();
   });
 });
+
+describe('LaneHealthPanel single-action gate', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let sleepLane: ReturnType<typeof vi.fn>;
+  let drainLane: ReturnType<typeof vi.fn>;
+  let wakeLane: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    // Each action hangs until the test settles it — the in-flight state the
+    // gate is about to refuse or admit.
+    sleepLane = vi.fn(() => new Promise<void>(() => {}));
+    drainLane = vi.fn(() => new Promise<void>(() => {}));
+    wakeLane = vi.fn(() => new Promise<void>(() => {}));
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [{ provide: StatisticsService, useValue: { sleepLane, drainLane, wakeLane } }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-foo': lane({ runtime_state: 'running' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+  });
+
+  it('refuses a sleep while a drain is in flight', async () => {
+    const draining = panel.handleDrain('planner-foo');
+
+    await panel.handleSleep('planner-foo');
+
+    expect(drainLane).toHaveBeenCalledTimes(1);
+    expect(sleepLane).not.toHaveBeenCalled();
+    expect(panel.drainingLaneId()).toBe('planner-foo');
+    void draining;
+  });
+
+  it('refuses a wake while a sleep is in flight', async () => {
+    const sleeping = panel.handleSleep('planner-foo');
+
+    await panel.handleWake('planner-foo');
+
+    expect(sleepLane).toHaveBeenCalledTimes(1);
+    expect(wakeLane).not.toHaveBeenCalled();
+    expect(panel.sleepingLaneId()).toBe('planner-foo');
+    void sleeping;
+  });
+
+  it('lets the next action through once the running one has settled', async () => {
+    let settleDrain: () => void = () => {};
+    drainLane.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleDrain = resolve;
+        }),
+    );
+    const draining = panel.handleDrain('planner-foo');
+
+    await panel.handleSleep('planner-foo');
+    expect(sleepLane).not.toHaveBeenCalled();
+
+    settleDrain();
+    await draining;
+    expect(panel.anyLaneActionInFlight()).toBe(false);
+
+    // Not awaited on purpose: sleepLane hangs by design, and the service call
+    // happens synchronously before the handler's first await.
+    const sleeping = panel.handleSleep('planner-foo');
+    expect(sleepLane).toHaveBeenCalledTimes(1);
+    void sleeping;
+  });
+});

@@ -161,6 +161,15 @@ class CapacityPlanner:
     # Demand-preemptive drain: graceful swap of busy lanes for starving models
     DRAIN_TIMEOUT_SECONDS = 60.0  # Max wait for active requests to finish
 
+    # The manual drain's whole endpoint call — the strict wait above plus the
+    # terminal step's own drain, command and confirmation — must answer before
+    # the webservice's 130 s read timeout cuts it. 115 s leaves headroom for
+    # the HTTP hop, and the remainder is carried into the executor as a shared
+    # deadline so the terminal step's steps spend one pot instead of stacking
+    # their individual budgets on top of the first wait (which alone can run
+    # the full DRAIN_TIMEOUT_SECONDS).
+    DRAIN_ENDPOINT_BUDGET_SECONDS = 115.0
+
     # Floor for the add_lane/apply_lanes worker-command timeout. Cold loads
     # of large models legitimately take many minutes (weight copy into the
     # RAM cache + torch.compile + CUDA graph capture — Qwen3.6-35B tp=2 was
@@ -6863,6 +6872,22 @@ class CapacityPlanner:
             None,
         )
 
+    def _step_budget(self, deadline: Optional[float], default_seconds: float) -> float:
+        """A step's time budget: ``default_seconds``, capped by the time left
+        until the shared ``deadline`` (an absolute monotonic clock reading)
+        when one was carried in.
+
+        The manual drain hands its endpoint budget to the confirmed executor
+        as a deadline, so the executor's own drain, command and confirmation
+        spend the time left on the call instead of stacking their individual
+        budgets on top of the drain that already ran. Without a deadline the
+        default is returned untouched, so every existing caller behaves as
+        before.
+        """
+        if deadline is None:
+            return default_seconds
+        return max(0.0, min(default_seconds, deadline - time.monotonic()))
+
     async def drain_lane_manually(self, provider_id: int, lane_id: str) -> Dict[str, Any]:
         """Operator-initiated drain of a busy lane ("Drain" in the statistics UI).
 
@@ -6887,8 +6912,11 @@ class CapacityPlanner:
            off), keeps the VRAM ledger current, and waits for the worker to
            actually confirm the state — so this never reports ``slept`` or
            ``unloaded`` on the strength of a command that was merely sent.
-           The lane is already drained and cold-marked by step 2, so the
-           executor's own drain is an immediate no-op;
+           The lane is drained and cold-marked by step 2, so the executor's
+           own drain usually returns at once — it still runs, because a
+           request dispatched before the cold mark can land on the worker a
+           beat after step 2's zero check, and that second wait is what keeps
+           such a request from being killed by the sleep;
         4. clear the cold mark on every exit, so a lane the drain could not
            finish keeps serving exactly as before. The executor's reclaim
            sleeps keep their mark until a wake clears it, but the manual wake
@@ -6908,9 +6936,23 @@ class CapacityPlanner:
         ``stop`` a beat after step 3 decided, and a lane the drain ends with
         gone is an ``unloaded``, not an error.
 
+        The whole run is budgeted by ``DRAIN_ENDPOINT_BUDGET_SECONDS``: the
+        strict wait takes its ``DRAIN_TIMEOUT_SECONDS`` of it, and the
+        remainder is handed to the executor as a shared deadline (see
+        ``_step_budget``), so the terminal step's drain, command and
+        confirmation spend the time left on the call instead of stacking
+        their individual budgets on top of the first wait. That is what keeps
+        the answer within the webservice's read timeout on this call: when
+        the budget runs out, whatever step is running is the one that times
+        out — mid-second-drain the sleep is refused before its command is
+        sent, mid-confirmation the terminal-state re-read below decides the
+        answer — and the lane is left serving or already offline, so a
+        budget run-out is an actionable error, never a dropped request.
+
         Returns a result dict; the endpoint maps it onto a status code.
         """
         async with self._lane_lock(provider_id, lane_id):
+            started = time.monotonic()
             self._mark_lane_cold(provider_id, lane_id)
             try:
                 drained = await self._drain_lane(provider_id, lane_id, timeout_seconds=self.DRAIN_TIMEOUT_SECONDS)
@@ -6996,8 +7038,15 @@ class CapacityPlanner:
                     )
 
                 # The executor owns the desired-lane sync, the VRAM ledger, and
-                # the confirmation wait for this step (see the docstring).
-                await self._execute_action_with_confirmation(terminal, timeout_seconds=30.0)
+                # the confirmation wait for this step (see the docstring). The
+                # deadline carries the endpoint budget in: the strict wait
+                # above already spent its share, so the executor's own drain,
+                # command and confirmation get only what is left.
+                await self._execute_action_with_confirmation(
+                    terminal,
+                    timeout_seconds=30.0,
+                    deadline=started + self.DRAIN_ENDPOINT_BUDGET_SECONDS,
+                )
 
                 # Read the terminal state from the lane itself: the executor's
                 # host-RAM recheck can escalate a sleep to a stop, in which
@@ -8323,11 +8372,21 @@ class CapacityPlanner:
         return None
 
     async def _execute_action_with_confirmation(
-        self, action: CapacityPlanAction, timeout_seconds: float = 60.0
+        self,
+        action: CapacityPlanAction,
+        timeout_seconds: float = 60.0,
+        deadline: Optional[float] = None,
     ) -> bool:
         """Execute action and wait for worker status to confirm expected state.
 
         Returns True if confirmed, False if timeout.
+
+        ``deadline`` (an absolute monotonic clock reading) caps every step of
+        the run — the reclaim drain, the command, the confirmation — by the
+        time left until then, so a caller that already spent time on this
+        action (the manual drain spends its endpoint budget on the strict
+        wait first) cannot be outrun by the per-step budgets. Without one the
+        per-step budgets apply unchanged.
 
         Every load outcome — a manual one, a planned one, a cold load —
         passes through this point, so this is also where a manual outcome
@@ -8335,13 +8394,24 @@ class CapacityPlanner:
         terminal state: a failure of a planner-owned load of the model must
         reach the operator's poll as well.
         """
-        confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds)
+        confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds, deadline=deadline)
         if action.action == "load":
             self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, confirmed)
         return confirmed
 
-    async def _execute_action_core(self, action: CapacityPlanAction, timeout_seconds: float = 60.0) -> bool:
-        """The executor proper; see _execute_action_with_confirmation."""
+    async def _execute_action_core(
+        self,
+        action: CapacityPlanAction,
+        timeout_seconds: float = 60.0,
+        deadline: Optional[float] = None,
+    ) -> bool:
+        """The executor proper; see _execute_action_with_confirmation.
+
+        ``deadline`` is threaded to the steps that would otherwise stack a
+        full budget of their own (the reclaim drain, the worker command, the
+        confirmation poll); the manual drain carries its endpoint budget in
+        as one.
+        """
         logger.info(
             "Executing capacity action: %s on lane %s (model=%s, worker=%s) — %s",
             action.action,
@@ -8478,7 +8548,9 @@ class CapacityPlanner:
                         # the case the safety valve exists to handle.
                         bypass_load_cooldown=True,
                     )
-                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds)
+                    # The escalated stop keeps the caller's shared deadline:
+                    # it spends the same pot the sleep was spending.
+                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds, deadline=deadline)
 
                 # For request-time reclaim sleeps, mark the lane cold and drain
                 # active requests BEFORE sending the sleep command.  Without this,
@@ -8495,10 +8567,14 @@ class CapacityPlanner:
                 _is_reclaim_sleep = action.action in ("sleep_l1", "sleep_l2")
                 if _is_reclaim_sleep:
                     self._mark_lane_cold(action.provider_id, action.lane_id)
+                    # A shared deadline (the manual drain carries its endpoint
+                    # budget in) caps this wait by the time left on the call;
+                    # an exhausted budget reads as "not drained" and aborts
+                    # the sleep before any command is sent.
                     drained = await self._drain_lane(
                         action.provider_id,
                         action.lane_id,
-                        timeout_seconds=60.0,
+                        timeout_seconds=self._step_budget(deadline, 60.0),
                     )
                     if not drained:
                         logger.warning(
@@ -8533,7 +8609,7 @@ class CapacityPlanner:
                         action.provider_id,
                         command_action,
                         command_params,
-                        timeout_seconds=int(min(timeout_seconds, 120)),
+                        timeout_seconds=int(min(timeout_seconds, 120.0, self._step_budget(deadline, timeout_seconds))),
                     )
                 except Exception as exc:
                     logger.error(
@@ -8852,11 +8928,15 @@ class CapacityPlanner:
                 # Phase 3a: Pre-mark lane as cold so scheduler stops routing to it
                 self._mark_lane_cold(action.provider_id, action.lane_id)
 
-                # Phase 3b: Drain active requests — abort if drain fails
+                # Phase 3b: Drain active requests — abort if drain fails.
+                # As in the sleep branch, a carried-in deadline caps this wait
+                # by the time left on the call, and an exhausted budget reads
+                # as "not drained" and aborts the stop before any command is
+                # sent.
                 drained = await self._drain_lane(
                     action.provider_id,
                     action.lane_id,
-                    timeout_seconds=60.0,
+                    timeout_seconds=self._step_budget(deadline, 60.0),
                 )
                 if not drained:
                     logger.warning(
@@ -8872,7 +8952,9 @@ class CapacityPlanner:
                             action.provider_id,
                             "delete_lane",
                             {"lane_id": action.lane_id},
-                            timeout_seconds=int(min(timeout_seconds, 30)),
+                            timeout_seconds=int(
+                                min(timeout_seconds, 30.0, self._step_budget(deadline, timeout_seconds))
+                            ),
                         )
                         self._registry.update_desired_lane_remove(
                             action.provider_id,
@@ -8901,7 +8983,9 @@ class CapacityPlanner:
                             action.provider_id,
                             "apply_lanes",
                             {"lanes": desired},
-                            timeout_seconds=int(min(timeout_seconds, 30)),
+                            timeout_seconds=int(
+                                min(timeout_seconds, 30.0, self._step_budget(deadline, timeout_seconds))
+                            ),
                         )
                         rolled_back = isinstance(result, dict) and result.get("rolled_back")
                         if rolled_back:
@@ -8930,8 +9014,9 @@ class CapacityPlanner:
                 logger.warning("Unknown capacity action: %s", action.action)
                 return False
 
-            # Poll for confirmation
-            confirmed = await self._poll_confirmation(action, timeout_seconds)
+            # Poll for confirmation — under the shared deadline, only with
+            # the time still left on the call.
+            confirmed = await self._poll_confirmation(action, self._step_budget(deadline, timeout_seconds))
         finally:
             # Release the in-flight lane-id claim (load actions claim it at
             # the top of their branch) — runs even on CancelledError/BaseException,

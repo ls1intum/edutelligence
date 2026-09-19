@@ -19,6 +19,7 @@ left to clear it.
 from __future__ import annotations
 
 import sys
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 from logos.capacity.capacity_planner import CapacityPlanner
@@ -69,7 +70,7 @@ def _executor(planner, lanes: list, effect) -> AsyncMock:
     """Mock the confirmed executor. ``effect(lane, lanes)`` simulates what the
     executor's command did to the worker when it runs."""
 
-    async def run(action, timeout_seconds=60.0):
+    async def run(action, timeout_seconds=60.0, deadline=None):
         lane = next((item for item in lanes if item.get("lane_id") == action.lane_id), None)
         if lane is not None:
             effect(lane, lanes)
@@ -277,3 +278,41 @@ async def test_a_worker_disconnect_during_drain_is_an_error_not_an_unload(monkey
     executor.assert_not_awaited()
     planner._registry.unmark_lane_cold.assert_called_once_with(1, "lane-1")
     assert planner._marked_cold_lanes == set()
+
+
+# ── the whole ride is budgeted under the webservice read timeout ────────────
+
+
+def test_step_budget_caps_a_step_at_the_deadline():
+    planner = _planner([])
+    # No deadline carried in: the default is returned untouched.
+    assert planner._step_budget(None, 60.0) == 60.0
+    # A deadline in the future caps the step at the time left on the call.
+    future = time.monotonic() + 5.0
+    assert 4.0 < planner._step_budget(future, 60.0) <= 5.0
+    # An exhausted (past) deadline leaves nothing to spend.
+    assert planner._step_budget(time.monotonic() - 1.0, 60.0) == 0.0
+
+
+async def test_the_terminal_step_gets_the_remaining_endpoint_budget(monkeypatch):
+    lane = _lane()
+    lanes = [lane]
+    planner = _planner(lanes)
+    planner._drain_lane = AsyncMock(return_value=True)
+    _patch_ram_headroom(planner, monkeypatch, ok=True)
+    executor = _executor(planner, lanes, _sleep)
+
+    result = await planner.drain_lane_manually(1, "lane-1")
+
+    assert result["status"] == "slept"
+    # The executor is handed the endpoint budget as an absolute monotonic
+    # deadline. The strict wait above was instant in this test, so the
+    # deadline is essentially "now + the full endpoint budget" — that shared
+    # pot, not the per-step budgets, is what keeps the whole call under the
+    # webservice timeout. The 1 s of slack covers the gap between the drain
+    # starting and this assertion running.
+    deadline = executor.await_args.kwargs.get("deadline")
+    assert deadline is not None
+    now = time.monotonic()
+    assert now + CapacityPlanner.DRAIN_ENDPOINT_BUDGET_SECONDS - 1.0 < deadline
+    assert deadline <= now + CapacityPlanner.DRAIN_ENDPOINT_BUDGET_SECONDS

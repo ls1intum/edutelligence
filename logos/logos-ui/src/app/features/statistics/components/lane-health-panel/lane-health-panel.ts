@@ -4,6 +4,7 @@ import {
   OnChanges,
   OnDestroy,
   SimpleChanges,
+  computed,
   inject,
   signal,
   ChangeDetectionStrategy,
@@ -230,6 +231,15 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   wakingLaneId = signal<string | null>(null);
   sleepWakeError = signal<string | null>(null);
 
+  /** True while any sleep/drain/wake of any lane is in flight. All three
+   *  buttons — and all three handlers — gate on this instead of on their own
+   *  signal: a status refresh can swap a draining lane's button back to an
+   *  enabled Sleep, and the per-signal guard alone would let that click
+   *  through under a running drain, racing the admin commands on one lane. */
+  anyLaneActionInFlight = computed(
+    () => this.sleepingLaneId() !== null || this.drainingLaneId() !== null || this.wakingLaneId() !== null,
+  );
+
   // ── Load-lane state ──────────────────────────────────────────────────────
   pickerOpen = signal(false);
   modelsLoading = signal(false);
@@ -449,7 +459,9 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
 
   async handleSleep(laneId: string): Promise<void> {
     const pid = this.providerId;
-    if (pid == null || this.sleepingLaneId() != null) return;
+    // Gate on any in-flight action, not just a sleep: a drain (or wake) still
+    // running on any lane must not be raced by a sleep on this one.
+    if (pid == null || this.anyLaneActionInFlight()) return;
     const attempt = ++this.sleepAttempt;
     this.sleepingLaneId.set(laneId);
     this.sleepWakeError.set(null);
@@ -477,7 +489,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
    */
   async handleDrain(laneId: string): Promise<void> {
     const pid = this.providerId;
-    if (pid == null || this.drainingLaneId() != null) return;
+    // Gate on any in-flight action, not just a drain — see handleSleep.
+    if (pid == null || this.anyLaneActionInFlight()) return;
     const attempt = ++this.drainAttempt;
     this.drainingLaneId.set(laneId);
     this.sleepWakeError.set(null);
@@ -497,7 +510,8 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
 
   async handleWake(laneId: string): Promise<void> {
     const pid = this.providerId;
-    if (pid == null || this.wakingLaneId() != null) return;
+    // Gate on any in-flight action, not just a wake — see handleSleep.
+    if (pid == null || this.anyLaneActionInFlight()) return;
     const attempt = ++this.wakeAttempt;
     this.wakingLaneId.set(laneId);
     this.sleepWakeError.set(null);

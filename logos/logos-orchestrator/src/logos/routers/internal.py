@@ -973,8 +973,9 @@ async def internal_logosnode_drain_lane(data: InternalDrainLaneRequest, request:
     all. A lane that does not drain in time is left exactly as found: still
     awake, still serving, still routable.
 
-    The ride is bounded by the drain timeout plus the terminal step's command
-    and confirmation budgets, all sized to stay under the servlet thread
+    The ride is bounded by the planner's drain endpoint budget (the strict
+    wait plus the terminal step's own drain, command and confirmation all
+    spend one shared deadline), sized to stay under the servlet read timeout
     Spring keeps open for this call — hence the synchronous answer instead of
     a 202 with polling. The terminal step (sleep or unload) runs through the
     planner's confirmed executor, so the answer only arrives once the worker
