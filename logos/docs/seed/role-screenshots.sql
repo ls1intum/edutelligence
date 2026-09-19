@@ -270,10 +270,10 @@ SELECT
     m.id,
     p.id,
     'success',
-    date_trunc('day', now()) - ((g.n % 16) || ' days')::interval + ((g.n % 5) || ' hours')::interval,
-    date_trunc('day', now()) - ((g.n % 16) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '1 second',
-    date_trunc('day', now()) - ((g.n % 16) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '1.2 seconds',
-    date_trunc('day', now()) - ((g.n % 16) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '2 seconds',
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval,
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '1 second',
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '1.2 seconds',
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '2 seconds',
     false,
     0,
     k.user_id,
@@ -309,10 +309,32 @@ SELECT
 FROM users u
 JOIN api_keys k ON k.user_id = u.id AND k.name = 'docs-role-' || u.username || '-key'
 CROSS JOIN generate_series(1, 3) AS g(n)
-JOIN models m ON m.name = 'llama-3.1-8b-instruct'
+JOIN models m ON m.name = 'qwen-2.5-72b-instruct'
 JOIN providers pc ON pc.name = 'Docs Cloud (EU)'
 JOIN providers pl ON pl.name = 'Docs Local Worker'
 WHERE u.username IN ('tobias.wasner', 'alexandra.szuminska', 'henriette.huhn');
+
+-- Older mistral traffic so Model Management Last Used shows a dated row
+-- (date + relative age), not only Never / Today.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-mistral-lu-' || g.n,
+    k.id, m.id, p.id, 'success',
+    now() - interval '2 days' - (g.n || ' hours')::interval,
+    now() - interval '2 days' - (g.n || ' hours')::interval + interval '1 second',
+    now() - interval '2 days' - (g.n || ' hours')::interval + interval '1.2 seconds',
+    now() - interval '2 days' - (g.n || ' hours')::interval + interval '2 seconds',
+    false, 0, k.user_id, k.team_id, 'docs-role-screenshots',
+    true, true, 80000
+FROM generate_series(1, 3) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
+JOIN models m ON m.name = 'mistral-small-3.2-24b'
+JOIN providers p ON p.name = 'Docs Cloud (EU)';
 
 INSERT INTO usage_tokens (type_id, log_entry_id, token_count)
 SELECT tt.id, le.id, 350 + (le.id % 200)

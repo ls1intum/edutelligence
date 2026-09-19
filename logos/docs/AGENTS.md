@@ -127,10 +127,6 @@ Overwrite exactly these files (path relative to `static/img/roles/`):
 | `team-detail-cloud-usage.png` | owner or `logos_admin` | `/teams/<id>` — **Cloud Usage** |
 | `team-detail-settings.png` | owner or `logos_admin` | `/teams/<id>` — **Settings** |
 | `team-detail-providers.png` | `tobias.wasner` (`logos_admin` only) | `/teams/<id>` — **Providers** |
-
-Team detail is documented once under `roles/app-admin.md#teams` (tab walkthrough);
-Logos Admin links there and only adds the Providers shot. Do not keep
-separate `*-team-management-detail.png` per role.
 | `app-admin-my-workspace.png` | `alexandra.szuminska` | `/my-workspace` |
 | `app-admin-batches.png` | `alexandra.szuminska` | `/batches` |
 | `app-developer-models.png` | `henriette.huhn` | `/models` |
@@ -142,10 +138,14 @@ separate `*-team-management-detail.png` per role.
 | `ai-tools-step-connect.png` | same | `/ai-tools` — step **Connect** |
 | `ai-tools-step-verify.png` | same | `/ai-tools` — step **Verify** |
 
+Team detail is documented once under `roles/app-admin.md#teams` (tab walkthrough);
+Logos Admin links there and only adds the Providers shot. Do not keep
+separate `*-team-management-detail.png` per role.
+
 AI Tools is **not** documented per role — the wizard is identical for every
 role. Keep one step walkthrough under `roles/app-developer.md#ai-tools` and
 link App Admin / Logos Admin there. Capture the six `ai-tools-step-*.png`
-files (give the user a second API key so **Team** is not skipped). Do not
+files once (any role with a key; Team step needs more than one key). Do not
 reintroduce `*-ai-tools.png` per role.
 
 

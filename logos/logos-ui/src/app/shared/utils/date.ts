@@ -27,15 +27,31 @@ export function formatIsoDate(iso: string | null | undefined): string {
   return `${match[3]}.${match[2]}.${match[1]}`;
 }
 
+/** Primary label and optional age line for a "last used" cell. */
+export type LastUsedParts = { primary: string; age: string | null };
+
+/**
+ * Split "last used" into a primary line ("Never" / "Today" / "24.08.2026")
+ * and an optional age line ("(2 days ago)") so table cells can stack them
+ * instead of overflowing a single nowrap row.
+ */
+export function formatLastUsedParts(
+  iso: string | null | undefined,
+  now: Date = new Date(),
+): LastUsedParts {
+  if (!iso) return { primary: 'Never', age: null };
+  const d = new Date(iso);
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / MS_PER_DAY);
+  if (diffDays <= 0) return { primary: 'Today', age: null };
+  const age = diffDays === 1 ? '(1 day ago)' : `(${diffDays} days ago)`;
+  return { primary: formatGermanDate(d), age };
+}
+
 /**
  * "Last used" display for an ISO timestamp: "Never", "Today" or the German
  * date with the age in brackets, e.g. "24.08.2026 (2 days ago)".
  */
 export function formatLastUsed(iso: string | null | undefined, now: Date = new Date()): string {
-  if (!iso) return 'Never';
-  const d = new Date(iso);
-  const diffDays = Math.floor((now.getTime() - d.getTime()) / MS_PER_DAY);
-  if (diffDays <= 0) return 'Today';
-  const age = diffDays === 1 ? '(1 day ago)' : `(${diffDays} days ago)`;
-  return `${formatGermanDate(d)} ${age}`;
+  const { primary, age } = formatLastUsedParts(iso, now);
+  return age ? `${primary} ${age}` : primary;
 }

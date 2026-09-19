@@ -1,7 +1,25 @@
-import { daysSince, formatIsoDate, formatLastUsed } from './date';
+import { daysSince, formatIsoDate, formatLastUsed, formatLastUsedParts } from './date';
 
 describe('date utils', () => {
   const now = new Date('2026-08-26T12:00:00');
+
+  describe('formatLastUsedParts', () => {
+    it('splits date and age onto separate lines', () => {
+      expect(formatLastUsedParts(null, now)).toEqual({ primary: 'Never', age: null });
+      expect(formatLastUsedParts('2026-08-26T09:00:00', now)).toEqual({
+        primary: 'Today',
+        age: null,
+      });
+      expect(formatLastUsedParts('2026-08-25T12:00:00', now)).toEqual({
+        primary: '25.08.2026',
+        age: '(1 day ago)',
+      });
+      expect(formatLastUsedParts('2026-08-24T09:00:00', now)).toEqual({
+        primary: '24.08.2026',
+        age: '(2 days ago)',
+      });
+    });
+  });
 
   describe('formatLastUsed', () => {
     it('renders "Never" for a missing timestamp', () => {
