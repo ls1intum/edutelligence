@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -55,11 +56,19 @@ class TeamControllerTest {
            .andExpect(jsonPath("$").isArray());
     }
 
+    // The method-scoped fixture adds a case pair ("beta-team" id 2003,
+    // "Beta-Team" id 2004, inserted in the opposite order): equal names
+    // ignore case, so the assertion fails if the sort is case-sensitive or
+    // if the id tiebreak is missing (a stable sort would keep the physical
+    // row order).
     @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = "/sql/seed-team-ordering.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = "/sql/cleanup-team-ordering.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     void listTeams_is_sorted_by_name() throws Exception {
         mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$[*].name", contains("kc-team", "test-team")));
+           .andExpect(jsonPath("$[*].name", contains("beta-team", "Beta-Team", "kc-team", "test-team")));
     }
 
     @Test
