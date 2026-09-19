@@ -17,10 +17,17 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         lecture_id=12,
         lecture_unit_id=13,
         display_page_numbers=None,
+        force_reingest=False,
+        course_language="en",
     )
     pipeline.dto = SimpleNamespace(
         lecture_unit=lecture_unit,
         settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        )
     )
     pipeline.callback = SimpleNamespace(
         update=MagicMock(),
@@ -31,7 +38,13 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
     pipeline.get_course_language = MagicMock(return_value="en")
 
     version_chunk = SimpleNamespace(
-        properties={LectureUnitPageChunkSchema.PAGE_VERSION.value: 7}
+        properties={
+            LectureUnitPageChunkSchema.PAGE_VERSION.value: 7,
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
+            # A non-null display number keeps the unit skippable; a null one would
+            # (correctly) force a re-ingest to repopulate it.
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
+        }
     )
     existing_chunks = [
         SimpleNamespace(

@@ -151,6 +151,89 @@ class TranscriptionSettings(BaseModel):
     )
 
 
+class IngestionWorkerSettings(BaseModel):
+    """Configuration of the pull-based ingestion worker.
+
+    The worker discovers its Artemis upstreams from their authenticated health
+    checks (each announces its own base URL in a header), so there is no
+    upstream configuration here and Iris keeps no standing knowledge of its
+    callers. It claims lecture ingestion jobs from every discovered upstream
+    when it has free capacity and renews a lease for every run it executes on
+    the fixed heartbeat interval. capacity is shared across all upstreams and
+    replaces Artemis's global max-concurrent-jobs as the effective
+    parallelism: in pull mode this process only ever takes what it can run.
+    """
+
+    enabled: bool = Field(default=True)
+    capacity: int = Field(default=2)
+    poll_interval_seconds: float = Field(default=2.0)
+    heartbeat_interval_seconds: float = Field(default=5.0)
+    # Hostnames (case-insensitive, port ignored) an announced upstream must match to be
+    # registered. Empty (the default) accepts any http(s) URL, matching today's zero-config
+    # discovery for local and single-tenant deployments. Set this where Iris is reachable by
+    # parties other than its own Artemis installations, so a valid API key cannot point the
+    # worker's authenticated outbound requests at an arbitrary internal or external address.
+    allowed_upstream_hosts: list[str] = Field(default_factory=list)
+
+
+class LectureIngestionSettings(BaseModel):
+    """Tunables for the lecture-ingestion pipeline: vision retries, read-completeness
+    guards, and language detection. Defaults match the pipeline's original
+    hardcoded values.
+    """
+
+    vision_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description="Max attempts to interpret a slide via the vision LLM before failing the run.",
+    )
+    skip_check_fetch_limit: int = Field(
+        default=10_000,
+        ge=1,
+        description=(
+            "Max rows read when checking whether a unit's stored chunks are already "
+            "current and complete, and when counting a unit's distinct ingestion "
+            "generations. A read that hits this cap is treated as possibly "
+            "truncated/incomplete rather than trusted as a full sample."
+        ),
+    )
+    convergence_max_escalations: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            "After write-then-purge, how many times to escalate to a full "
+            "delete-and-rewrite if a stale generation the id-scoped purge missed is "
+            "still visible, before failing the run so the reconciler retries."
+        ),
+    )
+    language_detection_min_chars: int = Field(
+        default=200,
+        ge=1,
+        description=(
+            "Below this much aggregated deck text, language detection is unreliable "
+            "and default_language is used instead of guessing."
+        ),
+    )
+    language_detection_max_chars: int = Field(
+        default=10_000,
+        ge=1,
+        description="Max characters of deck text fed to the language detector per run.",
+    )
+    default_language: str = Field(
+        default="en",
+        description="Fallback language (ISO 639-1) when detection is skipped or fails.",
+    )
+
+    @model_validator(mode="after")
+    def validate_language_detection_bounds(self):
+        """Ensure the detector sample window is at least the gating threshold."""
+        if self.language_detection_max_chars < self.language_detection_min_chars:
+            raise ValueError(
+                "language_detection_max_chars must be >= language_detection_min_chars"
+            )
+        return self
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -162,6 +245,12 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    ingestion_worker: IngestionWorkerSettings = Field(
+        default_factory=IngestionWorkerSettings
+    )
+    lecture_ingestion: LectureIngestionSettings = Field(
+        default_factory=LectureIngestionSettings
+    )
 
     @classmethod
     def get_settings(cls):
