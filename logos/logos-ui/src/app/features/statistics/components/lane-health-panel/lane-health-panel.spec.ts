@@ -136,13 +136,14 @@ function lane(overrides: Partial<LaneSignalData> = {}): LaneSignalData {
 }
 
 /**
- * The Wake/Sleep buttons beside Unload.
+ * The Wake/Sleep/Drain buttons beside Unload.
  *
- * The buttons reach the two states the capacity planner also reaches on its
- * own, so they are offered only where they mean something: Wake on a lane
- * that is actually asleep, Sleep on one that is awake and idle. A busy lane
- * gets no Sleep button — the server would refuse it anyway, and the panel
- * would just display the refusal.
+ * The buttons reach the states the capacity planner also reaches on its own,
+ * so they are offered only where they mean something: Wake on a lane that is
+ * actually asleep, Sleep on one that is awake and idle, Drain on one that is
+ * still serving — Sleep is withheld from a busy lane (the click would block
+ * for the whole drain), and Drain is its busy counterpart: no new requests,
+ * wait for the in-flight ones, then sleep or unload.
  */
 describe('laneSleepAction', () => {
   it('offers Wake on a sleeping lane', () => {
@@ -159,13 +160,40 @@ describe('laneSleepAction', () => {
     expect(laneSleepAction(lane({ sleep_state: 'awake' }))).toBe('sleep');
   });
 
-  it('withholds Sleep from a lane that is serving', () => {
-    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 1 }))).toBeNull();
+  it('offers Drain on an awake lane that is serving', () => {
+    // The sleep button cannot take effect immediately on a busy lane, and
+    // the worker's wait-mode sleep would drop stragglers after its budget —
+    // Drain is the action that waits for the in-flight requests instead.
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 1 }))).toBe('drain');
   });
 
-  it('withholds both actions from a lane the backend cannot sleep', () => {
+  it('offers Drain on a busy lane even when its sleep capability is not reported yet', () => {
+    // A lane that never slept reports "unknown" until its first transition;
+    // the server decides sleep-versus-unload from the fresh snapshot.
+    expect(laneSleepAction(lane({ sleep_state: 'unknown', active_requests: 2 }))).toBe('drain');
+    expect(laneSleepAction(lane({ sleep_state: 'unsupported', active_requests: 2 }))).toBe('drain');
+    expect(laneSleepAction(lane({ sleep_state: null, active_requests: 2 }))).toBe('drain');
+  });
+
+  it('offers Drain when vLLM holds work even though active_requests is zero', () => {
+    // The strict drain waits for every activity counter to read zero, so a
+    // lane with queued/running vLLM work is busy even with no proxied
+    // requests: a best-effort Sleep could reach its budget and drop that
+    // work, so Drain is the action offered.
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 0, queue_waiting: 5 }))).toBe('drain');
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 0, requests_running: 2 }))).toBe('drain');
+  });
+
+  it('offers Sleep on an awake lane that is idle across every counter', () => {
+    expect(
+      laneSleepAction(lane({ sleep_state: 'awake', active_requests: 0, queue_waiting: 0, requests_running: 0 })),
+    ).toBe('sleep');
+  });
+
+  it('withholds both actions from an idle lane the backend cannot sleep', () => {
     // A lane with sleep mode disabled reports "unsupported"; a lane that
-    // never slept reports "unknown" until its first transition.
+    // never slept reports "unknown" until its first transition. Neither has
+    // anything to sleep while idle, and nothing to drain.
     expect(laneSleepAction(lane({ sleep_state: 'unsupported' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: 'unknown' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: null }))).toBeNull();
@@ -595,7 +623,7 @@ describe('LaneHealthPanel load outcome poll', () => {
   it('stops the poll on a backend that predates the load_status route', async () => {
     // A 404/501 is not a blip to retry: the deployed Spring has no route, so
     // the poll would 404 until the cap. Stop and fall back to the
-    // lane-appearance check, which needs no backend support.
+    // lane-appearance check, which needs no application server support.
     await acceptLoad();
     loadStatusStub = () =>
       Promise.reject(Object.assign(new Error('Not Found'), { status: 404 }));
@@ -849,5 +877,79 @@ describe('LaneHealthPanel action feedback follows the worker', () => {
     unloadSettlers[2]();
     await second;
     expect(panel.unloadingLaneId()).toBeNull();
+  });
+});
+
+describe('LaneHealthPanel single-action gate', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let sleepLane: ReturnType<typeof vi.fn>;
+  let drainLane: ReturnType<typeof vi.fn>;
+  let wakeLane: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    // Each action hangs until the test settles it — the in-flight state the
+    // gate is about to refuse or admit.
+    sleepLane = vi.fn(() => new Promise<void>(() => {}));
+    drainLane = vi.fn(() => new Promise<void>(() => {}));
+    wakeLane = vi.fn(() => new Promise<void>(() => {}));
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [{ provide: StatisticsService, useValue: { sleepLane, drainLane, wakeLane } }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-foo': lane({ runtime_state: 'running' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+  });
+
+  it('refuses a sleep while a drain is in flight', async () => {
+    const draining = panel.handleDrain('planner-foo');
+
+    await panel.handleSleep('planner-foo');
+
+    expect(drainLane).toHaveBeenCalledTimes(1);
+    expect(sleepLane).not.toHaveBeenCalled();
+    expect(panel.drainingLaneId()).toBe('planner-foo');
+    void draining;
+  });
+
+  it('refuses a wake while a sleep is in flight', async () => {
+    const sleeping = panel.handleSleep('planner-foo');
+
+    await panel.handleWake('planner-foo');
+
+    expect(sleepLane).toHaveBeenCalledTimes(1);
+    expect(wakeLane).not.toHaveBeenCalled();
+    expect(panel.sleepingLaneId()).toBe('planner-foo');
+    void sleeping;
+  });
+
+  it('lets the next action through once the running one has settled', async () => {
+    let settleDrain: () => void = () => {};
+    drainLane.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleDrain = resolve;
+        }),
+    );
+    const draining = panel.handleDrain('planner-foo');
+
+    await panel.handleSleep('planner-foo');
+    expect(sleepLane).not.toHaveBeenCalled();
+
+    settleDrain();
+    await draining;
+    expect(panel.anyLaneActionInFlight()).toBe(false);
+
+    // Not awaited on purpose: sleepLane hangs by design, and the service call
+    // happens synchronously before the handler's first await.
+    const sleeping = panel.handleSleep('planner-foo');
+    expect(sleepLane).toHaveBeenCalledTimes(1);
+    void sleeping;
   });
 });

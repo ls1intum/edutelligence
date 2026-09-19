@@ -193,3 +193,176 @@ describe('WorkerGpuPanel calibration message', () => {
     });
   });
 });
+
+/**
+ * The "Stop calibration" button reuses calibrate's staleness-guard pattern
+ * (generation counter + provider check) — these tests exercise the same
+ * mechanics for stopState, not every scenario calibrateState already covers.
+ */
+describe('WorkerGpuPanel stop calibration', () => {
+  let fixture: ComponentFixture<WorkerGpuPanel>;
+  let panel: WorkerGpuPanel;
+  let stopResult: { body?: unknown; error?: unknown };
+  let settleStop: (() => void) | null;
+
+  beforeEach(async () => {
+    stopResult = {};
+    settleStop = null;
+    await TestBed.configureTestingModule({
+      imports: [WorkerGpuPanel],
+      providers: [
+        {
+          provide: StatisticsService,
+          useValue: {
+            stopCalibration: () =>
+              new Promise((resolve, reject) => {
+                settleStop = () => (stopResult.error ? reject(stopResult.error) : resolve(stopResult.body));
+              }),
+          },
+        },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WorkerGpuPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('providerLatestSamples', { 'w-a': null, 'w-b': null });
+    fixture.componentRef.setInput('providerDevices', {});
+    fixture.componentRef.setInput('providerMeta', {
+      'w-a': { provider_id: 1, calibrating: true },
+      'w-b': { provider_id: 2, calibrating: false },
+    });
+    fixture.componentRef.setInput('lanesByProvider', {});
+    fixture.componentRef.setInput('activeProvider', 'w-a');
+    fixture.detectChanges();
+  });
+
+  function switchTo(provider: string): void {
+    const previous = panel.activeProvider;
+    panel.activeProvider = provider;
+    panel.ngOnChanges({ activeProvider: new SimpleChange(previous, provider, true) });
+  }
+
+  it('only offers the button while providerMeta reports calibrating', () => {
+    expect(panel.canStop).toBe(true);
+    switchTo('w-b');
+    expect(panel.canStop).toBe(false);
+  });
+
+  it('does not offer the button once the calibrating worker goes offline', () => {
+    expect(panel.canStop).toBe(true);
+    fixture.componentRef.setInput('providerMeta', {
+      'w-a': { provider_id: 1, calibrating: true, connection_state: 'offline' },
+      'w-b': { provider_id: 2, calibrating: false },
+    });
+    fixture.detectChanges();
+    expect(panel.canStop).toBe(false);
+  });
+
+  it('shows the cancelled message for the worker it stopped', async () => {
+    const pending = panel.handleStopCalibration();
+    expect(panel.stopState().kind).toBe('loading');
+
+    stopResult.body = { was_active: true, current_model: 'org/a' };
+    settleStop?.();
+    await pending;
+
+    expect(panel.stopState()).toEqual({
+      kind: 'success',
+      message: 'Calibration cancelled (was calibrating org/a).',
+    });
+  });
+
+  it('shows a generic cancelled message when current_model is absent', async () => {
+    const pending = panel.handleStopCalibration();
+    stopResult.body = { was_active: true };
+    settleStop?.();
+    await pending;
+
+    expect(panel.stopState()).toEqual({
+      kind: 'success',
+      message: 'Calibration cancelled.',
+    });
+  });
+
+  it('reports when nothing was running', async () => {
+    const pending = panel.handleStopCalibration();
+    stopResult.body = { was_active: false };
+    settleStop?.();
+    await pending;
+
+    expect(panel.stopState()).toEqual({
+      kind: 'success',
+      message: 'No calibration session was running.',
+    });
+  });
+
+  it('shows an error for a failed stop call', async () => {
+    const pending = panel.handleStopCalibration();
+    stopResult.error = { status: 500, error: { error: 'boom' } };
+    settleStop?.();
+    await pending;
+
+    expect(panel.stopState()).toEqual({ kind: 'error', message: 'boom' });
+  });
+
+  it('drops a stale answer when the operator switches worker mid-flight', async () => {
+    const pending = panel.handleStopCalibration();
+    switchTo('w-b');
+    expect(panel.stopState().kind).toBe('idle');
+
+    stopResult.body = { was_active: true, current_model: 'org/a' };
+    settleStop?.();
+    await pending;
+
+    expect(panel.stopState().kind).toBe('idle');
+  });
+});
+
+/**
+ * Worker-uptime and ws-uptime chips: worker_started_at and
+ * connected_at are two independent clocks — a bridge reconnect resets the
+ * latter without restarting the worker process, so the labels must track
+ * their own timestamp rather than collapsing into one "uptime" value.
+ */
+describe('WorkerGpuPanel uptime labels', () => {
+  let fixture: ComponentFixture<WorkerGpuPanel>;
+  let panel: WorkerGpuPanel;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [WorkerGpuPanel],
+      providers: [{ provide: StatisticsService, useValue: {} }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WorkerGpuPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('providerLatestSamples', { 'w-a': null });
+    fixture.componentRef.setInput('providerDevices', {});
+    fixture.componentRef.setInput('lanesByProvider', {});
+    fixture.componentRef.setInput('activeProvider', 'w-a');
+  });
+
+  it('reads null for both labels when the worker predates uptime reporting', () => {
+    fixture.componentRef.setInput('providerMeta', { 'w-a': { provider_id: 1 } });
+    fixture.componentRef.setInput('nowMs', new Date('2026-09-16T12:00:00Z').getTime());
+    fixture.detectChanges();
+
+    expect(panel.workerUptimeLabel).toBeNull();
+    expect(panel.wsUptimeLabel).toBeNull();
+  });
+
+  it('formats worker uptime and ws uptime from their own independent timestamps', () => {
+    fixture.componentRef.setInput('providerMeta', {
+      'w-a': {
+        provider_id: 1,
+        // Worker process has been up a full day; the bridge reconnected 30
+        // minutes ago — the two chips must not read the same value.
+        worker_started_at: '2026-09-15T12:00:00Z',
+        connected_at: '2026-09-16T11:30:00Z',
+      },
+    });
+    fixture.componentRef.setInput('nowMs', new Date('2026-09-16T12:00:00Z').getTime());
+    fixture.detectChanges();
+
+    expect(panel.workerUptimeLabel).toBe('1d 0h');
+    expect(panel.wsUptimeLabel).toBe('30m');
+  });
+});

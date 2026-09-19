@@ -62,6 +62,13 @@ export class TeamManagement implements OnInit {
   createLoading = signal(false);
   createError = signal('');
 
+  // ── Team queue priority (logos_admin only) ──────────────────────────────
+  /** Team ids with a priority PATCH in flight, one entry per team so
+   *  overlapping saves on different rows don't unlock each other's
+   *  selectors. */
+  prioritySaving = signal<Set<number>>(new Set());
+  priorityError = signal('');
+
   // ── Computed ─────────────────────────────────────────────────────────────
   isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
   isAppAdmin = computed(() => this.auth.currentUser()?.role === 'app_admin');
@@ -146,6 +153,56 @@ export class TeamManagement implements OnInit {
 
   navigateToTeam(id: number): void {
     this.router.navigate(['/teams', id]);
+  }
+
+  // ── Team queue priority ─────────────────────────────────────────────────
+  /** Select options: Default (unset) plus every value the API accepts (1–10),
+   *  with Low/Normal/High annotating the classic bucket values. */
+  readonly priorityOptions: { value: string; label: string }[] = [
+    { value: '', label: 'Default' },
+    ...Array.from({ length: 10 }, (_, i): { value: string; label: string } => {
+      const v = i + 1;
+      const bucket: Record<number, string> = { 1: 'Low', 5: 'Normal', 10: 'High' };
+      return { value: String(v), label: bucket[v] ? `${bucket[v]} (${v})` : String(v) };
+    }),
+  ];
+
+  priorityLabel(team: Team): string {
+    if (team.priority === null || team.priority === undefined) return 'Default';
+    const known: Record<number, string> = { 1: 'Low', 5: 'Normal', 10: 'High' };
+    return known[team.priority] ?? String(team.priority);
+  }
+
+  /** The option value (a string, matching `priorityOptions`) currently
+   *  selected for the team's priority; '' = Default/unset. Selection is
+   *  expressed on the <option> via [selected], not as [value] on the
+   *  <select> — a [value] binding on the <select> is applied before the @for
+   *  has produced any <option>, so the browser drops it and the select falls
+   *  back to the first option (Default) on every render, e.g. after a reload. */
+  priorityValue(team: Team): string {
+    return team.priority === null || team.priority === undefined ? '' : String(team.priority);
+  }
+
+  /** Optimistic select change: rolls back and reports if the PATCH fails. */
+  async changeTeamPriority(team: Team, value: string): Promise<void> {
+    const priority = value === '' ? null : Number(value);
+    const previous = team.priority;
+    this.priorityError.set('');
+    this.teams.update((list) => list.map((t) => (t.id === team.id ? { ...t, priority } : t)));
+    this.prioritySaving.update((saving) => new Set(saving).add(team.id));
+    try {
+      await this.teamService.updateTeamPriority(team.id, priority);
+    } catch {
+      this.teams.update((list) => list.map((t) => (t.id === team.id ? { ...t, priority: previous } : t)));
+      this.priorityError.set(`Failed to update the queue priority of '${team.name}'.`);
+    } finally {
+      // Unlock only this team's selector — other rows may still be saving.
+      this.prioritySaving.update((saving) => {
+        const next = new Set(saving);
+        next.delete(team.id);
+        return next;
+      });
+    }
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

@@ -31,6 +31,8 @@ import asyncio
 import csv
 import json
 import math
+import os
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -292,20 +294,31 @@ async def collect_runtime_samples(
     client: httpx.AsyncClient,
     base_url: str,
     logos_key: str,
+    internal_secret: str,
     stop_event: asyncio.Event,
     interval_s: float,
+    telemetry_base: Optional[str] = None,
 ) -> list[dict]:
     samples: list[dict] = []
     headers = _json_headers(logos_key)
+    # scheduler_state is internal-only (secret-gated, no public router), so the
+    # runtime snapshots are pulled from a base that can reach the orchestrator
+    # directly. In local mode that is the same as base_url; for remote runs the
+    # wrapper points it at an internally reachable URL. Falls back to base_url
+    # so an explicit --telemetry-base is not required just to run at all.
+    telemetry = (telemetry_base or base_url).rstrip("/")
+    warned = {"done": False}
 
     async def capture_once() -> None:
         sample: dict[str, object] = {"captured_at": isoformat_utc(datetime.now(timezone.utc))}
         try:
+            # scheduler_state is gated on the shared internal secret, not a
+            # user API key — the sample carries cluster internals.
             scheduler_payload = await _request_json(
                 client,
                 "GET",
-                f"{base_url.rstrip('/')}/logosdb/scheduler_state",
-                headers=headers,
+                f"{telemetry}/logosdb/scheduler_state",
+                headers={"Authorization": f"Bearer {internal_secret}"},
             )
             sample["scheduler_state"] = scheduler_payload
             provider_ids: list[int] = []
@@ -315,13 +328,16 @@ async def collect_runtime_samples(
                 if isinstance(providers, dict):
                     provider_ids = [int(provider_id) for provider_id in providers.keys() if str(provider_id).isdigit()]
 
+            # provider status uses a different credential than scheduler_state:
+            # a root logos_key (`headers`), not the internal secret — a
+            # non-root key here yields scheduler data but no provider snapshots.
             provider_status: dict[str, object] = {}
             for provider_id in provider_ids:
                 try:
                     provider_status[str(provider_id)] = await _request_json(
                         client,
                         "POST",
-                        f"{base_url.rstrip('/')}/logosdb/providers/logosnode/status",
+                        f"{telemetry}/logosdb/providers/logosnode/status",
                         headers=headers,
                         json_body={"logos_key": logos_key, "provider_id": provider_id},
                     )
@@ -330,6 +346,19 @@ async def collect_runtime_samples(
             sample["provider_status"] = provider_status
         except Exception as exc:  # noqa: BLE001
             sample["error"] = str(exc)
+            # A scheduler_state failure empties every snapshot in
+            # runtime_samples.jsonl; make the first one loud instead of letting
+            # the run "complete" with all documented snapshots missing.
+            if not warned["done"]:
+                warned["done"] = True
+                print(
+                    f"Warning: runtime telemetry unavailable at {telemetry} ({exc}). "
+                    "scheduler_state and provider_status snapshots will be missing "
+                    "for this run. Point --telemetry-base at a base that can reach "
+                    "the orchestrator's internal endpoints.",
+                    file=sys.stderr,
+                    flush=True,
+                )
         samples.append(sample)
 
     await capture_once()
@@ -375,13 +404,10 @@ def fetch_runtime_artifacts(
     end_ts: datetime,
     runtime_samples: list[dict],
 ) -> RuntimeArtifacts:
-    vram_day = start_ts.astimezone(timezone.utc).date().isoformat()
-    provider_vram = _request_json_sync(
-        "POST",
-        f"{base_url.rstrip('/')}/logosdb/get_ollama_vram_stats",
-        logos_key=logos_key,
-        json_body={"day": vram_day},
-    )
+    # The orchestrator's /logosdb/get_ollama_vram_stats endpoint was removed
+    # (the webservice serves the dashboard with proper auth); VRAM history is
+    # covered by the per-sample provider_status payloads instead.
+    provider_vram = None
     request_log_stats = _request_json_sync(
         "POST",
         f"{base_url.rstrip('/')}/logosdb/request_log_stats",
@@ -567,8 +593,7 @@ def is_local_api_base(base_url: str) -> bool:
 def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
     with DBManager() as db:
         rows = db.session.execute(
-            text(
-                """
+            text("""
                 SELECT
                     le.id,
                     le.request_id,
@@ -597,8 +622,7 @@ def fetch_log_records(process_id: int, start_log_id: int) -> List[LogRecord]:
                 WHERE le.process_id = :pid
                   AND le.id > :start_id
                 ORDER BY le.id ASC
-                """
-            ),
+                """),
             {"pid": process_id, "start_id": start_log_id},
         ).fetchall()
 
@@ -1397,7 +1421,9 @@ async def run_workload(
     workload: Sequence[WorkloadEntry],
     logos_key: str,
     base_url: str,
+    internal_secret: str,
     request_timeout_s: float,
+    telemetry_base: Optional[str] = None,
 ) -> tuple[List[RequestResult], list[dict]]:
     async def report_progress(
         start_monotonic: float,
@@ -1427,8 +1453,10 @@ async def run_workload(
                 client,
                 base_url,
                 logos_key,
+                internal_secret,
                 stop_event,
                 interval_s=1.0,
+                telemetry_base=telemetry_base,
             )
         )
         progress_task = asyncio.create_task(
@@ -1480,11 +1508,33 @@ def wait_for_log_records(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay workload against Logos API.")
     parser.add_argument("--logos-key", required=True, help="Logos API key used for authentication.")
+    parser.add_argument(
+        "--internal-secret",
+        default=os.environ.get("LOGOS_INTERNAL_SECRET", ""),
+        help="Shared orchestrator internal secret (gates /logosdb/scheduler_state).",
+    )
     parser.add_argument("--workload", type=Path, required=True, help="Path to workload CSV.")
     parser.add_argument(
         "--api-base",
         default="http://localhost:8080",
         help="Base URL for the Logos API.",
+    )
+    parser.add_argument(
+        "--telemetry-base",
+        default=None,
+        help=(
+            "Base URL for the internal runtime-sampling endpoints "
+            "(/logosdb/scheduler_state, /logosdb/providers/logosnode/status). "
+            "Defaults to --api-base. For remote runs point this at a base that "
+            "can reach the orchestrator's internal endpoints, which are not on "
+            "the public Traefik routers. The two use different credentials: "
+            "scheduler_state is gated on the internal secret (carried as a "
+            "Bearer token here, so the base must be HTTPS or a local port "
+            "behind an authenticated tunnel — a plain-HTTP non-local host is "
+            "refused), while provider status requires a root logos_key (a "
+            "non-root --logos-key yields scheduler data but no provider "
+            "snapshots)."
+        ),
     )
     parser.add_argument("--output", type=Path, help="Destination CSV file.")
     parser.add_argument(
@@ -1507,6 +1557,20 @@ def main() -> None:
 
     workload = parse_workload(args.workload)
     local_mode = is_local_api_base(args.api_base)
+    telemetry_base = (args.telemetry_base or args.api_base).rstrip("/")
+    # The internal secret reaches the telemetry base as a Bearer token. Loopback
+    # and HTTPS keep it off any untrusted link; plain HTTP to a non-local host
+    # would put the shared secret in cleartext on the workstation-to-deployment
+    # path (whoever can read it can call every /internal/* endpoint), so refuse.
+    if urlparse(telemetry_base).scheme.lower() == "http" and not is_local_api_base(telemetry_base):
+        print(
+            "Error: --telemetry-base uses plain HTTP for a non-local host "
+            f"({telemetry_base}). The internal secret would cross that link in "
+            "cleartext. Use an HTTPS telemetry URL, or an authenticated "
+            "tunnel/port-forward to a local port (e.g. http://127.0.0.1:18443).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     process_id = None
     original_log = None
     restore_log = "BILLING"
@@ -1524,7 +1588,14 @@ def main() -> None:
     print(f"Executing {len(workload)} requests via {args.api_base} (/v1/...)")
     try:
         results, runtime_samples = asyncio.run(
-            run_workload(workload, args.logos_key, args.api_base, args.request_timeout_s)
+            run_workload(
+                workload,
+                args.logos_key,
+                args.api_base,
+                args.internal_secret,
+                args.request_timeout_s,
+                telemetry_base,
+            )
         )
         if local_mode:
             logs = wait_for_log_records(
@@ -1565,6 +1636,8 @@ def main() -> None:
             {
                 "workload": str(args.workload),
                 "api_base": args.api_base,
+                "telemetry_base": telemetry_base,
+                "telemetry_ok": any("scheduler_state" in sample for sample in runtime_samples),
                 "request_timeout_s": args.request_timeout_s,
                 "request_count": len(results),
                 "experiment_name": output_layout.experiment_name,

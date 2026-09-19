@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Fake ``nvidia-smi`` — renders the GPU simulator's state file.
+
+The worker reads the GPU through exactly three invocation shapes:
+
+* ``--query-gpu=<fields> --format=csv[,noheader][,nounits]``
+  (``gpu.GpuMetricsCollector``, ``node_health``, ``calibration``,
+  ``VllmProcessHandle._detect_cuda_arch``)
+* ``--query-compute-apps=pid,used_memory --format=csv,noheader,nounits``
+  (``_verify_vram_released``, ``LaneManager._query_process_vram_map``)
+* bare ``nvidia-smi`` (the watchdog's diagnostics dump)
+
+This shim is field-driven rather than shape-driven: it answers whatever field
+list it is handed, so a new query in the worker does not need a change here.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+
+# The worker spawns us as a bare subprocess, so nothing is on PYTHONPATH.
+# harness/gpusim/bin/nvidia-smi -> harness/gpusim/bin -> harness/gpusim -> harness -> e2e
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from harness.gpusim import state as gpustate  # noqa: E402
+
+ARG_QUERY_GPU = "--query-gpu="
+ARG_QUERY_APPS = "--query-compute-apps="
+ARG_FORMAT = "--format="
+
+
+def _parse_format(argv: list[str]) -> tuple[bool, bool]:
+    """Return (noheader, nounits) from the ``--format=`` argument."""
+    for arg in argv:
+        if arg.startswith(ARG_FORMAT):
+            parts = {p.strip() for p in arg[len(ARG_FORMAT) :].split(",")}
+            return "noheader" in parts, "nounits" in parts
+    return False, False
+
+
+def _parse_fields(argv: list[str], prefix: str) -> list[str] | None:
+    for arg in argv:
+        if arg.startswith(prefix):
+            return [f.strip() for f in arg[len(prefix) :].split(",") if f.strip()]
+    return None
+
+
+def _query_gpu(sim: gpustate.GpuSimState, fields: list[str], noheader: bool) -> str:
+    lines = []
+    if not noheader:
+        lines.append(", ".join(fields))
+    for dev in sim.visible_devices():
+        lines.append(", ".join(sim.field_value(dev, name) for name in fields))
+    return "\n".join(lines)
+
+
+def _query_compute_apps(sim: gpustate.GpuSimState, fields: list[str], noheader: bool) -> str:
+    lines = []
+    if not noheader:
+        lines.append(", ".join(fields))
+    for alloc in sim.allocations:
+        rendered = []
+        for name in fields:
+            if name == "pid":
+                rendered.append(str(alloc.pid))
+            elif name in ("used_memory", "used_gpu_memory"):
+                rendered.append(str(int(round(alloc.mb))))
+            elif name == "gpu_uuid":
+                dev = sim.device(alloc.device_index)
+                rendered.append(dev.fields.get("uuid", "") if dev else "")
+            elif name == "process_name":
+                rendered.append("/opt/venv/bin/python3")
+            else:
+                rendered.append("[Not Supported]")
+        lines.append(", ".join(rendered))
+    return "\n".join(lines)
+
+
+def _bare_table(sim: gpustate.GpuSimState) -> str:
+    """A recognisable, if abbreviated, stand-in for the full nvidia-smi table.
+
+    The watchdog captures this verbatim into its diagnostics dump, so it only
+    has to be plausible and to contain the per-device state a human would look
+    for after a wedge.
+    """
+    head = (
+        f"NVIDIA-SMI {sim.driver_version}   Driver Version: {sim.driver_version}   "
+        f"CUDA Version: {sim.cuda_version}\n"
+        "+-----------------------------------------------------------------------------+\n"
+        "| GPU  Name                 Pwr:Usage/Cap |         Memory-Usage | GPU-Util    |\n"
+        "|=============================================================================|"
+    )
+    rows = []
+    for dev in sim.visible_devices():
+        rows.append(
+            f"|   {dev.index}  {sim.field_value(dev, 'name'):<20} "
+            f"{sim.field_value(dev, 'power.draw'):>8}W | "
+            f"{sim.field_value(dev, 'memory.used'):>7}MiB / {sim.field_value(dev, 'memory.total'):>7}MiB | "
+            f"{sim.field_value(dev, 'utilization.gpu'):>3}%        |"
+        )
+    tail = "+-----------------------------------------------------------------------------+"
+    procs = ["| Processes:                                                                  |"]
+    for alloc in sim.allocations:
+        procs.append(f"|    {alloc.device_index}   N/A  N/A  {alloc.pid:>8}      C   python3   {int(alloc.mb):>7}MiB |")
+    return "\n".join([head, *rows, tail, *procs, tail])
+
+
+def main(argv: list[str]) -> int:
+    try:
+        sim = gpustate.load()
+    except gpustate.GpuSimStateError as exc:
+        print(f"nvidia-smi (gpusim): {exc}", file=sys.stderr)
+        return 9
+
+    if sim.smi.hang_seconds > 0:
+        time.sleep(sim.smi.hang_seconds)
+
+    if sim.smi.absent:
+        # A shim that is present but reports itself missing. Prefer omitting
+        # the binary from PATH for the "no NVIDIA runtime" case — callers
+        # distinguish FileNotFoundError from a non-zero exit.
+        print("nvidia-smi: command not found", file=sys.stderr)
+        return 127
+
+    if sim.smi.exit_code != 0:
+        if sim.smi.stderr:
+            print(sim.smi.stderr, file=sys.stderr)
+        else:
+            print("Unable to determine the device handle for GPU: Unknown Error", file=sys.stderr)
+        return sim.smi.exit_code
+
+    noheader, _nounits = _parse_format(argv)
+
+    gpu_fields = _parse_fields(argv, ARG_QUERY_GPU)
+    if gpu_fields is not None:
+        out = _query_gpu(sim, gpu_fields, noheader)
+        if out:
+            print(out)
+        return 0
+
+    app_fields = _parse_fields(argv, ARG_QUERY_APPS)
+    if app_fields is not None:
+        out = _query_compute_apps(sim, app_fields, noheader)
+        if out:
+            print(out)
+        return 0
+
+    print(_bare_table(sim))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

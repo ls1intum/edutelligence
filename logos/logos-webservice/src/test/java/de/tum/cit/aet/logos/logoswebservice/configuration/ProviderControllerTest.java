@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.configuration;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -10,6 +11,7 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
@@ -23,11 +25,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
@@ -54,6 +65,16 @@ class ProviderControllerTest {
     // Mocked so the price refresh triggered by connect_model_provider does not
     // reach the live litellm catalog during tests.
     @MockitoBean PriceUpdaterService priceUpdaterService;
+    // Mocked so stopCalibration/calibrateUncalibrated tests never make a real
+    // outbound call to an orchestrator — only the request-body binding into
+    // OrchestratorWorkerAdminClient's int/String args is under test here.
+    @MockitoBean OrchestratorWorkerAdminClient workerAdminClient;
+    // Mocked so tests can assert what the endpoint announces to the
+    // orchestrator instead of sending nothing (no orchestrator URL in tests).
+    @MockitoBean OrchestratorNotificationService orchestratorNotificationService;
+    // Mocked so the status endpoint is testable without an orchestrator URL.
+    @MockitoBean OrchestratorModelSyncClient modelSyncClient;
+    @MockitoBean ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -274,6 +295,7 @@ class ProviderControllerTest {
         // Without this refresh a freshly linked cloud model kept reporting a
         // cost of zero until the next daily full refresh.
         verify(priceUpdaterService).updatePricesForModelAsync(5002);
+        verify(modelCapabilitiesUpdaterService).updateCapabilitiesForModelAsync(5002, "gpt-3.5");
     }
 
     @Test
@@ -305,6 +327,93 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.totalProviders").isNumber());
+    }
+
+    @Test
+    void refreshModels_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+        verify(orchestratorNotificationService, never()).notifyRefresh(anyBoolean(), anyBoolean());
+    }
+
+    @Test
+    void refreshModels_triggersCloudModelSync() throws Exception {
+        when(orchestratorNotificationService.sendRefreshSync(false, true)).thenReturn(true);
+
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model refresh triggered."));
+
+        // syncCloudModels must be true: a plain pipeline refresh would leave
+        // the upstream listings unread until the next 15-minute interval.
+        verify(orchestratorNotificationService).sendRefreshSync(false, true);
+    }
+
+    @Test
+    void refreshModels_reports503WhenTheOrchestratorCouldNotBeReached() throws Exception {
+        // The mock's default false: the pass was never handed over, so a 200
+        // would leave the UI polling a completion status that can never come.
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isServiceUnavailable())
+           .andExpect(jsonPath("$.error").value(containsString("orchestrator")));
+    }
+
+    @Test
+    void modelSyncStatus_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void modelSyncStatus_reportsTheOrchestratorState() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(true);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(true));
+    }
+
+    @Test
+    void modelSyncStatus_reportsExplicitIdle() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(false);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(false));
+    }
+
+    @Test
+    void modelSyncStatus_reportsUnknownWhenTheStatusCouldNotBeRead() throws Exception {
+        // null: the orchestrator did not answer. The UI settles an accepted
+        // refresh only on an explicit false, so the endpoint has to be able
+        // to express "unknown" — collapsing it to false would end the wait
+        // on a transient failure.
+        when(modelSyncClient.isSyncRunning()).thenReturn(null);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running", nullValue()));
     }
 
     @Test
@@ -383,5 +492,37 @@ class ProviderControllerTest {
                 .content("{\"lane_id\":\"lane-1\"}"))
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+    }
+
+    @Test
+    void stopCalibration_bindsSnakeCaseProviderIdFromRequestBody() throws Exception {
+        // StopCalibrationRequestDTO.providerId() must actually be populated
+        // from the UI's snake_case "provider_id" body — a prior review
+        // thread questioned whether the app's custom ObjectMapper bean
+        // (JacksonConfig) still honours spring.jackson.property-naming-
+        // strategy=SNAKE_CASE. Asserting the int reaching
+        // OrchestratorWorkerAdminClient proves the binding, independent of
+        // internal Spring wiring details.
+        when(workerAdminClient.stopCalibration(6001))
+            .thenReturn(ResponseEntity.ok(Map.of("was_active", false)));
+
+        mvc.perform(post("/logosdb/providers/logosnode/stop_calibration")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.was_active").value(false));
+
+        verify(workerAdminClient).stopCalibration(eq(6001));
+    }
+
+    @Test
+    void stopCalibration_requiresProviderId() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/stop_calibration")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id is required"));
     }
 }

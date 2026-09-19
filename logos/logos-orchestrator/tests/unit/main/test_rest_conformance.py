@@ -7,6 +7,7 @@ proxied upstream operation is a POST. Other methods must yield a proper
 """
 
 from fastapi import HTTPException
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 import logos as main
@@ -39,9 +40,26 @@ def test_models_listing_still_get():
 def test_openai_models_alias_registered():
     # The /openai prefix mirrors /v1; model listing/retrieval must exist there
     # too (previously the catch-all answered these GETs with 400).
-    routes = {(route.path, method) for route in main.app.routes for method in getattr(route, "methods", None) or ()}
+    routes = {
+        (route.path, method)
+        for route in iter_route_contexts(main.app.routes)
+        for method in getattr(route, "methods", None) or ()
+    }
     assert ("/openai/models", "GET") in routes
     assert ("/openai/models/{model_id:path}", "GET") in routes
+
+
+def test_classify_registered_as_vllm_native_route():
+    # /classify is vLLM's own classification endpoint (bare path, not under
+    # /v1) — without this registration a calibrated classification model
+    # is unreachable from clients even though calibration itself talks to
+    # vLLM directly and never goes through this router.
+    routes = {
+        (route.path, method)
+        for route in iter_route_contexts(main.app.routes)
+        for method in getattr(route, "methods", None) or ()
+    }
+    assert ("/classify", "POST") in routes
 
 
 async def test_http_exception_handler_preserves_headers():

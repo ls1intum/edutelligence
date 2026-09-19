@@ -31,8 +31,10 @@ from logos.dbutils.dbrequest import (
     InternalBenchmarkRequest,
     InternalCalibrateRequest,
     InternalDeleteLaneRequest,
+    InternalDrainLaneRequest,
     InternalLaneLoadStatusRequest,
     InternalSleepLaneRequest,
+    InternalStopCalibrationRequest,
     InternalWakeLaneRequest,
     RefreshPipelineRequest,
 )
@@ -178,7 +180,24 @@ async def internal_refresh_pipeline(data: RefreshPipelineRequest, request: Reque
         # timeout. The pass refreshes runtime state itself once it finds
         # something, so nothing is lost by returning first.
         _main._cloud_model_sync.request_refresh()
+    if data.sync_cloud_models and _main._azure_deployment_sync is not None:
+        _main._azure_deployment_sync.request_refresh()
     return {"status": "ok"}
+
+
+@router.get("/internal/cloud_model_sync_status", tags=["admin"])
+async def internal_cloud_model_sync_status(request: Request):
+    """Whether a cloud model sync pass is running or queued, for the webservice.
+
+    A manual refresh is answered before its pass has written anything, and the
+    pass contacts every cloud upstream in turn — so "trigger accepted" is not
+    "done". The admin UI polls this until the pass the refresh requested has
+    finished, instead of guessing from unchanged model lists (the first write
+    can land at any moment, and a mid-pass snapshot can look stable).
+    """
+    _require_internal_secret(request, disabled_detail="Internal cloud model sync status endpoint disabled")
+    sync = _main._cloud_model_sync
+    return {"running": bool(sync is not None and sync.is_busy())}
 
 
 @router.get("/internal/provider_status", tags=["admin"])
@@ -204,6 +223,14 @@ async def internal_provider_status(request: Request):
         last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
         if isinstance(last_heartbeat, datetime.datetime):
             last_heartbeat = last_heartbeat.isoformat()
+        connected_at = runtime_snapshot.get("connected_at") if runtime_snapshot else None
+        if isinstance(connected_at, datetime.datetime):
+            connected_at = connected_at.isoformat()
+        # Self-reported by the worker — distinct from connected_at, so it
+        # reflects worker uptime even across bridge reconnects.
+        worker_started_at = (
+            (runtime_snapshot.get("runtime") or {}).get("process_started_at") if runtime_snapshot else None
+        )
         providers.append(
             {
                 "provider_id": provider_id,
@@ -212,10 +239,41 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "connected_at": connected_at if isinstance(connected_at, str) else None,
+                "worker_started_at": worker_started_at if isinstance(worker_started_at, str) else None,
                 "calibrating": _main._logosnode_registry.is_calibrating(provider_id),
             }
         )
     return {"providers": providers}
+
+
+@router.get("/internal/perf_trace/{request_id}", tags=["admin"])
+async def internal_perf_trace(request: Request, request_id: str):
+    """Fetch and consume the env-gated perf trace of one request (the benchmark).
+
+    Only available with ``LOGOS_PERF_TRACE`` enabled — then each request's
+    phase timings accumulate in memory and are exposed here exactly once
+    (take/pop semantics). The benchmark harness reads it to build the
+    nanosecond phase report; with tracing disabled the store is empty and
+    this endpoint always 404s.
+    """
+    _require_internal_secret(request, disabled_detail="Perf trace endpoint disabled")
+    from logos import perf_trace  # noqa: PLC0415 (keep the hot path import-free)
+
+    trace = perf_trace.take(request_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="No perf trace for request (tracing disabled or already taken)")
+    return trace
+
+
+@router.delete("/internal/perf_trace", tags=["admin"])
+async def internal_perf_trace_flush(request: Request):
+    """Drop all pending perf traces (benchmark harness cleanup)."""
+    _require_internal_secret(request, disabled_detail="Perf trace endpoint disabled")
+    from logos import perf_trace  # noqa: PLC0415
+
+    perf_trace.reset()
+    return {"status": "ok"}
 
 
 @router.get("/internal/model_context_windows", tags=["admin"])
@@ -680,12 +738,17 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
     sleep_level = (
         _main._calibration_orchestrator._config.sleep_level if _main._calibration_orchestrator is not None else 1
     )
+    skip_models = (
+        sorted(_main._calibration_orchestrator._capacity_skip_models(data.provider_id))
+        if _main._calibration_orchestrator is not None
+        else []
+    )
     pname = _resolve_provider_name(data.provider_id)
     try:
         await _main._logosnode_registry.send_command(
             data.provider_id,
             "start_calibration_session",
-            params={"sleep_level": sleep_level},
+            params={"sleep_level": sleep_level, "skip_models": skip_models},
             timeout_seconds=30,
         )
     except LogosNodeOfflineError as exc:
@@ -704,6 +767,51 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
         "count": len(models),
         "models": models,
     }
+
+
+@router.post("/internal/logosnode/stop_calibration", tags=["admin"])
+async def internal_logosnode_stop_calibration(data: InternalStopCalibrationRequest, request: Request):
+    """Cancel a worker's in-progress calibration session, called by Spring after JWT validation.
+
+    The worker owns the teardown via cancel_event; nothing partial is
+    written for the model in progress — it's just left uncalibrated for
+    a later session.
+    """
+    _require_internal_secret(request)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        result = await _main._logosnode_registry.send_command(
+            data.provider_id,
+            "stop_calibration_session",
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Internal stop-calibration: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning("Internal stop-calibration: stop_calibration_session failed on provider=%s: %s", pname, exc)
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    was_active = bool(result.get("was_active", False))
+    current_model = result.get("current_model")
+    logger.info(
+        "Internal stop-calibration: provider=%s was_active=%s current_model=%s",
+        pname,
+        was_active,
+        current_model or "<none>",
+    )
+    result = {
+        "message": (
+            f"Calibration session on {pname} cancelled (was calibrating {current_model})"
+            if was_active
+            else f"No calibration session was running on {pname}"
+        ),
+        "was_active": was_active,
+        "current_model": current_model,
+    }
+    return JSONResponse(content=result, status_code=200)
 
 
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])
@@ -849,6 +957,60 @@ async def internal_logosnode_sleep_lane(data: InternalSleepLaneRequest, request:
         action="sleep_lane",
         params={"lane_id": data.lane_id, "level": 1, "mode": "wait"},
     )
+
+
+@router.post("/internal/logosnode/lanes/drain", tags=["admin"])
+async def internal_logosnode_drain_lane(data: InternalDrainLaneRequest, request: Request):
+    """Drain a busy lane, then sleep (or unload) it. Called by Spring after JWT validation.
+
+    The manual sleep button is withheld from a lane that is still serving —
+    a click there would block for the whole drain, and the worker's wait-mode
+    drain would still drop stragglers once its budget runs out. This is the
+    busy-lane counterpart: the planner marks the lane cold first, so no new
+    requests are routed to it, waits for the in-flight ones to finish, and
+    only then puts the lane to sleep — or unloads it when the host cannot
+    afford a resident sleeper, or the lane's backend has no sleep mode at
+    all. A lane that does not drain in time is left exactly as found: still
+    awake, still serving, still routable.
+
+    The ride is bounded by the planner's drain endpoint budget (the strict
+    wait plus the terminal step's own drain, command and confirmation all
+    spend one shared deadline), sized to stay under the servlet read timeout
+    Spring keeps open for this call — hence the synchronous answer instead of
+    a 202 with polling. The terminal step (sleep or unload) runs through the
+    planner's confirmed executor, so the answer only arrives once the worker
+    has actually reached the state, not merely accepted the command.
+    """
+    _require_internal_secret(request)
+
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    lanes = (snap.get("runtime") or {}).get("lanes") or []
+    lane = next(
+        (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id", "")) == data.lane_id),
+        None,
+    )
+    if lane is None:
+        return JSONResponse(status_code=404, content={"error": f"Lane '{data.lane_id}' not found on this worker"})
+    if _main._capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not ready")
+
+    result = await _main._capacity_planner.drain_lane_manually(data.provider_id, data.lane_id)
+    status = str(result.get("status") or "")
+    if status in ("slept", "unloaded"):
+        return JSONResponse(status_code=200, content=result)
+    if status == "drain_timeout":
+        return JSONResponse(
+            status_code=409,
+            content={"error": result.get("error") or "Lane did not drain in time"},
+        )
+    return JSONResponse(status_code=502, content={"error": result.get("error") or "Drain failed"})
 
 
 @router.post("/internal/logosnode/lanes/wake", tags=["admin"])

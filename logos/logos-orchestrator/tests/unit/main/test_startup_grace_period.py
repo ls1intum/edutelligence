@@ -43,6 +43,9 @@ class _FakeDB:
     def __exit__(self, exc_type, exc, tb):
         return False
 
+    def get_deployments_for_api_key(self, api_key_id):
+        return RAW
+
 
 @pytest.fixture(autouse=True)
 def _fresh_server(monkeypatch):
@@ -75,13 +78,16 @@ def _empty_then_raw_filter():
 
 
 def _stub_sync_path(monkeypatch, body, raw, filter_fn):
-    async def fake_auth_parse_log(request, use_profile_auth=False):
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock()
         auth.api_key_id = 88
-        return {}, auth, body, "127.0.0.1", None
+        return {}, auth, body, "127.0.0.1", None, raw
 
     monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
     monkeypatch.setattr(main, "DBManager", _FakeDB)
+    # The job path (execute_proxy_job) still does its own deployment lookup;
+    # the sync path no longer calls request_setup (it arrives with the
+    # auth_parse_log result).
     monkeypatch.setattr(main, "request_setup", lambda headers, api_key_id, db=None: (raw, [MODEL_NAME]))
     monkeypatch.setattr(main, "_filter_logosnode_deployments", filter_fn)
 

@@ -6,12 +6,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException, Request
+from pydantic import ValidationError
 
 import logos as main_mod
 from logos import ContextResolver, ExecutionContext, LogosNodeOfflineError, LogosNodeRuntimeRegistry
-from logos.dbutils.dbrequest import ConnectModelProviderRequest, LogosNodeAuthRequest, LogosNodeRegisterRequest
+from logos.dbutils.dbmanager import VALID_PRIVACY_LEVELS
+from logos.dbutils.dbmodules import ThresholdLevel
+from logos.dbutils.dbrequest import LogosNodeAuthRequest, LogosNodeRegisterRequest
 from logos.logosnode_registry import LogosNodeSessionConflictError
-from logos.routers import admin as admin_mod
 from logos.routers import logosnode as logosnode_mod
 
 
@@ -353,6 +355,82 @@ async def test_logosnode_auth_requires_matching_shared_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_logosnode_auth_sends_central_hf_token(monkeypatch):
+    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.setenv("HF_TOKEN", "central-token")
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_logosnode_provider_by_api_key(api_key: str):
+            if api_key != "shared-secret":
+                return None
+            return {
+                "id": 3,
+                "provider_type": "logosnode",
+                "api_key": "shared-secret",
+            }
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    req = LogosNodeAuthRequest(shared_key="shared-secret")
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "method": "POST",
+            "path": "/logosdb/providers/logosnode/auth",
+            "headers": [(b"host", b"logos.local:8080")],
+        }
+    )
+    response = await logosnode_mod.logosnode_auth(req, request)
+    assert response["hf_token"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_logosnode_auth_sends_empty_hf_token_when_unset(monkeypatch):
+    monkeypatch.setattr(main_mod, "_logosnode_registry", LogosNodeRuntimeRegistry())
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_logosnode_provider_by_api_key(api_key: str):
+            if api_key != "shared-secret":
+                return None
+            return {
+                "id": 3,
+                "provider_type": "logosnode",
+                "api_key": "shared-secret",
+            }
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    req = LogosNodeAuthRequest(shared_key="shared-secret")
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "method": "POST",
+            "path": "/logosdb/providers/logosnode/auth",
+            "headers": [(b"host", b"logos.local:8080")],
+        }
+    )
+    response = await logosnode_mod.logosnode_auth(req, request)
+    assert response["hf_token"] == ""
+
+
+@pytest.mark.asyncio
 async def test_logosnode_auth_rejects_different_active_worker(monkeypatch):
     registry = LogosNodeRuntimeRegistry()
     ticket = await registry.consume_ticket(await registry.issue_ticket(3, "worker-a", []))
@@ -413,6 +491,11 @@ async def test_logosnode_auth_requires_tls(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await logosnode_mod.logosnode_auth(req, request)
     assert exc.value.status_code == 400
+    # The rejection has to name what arrived: a worker dialling https:// and
+    # still landing here was stripped of its TLS signal by a proxy hop, and
+    # only these two values tell that apart from a genuinely cleartext caller.
+    assert "scheme='http'" in exc.value.detail
+    assert "x-forwarded-proto=''" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -473,6 +556,10 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
             assert kwargs["provider_type"] == "logosnode"
             assert kwargs["provider_name"] == "gpu-node-1"
             assert kwargs["api_key"]
+            # add_provider rejects a missing or unknown privacy_level outright,
+            # so the caller must forward a real one — the omission that made
+            # this endpoint return 400 for every request.
+            assert kwargs["privacy_level"] in VALID_PRIVACY_LEVELS
             return {"provider-id": 41}, 200
 
     monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
@@ -480,11 +567,71 @@ async def test_logosnode_register_creates_provider_and_key(monkeypatch):
     req = LogosNodeRegisterRequest(
         logos_key="root-key",
         provider_name="gpu-node-1",
+        privacy_level=ThresholdLevel.LOCAL.value,
     )
     response = await logosnode_mod.logosnode_register(req)
     assert response["provider_id"] == 41
     assert response["provider_type"] == "logosnode"
     assert response["shared_key"]
+
+
+def test_register_request_requires_an_explicit_privacy_level():
+    """Omitting the trust level must be refused, not silently assumed.
+
+    LOCAL is the *most* trusted tier ("our datacentre"). A default would make
+    every self-registering worker — a rented GPU, a personal Mac running the MLX
+    worker — immediately eligible for traffic restricted to operator-controlled
+    hardware, before an operator ever sees it.
+    """
+    with pytest.raises(ValidationError):
+        LogosNodeRegisterRequest(logos_key="root-key", provider_name="no-level-node")
+
+
+def test_register_request_rejects_an_unknown_privacy_level():
+    with pytest.raises(ValidationError):
+        LogosNodeRegisterRequest(
+            logos_key="root-key",
+            provider_name="bad-level-node",
+            privacy_level="TOTALLY_TRUSTED",
+        )
+
+
+@pytest.mark.asyncio
+async def test_logosnode_register_forwards_third_party_hardware(monkeypatch):
+    """Hardware outside operator control must register at its real trust level."""
+    captured: dict = {}
+
+    class _FakeDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return False
+
+        @staticmethod
+        def get_user_by_api_key(logos_key: str):
+            return {"role": "logos_admin"} if logos_key == "root-key" else None
+
+        @staticmethod
+        def add_provider(**kwargs):
+            captured.update(kwargs)
+            return {"provider-id": 43}, 200
+
+        @staticmethod
+        def sync_logosnode_capabilities(provider_id: int, models: list):  # noqa: ARG004
+            return None
+
+    monkeypatch.setattr(logosnode_mod, "DBManager", _FakeDB)
+
+    await logosnode_mod.logosnode_register(
+        LogosNodeRegisterRequest(
+            logos_key="root-key",
+            provider_name="someones-macbook",
+            privacy_level=ThresholdLevel.THIRD_PARTY_HARDWARE.value,
+        )
+    )
+
+    assert captured["privacy_level"] == ThresholdLevel.THIRD_PARTY_HARDWARE.value
 
 
 @pytest.mark.asyncio
@@ -603,70 +750,6 @@ async def test_refresh_pipeline_runtime_state_reloads_registrations(monkeypatch)
         (20, 2): "cloud",
     }
     assert rebuilt == [True]
-
-
-@pytest.mark.asyncio
-async def test_connect_model_provider_refreshes_pipeline_runtime_state(monkeypatch):
-    refresh_calls = []
-
-    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
-        refresh_calls.append(rebuild_model_classifier)
-
-    class _FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-            return False
-
-        @staticmethod
-        def connect_model_provider(**kwargs):
-            assert kwargs["provider_id"] == 13
-            assert kwargs["model_id"] == 30
-            return {"result": "ok"}, 200
-
-    monkeypatch.setattr(admin_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(admin_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
-
-    req = ConnectModelProviderRequest(logos_key="root-key", model_id=30, provider_id=13)
-    response = await admin_mod.connect_model_provider(req)
-
-    assert response == ({"result": "ok"}, 200)
-    assert refresh_calls == [False]
-
-
-@pytest.mark.asyncio
-async def test_update_provider_sdi_config_refreshes_pipeline_runtime_state(monkeypatch):
-    refresh_calls = []
-
-    async def _fake_refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = False):
-        refresh_calls.append(rebuild_model_classifier)
-
-    class _FakeDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):  # noqa: ARG002
-            return False
-
-        @staticmethod
-        def update_provider_sdi_config(**kwargs):
-            assert kwargs["provider_id"] == 13
-            assert kwargs["parallel_capacity"] == 16
-            return {"result": "ok"}, 200
-
-    monkeypatch.setattr(admin_mod, "DBManager", _FakeDB)
-    monkeypatch.setattr(admin_mod, "refresh_pipeline_runtime_state", _fake_refresh_pipeline_runtime_state)
-
-    req = main_mod.UpdateProviderSdiConfigRequest(
-        logos_key="root-key",
-        provider_id=13,
-        parallel_capacity=16,
-    )
-    response = await admin_mod.update_provider_sdi_config(req)
-
-    assert response == ({"result": "ok"}, 200)
-    assert refresh_calls == [False]
 
 
 @pytest.mark.asyncio

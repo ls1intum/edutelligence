@@ -2,6 +2,8 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -15,6 +17,8 @@ import org.springframework.web.client.RestClientResponseException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.IpRateLimiterService;
+import de.tum.cit.aet.logos.logoswebservice.common.RateLimitExceededException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCalibrationLogRequestDTO;
@@ -41,19 +45,22 @@ public class ModelController {
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
     private final ObjectMapper objectMapper;
+    private final IpRateLimiterService rateLimiter;
 
     public ModelController(ModelService modelService,
                            ModelPriceService modelPriceService,
                            PriceUpdaterService priceUpdaterService,
                            ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
                            OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           IpRateLimiterService rateLimiter) {
         this.modelService = modelService;
         this.modelPriceService = modelPriceService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
         this.objectMapper = objectMapper;
+        this.rateLimiter = rateLimiter;
     }
 
     @PostMapping("/get_models")
@@ -66,16 +73,42 @@ public class ModelController {
      * (logos_key / logos-key header or Authorization: Bearer) — not a JWT —
      * because the callers are the applications that send inference traffic,
      * which hold API keys. Only models the key may access are reported.
+     *
+     * <p>
+     * A 401 here is exactly what lets a caller test a leaked key for validity, so repeated 401s from one address
+     * are rate limited: {@link IpRateLimiterService#tryReserveAuthFailureSlot} atomically checks and reserves the
+     * budget before authentication runs, so a burst of concurrent requests cannot all slip through on the same
+     * free slot. The reservation is given back the moment the key is known valid (see
+     * {@link IpRateLimiterService#releaseAuthFailureSlot}) — deliberately before the orchestrator call below,
+     * which can be slow and does not need auth to succeed again: holding the reservation through it would let a
+     * burst of valid concurrent requests exhaust the failure budget among themselves while their calls are in
+     * flight, and would leave the slot stuck until it expired if that call ever threw.
      */
     @PostMapping("/get_model_health")
     public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
-        String apiKey = extractApiKey(request);
-        if (apiKey == null) {
-            return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+        String clientIp = rateLimiter.clientIp(request);
+        if (!rateLimiter.tryReserveAuthFailureSlot(clientIp)) {
+            throw new RateLimitExceededException(60);
         }
-        return modelService.getModelHealth(apiKey)
-            .map(ResponseEntity::ok)
-            .orElseGet(() -> ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key")));
+
+        try {
+            String apiKey = extractApiKey(request);
+            Optional<Set<String>> accessibleModels = apiKey == null
+                ? Optional.empty()
+                : modelService.resolveAccessibleModelsForApiKey(apiKey);
+            if (accessibleModels.isEmpty()) {
+                if (!rateLimiter.recordAuthFailureSlot(clientIp)) {
+                    throw new RateLimitExceededException(60);
+                }
+                return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+            }
+
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            return ResponseEntity.ok(modelService.getModelHealthForAccessibleModels(accessibleModels.get()));
+        } catch (RuntimeException e) {
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            throw e;
+        }
     }
 
     static String extractApiKey(HttpServletRequest request) {

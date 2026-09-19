@@ -107,6 +107,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
    */
   @Input() filterUserId: number | null = null;
   @Input() filterTeamId: number | null = null;
+  @Input() filterProviderId: number | null = null;
+  @Input() filterErrorsOnly = false;
   /**
    * The lifecycle bucket the feed is narrowed to (queued/running/error/
    * finished), or null for all states. Like the user/team inputs it is owned
@@ -142,22 +144,29 @@ export class RecentRequests implements OnChanges, OnDestroy {
   private readonly _totalInRange = signal<number | null>(0);
   private readonly _filterUserId = signal<number | null>(null);
   private readonly _filterTeamId = signal<number | null>(null);
+  private readonly _filterProviderId = signal<number | null>(null);
+  private readonly _filterErrorsOnly = signal(false);
   private readonly _filterStatus = signal<string | null>(null);
 
   /** Only for the empty state, which reads differently once a filter is on. */
   readonly filterActive = computed(
-    () => this._filterUserId() !== null || this._filterTeamId() !== null,
+    () =>
+      this._filterUserId() !== null ||
+      this._filterTeamId() !== null ||
+      this._filterProviderId() !== null ||
+      this._filterErrorsOnly(),
   );
 
   /**
    * The empty state, worded for the filters that are on. A state filter alone
-   * names the state; a team/user scope keeps its own wording, with the state
-   * folded in when both are active.
+   * names the state; any other scope (team, requester, provider, errors-only)
+   * uses neutral "matching" wording so provider/errors-only does not claim a
+   * requester or team was selected.
    */
   readonly emptyMessage = computed(() => {
     const state = this._filterStatus() ? `${this._filterStatus()} ` : '';
     return this.filterActive()
-      ? `No ${state}requests from this requester or team in the selected range.`
+      ? `No ${state}matching requests in the selected range.`
       : `No ${state}requests in this time range.`;
   });
 
@@ -173,6 +182,12 @@ export class RecentRequests implements OnChanges, OnDestroy {
    * of cursors already used.
    */
   private cursorForPage: (RequestCursor | null)[] = [null];
+
+  /**
+   * Bumped whenever the range or scope changes so an in-flight page fetch for
+   * the previous filter cannot write rows back onto the new one.
+   */
+  private pageFetchGeneration = 0;
 
   private readonly _pageRows = signal<RequestItem[]>([]);
   private readonly _pageTotal = signal<number | null>(null);
@@ -244,6 +259,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
     if (changes['totalInRange']) this._totalInRange.set(this.totalInRange);
     if (changes['filterUserId']) this._filterUserId.set(this.filterUserId);
     if (changes['filterTeamId']) this._filterTeamId.set(this.filterTeamId);
+    if (changes['filterProviderId']) this._filterProviderId.set(this.filterProviderId);
+    if (changes['filterErrorsOnly']) this._filterErrorsOnly.set(this.filterErrorsOnly);
     if (changes['filterStatus']) this._filterStatus.set(this.filterStatus);
     // A new range or a new scope invalidates every page cut out of the previous
     // one. No fetch follows: page 0 is the live feed either way, and the
@@ -251,6 +268,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
     const scopeChanged =
       (changes['filterUserId'] && !changes['filterUserId'].firstChange) ||
       (changes['filterTeamId'] && !changes['filterTeamId'].firstChange) ||
+      (changes['filterProviderId'] && !changes['filterProviderId'].firstChange) ||
+      (changes['filterErrorsOnly'] && !changes['filterErrorsOnly'].firstChange) ||
       (changes['filterStatus'] && !changes['filterStatus'].firstChange);
     if ((changes['range'] && !changes['range'].firstChange) || scopeChanged) {
       this.resetToFirstPage();
@@ -267,6 +286,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
   }
 
   private resetToFirstPage(): void {
+    this.pageFetchGeneration++;
     this.pageIndex.set(0);
     this.cursorForPage = [null];
     this._pageRows.set([]);
@@ -274,6 +294,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
     this._pageHasMore.set(false);
     this._pageNextCursor.set(null);
     this.error.set(null);
+    this.loading.set(false);
   }
 
   // ── Paging handlers ────────────────────────────────────────────────────────
@@ -318,6 +339,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
     const range = this.range;
     if (!range) return;
 
+    const generation = this.pageFetchGeneration;
     this.loading.set(true);
     this.error.set(null);
     try {
@@ -325,9 +347,13 @@ export class RecentRequests implements OnChanges, OnDestroy {
         range.startIso,
         range.endIso,
         PAGE_SIZE,
-        { userId: this._filterUserId(), teamId: this._filterTeamId(), status: this._filterStatus() },
+        { userId: this._filterUserId(), teamId: this._filterTeamId(),
+          providerId: this._filterProviderId(), errorsOnly: this._filterErrorsOnly(),
+          status: this._filterStatus() },
         cursor,
       );
+      // Scope or range moved on while we waited — drop the stale page.
+      if (generation !== this.pageFetchGeneration) return;
       const rows = page.requests ?? [];
       // An empty page past the first is a dead end — the range held exactly a
       // multiple of the page size, or rows fell out of it while the operator
@@ -344,11 +370,12 @@ export class RecentRequests implements OnChanges, OnDestroy {
       this._pageNextCursor.set(page.next_cursor ?? null);
       this.pageIndex.set(index);
     } catch (err: unknown) {
+      if (generation !== this.pageFetchGeneration) return;
       const e = err as { status?: number; error?: { error?: string; detail?: string } };
       const detail = e.error?.error ?? e.error?.detail ?? `HTTP ${e.status}`;
       this.error.set(`Could not load requests: ${detail}`);
     } finally {
-      this.loading.set(false);
+      if (generation === this.pageFetchGeneration) this.loading.set(false);
     }
   }
 
@@ -454,6 +481,43 @@ export class RecentRequests implements OnChanges, OnDestroy {
   /** Full name ("First Last"), falling back to the username. */
   requesterOf(item: RequestItem): string {
     return item.full_name || item.username || '';
+  }
+
+  /**
+   * Whether this row was made with an application (service) key.
+   * Those are team credentials labelled by environment, not by a person.
+   */
+  isApplicationKey(item: RequestItem): boolean {
+    return item.api_key_type === 'application';
+  }
+
+  /**
+   * Real environment name for an application-key row, or empty when the
+   * database placeholder ("-") / a blank value would only add noise.
+   */
+  environmentOf(item: RequestItem): string {
+    const env = item.environment?.trim();
+    return env && env !== '-' ? env : '';
+  }
+
+  /**
+   * Whether the personal requester chip belongs on this row.
+   * Application keys have no person behind them — only team + environment.
+   */
+  showRequester(item: RequestItem): boolean {
+    return !this.isApplicationKey(item) && !!this.requesterOf(item);
+  }
+
+  /**
+   * Label for the key chip, or empty when the chip should not render.
+   *
+   * Application keys: the environment (falling back to the key name when no
+   * environment was set). Developer keys: omitted — the key name repeats the
+   * user (e.g. `tobias.wasner-Logos-key`) and is obsolete next to the user chip.
+   */
+  keyChipOf(item: RequestItem): string {
+    if (!this.isApplicationKey(item)) return '';
+    return this.environmentOf(item) || item.api_key_name?.trim() || '';
   }
 
   /** Cloud cost in USD; null when no price is on record for the model. */

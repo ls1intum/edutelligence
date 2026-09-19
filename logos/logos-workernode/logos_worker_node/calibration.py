@@ -41,13 +41,13 @@ import subprocess
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from logos_worker_node.vllm_compat import (
     _BAKED_QUANT_METHODS_FILENAME,
@@ -86,6 +86,11 @@ _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # sweep step and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
 _FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
+# Delay before each retry of the Phase-1 baseline VRAM read. First retry
+# short (most nvidia-smi blips clear in seconds); last keeps the original
+# 15s — no telemetry rules out a slower teardown after a huge model, so
+# the last chance stays unshortened.
+_BASELINE_VRAM_RETRY_DELAYS_S: tuple[float, ...] = (2.0, 15.0)
 _LOG_DIAGNOSTIC_TAIL_LINES = 80  # lines of probe log echoed into worker logs on failure
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
@@ -391,31 +396,6 @@ def _record_unsupported_model(path: Path, entry: UnsupportedModelEntry) -> None:
     )
 
 
-def _remove_unsupported_model(path: Path, model: str) -> int:
-    """Remove all entries for *model* from the file. Returns the number of
-    lines removed. Used when calibration succeeds despite a prior entry
-    (operator manually cleared the underlying issue and re-ran).
-    """
-    if not path.exists():
-        return 0
-    lines = path.read_text(encoding="utf-8").splitlines()
-    remaining: list[str] = []
-    removed = 0
-    for ln in lines:
-        stripped = ln.strip()
-        if not stripped or stripped.startswith("#"):
-            remaining.append(ln)
-            continue
-        head = stripped.split("\t", 1)[0].strip()
-        if head == model:
-            removed += 1
-            continue
-        remaining.append(ln)
-    if removed:
-        path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
-    return removed
-
-
 def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | None:
     """Public helper for callers outside this module (e.g. logos_bridge).
 
@@ -517,6 +497,24 @@ def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern |
         if pattern.needle in log_tail:
             return pattern
     return None
+
+
+# A genuine CUDA/torch allocator OOM — distinct from the KV-too-small and
+# max-num-seqs validation rejections above, which name their own fix
+# instead of exhausting the GPU. Lowercase: matched case-insensitively,
+# since vLLM's cumem allocator capitalizes "Error" where torch doesn't.
+_CUDA_OOM_MARKERS: tuple[str, ...] = ("cuda out of memory", "cuda error: out of memory")
+
+
+def _is_cuda_oom_log(log_tail: str) -> bool:
+    """True when the log shows a genuine CUDA/torch OOM, not one of the
+    recoverable validation rejections handled by the suggestion-based
+    retries. Weights are fixed for a given tp, so once this appears, a
+    larger kv can only need more memory — never less."""
+    if not log_tail:
+        return False
+    lowered = log_tail.lower()
+    return any(m in lowered for m in _CUDA_OOM_MARKERS)
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +658,45 @@ def _get(url: str, timeout_s: float = 10.0) -> tuple[int, Any]:
 
 def _post(url: str, body: dict | None = None, timeout_s: float = 30.0) -> tuple[int, Any]:
     return _http("POST", url, body=body, timeout_s=timeout_s)
+
+
+def _post_multipart(
+    url: str,
+    *,
+    fields: dict[str, str],
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    file_content_type: str = "audio/wav",
+    timeout_s: float = 30.0,
+) -> tuple[int, Any]:
+    """POST a ``multipart/form-data`` body — stdlib-only, no extra HTTP
+    client dependency for the (single) transcription probe use.
+    """
+    boundary = uuid.uuid4().hex
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; '
+        f'filename="{filename}"\r\nContent-Type: {file_content_type}\r\n\r\n'.encode() + file_bytes + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+    payload = b"".join(parts)
+    headers = {
+        "User-Agent": "logos-calibrate/1.0",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            raw = resp.read()
+            parsed: Any = json.loads(raw) if raw else {}
+            return resp.status, parsed
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+    except Exception:
+        return 0, {}
 
 
 # ---------------------------------------------------------------------------
@@ -999,18 +1036,8 @@ def wait_ready(
     raise TimeoutError(f"vLLM not ready after {timeout_s:.0f}s")
 
 
-def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> bool:
-    """Trigger a single 1-token completion to force lazy GPU allocations.
-
-    Without this, ``/health=200`` only guarantees weights are loaded — CUDA
-    graphs are captured lazily on the first real request, FlashInfer kernels
-    JIT on first use, and Triton autotunes per-shape. The peak VRAM the
-    planner needs to budget for is post-first-request, not post-load.
-
-    Sends one ``/v1/completions`` with ``max_tokens=1``. Returns True on
-    success, False on any HTTP error (caller logs and continues — failure
-    here doesn't fail calibration, the awake measurement is still useful).
-    """
+def probe_generative(base_url: str, model: str, timeout_s: float) -> bool:
+    """1-token ``/v1/completions`` probe — the generative serving path."""
     body = {
         "model": model,
         "prompt": "hi",
@@ -1020,6 +1047,152 @@ def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> boo
     }
     status, _ = _post(f"{base_url}/v1/completions", body=body, timeout_s=timeout_s)
     return status == 200
+
+
+def probe_pooling(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/v1/embeddings`` request — embedding models' real serving path."""
+    body = {"model": model, "input": "hi"}
+    status, _ = _post(f"{base_url}/v1/embeddings", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+def probe_classification(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/classify`` request — sequence-classification models' real
+    serving path (vLLM never serves these from ``/v1/embeddings``)."""
+    body = {"model": model, "input": "hi"}
+    status, _ = _post(f"{base_url}/classify", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+def probe_reranking(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/rerank`` request — reranker models' real serving path (query
+    + documents, not a bare embeddings call)."""
+    body = {"model": model, "query": "hi", "documents": ["hi"]}
+    status, _ = _post(f"{base_url}/rerank", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+# Sub-second mono 16kHz WAV — no network dependency for the transcription
+# probe.
+_PROBE_AUDIO_PATH = Path(__file__).with_name("fixtures") / "calibration_probe.wav"
+
+
+def probe_transcription(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/v1/audio/transcriptions`` request against a bundled WAV
+    fixture — the real endpoint voice-only models (Whisper & co.) serve.
+    """
+    try:
+        audio_bytes = _PROBE_AUDIO_PATH.read_bytes()
+    except OSError:
+        logger.warning("  calibration probe fixture missing: %s", _PROBE_AUDIO_PATH)
+        return False
+    status, _ = _post_multipart(
+        f"{base_url}/v1/audio/transcriptions",
+        fields={"model": model},
+        file_field="file",
+        filename="calibration_probe.wav",
+        file_bytes=audio_bytes,
+        timeout_s=timeout_s,
+    )
+    return status == 200
+
+
+_PROBE_BY_MODEL_KIND: dict[str, Callable[[str, str, float], bool]] = {
+    "generative": probe_generative,
+    "pooling": probe_pooling,
+    "classification": probe_classification,
+    "reranking": probe_reranking,
+    "transcription": probe_transcription,
+}
+
+# Model kinds calibration can positively verify end-to-end — a failed
+# probe for these fails calibration outright (see _calibrate_model_probe
+# Phase 2.5 / 5.5). "generative" stays non-fatal, deliberately, to avoid
+# false positives on transient first-token flakiness — only the classes
+# with a real, working functional probe are fatal.
+_FATAL_PROBE_MODEL_KINDS = frozenset({"pooling", "classification", "reranking", "transcription"})
+
+# The endpoint each fatal kind's probe targets — used only to check the
+# route actually exists before trusting a probe failure there (see
+# _resolve_probed_model_kind below).
+_ENDPOINT_BY_MODEL_KIND: dict[str, str] = {
+    "pooling": "/v1/embeddings",
+    "classification": "/classify",
+    "reranking": "/rerank",
+    "transcription": "/v1/audio/transcriptions",
+}
+
+
+def _endpoint_registered(base_url: str, path: str, timeout_s: float) -> bool | None:
+    """Whether vLLM actually registered *path* for the loaded checkpoint,
+    read from its own ``/openapi.json`` — ground truth from the live
+    process, not a guess from HF metadata. HF's pipeline_tag/architectures
+    can say "this model is a reranker" while the checkpoint itself is a
+    plain CausalLM vLLM only ever serves generatively (e.g. Qwen3-Reranker:
+    ``pipeline_tag="text-ranking"``, but vLLM logs ``Supported tasks:
+    ['generate']`` and never registers ``/rerank`` at all).
+
+    Returns None — "unknown" — when the check itself didn't complete
+    (network hiccup, non-200, unparseable body). Callers must never read
+    None as "confirmed missing": that would turn a transient glitch into
+    a silent kind downgrade.
+    """
+    status, payload = _get(f"{base_url}/openapi.json", timeout_s=timeout_s)
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    paths = payload.get("paths")
+    if not isinstance(paths, dict):
+        return None
+    return path in paths
+
+
+def _resolve_probed_model_kind(base_url: str, model: str, model_kind: str, timeout_s: float = 10.0) -> str:
+    """Downgrade *model_kind* to "generative" when vLLM never registered
+    its fatal probe's endpoint — a classification mismatch, not a broken
+    lane, so it must not fail calibration the way a real serving bug does
+    (see the Qwen3-Reranker case in _FATAL_PROBE_MODEL_KINDS' own comment).
+    Leaves model_kind untouched when the endpoint exists, or when the
+    registration check itself is inconclusive — an actually-broken lane
+    must still be caught fatally, same as before this existed.
+    """
+    if model_kind not in _FATAL_PROBE_MODEL_KINDS:
+        return model_kind
+    expected_path = _ENDPOINT_BY_MODEL_KIND.get(model_kind)
+    if expected_path is None:
+        return model_kind
+    if _endpoint_registered(base_url, expected_path, timeout_s) is False:
+        logger.warning(
+            "  %s classified as %r, but vLLM never registered %s for this "
+            "checkpoint (Supported tasks mismatch) — falling back to the "
+            "generative probe instead of failing calibration outright",
+            model,
+            model_kind,
+            expected_path,
+        )
+        return "generative"
+    return model_kind
+
+
+def warmup_inference(
+    base_url: str,
+    model: str,
+    timeout_s: float = 120.0,
+    *,
+    model_kind: str = "generative",
+) -> bool:
+    """Send one real request through *model*'s own serving endpoint.
+
+    Also forces lazy GPU allocations (CUDA graph capture, FlashInfer JIT,
+    Triton autotune, real KV page allocation) so the awake VRAM sample
+    reflects post-first-request peak, not post-load. ``model_kind`` (from
+    ``classify_model_kind``) picks the matching endpoint — completions,
+    embeddings, classify, rerank, or transcription — instead of always
+    assuming ``/v1/completions``, which silently no-ops for pooling/
+    classification/reranking/ASR models and never catches a serving-breaking
+    config for them.
+    """
+    probe = _PROBE_BY_MODEL_KIND.get(model_kind, probe_generative)
+    return probe(base_url, model, timeout_s)
 
 
 def wait_sleep_state(base_url: str, target: bool, timeout_s: float) -> None:
@@ -1117,7 +1290,7 @@ class CalibrationResult:
     # from-disk cold load; a deliberately cold reading (dropping the host
     # page cache) is out of scope here, and consumers must not substitute
     # this value for a from-disk cold-start constant (estimator-side
-    # consumption is tracked in #860). None when the warmup request did not
+    # consumption is tracked in ). None when the warmup request did not
     # serve: a value that never actually served a request must not pose as a
     # cold-load measurement.
     cold_load_time_s: float | None = None
@@ -1145,6 +1318,20 @@ class CalibrationResult:
     # kind was written — the failure isn't the calibration's fault and
     # leaving artefacts behind just pollutes things (see deioma 2026-06-04).
     node_unhealthy_reason: str | None = None
+    # True when the KV search exhausted its range because a probe actually
+    # hit a CUDA/torch allocator OOM (``_is_cuda_oom_log`` / the
+    # ``_capacity_oom_box`` latch), not merely because no kv value ever
+    # loaded. The generic "no working kv" terminal error is also set for
+    # non-capacity causes (e.g. a tp the model's attention-head count
+    # can't divide, which never even reaches a real OOM) — callers that
+    # decide whether a lower-tp fallback can help must use this explicit
+    # flag, not string-match ``error``, or they wrongly skip a fallback
+    # that would have recovered from a config/arch quirk.
+    capacity_oom: bool = False
+    # Set only by a failed Metal probe that looks like a memory-capacity
+    # issue. Value = this node's own working-set budget (MB) — evidence the
+    # model needs more than that here. None on CUDA results and on success.
+    metal_capacity_floor_mb: float | None = None
     # ``max_model_len`` actually used during the successful probe(s). When
     # vLLM refuses to start because the configured KV budget can't hold one
     # request at the model's default max_seq_len, calibration parses vLLM's
@@ -1422,6 +1609,7 @@ def calibrate_model(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker — the public entry point.
 
@@ -1470,6 +1658,7 @@ def calibrate_model(
             cancel_event=cancel_event,
             cache_use_reserved=cache_use_reserved,
             establish_host_ram_floor=establish_host_ram_floor,
+            proc_callback=proc_callback,
         )
     finally:
         # Release on EVERY exit — a failed, cancelled, or early-returned run
@@ -1492,6 +1681,7 @@ def _calibrate_model_probe(
     cancel_event: threading.Event | None = None,
     cache_use_reserved: list[bool],
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker and return a :class:`CalibrationResult`.
 
@@ -1560,6 +1750,10 @@ def _calibrate_model_probe(
     plan = {**plan, "enforce_eager": eager_mode, "enable_sleep_mode": sleep_level > 0}
 
     model = plan["model"]
+    # "model_kind" is an operator override (engines.vllm.model_overrides);
+    # "_detected_model_kind" is the HF-precheck's auto-classification
+    # (logos_bridge.py). Both route the functional probe below.
+    model_kind = str(plan.get("model_kind") or plan.get("_detected_model_kind") or "generative")
     gpu_devices = str(plan.get("gpu_devices") or "")
     tp = int(plan.get("tensor_parallel_size", 1))
     gpu_indices = parse_gpu_indices(gpu_devices)
@@ -1616,23 +1810,26 @@ def _calibrate_model_probe(
         return partial
 
     # Phase 1 — Baseline: measure before any model process exists.
-    # Retry up to 3 times with a short delay — nvidia-smi can be temporarily
-    # sluggish right after a previous heavy calibration run (GPU driver busy).
-    logger.info("  [1/5] Baseline VRAM...")
+    # Retry a few times with a short, growing delay — nvidia-smi can be
+    # temporarily sluggish right after a heavy calibration run (GPU driver
+    # busy), but that's usually gone within seconds, not 15s per retry.
+    logger.info("  [1/6] Baseline VRAM...")
     baseline_mb: float | None = None
-    for _attempt in range(3):
+    for _attempt in range(1 + len(_BASELINE_VRAM_RETRY_DELAYS_S)):
         try:
             baseline_mb = sample_vram_mb(gpu_indices)
             break
         except Exception as exc:
             last_exc = exc
-            if _attempt < 2:
+            if _attempt < len(_BASELINE_VRAM_RETRY_DELAYS_S):
+                delay = _BASELINE_VRAM_RETRY_DELAYS_S[_attempt]
                 logger.warning(
-                    "  nvidia-smi baseline attempt %d failed: %s — retrying in 15s",
+                    "  nvidia-smi baseline attempt %d failed: %s — retrying in %.0fs",
                     _attempt + 1,
                     exc,
+                    delay,
                 )
-                time.sleep(15)
+                time.sleep(delay)
     if baseline_mb is None:
         partial.error = f"nvidia-smi baseline failed: {last_exc}"
         logger.warning("  ERROR: %s", partial.error)
@@ -1780,6 +1977,12 @@ def _calibrate_model_probe(
     # over-committed host. The run fails with the reason instead of a
     # generic "no working kv".
     _host_ram_blocked_box: list[str] = []
+
+    # Sibling latch for a genuine CUDA/torch OOM. Once set, the kv_lo scan
+    # below stops climbing to ever-larger (and therefore hungrier) kv sizes
+    # — a real capacity shortfall at this tp can't be fixed by asking for
+    # more kv, only for less.
+    _capacity_oom_box: list[bool] = []
 
     # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. We keep
     # this local to one probe so each KV step starts from the model default
@@ -2085,6 +2288,12 @@ def _calibrate_model_probe(
                         allow_whitelist=allow_whitelist,
                     )
 
+            # Neither suggestion-based recovery applied — a genuine CUDA
+            # OOM here means climbing to a larger kv can only ask for more
+            # memory, never less. Latch it for the kv_lo scan below.
+            if not _capacity_oom_box and _is_cuda_oom_log(probe_log):
+                _capacity_oom_box.append(True)
+
             # Normal recoverable failure (OOM at this kv, NCCL timeout, …):
             # record the per-command blacklist line so the kv search avoids
             # re-trying this exact fingerprint on the next pass.
@@ -2261,8 +2470,18 @@ def _calibrate_model_probe(
                 kv_lo = kv
                 first_mml = mml
                 break
+            if _capacity_oom_box:
+                break  # real OOM — a larger kv will only need more, not less
             kv += _KV_CACHE_MIN_STEP_MB
         if kv_lo is None:
+            # This text fires for two distinct causes: a real capacity
+            # shortfall (_capacity_oom_box latched a genuine CUDA OOM) or
+            # every probe in the range failing for an unrelated reason
+            # (e.g. this tp's attention-head count isn't divisible) — the
+            # message reads the same either way, so record which one it
+            # actually was in capacity_oom instead of letting a caller
+            # infer it from this string.
+            partial.capacity_oom = bool(_capacity_oom_box)
             partial.error = (
                 f"No working KV cache size found between {_format_kv_mb(search_lo)} and "
                 f"{_format_kv_mb(original_ceiling)} on tp={tp}. Model weights likely exceed available GPU VRAM."
@@ -2547,6 +2766,18 @@ def _calibrate_model_probe(
         partial.error = "cancelled"
         return partial
 
+    # Make the live process reachable to stop_calibration_session: it has
+    # no other way to unblock the plain blocking warmup call below once its
+    # 15s grace period elapses (see kill_current_proc in logos_bridge.py).
+    if proc_callback is not None:
+        proc_callback(proc)
+
+    # Ground-truth check before trusting a fatal probe: does this vLLM
+    # process actually serve model_kind's endpoint at all? See
+    # _resolve_probed_model_kind — downgrades to "generative" on a
+    # confirmed mismatch, leaves model_kind alone otherwise.
+    model_kind = _resolve_probed_model_kind(base_url, model, model_kind)
+
     try:
         # Phase 2.5 — Warmup with a 1-token completion. Forces:
         #   • CUDA graph capture (when enforce_eager=False)
@@ -2562,8 +2793,15 @@ def _calibrate_model_probe(
                 "  [2.5/6] Warming up engine (1-token completion, capturing CUDA graphs — may take a couple minutes)..."
             )
         warmup_t0 = time.perf_counter()
-        warmup_ok = warmup_inference(base_url, model, timeout_s=600.0)
+        warmup_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
         warmup_dt = time.perf_counter() - warmup_t0
+        # A killed-to-unblock probe answers this call with a connection
+        # error just like a genuine failure — check cancellation first so
+        # it reports as "cancelled", not as a fatal/serving-failure verdict.
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("  Calibration cancelled during warmup.")
+            partial.error = "cancelled"
+            return partial
         if warmup_ok:
             logger.info(
                 "        warmup done in %.1fs — graphs/JIT/KV pools allocated",
@@ -2583,6 +2821,17 @@ def _calibrate_model_probe(
                     "        cold load (spawn → first served request, page-cache-warm) = %.1fs",
                     cold_load_time_s,
                 )
+        elif model_kind in _FATAL_PROBE_MODEL_KINDS:
+            # A classified pooling/classification/reranking/transcription
+            # model has a real, working probe — a failure here is the model
+            # itself not serving one request on its own endpoint, not a
+            # missed /v1/completions mismatch. Must not reach [CALIBRATED].
+            partial.error = (
+                f"functional probe failed ({model_kind}): {model} did not answer "
+                "one request on its own serving endpoint"
+            )
+            logger.warning("  ERROR: %s", partial.error)
+            return partial
         else:
             logger.warning(
                 "        warmup failed (%.1fs) — awake VRAM may underestimate peak",
@@ -2782,24 +3031,30 @@ def _calibrate_model_probe(
                     # Test request 2: a lane that wakes but cannot serve is as
                     # unusable as one that never wakes. Same call as the Phase
                     # 2.5 warmup — one 1-token completion.
-                    post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0)
+                    post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
+                    if cancel_event is not None and cancel_event.is_set():
+                        logger.info("  Calibration cancelled during post-wake warmup.")
+                        partial.error = "cancelled"
+                        return partial
                     if not post_wake_ok and warmup_ok:
                         # Served before sleep but not after: the sleep/wake
                         # cycle broke serving.
                         sleep_phase_failed = True
                         sleep_failure_reason = "post-wake test request failed — model does not serve after sleep/wake"
                     elif not post_wake_ok:
-                        # Did not serve one before sleep either, so this
-                        # failure carries no evidence of a wake regression —
-                        # whatever the cause (embedding-only lanes expose no
-                        # /v1/completions, a transient 5xx, ...), it predates
-                        # the sleep. The wake itself is verified by
-                        # /is_sleeping above, so accept it.
+                        # Did not serve one before sleep either. For a
+                        # classified pooling/classification/reranking/
+                        # transcription model that is unreachable here —
+                        # Phase 2.5 already failed the
+                        # run outright on the same probe. This remains a
+                        # genuine "no evidence" case only for an
+                        # unclassified/generative model (a transient 5xx,
+                        # etc.); the wake itself is verified by /is_sleeping
+                        # above, so accept it.
                         logger.warning(
                             "        post-wake test request failed, but the pre-sleep warmup "
-                            "did not serve either — no evidence of a wake regression (the "
-                            "request type may simply be unsupported by this model, e.g. an "
-                            "embedding lane); accepting wake on /is_sleeping evidence"
+                            "did not serve either — no evidence of a wake regression; "
+                            "accepting wake on /is_sleeping evidence"
                         )
                     else:
                         # First request served after the wake completed — the
@@ -2898,6 +3153,8 @@ def _calibrate_model_probe(
         )
 
     finally:
+        if proc_callback is not None:
+            proc_callback(None)
         logger.info("  Stopping vLLM...")
         stop_vllm(proc)
         # Kill any orphaned TP workers left behind by CUDA/NCCL crashes during
@@ -3199,7 +3456,7 @@ def calibration_gpu_slice(available_gpus: int) -> list[int]:
     length equals the maximum tensor-parallel size the node supports, so the
     existing max-first TP escalation fits inside it unchanged.
 
-    Pinning the calibration to this concrete slice (issue #592) leaves the
+    Pinning the calibration to this concrete slice leaves the
     leftover GPUs (``slice_size..N-1``) free for production lanes, which would
     otherwise sit idle for the entire calibration window, and makes the VRAM
     baseline a well-defined sum over exactly the GPUs the probe uses.
@@ -3209,6 +3466,32 @@ def calibration_gpu_slice(available_gpus: int) -> list[int]:
         return []
     slice_size = 1 << (n.bit_length() - 1)
     return list(range(slice_size))
+
+
+def select_calibration_gpus(available_gpus: int, busy_gpus: Iterable[int] = ()) -> list[int]:
+    """GPU indices a calibration run should use, preferring idle ones.
+
+    Same slice size as :func:`calibration_gpu_slice` (the largest power-of-two
+    ≤ ``available_gpus``), but the indices favor GPUs outside *busy_gpus* —
+    so on a 3-GPU node with a model loaded only on GPU 0, calibration picks
+    ``[1, 2]`` instead of unconditionally killing lanes on ``[0, 1]``. When
+    too few GPUs are idle to cover the needed size, every idle GPU is still
+    kept and only the remaining slots are filled from the busy ones — a
+    3-GPU node with 0 and 1 busy picks ``[2, 0]``, not the naive ``[0, 1]``,
+    which would tear down both serving lanes when sparing one was possible.
+    """
+    n = int(available_gpus) if available_gpus else 0
+    if n < 1:
+        return []
+    slice_size = 1 << (n.bit_length() - 1)
+    if slice_size == n:
+        # The slice spans the whole node — every GPU is used either way,
+        # so idle preference cannot change what gets torn down.
+        return list(range(n))
+    busy = {int(i) for i in busy_gpus}
+    idle = [i for i in range(n) if i not in busy]
+    ordered = idle + [i for i in range(n) if i in busy]
+    return ordered[:slice_size]
 
 
 def _plan_needs_gpu_pin(gpu_devices: str) -> bool:
@@ -3228,7 +3511,7 @@ def pin_plan_gpu_devices(plan: dict[str, Any], available_gpus: int) -> dict[str,
     unchanged: the operator's choice is authoritative. A plan left at
     "all"/blank is pinned to the node's calibration slice so the probe only
     touches that slice (``CUDA_VISIBLE_DEVICES``) and its VRAM baseline is
-    measured over a well-defined set of GPUs (issue #592).
+    measured over a well-defined set of GPUs.
     """
     if not _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
         return plan
@@ -3260,6 +3543,7 @@ def _try_calibrate(
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -3276,6 +3560,7 @@ def _try_calibrate(
             model_cache=model_cache,
             cancel_event=cancel_event,
             establish_host_ram_floor=establish_host_ram_floor,
+            proc_callback=proc_callback,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -3303,6 +3588,7 @@ def calibrate_with_tp_escalation(
     available_gpus: int | None = None,
     cancel_event: threading.Event | None = None,
     establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model using a max-first, search-down TP strategy.
 
@@ -3333,6 +3619,10 @@ def calibrate_with_tp_escalation(
     # The slice length equals the max TP below, so the escalation is unchanged.
     plan = pin_plan_gpu_devices(plan, available_gpus)
 
+    # Whether the operator/orchestrator actually pinned a tp, as opposed to
+    # this function defaulting to 1 below. Only an explicit pin overrides
+    # the OOM-fallback guard further down — a bare default must not.
+    explicit_tp = plan.get("tensor_parallel_size") is not None
     original_tp = int(plan.get("tensor_parallel_size", 1))
     hardware_max_tp = _max_tp_for_plan(plan, available_gpus)
     max_tp = _max_tp_for_plan(plan, available_gpus, weight_derived_max_tp=plan.get("_hf_max_tp_ceiling"))
@@ -3359,6 +3649,7 @@ def calibrate_with_tp_escalation(
         model_cache=_mc,
         cancel_event=cancel_event,
         establish_host_ram_floor=establish_host_ram_floor,
+        proc_callback=proc_callback,
     )
 
     def _retry_with_trust_remote_code_if_needed(
@@ -3388,6 +3679,20 @@ def calibrate_with_tp_escalation(
         # vllm_compat._FATAL_LOAD_ERROR_PATTERNS, not just two of them).
         return result.unsupported_reason is not None
 
+    def _is_capacity_exhausted(result: CalibrationResult) -> bool:
+        """True when weights/kv don't fit anywhere in the kv search range
+        at this tp — a real VRAM shortfall, not a config/arch quirk. A
+        lower tp needs *more* VRAM per GPU, not less, so it can't recover
+        from this (see ``min_feasible_tp``'s same math in the HF precheck).
+
+        Reads the explicit ``capacity_oom`` flag, not ``result.error`` —
+        the generic "no working kv" message is also set when every probe
+        fails for a non-capacity reason (e.g. a tp this model's attention
+        heads can't divide), which never latches a real OOM and would
+        otherwise wrongly suppress the lower-tp fallback below.
+        """
+        return result.capacity_oom
+
     tp = max_tp
     current_plan = {**plan, "tensor_parallel_size": tp}
     result = _try_calibrate(current_plan, **cal_kwargs)
@@ -3411,10 +3716,12 @@ def calibrate_with_tp_escalation(
         plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
         _fatal = _is_fatal(result)
 
-    # If max tp fails, try the configured (original) tp before giving up.
-    # Models may have attention-head counts that aren't divisible by max_tp
-    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-    if not result.success and not _fatal and tp > original_tp:
+    # If max tp fails, try the configured (original) tp before giving up —
+    # handles head-count divisibility quirks. Skip it on a genuine capacity
+    # shortfall (lower tp needs *more* VRAM/GPU, not less) unless the
+    # operator/orchestrator explicitly pinned that lower tp themselves.
+    _skip_capacity_fallback = _is_capacity_exhausted(result) and not explicit_tp
+    if not result.success and not _fatal and tp > original_tp and not _skip_capacity_fallback:
         logger.info(
             "  %s failed at max tp=%d — falling back to configured tp=%d",
             model_name,
@@ -3426,6 +3733,15 @@ def calibrate_with_tp_escalation(
         result = _try_calibrate(current_plan, **cal_kwargs)
         plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
         _fatal = _is_fatal(result)
+    elif _skip_capacity_fallback and tp > original_tp:
+        logger.info(
+            "  %s failed at tp=%d with a genuine VRAM shortfall — skipping "
+            "the tp=%d fallback (not operator-pinned, and fewer GPUs only "
+            "means more memory per GPU, not less)",
+            model_name,
+            tp,
+            original_tp,
+        )
 
     if not result.success or _fatal:
         return result
