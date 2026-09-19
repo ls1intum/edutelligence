@@ -37,7 +37,10 @@ public class GatewayCloudForwarder {
 
     public GatewayCloudForwarder(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
+        // HTTP/1.1 only: default h2c Upgrade breaks body delivery to some
+        // upstreams (same failure mode as GatewayOrchestratorProxy).
         this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();

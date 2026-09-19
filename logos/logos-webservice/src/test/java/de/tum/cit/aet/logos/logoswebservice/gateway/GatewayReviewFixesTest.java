@@ -59,6 +59,12 @@ class GatewayHopByHopTest {
     }
 
     @Test
+    void filtersHttp2SettingsAsRequestHopByHop() {
+        assertThat(GatewayHopByHop.isRequestHopByHop("HTTP2-Settings")).isTrue();
+        assertThat(GatewayHopByHop.isRequestHopByHop("http2-settings")).isTrue();
+    }
+
+    @Test
     void responseExcludeIncludesTrailerAndConnectionNominated() {
         Set<String> exclude = GatewayHopByHop.responseExcludeNames(Map.of(
             "Connection", List.of("close, X-Custom"),
@@ -72,7 +78,7 @@ class GatewayHopByHopTest {
     void requestExcludeIncludesConnectionNominated() {
         Set<String> exclude = GatewayHopByHop.requestExcludeNames(
             Collections.enumeration(List.of("close, X-Custom")));
-        assertThat(exclude).contains("connection", "x-custom", "close", "expect");
+        assertThat(exclude).contains("connection", "x-custom", "close", "expect", "http2-settings");
         assertThat(exclude).doesNotContain("authorization");
     }
 }

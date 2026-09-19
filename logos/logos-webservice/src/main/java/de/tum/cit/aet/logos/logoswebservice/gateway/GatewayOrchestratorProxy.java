@@ -38,7 +38,10 @@ public class GatewayOrchestratorProxy {
 
     public GatewayOrchestratorProxy(@Value("${logos.orchestrator.url:}") String orchestratorUrl) {
         this.orchestratorUrl = orchestratorUrl == null ? "" : orchestratorUrl.strip().replaceAll("/+$", "");
+        // HTTP/1.1 only: the JDK client's default h2c Upgrade leaves uvicorn
+        // reading an empty body ("Invalid JSON body") on the orchestrator.
         this.httpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();
