@@ -59,12 +59,16 @@ Developers).
 
 ## Teams
 
-Teams, their owners, and members. Opening a team shows its members, its API
-keys, and its per-team settings (queue priority, budget).
+Teams, their owners, and members.
 
 ![Teams page](/img/roles/logos-admin-team-management.png)
 
-![Team detail](/img/roles/logos-admin-team-management-detail.png)
+Opening a team shows the same detail tabs as for an owning App Admin — see
+[App Admin → Teams](app-admin.md#teams) for Overview through Settings. Logos
+Admins additionally get a **Providers** tab (which cloud / worker providers
+the team may use).
+
+![Team detail — Providers](/img/roles/team-detail-providers.png)
 
 ## Agent Sessions
 

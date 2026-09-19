@@ -33,13 +33,59 @@ never higher roles.
 ## Teams
 
 Teams, their owners, and members. App Admins can create teams, add members,
-and manage the team's API keys — for the teams they own. Opening a team
-shows its members, its API keys, and its per-team settings (queue priority,
-budget).
+and manage the team's API keys — for the teams they own.
 
 ![Teams page](/img/roles/app-admin-team-management.png)
 
-![Team detail](/img/roles/app-admin-team-management-detail.png)
+Opening a team opens its detail view. Owners (and Logos Admins) get the full
+tab set below; other members only see **Overview** and **Members**.
+
+### Overview
+
+Headcount, active keys, permitted models, member budget usage, and the
+defaults applied when a key or member has no individual limit.
+
+![Team detail — Overview](/img/roles/team-detail-overview.png)
+
+### Members
+
+Owners and members, with per-person budget and rate-limit overrides. Add or
+remove people here (unless the team is Keycloak-managed).
+
+![Team detail — Members](/img/roles/team-detail-members.png)
+
+### Application Keys
+
+Application (service) keys that belong to the team — create, rotate, revoke,
+and set per-key limits / model permissions.
+
+![Team detail — Application Keys](/img/roles/team-detail-application-keys.png)
+
+### Models
+
+Which catalogue models this team may use.
+
+![Team detail — Models](/img/roles/team-detail-models.png)
+
+### Activity
+
+Live queue state for the team, recent request log, token totals, and export.
+
+![Team detail — Activity](/img/roles/team-detail-activity.png)
+
+### Cloud Usage
+
+What cloud providers charged for this team's off-site traffic (local models
+do not appear here — see Activity for that).
+
+![Team detail — Cloud Usage](/img/roles/team-detail-cloud-usage.png)
+
+### Settings
+
+Team monthly budget, default key budget, and default cloud/local rate limits.
+Also where an owner deletes the team.
+
+![Team detail — Settings](/img/roles/team-detail-settings.png)
 
 ## My Workspace
 

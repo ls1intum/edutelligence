@@ -113,14 +113,24 @@ Overwrite exactly these files (path relative to `static/img/roles/`):
 | `logos-admin-billing.png` | `tobias.wasner` | `/billing` |
 | `logos-admin-user-management.png` | `tobias.wasner` | `/user-management` |
 | `logos-admin-team-management.png` | `tobias.wasner` | `/team-management` |
-| `logos-admin-team-management-detail.png` | `tobias.wasner` | `/teams/<Logos team id>` (Overview; tabs visible) |
 | `logos-admin-agents.png` | `tobias.wasner` | `/agents` |
 | `logos-admin-my-workspace.png` | `tobias.wasner` | `/my-workspace` |
 | `logos-admin-batches.png` | `tobias.wasner` | `/batches` |
 | `app-admin-models.png` | `alexandra.szuminska` | `/models` |
 | `app-admin-user-management.png` | `alexandra.szuminska` | `/user-management` |
 | `app-admin-team-management.png` | `alexandra.szuminska` | `/team-management` |
-| `app-admin-team-management-detail.png` | `alexandra.szuminska` | `/teams/<Logos team id>` |
+| `team-detail-overview.png` | owner or `logos_admin` | `/teams/<id>` — **Overview** |
+| `team-detail-members.png` | same | `/teams/<id>` — **Members** |
+| `team-detail-application-keys.png` | owner or `logos_admin` | `/teams/<id>` — **Application Keys** |
+| `team-detail-models.png` | owner or `logos_admin` | `/teams/<id>` — **Models** |
+| `team-detail-activity.png` | owner or `logos_admin` | `/teams/<id>` — **Activity** |
+| `team-detail-cloud-usage.png` | owner or `logos_admin` | `/teams/<id>` — **Cloud Usage** |
+| `team-detail-settings.png` | owner or `logos_admin` | `/teams/<id>` — **Settings** |
+| `team-detail-providers.png` | `tobias.wasner` (`logos_admin` only) | `/teams/<id>` — **Providers** |
+
+Team detail is documented once under `roles/app-admin.md#teams` (tab walkthrough);
+Logos Admin links there and only adds the Providers shot. Do not keep
+separate `*-team-management-detail.png` per role.
 | `app-admin-my-workspace.png` | `alexandra.szuminska` | `/my-workspace` |
 | `app-admin-batches.png` | `alexandra.szuminska` | `/batches` |
 | `app-developer-models.png` | `henriette.huhn` | `/models` |
