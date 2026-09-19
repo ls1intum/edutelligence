@@ -173,6 +173,16 @@ export class TeamManagement implements OnInit {
     return known[team.priority] ?? String(team.priority);
   }
 
+  /** The option value (a string, matching `priorityOptions`) currently
+   *  selected for the team's priority; '' = Default/unset. Selection is
+   *  expressed on the <option> via [selected], not as [value] on the
+   *  <select> — a [value] binding on the <select> is applied before the @for
+   *  has produced any <option>, so the browser drops it and the select falls
+   *  back to the first option (Default) on every render, e.g. after a reload. */
+  priorityValue(team: Team): string {
+    return team.priority === null || team.priority === undefined ? '' : String(team.priority);
+  }
+
   /** Optimistic select change: rolls back and reports if the PATCH fails. */
   async changeTeamPriority(team: Team, value: string): Promise<void> {
     const priority = value === '' ? null : Number(value);

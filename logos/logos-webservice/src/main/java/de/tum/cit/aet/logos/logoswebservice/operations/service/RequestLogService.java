@@ -129,6 +129,7 @@ public class RequestLogService {
                 m.put("full_name", p.getFullName());
                 m.put("api_key_name", p.getApiKeyName());
                 m.put("api_key_type", p.getApiKeyType());
+                m.put("environment", p.getEnvironment());
                 m.put("prompt_tokens", p.getPromptTokens());
                 m.put("completion_tokens", p.getCompletionTokens());
                 m.put("total_tokens", p.getTotalTokens());

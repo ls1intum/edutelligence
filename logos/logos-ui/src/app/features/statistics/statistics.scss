@@ -256,6 +256,12 @@
 }
 
 // ── Provider glass row ────────────────────────────────────────────────────────
+.stats-providers-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .stats-glass-row {
   @include glass-surface;
   padding: 12px;
@@ -269,6 +275,7 @@
   align-items: center;
   gap: 12px;
   padding: 0 4px;
+  flex-wrap: wrap;
 }
 
 .stats-glass-row__label {
@@ -338,6 +345,12 @@
   color: rgb(var(--color-warning));
   background: rgb(var(--color-warning) / var(--opacity-soft));
   border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
+}
+
+.stats-provider-badge--offline {
+  color: rgb(var(--color-typography-500));
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
 }
 
 // ── Range badge ───────────────────────────────────────────────────────────────

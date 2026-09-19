@@ -217,6 +217,13 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                NULLIF(TRIM(COALESCE(u.prename, '') || ' ' || COALESCE(u.name, '')), '') AS fullName,
                k.name AS apiKeyName,
                k.key_type::text AS apiKeyType,
+               -- Application keys are labelled by environment. Prefer the key
+               -- row so a log_entry wipe/tag value cannot override it; "-" is
+               -- the placeholder keys without one carry.
+               CASE WHEN k.key_type::text = 'application'
+                    THEN COALESCE(NULLIF(k.environment, '-'), NULLIF(le.environment, '-'))
+                    ELSE NULLIF(le.environment, '-')
+               END AS environment,
                tk.prompt_tokens AS promptTokens,
                tk.completion_tokens AS completionTokens,
                tk.total_tokens AS totalTokens,

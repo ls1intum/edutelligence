@@ -117,10 +117,7 @@ services:
       - "traefik.http.routers.orch-scheduler-state.service=orch-svc"
       - "traefik.http.routers.orch-scheduler-state.middlewares=strip-api"
       - "traefik.http.routers.orch-scheduler-state.priority=201"
-      - "traefik.http.routers.orch-v1.rule=PathPrefix(`/v1`) || PathPrefix(`/openai`)"
-      - "traefik.http.routers.orch-v1.entrypoints=web8080"
-      - "traefik.http.routers.orch-v1.service=orch-svc"
-      - "traefik.http.routers.orch-v1.priority=100"
+      # Public /v1|/openai go through logos-webservice (inference gateway).
       - "traefik.http.services.orch-svc.loadbalancer.server.port=8080"
     networks: [e2e]
 
@@ -239,6 +236,7 @@ services:
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "logos-e2e-internal-secret"
+      LOGOS_GATEWAY_ENABLED: "true"
       JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=70.0"
       KEYCLOAK_ISSUER_URI: "http://localhost:${E2E_KEYCLOAK_PORT:-18095}/realms/tum"
       KEYCLOAK_JWKS_URI: "http://keycloak:8080/realms/tum/protocol/openid-connect/certs"
@@ -253,6 +251,10 @@ services:
       - "8081"
     labels:
       - "traefik.enable=true"
+      - "traefik.http.routers.ws-v1.rule=PathPrefix(`/v1`) || PathPrefix(`/openai`) || PathPrefix(`/jobs`)"
+      - "traefik.http.routers.ws-v1.entrypoints=web8080"
+      - "traefik.http.routers.ws-v1.service=ws-svc"
+      - "traefik.http.routers.ws-v1.priority=100"
       - "traefik.http.routers.ws-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`) || Path(`/api/info`)"
       - "traefik.http.routers.ws-identity.entrypoints=web8080"
       - "traefik.http.routers.ws-identity.service=ws-svc"

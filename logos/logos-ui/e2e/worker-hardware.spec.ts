@@ -22,10 +22,9 @@ const routedContent = 'app-shell router-outlet + *';
 /**
  * Any card in the simulated fleet.
  *
- * Never assert a *specific* model on the statistics page: the panel shows one
- * provider at a time and picks it by sorting on the worker name, which is the
- * container hostname — random hex per run. Naming one card passes or fails
- * depending on which node happened to sort first.
+ * Local Providers renders every connected worker at once, so any fleet GPU
+ * model that reached the browser is enough to prove the hardware path works.
+ * Exact fleet size is asserted separately via `.stats-glass-row` count.
  */
 const ANY_FLEET_GPU = new RegExp(SIMULATED_FLEET.map(node => node.gpu).join('|'));
 
@@ -56,14 +55,9 @@ test.describe('worker hardware', () => {
     await page.goto('/statistics');
     await expect(page.locator(routedContent)).toBeVisible();
 
-    // The panel shows one provider at a time: `activeProvider` resolves to a
-    // single worker and `devices` returns only that worker's cards. An earlier
-    // version of this test expected every simulated GPU on screen at once,
-    // which the page never promised — it failed on the node that simply was not
-    // the selected one. Fleet completeness is the API tier's job
-    // (tests/node/test_node_registration.py asserts both nodes and their exact
-    // hardware); what the browser has to prove is that the selected worker's
-    // real model reaches the DOM rather than a placeholder.
+    // Local Providers shows every connected worker in its own glass row, so a
+    // simulated GPU model from the fleet must reach the DOM rather than a
+    // placeholder. Fleet completeness (exact node count) is asserted below.
     const body = page.locator('body');
     await expect(body, 'the panel reported no providers connected').not.toContainText(
       /No providers connected/i,
@@ -75,27 +69,25 @@ test.describe('worker hardware', () => {
     ).toContainText(ANY_FLEET_GPU, { timeout: 30_000 });
   });
 
-  test('both simulated workers are selectable', async ({ page }) => {
+  test('both simulated workers appear on Local Providers', async ({ page }) => {
     await page.goto('/statistics');
     await expect(page.locator(routedContent)).toBeVisible();
 
-    // The completeness check the test above cannot make: the provider selector
-    // is where every connected worker becomes visible to an operator, so a node
-    // that registered but never reached the UI shows up here as a missing
-    // option rather than as a silently narrower dropdown.
-    // app-select collapses to a plain label when it has one option or fewer, so
-    // "not visible" here is itself the failure signal: it means fewer workers
-    // reached the UI than registered, not that the control moved.
-    const selector = page.getByLabel(/select provider/i);
+    // Completeness check: every connected worker gets its own glass row, so a
+    // node that registered but never reached the UI shows up as a missing row
+    // rather than a silently narrower dropdown (the old provider <select>).
+    const rows = page.locator('.stats-glass-row');
     await expect(
-      selector,
-      'the provider <select> did not render — with one option or fewer app-select collapses, ' +
-        'so this means fewer than two workers reached the statistics page',
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(
-      selector.locator('option'),
-      `expected one option per simulated worker (${SIMULATED_FLEET.length})`,
+      rows,
+      `expected one glass row per simulated worker (${SIMULATED_FLEET.length})`,
     ).toHaveCount(SIMULATED_FLEET.length, { timeout: 30_000 });
+
+    // Each row header carries the provider name; container hostnames are random
+    // hex per run, so assert the fleet size via rows rather than fixed labels.
+    await expect(
+      page.locator('body'),
+      `no simulated GPU model reached the browser; expected one of ${SIMULATED_FLEET.map(n => n.gpu).join(', ')}`,
+    ).toContainText(ANY_FLEET_GPU, { timeout: 30_000 });
   });
 
   test('the providers page lists the registered worker nodes', async ({ page }) => {
