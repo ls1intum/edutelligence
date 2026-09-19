@@ -8,11 +8,12 @@ that produced the original "vanishing answer" production complaint.
 # pylint: disable=protected-access
 
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from weaviate.classes.query import Filter
 
 from iris.config import settings
+from iris.domain.search.global_search_dto import AccessContext, EntitySourceDTO
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     QWEN3_RETRIEVAL_INSTRUCTION,
     LectureGlobalSearchRetrieval,
@@ -309,3 +310,75 @@ def test_expansion_restricts_the_transcription_lane_to_slide_less_segments():
     assert transcription_call.args[3] == Filter.by_property(
         LectureTranscriptionSchema.PAGE_NUMBER.value
     ).equal(-1), "the transcription lane must skip rows a slide segment already covers"
+
+
+def test_safe_rerank_scores_a_single_candidate_instead_of_skipping_it():
+    # A single candidate must still be scored against the relevance floor — it
+    # must not silently bypass reranking just because there is nothing to
+    # compare it against for ordering purposes. The floor rejects GARBAGE
+    # (see test_rerank_floor_keeps_weak_but_plausible_candidates); a lone
+    # candidate that skips scoring entirely can never be rejected by it.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval.reranker_model_id = "some-reranker"
+    candidate = SimpleNamespace(snippet="a lone candidate")
+
+    fake_client = Mock()
+    fake_client.rerank.return_value = SimpleNamespace(
+        results=[SimpleNamespace(index=0, relevance_score=0.01)]
+    )
+    with patch(
+        "iris.retrieval.lecture.lecture_global_search_retrieval.LlmManager"
+    ) as mock_manager_cls:
+        mock_manager_cls.return_value.get_llm_by_id.return_value = fake_client
+        result = retrieval._safe_rerank("irrelevant junk query", [candidate])
+
+    assert result is not None, "a single candidate must still be scored, not skipped"
+    _, relevance = result
+    assert relevance == [0.01]
+
+
+def test_empty_course_scope_still_returns_pre_authorized_entity_sources():
+    # A user with entity-level access (e.g. a public channel or catalog entry)
+    # but no role-based course access gets effective_course_ids == [] — the
+    # lecture-content lanes have nothing to search, but entity_sources were
+    # already authorized independently by Artemis (see _run_hybrid_search's
+    # own docstring) and must not be discarded along with the content search.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval.embed_retrieval_query = Mock(
+        side_effect=AssertionError("must not embed when content lanes are skipped")
+    )
+    retrieval._run_hybrid_search = Mock(return_value=["entity result"])
+
+    entity_sources = [EntitySourceDTO(entity_type="faq", snippet="A public FAQ answer")]
+    result = retrieval.search(
+        query="anything",
+        limit=5,
+        access_context=AccessContext(course_ids=[], unrestricted=False),
+        entity_sources=entity_sources,
+    )
+
+    assert result == ["entity result"]
+    retrieval._run_hybrid_search.assert_called_once()
+    assert retrieval._run_hybrid_search.call_args.kwargs["skip_content_lanes"] is True
+    assert (
+        retrieval._run_hybrid_search.call_args.kwargs["entity_sources"]
+        == entity_sources
+    )
+
+
+def test_empty_course_scope_with_no_entity_sources_still_returns_nothing():
+    # The original short-circuit stays correct for the case it was actually
+    # meant for: nothing accessible at all.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval._run_hybrid_search = Mock(
+        side_effect=AssertionError("must not run the search pipeline for nothing")
+    )
+
+    result = retrieval.search(
+        query="anything",
+        limit=5,
+        access_context=AccessContext(course_ids=[], unrestricted=False),
+        entity_sources=None,
+    )
+
+    assert result == []

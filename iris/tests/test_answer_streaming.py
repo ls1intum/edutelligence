@@ -43,6 +43,41 @@ class TestSentinelParsing:
         assert used == {0, 1, 2}
 
 
+class TestUsedSourcesRangeCheck:
+    """An out-of-range used_sources index must not slip an ungrounded answer
+    past the "cites no real source" suppression guard."""
+
+    def test_json_path_out_of_range_index_is_dropped_not_kept(self):
+        answer, used = parse_answer_response(
+            '{"answer": "Yes, that is correct.", "used_sources": [99]}', 3
+        )
+        # Suppressed: used_indices ends up empty once the bogus index is
+        # dropped, so the ungrounded-answer guard fires as intended.
+        assert answer is None
+        assert used == set()
+
+    def test_json_path_mixes_in_range_and_out_of_range_indices(self):
+        answer, used = parse_answer_response(
+            '{"answer": "Yes.", "used_sources": [2, 99]}', 3
+        )
+        assert answer == "Yes."
+        assert used == {1}
+
+    def test_trailing_schema_path_out_of_range_index_is_dropped(self):
+        answer, used = parse_answer_response(
+            "The exam is worth 30 points.\nUsed_sources: [99]", 3
+        )
+        assert answer is None
+        assert used == set()
+
+    def test_trailing_schema_path_in_range_index_still_works(self):
+        answer, used = parse_answer_response(
+            "The exam is worth 30 points.\nUsed_sources: [2]", 3
+        )
+        assert answer == "The exam is worth 30 points."
+        assert used == {1}
+
+
 class TestSentinelGateStreamHandler:
     """Deltas are held until the output can no longer be the sentinel."""
 
@@ -172,3 +207,29 @@ class TestNavigateFallbackClearsTheStream:
         # No fallback ran, so nothing was ever discarded — an unconditional reset
         # here would just flash the client back to a thinking state for no reason.
         assert None not in deltas
+
+    def test_token_usage_from_both_calls_is_recorded_on_fallback(self):
+        # self.answer_llm.tokens is reassigned to a NEW TokenUsageDTO instance by
+        # every real invocation (see IrisLangchainChatModel._generate); a mock that
+        # does the same distinguishes "recorded once, from whichever call happened
+        # to run last" from "recorded from both calls".
+        pipeline = self._pipeline_with("!none!", "Yes, see the exercise.")
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace(call="none"))
+        original_generate_answer = pipeline._generate_answer
+        call_count = 0
+
+        def generate_and_stamp_usage(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            pipeline.answer_llm.tokens = SimpleNamespace(call=call_count)
+            return original_generate_answer(*args, **kwargs)
+
+        pipeline._generate_answer = generate_and_stamp_usage
+
+        pipeline(query="where is this covered", intent=SearchIntent.TRIGGER_AI)
+
+        recorded_calls = [t.call for t in pipeline.tokens]
+        assert recorded_calls == [1, 2], (
+            "both the discarded first call and the fallback call must be "
+            "recorded, not just whichever one happened to run last"
+        )

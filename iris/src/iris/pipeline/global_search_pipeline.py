@@ -260,7 +260,7 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
         used_indices = {
             i - 1
             for i in (raw_indices if isinstance(raw_indices, list) else [])
-            if isinstance(i, int) and i >= 1
+            if isinstance(i, int) and 1 <= i <= num_sources
         }
         return answer, used_indices
 
@@ -271,8 +271,10 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     match = _TRAILING_USED_SOURCES_RE.search(cleaned)
     if match:
         used_indices = {
-            int(n) - 1 for n in re.findall(r"\d+", match.group("indices"))
-        } - {-1}
+            int(n) - 1
+            for n in re.findall(r"\d+", match.group("indices"))
+            if 1 <= int(n) <= num_sources
+        }
         answer = cleaned[: match.start()].rstrip() or None
         logger.warning(
             "[global-search] outcome=parse_salvaged_text used=%d/%d raw=%r",
@@ -497,6 +499,12 @@ class GlobalSearchPipeline(SubPipeline):
             navigate=all_pointers,
             stream_handler=stream_handler,
         )
+        # Snapshot usage right after this call: self.answer_llm.tokens is a fresh
+        # TokenUsageDTO instance per invocation, so this reference is independent
+        # of whatever the (possible) fallback call below reassigns it to next.
+        self._append_tokens(
+            self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
+        )
         answer, used_indices = parse_answer_response(raw, len(grounded_sources))
         used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
 
@@ -520,6 +528,9 @@ class GlobalSearchPipeline(SubPipeline):
                 raw = self._generate_answer(
                     query, entity_grounded, access_context, navigate=True
                 )
+                self._append_tokens(
+                    self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
+                )
                 answer, used_indices = parse_answer_response(raw, len(entity_grounded))
                 used_sources = [
                     s for i, s in enumerate(entity_grounded) if i in used_indices
@@ -537,10 +548,6 @@ class GlobalSearchPipeline(SubPipeline):
         answer = renumber_citation_markers(
             answer,
             {old + 1: new + 1 for new, old in enumerate(ordered_used)},
-        )
-
-        self._append_tokens(
-            self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
 
         used_lecture = [

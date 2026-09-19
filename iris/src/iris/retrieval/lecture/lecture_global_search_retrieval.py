@@ -375,14 +375,23 @@ class LectureGlobalSearchRetrieval:
         :return: Segments sorted by relevance.
         """
         effective_course_ids = resolve_effective_course_ids(course_ids, access_context)
-        if effective_course_ids is not None and not effective_course_ids:
+        no_accessible_courses = (
+            effective_course_ids is not None and not effective_course_ids
+        )
+        if no_accessible_courses:
             logger.debug(
-                "Access context yields no accessible courses; skipping search."
+                "Access context yields no accessible courses; skipping lecture content search."
             )
-            return []
+            if not entity_sources:
+                return []
         if entity_sources:
             entity_sources = dedupe_semester_twins(entity_sources, query)
-        query_embedding = self.embed_retrieval_query(query)
+        # No accessible courses means no lecture content to embed a query against —
+        # the embedding is skipped, but entity_sources (already authorized by
+        # Artemis, independent of this course scope) still reach the rerank/gate.
+        query_embedding = (
+            self.embed_retrieval_query(query) if not no_accessible_courses else []
+        )
         return self._run_hybrid_search(
             query=query,
             vector=query_embedding,
@@ -392,6 +401,7 @@ class LectureGlobalSearchRetrieval:
             auto_cut=auto_cut,
             policy=_VisibilityPolicy.from_context(access_context),
             entity_sources=entity_sources,
+            skip_content_lanes=no_accessible_courses,
         )
 
     def _run_hybrid_search(
@@ -404,19 +414,26 @@ class LectureGlobalSearchRetrieval:
         auto_cut: bool = False,
         policy: "_VisibilityPolicy | None" = None,
         entity_sources: list[EntitySourceDTO] | None = None,
+        skip_content_lanes: bool = False,
     ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
         """Run the recall lanes, rerank the candidate pool, map to DTOs.
 
         ``entity_sources`` are pre-fetched, pre-authorized entity cards from
         Artemis; they join the shared rerank pool so one cross-encoder scores
         entities and content on the same calibrated scale. Their visibility
-        was already decided by Artemis and is not re-checked here.
+        was already decided by Artemis and is not re-checked here — so
+        ``skip_content_lanes`` (no accessible courses for lecture content)
+        still lets them reach the rerank/gate pipeline below.
         """
         if policy is None:
             policy = _VisibilityPolicy.from_context(None)
         telemetry = _SearchTelemetry()
-        seg_objects, trans_objects = self._search_lanes(
-            query, vector, alpha, limit, course_ids, auto_cut, telemetry
+        seg_objects, trans_objects = (
+            ([], [])
+            if skip_content_lanes
+            else self._search_lanes(
+                query, vector, alpha, limit, course_ids, auto_cut, telemetry
+            )
         )
         units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
             seg_objects, trans_objects, telemetry
@@ -900,7 +917,7 @@ class LectureGlobalSearchRetrieval:
         can never degrade below pre-reranker behavior. Deliberately does NOT
         disable itself process-wide on failure (unlike RerankRequestHandler).
         """
-        if self.reranker_model_id is None or len(candidates) < 2:
+        if self.reranker_model_id is None or not candidates:
             return None
         # Entity cards guarantee a non-empty snippet; the lecture-unit name is
         # the fallback for content DTOs only.
