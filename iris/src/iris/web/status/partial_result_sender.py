@@ -1,9 +1,10 @@
 """Ephemeral partial-result status callback sender."""
 
 from threading import Event, Lock, Thread
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
+from pydantic import BaseModel
 
 from iris.common.logging_config import get_logger
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
@@ -36,11 +37,21 @@ class PartialResultSender(Thread):
         url: str,
         run_id: str,
         interval_seconds: float = 0.35,
+        status_dto_factory: Optional[Callable[[str, int], BaseModel]] = None,
     ):
         super().__init__(daemon=True)
         self.url = url
         self.run_id = run_id
         self.interval_seconds = interval_seconds
+        # Builds the RUNNING payload for one partial (text, seq). Defaults to
+        # the chat DTO; other pipelines (global search) pass their own.
+        self._status_dto_factory = status_dto_factory or (
+            lambda text, seq: ChatStatusUpdateDTO(
+                run_state=RunStateEnum.RUNNING,
+                partial_result=text,
+                partial_seq=seq,
+            )
+        )
         self._lock = Lock()
         self._stop_event = Event()
         self._accumulated = ""
@@ -114,11 +125,9 @@ class PartialResultSender(Thread):
                 return None
 
             self._partial_seq += 1
-            payload = ChatStatusUpdateDTO(
-                run_state=RunStateEnum.RUNNING,
-                partial_result=text,
-                partial_seq=self._partial_seq,
-            ).model_dump(by_alias=True, exclude_none=True)
+            payload = self._status_dto_factory(text, self._partial_seq).model_dump(
+                by_alias=True, exclude_none=True
+            )
             return payload, text, epoch
 
     def _post_payload(self, payload: dict) -> bool:
