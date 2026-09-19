@@ -1,6 +1,6 @@
 ---
 name: ui-screenshots
-description: Capture full-page desktop and mobile screenshots of the Logos Angular web application and host them so they render in a pull request or in the documentation. Use whenever a change touches logos-ui/, when a PR needs UI screenshots, or when adding UI imagery to docs — covers localhost-vs-127.0.0.1 CORS, unlocking shell scroll containers, waiting for real data (not skeletons), and the gist hosting gotcha that otherwise serves images as text.
+description: Capture full-page desktop and mobile screenshots of the Logos Angular web application and host them so they render in a pull request or in the documentation. Use whenever a change touches logos-ui/, when a PR needs UI screenshots, or when adding UI imagery to docs — covers localhost-vs-127.0.0.1 CORS, unlocking shell scroll containers, waiting for real data (not skeletons), and the gist hosting gotcha that otherwise serves images as text. For committed role-guide PNGs under docs/static/img/roles/, also read logos/docs/AGENTS.md (seed + shot matrix).
 compatibility: Requires the Logos dev stack (Docker Compose), the GitHub CLI (`gh`) authenticated, and a browser automation tool such as Playwright.
 ---
 
@@ -13,7 +13,7 @@ Reviewers must be able to see the result without running the stack; a UI PR with
 - At least one **desktop** screenshot of the changed view.
 - At least one **mobile** screenshot (375px viewport) of the same view — the shared data tables drop their header below 768px and fall back to per-cell `data-label`s, so a mobile shot is the only way to see how a table actually renders there.
 - **Every screenshot must show the FULL page** — page header, tab bar, and the entire scrollable content. A shot that starts mid-view or cuts off the last table row is not acceptable.
-- Screenshots go into the PR description (or docs) only — **never commit them to the repository**.
+- Screenshots go into the PR description only — **never commit them to the repository**, except the role-guide PNGs under `docs/static/img/roles/` (see `docs/AGENTS.md`).
 
 ## 1. Run the stack and open the UI on `localhost` (not `127.0.0.1`)
 
@@ -107,3 +107,7 @@ If it says `text/plain`, the "image" is text — re-push via git as above. If `c
 ## 4. Embed in the PR description
 
 Add a `## Screenshots` section with the raw gist URLs (commit-pinned), labelled desktop/mobile.
+
+## 5. Role-guide documentation shots (committed PNGs)
+
+When refreshing `docs/static/img/roles/*.png` or priming demo data so those pages are not empty, follow [`docs/AGENTS.md`](../../docs/AGENTS.md) instead of gist-hosting: login users, apply `docs/seed/role-screenshots.sql`, capture desktop full-page shots into the existing filenames, and commit them with the docs change.

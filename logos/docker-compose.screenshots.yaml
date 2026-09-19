@@ -1,0 +1,153 @@
+# Throwaway standalone stack for capturing role-page documentation screenshots.
+# Shifted ports (19080/19082/18085/15432) + own container names/volumes so it
+# can run in parallel with another clone's dev stack. NO traefik/rate-gateway:
+# the UI dev server proxies /api straight to the webservice.
+#
+#   docker compose -f docker-compose.screenshots.yaml --project-name logos-doks up -d --build
+#   cd logos-ui && ng serve --port 4300 --proxy-config /tmp/logos-doks-proxy.conf.json
+
+services:
+  logos-doks-db:
+    build: ./db
+    container_name: doks-db
+    restart: unless-stopped
+    user: postgres
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_cron
+      -c cron.database_name=logosdb
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: logosdb
+      POSTGRES_HOST: localhost
+    ports:
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "--username=postgres"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - doks_pg:/var/lib/postgresql/data
+    networks:
+      - doks-internal
+
+  logos-doks-keycloak:
+    image: quay.io/keycloak/keycloak:26.7
+    container_name: doks-keycloak
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm", "--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: "http://localhost:18085"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "18085:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      - doks-internal
+
+  logos-doks-orchestrator:
+    build:
+      context: ../
+      dockerfile: ./logos/logos-orchestrator/Dockerfile
+    container_name: doks-orchestrator
+    restart: unless-stopped
+    command:
+      [
+        "uvicorn",
+        "logos.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--ws-ping-interval",
+        "60",
+        "--ws-ping-timeout",
+        "60",
+      ]
+    depends_on:
+      logos-doks-db:
+        condition: service_healthy
+    environment:
+      LOGOS_DOMAIN: "localhost"
+      LOGOS_SCHEDULER_ETTFT_ENABLED: "true"
+      LOGOS_CAPACITY_PLANNER_ENABLED: "true"
+      ECCS_DECISION_LOG: "/tmp/eccs_decisions.jsonl"
+      LOGOS_PREFIX_AFFINITY_ENABLED: "true"
+      LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP: "true"
+      LOGOSNODE_INFER_TIMEOUT_SECONDS: "1200"
+      LOGOSNODE_STREAM_TIMEOUT_SECONDS: "1200"
+      HF_TOKEN: ""
+      PROMETHEUS_API_KEY: ""
+      LOGOS_INTERNAL_SECRET: "logos-local-internal-secret"
+      LOGOS_DOCS_ENABLED: "true"
+      LOGOS_PUBLIC_ENDPOINT_RPM: "60"
+      LOGOS_AUTH_FAILURE_RPM: "20"
+      LOGOS_WEBSERVICE_URL: "http://logos-doks-webservice:8081"
+      LOGOS_DB_URL: "postgresql://postgres:root@logos-doks-db:5432/logosdb"
+    ports:
+      - "127.0.0.1:19080:8080"
+    networks:
+      - doks-internal
+
+  logos-doks-webservice:
+    build:
+      context: ./logos-webservice
+      dockerfile: Dockerfile
+    container_name: doks-webservice
+    restart: unless-stopped
+    depends_on:
+      logos-doks-db:
+        condition: service_healthy
+      logos-doks-keycloak:
+        condition: service_healthy
+    environment:
+      DB_HOST: logos-doks-db
+      DB_PORT: 5432
+      DB_NAME: logosdb
+      DB_USER: postgres
+      DB_PASSWORD: root
+      LOGOS_ORCHESTRATOR_URL: "http://logos-doks-orchestrator:8080"
+      LOGOS_INTERNAL_SECRET: "logos-local-internal-secret"
+      LOGOS_RATE_LIMITING_ENABLED: "true"
+      LOGOS_RATE_LIMIT_PUBLIC_RPM: "60"
+      LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM: "20"
+      LOGOS_RATE_LIMIT_TRUSTED_PROXY_CIDRS: "172.16.0.0/12"
+      JDK_JAVA_OPTIONS: "-XX:MaxRAMPercentage=80.0"
+      KEYCLOAK_ISSUER_URI: "http://localhost:18085/realms/tum"
+      KEYCLOAK_JWKS_URI: "http://logos-doks-keycloak:8080/realms/tum/protocol/openid-connect/certs"
+      KEYCLOAK_ADMIN_BASE_URL: "http://logos-doks-keycloak:8080"
+      KEYCLOAK_REALM: "tum"
+      KEYCLOAK_CLIENT_ID: "logos"
+      KEYCLOAK_PASSKEY_RP_ID: ""
+      KEYCLOAK_PASSKEY_RP_NAME: "Logos"
+      KEYCLOAK_AUDIENCE: ""
+      KEYCLOAK_ROLES_LOGOS_ADMIN: "itg-admin"
+      KEYCLOAK_ROLES_APP_ADMIN: "chair-member"
+      KEYCLOAK_AUTO_PROVISION_TEAMS: "false"
+      KEYCLOAK_TEAM_ROLE_SUFFIXES: "-dev,-team,-group"
+      KEYCLOAK_SYNC_ENABLED: "false"
+      KEYCLOAK_SYNC_CLIENT_ID: "logos-sync"
+      KEYCLOAK_SYNC_CLIENT_SECRET: ""
+      # ng serve may use :4200 (dev) or :4300 (screenshots compose companion).
+      LOGOS_CORS_ALLOWED_ORIGINS: "http://localhost:4200,http://localhost:4300"
+    ports:
+      - "127.0.0.1:19082:8081"
+    networks:
+      - doks-internal
+
+volumes:
+  doks_pg:
+
+networks:
+  doks-internal:
+    driver: bridge
