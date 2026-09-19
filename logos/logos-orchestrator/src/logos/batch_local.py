@@ -323,12 +323,10 @@ async def _execute_lines(
         async def _run_and_checkpoint(line: Dict[str, Any]) -> None:
             """Run one line, make it durable, and publish the progress with it."""
             nonlocal completed, failed, cancelled
+            # A line cancelled before it finished raises here and never
+            # reaches the checkpoint below — that is what keeps a deposed
+            # runner's unfinished lines out of the new holder's skip list.
             row, line_failed = await _run_line(line, auth, headers)
-            if lost.is_set():
-                # Deposed mid-line: do not write what the new holder will
-                # write again. It resumes past the checkpoint and re-runs
-                # this line — which is exactly what must not be billed twice.
-                return
             finished[line.get("custom_id")] = row
             if line_failed:
                 failed += 1
@@ -336,11 +334,14 @@ async def _execute_lines(
                 completed += 1
             # Durable per line: that is what makes the resume below skip
             # exactly the lines already run and billed, no matter when the
-            # process dies. The progress write joins the checkpoint in one
-            # transaction and doubles as a lease heartbeat and a cancel
-            # check; it is conditional on the lease — a runner that was
-            # deposed must not publish counters the new holder is already
-            # moving.
+            # process dies — including this one when it committed after the
+            # lease was already lost: the insert is unconditional on
+            # purpose, so the new holder resumes past a line that ran and
+            # was billed instead of replaying it. The progress write joins
+            # the checkpoint in one transaction and doubles as a lease
+            # heartbeat and a cancel check; it is conditional on the lease —
+            # a runner that was deposed must not publish counters the new
+            # holder is already moving.
             with DBManager() as db:
                 db.save_local_batch_lines(
                     batch_object_id, RUNNER_ID, [{"custom_id": line.get("custom_id"), "row": row}]
@@ -349,7 +350,14 @@ async def _execute_lines(
                     batch_object_id, RUNNER_ID, completed, failed, LOCAL_BATCH_LEASE_TTL_S
                 )
             if still_running is None:
+                # The same loss the heartbeat reports, seen a write earlier:
+                # cancel the lines still in flight — they did not finish, so
+                # the new holder runs them exactly once — and leave through
+                # the lost checks below.
                 lost.set()
+                for task in worker_tasks:
+                    if task is not asyncio.current_task():
+                        task.cancel()
             elif still_running:
                 cancelled = True
                 no_more.set()
@@ -425,15 +433,29 @@ async def _execute_lines(
                     return None
                 raise
             finally:
+                for task in worker_tasks:
+                    if not task.done():
+                        task.cancel()
                 if not heartbeat_task.done():
                     heartbeat_task.cancel()
-                # Await the cleanup so the heartbeat cannot outlive the batch:
-                # an unawaited, uncancelled task would keep refreshing a lease
-                # this runner is done with.
+                # Await the cleanup so nothing outlives this run: an
+                # uncancelled worker would keep running — and billing — lines
+                # for a batch this runner has unwound, and the heartbeat
+                # would keep refreshing a lease it is done with.
                 try:
-                    await heartbeat_task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001 - its state is in `lost`
+                    await asyncio.gather(*worker_tasks, heartbeat_task, return_exceptions=True)
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001 - the cleanup is best effort
                     pass
+            if lost.is_set():
+                # The lease was lost on a per-line write after every worker
+                # had already stopped: the new holder resumes from the
+                # checkpoint and closes the batch out, so this runner writes
+                # no output file of its own.
+                logger.warning(
+                    "Lost the lease on batch %s before finalizing; another runner closes it out",
+                    batch.get("upstream_id"),
+                )
+                return None
 
     rows = [finished[line.get("custom_id")] for line in lines if line.get("custom_id") in finished]
     output_file_id = new_object_id("file")
