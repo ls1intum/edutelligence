@@ -423,7 +423,7 @@ async def test_sleep_action_escalates_to_stop_when_incremental_host_ram_does_not
 
     escalated: list[CapacityPlanAction] = []
 
-    async def _capture_confirmation(action, timeout_seconds=60.0):
+    async def _capture_confirmation(action, timeout_seconds=60.0, deadline=None):
         escalated.append(action)
         return True
 
