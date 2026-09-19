@@ -2,7 +2,7 @@
 
 Docusaurus site for Logos (user / admin / developer guides, architecture,
 deployment, and per-role UI guides). Published by the `Build Logos Documentation`
-workflow to <https://ls1intum.github.io/edutelligence/logos/>.
+workflow to https://ls1intum.github.io/edutelligence/logos/.
 
 ## Commands
 
@@ -15,6 +15,15 @@ npm run build      # production build — must succeed before merging docs PRs
 
 Sidebar and top-nav live in `sidebars.ts` and `docusaurus.config.ts`. Doc ids
 are path-based (`roles/app-developer`, `developer/architecture`, …).
+
+## System design diagrams
+
+Structural diagrams for the developer guide live under
+`static/img/system-design/` (SVG + `system-design.drawio`). The page is
+`developer/system-design.mdx` (Artemis-style: Top-Level, Deployment, Data
+Model, Request Flow). Keep the prose and filenames aligned with
+[Architecture](developer/architecture.mdx) terminology. Prefer white
+backgrounds, one accent colour, and short captions — not dense boxes.
 
 ## Role-guide screenshots (committed PNGs)
 

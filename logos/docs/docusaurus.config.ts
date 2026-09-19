@@ -18,7 +18,13 @@ const config: Config = {
       {
         docs: {
           path: ".",
-          exclude: ["**/node_modules/**", "**/build/**"],
+          exclude: [
+            "**/node_modules/**",
+            "**/build/**",
+            "**/AGENTS.md",
+            "**/CLAUDE.md",
+            "**/seed/**",
+          ],
           routeBasePath: "/",
           sidebarPath: "./sidebars.ts",
           editUrl: "https://github.com/ls1intum/edutelligence/tree/main/logos/docs/",

@@ -8,7 +8,9 @@ import useBaseUrl from '@docusaurus/useBaseUrl';
 
 This page is the terminology ground truth for all Logos documentation. The
 subsystem decomposition is defined here; every other document uses these
-names, so read this first if the docs feel abstract.
+names, so read this first if the docs feel abstract. For diagrams of how the
+pieces fit together (top-level design, deployment, data model, request flow),
+see [System Design](./system-design).
 
 Logos is an LLM engineering platform. Clients call it like an OpenAI
 endpoint (`/v1/chat/completions`, `/v1/models`, …) and get models back from
@@ -58,6 +60,10 @@ the [agent runner README](https://github.com/ls1intum/edutelligence/blob/main/lo
 and the [worker node guide](https://github.com/ls1intum/edutelligence/blob/main/logos/logos-workernode/AGENTS.md).
 
 ## How the pieces talk
+
+The structural diagrams (top-level, deployment, data model, inference paths)
+live on [System Design](./system-design). The gateway-split overview below is the
+same story in one picture:
 
 <img
   src={useBaseUrl('/img/architecture.svg')}

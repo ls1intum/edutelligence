@@ -15,9 +15,10 @@ const sidebars: SidebarsConfig = {
     { type: "doc", id: "admin/operations", label: "Operations and Troubleshooting" },
   ],
   developerSidebar: [
+    { type: "doc", id: "developer/system-design", label: "System Design" },
+    { type: "doc", id: "developer/architecture", label: "Architecture" },
     { type: "doc", id: "developer/local-setup", label: "Local Development" },
     { type: "doc", id: "context-windows", label: "Context Windows" },
-    { type: "doc", id: "developer/architecture", label: "Architecture" },
   ],
   rolesSidebar: [
     { type: "doc", id: "roles/app-developer", label: "App Developer" },
