@@ -1,6 +1,6 @@
 ---
 name: ui-screenshots
-description: Capture full-page desktop and mobile screenshots of the Logos Angular web application and host them so they render in a pull request or in the documentation. Use whenever a change touches logos-ui/, when a PR needs UI screenshots, or when adding UI imagery to docs — covers localhost-vs-127.0.0.1 CORS, unlocking shell scroll containers, waiting for real data (not skeletons), and the gist hosting gotcha that otherwise serves images as text. For committed role-guide PNGs under docs/static/img/roles/, also read logos/docs/AGENTS.md (seed + shot matrix).
+description: Capture full-page desktop and mobile screenshots of the Logos Angular web application and host them so they render in a pull request or in the documentation. Use whenever a change touches logos-ui/, when a PR needs UI screenshots, or when adding UI imagery to docs — covers localhost-vs-127.0.0.1 CORS, unlocking shell scroll containers, waiting for real data (not skeletons), and the gist hosting gotcha that otherwise serves images as text. For committed role-guide PNGs under docs/static/img/roles/, also read logos/docs/AGENTS.md (principles: one shot per distinct tab/step/modal, no near-duplicate per-role pages, every PNG explained; plus seed + shot matrix).
 compatibility: Requires the Logos dev stack (Docker Compose), the GitHub CLI (`gh`) authenticated, and a browser automation tool such as Playwright.
 ---
 
@@ -110,4 +110,4 @@ Add a `## Screenshots` section with the raw gist URLs (commit-pinned), labelled 
 
 ## 5. Role-guide documentation shots (committed PNGs)
 
-When refreshing `docs/static/img/roles/*.png` or priming demo data so those pages are not empty, follow [`docs/AGENTS.md`](../../docs/AGENTS.md) instead of gist-hosting: login users, apply `docs/seed/role-screenshots.sql`, capture desktop full-page shots into the existing filenames, and commit them with the docs change.
+When refreshing `docs/static/img/roles/*.png` or priming demo data so those pages are not empty, follow [`docs/AGENTS.md`](../../docs/AGENTS.md) instead of gist-hosting: login users, apply `docs/seed/role-screenshots.sql`, capture desktop shots of **each distinct UI state** (tabs, wizard steps, modals — not near-identical per-role pages), embed and explain every PNG in the role guide with UI-consistent names, and commit them with the docs change.
