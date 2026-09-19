@@ -123,12 +123,17 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
   /**
-   * The page carries two sections that share nothing but a websocket: the state
-   * of the local providers right now, and request traffic over a chosen period.
-   * They are split because reading them together invites the wrong conclusion —
-   * the time range in the header narrows the request panels and has no bearing
-   * at all on the VRAM, RAM, lane and GPU panels, which always show the latest
-   * sample.
+   * The page carries two sections that share a websocket but nothing else: the
+   * state of the local providers right now, and request traffic over a chosen
+   * period. They are split because reading them together invites the wrong
+   * conclusion — the time range in the header narrows the request panels and
+   * has no bearing at all on the VRAM, RAM, lane and GPU panels, which always
+   * show the latest sample.
+   *
+   * Only one tab is visible at a time, so the socket declares an interest and
+   * the server pushes just that channel — VRAM while Local Providers is open,
+   * aggregates and the feed while Requests is. Switching tabs re-inits the
+   * newly enabled channel so the panel is not stale.
    *
    * The active tab is mirrored into ?tab= so a link points at the section it was
    * copied from, and each switch is a history entry so Back returns to the tab
@@ -157,6 +162,23 @@ export class Statistics implements OnInit, OnDestroy {
   /** Resolves a ?tab= value, falling back to the default for anything unknown. */
   private tabFromParam(raw: string | null): StatsTab {
     return this.TABS.some((t) => t.id === raw) ? (raw as StatsTab) : 'local-providers';
+  }
+
+  /**
+   * Apply a tab from the URL and tell the socket which channel to push.
+   * Loading flags go up for the newly enabled panels so they do not keep
+   * showing numbers from a previous visit while the re-init is in flight.
+   */
+  private applyTab(tab: StatsTab): void {
+    const previous = this.activeTab();
+    this.activeTab.set(tab);
+    if (previous === tab) return;
+    if (tab === 'requests') {
+      this.markRangeChanged();
+    } else {
+      this.isVramLoading.set(true);
+    }
+    this.statsWs.setInterest(tab);
   }
 
   /** Filter options, loaded once on init. */
@@ -847,8 +869,13 @@ export class Statistics implements OnInit, OnDestroy {
     // Subscribed, not read once: Angular reuses this component for a
     // query-parameter navigation, so a snapshot read in ngOnInit would leave
     // the URL naming one tab while the page still showed the other.
+    // Interest is declared on connect from the first resolved tab, and every
+    // later change goes through applyTab so Back / a pasted link / a click
+    // all re-gate the socket the same way.
+    const initialTab = this.tabFromParam(this.route.snapshot.queryParamMap.get('tab'));
+    this.activeTab.set(initialTab);
     this.routeSub = this.route.queryParamMap.subscribe((params) => {
-      this.activeTab.set(this.tabFromParam(params.get('tab')));
+      this.applyTab(this.tabFromParam(params.get('tab')));
     });
 
     const cfg = this.wsTimelineConfig();
@@ -857,6 +884,7 @@ export class Statistics implements OnInit, OnDestroy {
       timeline: cfg,
       scope: this.currentScope(),
       feedStatus: this.feedStatus(),
+      interest: this.activeTab(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
         onVramDelta: (p) => this.handleVramWsDeltaV2(p),
