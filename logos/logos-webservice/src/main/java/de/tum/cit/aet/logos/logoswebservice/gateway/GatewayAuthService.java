@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.http.HttpStatus;
@@ -49,5 +50,10 @@ public class GatewayAuthService {
         return deploymentRepository.authenticateAndFindDeploymentsForModel(keyValue, modelName)
             .orElseThrow(() -> new ResponseStatusException(
                 HttpStatus.UNAUTHORIZED, "Invalid or missing API key"));
+    }
+
+    /** Deployments for an already-authenticated key (model name resolved in-repo). */
+    public List<GatewayDeployment> deploymentsForModel(GatewayKey key, String modelName) {
+        return deploymentRepository.findPermittedDeploymentsForModel(key.id(), modelName);
     }
 }

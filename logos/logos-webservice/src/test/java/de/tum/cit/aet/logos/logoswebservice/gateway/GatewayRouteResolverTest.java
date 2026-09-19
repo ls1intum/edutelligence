@@ -84,7 +84,8 @@ class GatewayRouteResolverTest {
     void anthropicDialectGoesToOrchestrator() {
         GatewayDeployment anthropic = new GatewayDeployment(
             1, "claude", 2, "Anthropic", "cloud", "anthropic",
-            "https://api.anthropic.com", "", "x-api-key", "{}", "sk");
+            "https://api.anthropic.com", "", "x-api-key", "{}", "sk",
+            "CLOUD_NOT_IN_EU_BY_US_PROVIDER", null);
         GatewayRouteDecision d = GatewayRouteResolver.decideFromDeployments(List.of(anthropic));
         assertThat(d.route()).isEqualTo(GatewayRoute.ORCHESTRATOR);
         assertThat(d.reason()).isEqualTo("anthropic-dialect");
@@ -116,11 +117,13 @@ class GatewayRouteResolverTest {
 
     private static GatewayDeployment cloud(String cloudType, String baseUrl, String endpoint) {
         return new GatewayDeployment(
-            1, "gpt-4o", 10, "Cloud", "cloud", cloudType, baseUrl, endpoint, "Authorization", "Bearer {}", "sk");
+            1, "gpt-4o", 10, "Cloud", "cloud", cloudType, baseUrl, endpoint, "Authorization", "Bearer {}", "sk",
+            "CLOUD_NOT_IN_EU_BY_US_PROVIDER", null);
     }
 
     private static GatewayDeployment logosnode() {
         return new GatewayDeployment(
-            1, "gpt-4o", 20, "Worker", "logosnode", null, "", "", "", "", "");
+            1, "gpt-4o", 20, "Worker", "logosnode", null, "", "", "", "", "",
+            "LOCAL", null);
     }
 }

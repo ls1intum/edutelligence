@@ -126,6 +126,29 @@ public class GatewayRouteResolver {
         return pathWithinApp;
     }
 
+    /**
+     * Paths eligible for direct-cloud forwarding. Everything else (files,
+     * batches, DELETE, …) is proxied — even when a {@code model} field is
+     * present — so provider credentials are not attached to non-inference APIs.
+     */
+    static boolean isDirectCloudEligible(String pathWithinApp, String httpMethod) {
+        String method = httpMethod == null ? "" : httpMethod.toUpperCase(Locale.ROOT);
+        if (!"POST".equals(method)) {
+            return false;
+        }
+        String p = stripOpenAiPrefix(pathWithinApp).replaceAll("/+$", "");
+        if (!p.startsWith("/v1/")) {
+            return false;
+        }
+        String op = p.substring("/v1/".length());
+        return switch (op) {
+            case "chat/completions", "completions", "embeddings", "responses",
+                 "images/generations", "images/edits", "images/variations",
+                 "audio/speech", "audio/transcriptions", "audio/translations" -> true;
+            default -> false;
+        };
+    }
+
     private static String stripOpenAiPrefix(String path) {
         return normalizeInferencePath(path);
     }

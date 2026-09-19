@@ -3,7 +3,9 @@ package de.tum.cit.aet.logos.logoswebservice.gateway;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -17,8 +19,8 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  *
  * <p>The common cloud path uses {@link #authenticateAndFindDeploymentsForModel}
  * so authorization is a single round-trip: key lookup plus model and provider
- * permission joins (mirroring the orchestrator's effective-permission CTEs and
- * {@code get_auth_info_to_deployment} credential columns).
+ * permission joins. Model ids are resolved case-insensitively with planner /
+ * replica aliases in Java ({@link GatewayModelNameResolver}).
  */
 @Repository
 public class GatewayDeploymentRepository {
@@ -57,18 +59,11 @@ public class GatewayDeploymentRepository {
             FROM team_model_permissions tmp, key_info ki
             WHERE tmp.team_id = ki.tid AND ki.custom = false
         ),
-        matched_model AS (
-            SELECT m.id AS model_id
-            FROM models m
-            WHERE m.name = :model_name
-            UNION
-            SELECT a.model_id
-            FROM model_aliases a
-            WHERE a.alias = :model_name
-        ),
         permitted AS (
             SELECT m.id AS model_id,
                    m.name AS model_name,
+                   (SELECT string_agg(a.alias, ',' ORDER BY a.alias)
+                      FROM model_aliases a WHERE a.model_id = m.id) AS aliases_csv,
                    p.id AS provider_id,
                    p.name AS provider_name,
                    p.provider_type AS provider_type,
@@ -77,12 +72,12 @@ public class GatewayDeploymentRepository {
                    mp.endpoint AS endpoint,
                    p.auth_name AS auth_name,
                    p.auth_format AS auth_format,
+                   p.privacy_level::text AS privacy_level,
                    COALESCE(NULLIF(mp.api_key, ''), p.api_key, '') AS provider_api_key
-            FROM matched_model mm
-                 JOIN models m ON m.id = mm.model_id
+            FROM effective_models em
+                 JOIN models m ON m.id = em.model_id
                  JOIN model_provider mp ON m.id = mp.model_id
                  JOIN providers p ON mp.provider_id = p.id
-                 JOIN effective_models em ON m.id = em.model_id
                  JOIN effective_providers ep ON p.id = ep.provider_id
         )
         SELECT ki.aki AS api_key_id,
@@ -97,6 +92,7 @@ public class GatewayDeploymentRepository {
                ki.default_priority,
                d.model_id,
                d.model_name,
+               d.aliases_csv,
                d.provider_id,
                d.provider_name,
                d.provider_type,
@@ -105,6 +101,7 @@ public class GatewayDeploymentRepository {
                d.endpoint,
                d.auth_name,
                d.auth_format,
+               d.privacy_level,
                d.provider_api_key
         FROM key_info ki
              LEFT JOIN permitted d ON true
@@ -135,18 +132,16 @@ public class GatewayDeploymentRepository {
 
     /**
      * One round-trip: authenticate the key and load permitted deployments for
-     * {@code modelName} (canonical name or alias). Empty optional → invalid key.
-     * Present with an empty deployment list → key valid but no permitted
-     * deployment for that model.
+     * {@code modelName} (canonical name, alias, planner-safe, or replica id).
+     * Empty optional → invalid key. Present with an empty deployment list →
+     * key valid but no permitted deployment for that model.
      */
     public Optional<GatewayAuthContext> authenticateAndFindDeploymentsForModel(
             String keyValue, String modelName) {
-        MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue("key_value", keyValue)
-            .addValue("model_name", modelName);
+        MapSqlParameterSource params = new MapSqlParameterSource("key_value", keyValue);
         List<GatewayAuthContext> rows = jdbc.query(KEY_AND_DEPLOYMENTS_SQL, params, rs -> {
             GatewayKey key = null;
-            List<GatewayDeployment> deployments = new ArrayList<>();
+            List<GatewayDeployment> all = new ArrayList<>();
             while (rs.next()) {
                 if (key == null) {
                     key = mapKey(rs);
@@ -154,13 +149,13 @@ public class GatewayDeploymentRepository {
                 Integer modelId = (Integer) rs.getObject("model_id");
                 Integer providerId = (Integer) rs.getObject("provider_id");
                 if (modelId != null && providerId != null) {
-                    deployments.add(mapDeployment(rs, modelId, providerId));
+                    all.add(mapDeployment(rs, modelId, providerId));
                 }
             }
             if (key == null) {
                 return List.of();
             }
-            return List.of(new GatewayAuthContext(key, List.copyOf(deployments)));
+            return List.of(new GatewayAuthContext(key, filterByResolvedModel(all, modelName)));
         });
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
@@ -173,13 +168,11 @@ public class GatewayDeploymentRepository {
     }
 
     /**
-     * Permitted deployments for an already-authenticated key id (resolver tests).
+     * Permitted deployments for an already-authenticated key id.
      */
     public List<GatewayDeployment> findPermittedDeploymentsForModel(int apiKeyId, String modelName) {
-        MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue("api_key_id", apiKeyId)
-            .addValue("model_name", modelName);
-        return jdbc.query("""
+        MapSqlParameterSource params = new MapSqlParameterSource("api_key_id", apiKeyId);
+        List<GatewayDeployment> all = jdbc.query("""
             WITH key_info AS (
                 SELECT ak.id AS aki,
                        ak.team_id AS tid,
@@ -205,14 +198,11 @@ public class GatewayDeploymentRepository {
                 SELECT tmp.model_id
                 FROM team_model_permissions tmp, key_info ki
                 WHERE tmp.team_id = ki.tid AND ki.custom = false
-            ),
-            matched_model AS (
-                SELECT m.id AS model_id FROM models m WHERE m.name = :model_name
-                UNION
-                SELECT a.model_id FROM model_aliases a WHERE a.alias = :model_name
             )
             SELECT m.id AS model_id,
                    m.name AS model_name,
+                   (SELECT string_agg(a.alias, ',' ORDER BY a.alias)
+                      FROM model_aliases a WHERE a.model_id = m.id) AS aliases_csv,
                    p.id AS provider_id,
                    p.name AS provider_name,
                    p.provider_type AS provider_type,
@@ -221,16 +211,63 @@ public class GatewayDeploymentRepository {
                    mp.endpoint AS endpoint,
                    p.auth_name AS auth_name,
                    p.auth_format AS auth_format,
+                   p.privacy_level::text AS privacy_level,
                    COALESCE(NULLIF(mp.api_key, ''), p.api_key, '') AS provider_api_key
             FROM models m
-                 JOIN matched_model mm ON m.id = mm.model_id
+                 JOIN effective_models em ON m.id = em.model_id
                  JOIN model_provider mp ON m.id = mp.model_id
                  JOIN providers p ON mp.provider_id = p.id
-                 JOIN effective_models em ON m.id = em.model_id
                  JOIN effective_providers ep ON p.id = ep.provider_id
             ORDER BY p.id
             """, params, (rs, rowNum) -> mapDeployment(
                 rs, rs.getInt("model_id"), rs.getInt("provider_id")));
+        return filterByResolvedModel(all, modelName);
+    }
+
+    /**
+     * Team default cloud RPM/TPM. Returns {@code int[2]} where a negative
+     * value means SQL NULL (no default).
+     */
+    public int[] findTeamCloudRateLimits(int teamId) {
+        MapSqlParameterSource params = new MapSqlParameterSource("tid", teamId);
+        return jdbc.query("""
+            SELECT default_cloud_rpm_limit, default_cloud_tpm_limit
+            FROM teams WHERE id = :tid
+            """, params, rs -> {
+            if (!rs.next()) {
+                return new int[] {-1, -1};
+            }
+            int rpm = rs.getInt(1);
+            if (rs.wasNull()) {
+                rpm = -1;
+            }
+            int tpm = rs.getInt(2);
+            if (rs.wasNull()) {
+                tpm = -1;
+            }
+            return new int[] {rpm, tpm};
+        });
+    }
+
+    static List<GatewayDeployment> filterByResolvedModel(List<GatewayDeployment> all, String modelName) {
+        if (all == null || all.isEmpty()) {
+            return List.of();
+        }
+        Map<Integer, GatewayModelNameResolver.ModelNames> byId = new LinkedHashMap<>();
+        for (GatewayDeployment d : all) {
+            byId.putIfAbsent(d.modelId(), GatewayModelNameResolver.ModelNames.of(d.modelName(), d.aliasesCsv()));
+        }
+        String resolved = GatewayModelNameResolver.resolve(modelName, List.copyOf(byId.values()));
+        if (resolved == null) {
+            return List.of();
+        }
+        List<GatewayDeployment> filtered = new ArrayList<>();
+        for (GatewayDeployment d : all) {
+            if (resolved.equals(d.modelName())) {
+                filtered.add(d);
+            }
+        }
+        return List.copyOf(filtered);
     }
 
     private static GatewayKey mapKey(ResultSet rs) throws SQLException {
@@ -261,7 +298,9 @@ public class GatewayDeploymentRepository {
             rs.getString("endpoint"),
             rs.getString("auth_name"),
             rs.getString("auth_format"),
-            rs.getString("provider_api_key")
+            rs.getString("provider_api_key"),
+            rs.getString("privacy_level"),
+            rs.getString("aliases_csv")
         );
     }
 }

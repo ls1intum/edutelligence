@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
@@ -24,13 +25,15 @@ import jakarta.servlet.http.HttpServletRequest;
 /**
  * Public inference gateway for {@code /v1/**}, {@code /openai/**}, {@code /jobs/**}.
  *
- * <p>Authenticates Logos API keys (not JWT). Pure-cloud named-model traffic is
- * forwarded straight to the cloud provider; everything else is reverse-proxied
- * to the orchestrator.
+ * <p>Authenticates Logos API keys (not JWT) <em>before</em> buffering the body.
+ * Pure-cloud named-model traffic on an allowlisted inference path is forwarded
+ * straight to the cloud provider; everything else is reverse-proxied to the
+ * orchestrator.
  *
  * <p><b>Remaining process state</b> (gateway is otherwise stateless per request):
  * <ul>
  *   <li>{@link GatewayBudgetService}'s short-TTL budget usage/limit cache</li>
+ *   <li>{@link GatewayCloudRateLimiter}'s per-key RPM/TPM windows</li>
  *   <li>JDK {@link java.net.http.HttpClient} connection pools in the forwarders</li>
  * </ul>
  *
@@ -47,6 +50,7 @@ public class InferenceGatewayController {
     private final GatewayBudgetService budgetService;
     private final GatewayCloudAccounting cloudAccounting;
     private final GatewayCloudForwarder cloudForwarder;
+    private final GatewayCloudRateLimiter cloudRateLimiter;
     private final GatewayOrchestratorProxy orchestratorProxy;
     private final ObjectMapper objectMapper;
 
@@ -56,6 +60,7 @@ public class InferenceGatewayController {
             GatewayBudgetService budgetService,
             GatewayCloudAccounting cloudAccounting,
             GatewayCloudForwarder cloudForwarder,
+            GatewayCloudRateLimiter cloudRateLimiter,
             GatewayOrchestratorProxy orchestratorProxy,
             ObjectMapper objectMapper) {
         this.enabled = enabled;
@@ -63,6 +68,7 @@ public class InferenceGatewayController {
         this.budgetService = budgetService;
         this.cloudAccounting = cloudAccounting;
         this.cloudForwarder = cloudForwarder;
+        this.cloudRateLimiter = cloudRateLimiter;
         this.orchestratorProxy = orchestratorProxy;
         this.objectMapper = objectMapper;
     }
@@ -71,31 +77,47 @@ public class InferenceGatewayController {
     public ResponseEntity<StreamingResponseBody> handle(HttpServletRequest request) throws IOException {
         String apiKeyValue = GatewayApiKeyExtractor.extract(request);
         String path = pathWithinApp(request);
-        byte[] body = request.getInputStream().readAllBytes();
-        String modelName = extractModelName(body, request.getContentType());
 
+        // Authenticate before buffering the body so unauthenticated traffic
+        // cannot force large heap allocations on permitAll routes.
         if (!enabled) {
             GatewayKey key = authService.requireActiveKey(apiKeyValue);
+            byte[] body = request.getInputStream().readAllBytes();
             log.debug("Gateway disabled — proxying {} {} keyId={} to orchestrator",
                 request.getMethod(), path, key.id());
             return orchestratorProxy.proxy(request, path, body);
         }
 
-        // Named-model inference: one SQL round-trip for auth + permissions.
-        // Listing/jobs/resource-mode: key-only query, then proxy.
         String contentType = request.getContentType();
         boolean multipart = contentType != null
             && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/");
+
+        // Multipart: auth then stream via proxy without a model peek.
+        if (multipart || path.startsWith("/jobs")
+                || GatewayRouteResolver.isListingOrWarmupPath(path, request.getMethod())) {
+            authService.requireActiveKey(apiKeyValue);
+            byte[] body = request.getInputStream().readAllBytes();
+            log.debug("Orchestrator proxy {} {} (listing/jobs/multipart)", request.getMethod(), path);
+            return orchestratorProxy.proxy(request, path, body);
+        }
+
+        // Named-model path: key-only auth first, then body, then deployments.
+        GatewayKey key = authService.requireActiveKey(apiKeyValue);
+        byte[] body = request.getInputStream().readAllBytes();
+        String modelName = extractModelName(body, contentType);
+
         if (modelName != null
-                && !path.startsWith("/jobs")
-                && !GatewayRouteResolver.isListingOrWarmupPath(path, request.getMethod())
-                && !multipart) {
-            GatewayAuthContext ctx = authService.requireKeyAndDeployments(apiKeyValue, modelName);
-            GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(
-                ctx.deploymentsForModel());
-            if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null
-                    && !GatewayRouteResolver.isMessagesPath(path)) {
+                && GatewayRouteResolver.isDirectCloudEligible(path, request.getMethod())
+                && !GatewayRouteResolver.isMessagesPath(path)
+                && !requiresOrchestratorPolicy(request, modelName)) {
+            GatewayAuthContext ctx = new GatewayAuthContext(
+                key, authService.deploymentsForModel(key, modelName));
+            List<GatewayDeployment> privacyFiltered = filterByPrivacy(
+                ctx.deploymentsForModel(), request, modelName);
+            GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
+            if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
                 budgetService.enforceCloudBudget(ctx.key());
+                cloudRateLimiter.enforceAndRecord(ctx.key(), body);
                 Integer logId = cloudAccounting.reserve(ctx.key(), decision.deployment());
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
@@ -110,13 +132,55 @@ public class InferenceGatewayController {
                     () -> cloudAccounting.settleSuccess(logId),
                     err -> cloudAccounting.settleFailure(logId, err));
             }
-            log.debug("Orchestrator proxy {} {} reason={}", request.getMethod(), path, decision.reason());
+            log.debug("Orchestrator proxy {} {} reason={}",
+                request.getMethod(), path, decision.reason());
             return orchestratorProxy.proxy(request, path, body);
         }
 
-        authService.requireActiveKey(apiKeyValue);
-        log.debug("Orchestrator proxy {} {} (non-named-model path)", request.getMethod(), path);
+        log.debug("Orchestrator proxy {} {} keyId={} (non-cloud-eligible path)",
+            request.getMethod(), path, key.id());
         return orchestratorProxy.proxy(request, path, body);
+    }
+
+    /**
+     * Policy-bearing requests stay on the orchestrator so threshold_privacy and
+     * stored policies apply. Direct cloud uses the default cloud threshold only.
+     */
+    private static boolean requiresOrchestratorPolicy(HttpServletRequest request, String modelName) {
+        if (headerPresent(request, "policy")) {
+            return true;
+        }
+        return modelName != null && modelName.regionMatches(true, 0, "logos-v", 0, 7);
+    }
+
+    private static boolean headerPresent(HttpServletRequest request, String name) {
+        Enumeration<String> values = request.getHeaders(name);
+        return values != null && values.hasMoreElements();
+    }
+
+    private static List<GatewayDeployment> filterByPrivacy(
+            List<GatewayDeployment> deployments, HttpServletRequest request, String modelName) {
+        if (deployments == null || deployments.isEmpty()) {
+            return List.of();
+        }
+        String threshold = GatewayPrivacy.DEFAULT_THRESHOLD;
+        // logos-v* already diverted; keep default threshold for plain named models.
+        List<GatewayDeployment> out = new ArrayList<>();
+        for (GatewayDeployment d : deployments) {
+            if (GatewayPrivacy.privacyOk(threshold, d.privacyLevel())) {
+                out.add(d);
+            }
+        }
+        if (out.isEmpty()) {
+            logPrivacyDivert(modelName, threshold, deployments.size());
+        }
+        return out;
+    }
+
+    private static void logPrivacyDivert(String modelName, String threshold, int before) {
+        LoggerFactory.getLogger(InferenceGatewayController.class)
+            .debug("Privacy filter removed all {} deployments for model={} threshold={}",
+                before, modelName, threshold);
     }
 
     private String extractModelName(byte[] body, String contentType) {

@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
+import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -21,9 +22,24 @@ final class GatewayHopByHop {
     private GatewayHopByHop() {
     }
 
-    /** Whether a request header must not be forwarded upstream. */
+    /** Whether a request header must not be forwarded upstream (base set only). */
     static boolean isRequestHopByHop(String name) {
         return name != null && BASE.contains(name.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Build the set of request header names that must not be forwarded:
+     * the base hop-by-hop set plus every field nominated by {@code Connection}.
+     */
+    static Set<String> requestExcludeNames(Enumeration<String> connectionValues) {
+        Set<String> exclude = new HashSet<>(BASE);
+        if (connectionValues == null) {
+            return exclude;
+        }
+        while (connectionValues.hasMoreElements()) {
+            addConnectionTokens(exclude, connectionValues.nextElement());
+        }
+        return exclude;
     }
 
     /**
@@ -41,17 +57,21 @@ final class GatewayHopByHop {
                 continue;
             }
             for (String value : e.getValue()) {
-                if (value == null) {
-                    continue;
-                }
-                for (String token : value.split(",")) {
-                    String t = token.strip().toLowerCase(Locale.ROOT);
-                    if (!t.isEmpty()) {
-                        exclude.add(t);
-                    }
-                }
+                addConnectionTokens(exclude, value);
             }
         }
         return exclude;
+    }
+
+    private static void addConnectionTokens(Set<String> exclude, String value) {
+        if (value == null) {
+            return;
+        }
+        for (String token : value.split(",")) {
+            String t = token.strip().toLowerCase(Locale.ROOT);
+            if (!t.isEmpty()) {
+                exclude.add(t);
+            }
+        }
     }
 }

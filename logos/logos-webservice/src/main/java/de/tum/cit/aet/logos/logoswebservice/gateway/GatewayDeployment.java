@@ -18,7 +18,9 @@ public record GatewayDeployment(
         String endpoint,
         String authName,
         String authFormat,
-        String apiKey
+        String apiKey,
+        String privacyLevel,
+        String aliasesCsv
 ) {
     /** True when this deployment is a cloud upstream (not a worker / logosnode). */
     public boolean isCloud() {

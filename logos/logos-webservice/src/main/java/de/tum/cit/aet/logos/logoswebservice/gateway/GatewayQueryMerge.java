@@ -1,10 +1,16 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Query-string helpers for cloud forward URLs.
+ *
+ * <p>Preserves repeated keys (ordered multimap). Provider parameters already
+ * on the URL are kept unless an inbound key overrides that key (all inbound
+ * values for an overriding key replace all provider values for it).
  */
 final class GatewayQueryMerge {
 
@@ -31,27 +37,42 @@ final class GatewayQueryMerge {
         if (q < 0) {
             return url + "?" + inbound;
         }
-        Map<String, String> params = new LinkedHashMap<>();
-        parseInto(url.substring(q + 1), params);
-        parseInto(inbound, params);
+        List<Pair> base = parse(url.substring(q + 1));
+        List<Pair> extra = parse(inbound);
+        Map<String, List<String>> override = new LinkedHashMap<>();
+        for (Pair p : extra) {
+            override.computeIfAbsent(p.key(), k -> new ArrayList<>()).add(p.value());
+        }
+        List<Pair> merged = new ArrayList<>();
+        for (Pair p : base) {
+            if (!override.containsKey(p.key())) {
+                merged.add(p);
+            }
+        }
+        for (Map.Entry<String, List<String>> e : override.entrySet()) {
+            for (String v : e.getValue()) {
+                merged.add(new Pair(e.getKey(), v));
+            }
+        }
         StringBuilder sb = new StringBuilder(url.substring(0, q + 1));
         boolean first = true;
-        for (Map.Entry<String, String> e : params.entrySet()) {
+        for (Pair p : merged) {
             if (!first) {
                 sb.append('&');
             }
             first = false;
-            sb.append(e.getKey());
-            if (e.getValue() != null) {
-                sb.append('=').append(e.getValue());
+            sb.append(p.key());
+            if (p.value() != null) {
+                sb.append('=').append(p.value());
             }
         }
         return sb.toString();
     }
 
-    private static void parseInto(String query, Map<String, String> out) {
+    private static List<Pair> parse(String query) {
+        List<Pair> out = new ArrayList<>();
         if (query == null || query.isBlank()) {
-            return;
+            return out;
         }
         for (String part : query.split("&")) {
             if (part.isEmpty()) {
@@ -59,10 +80,14 @@ final class GatewayQueryMerge {
             }
             int eq = part.indexOf('=');
             if (eq < 0) {
-                out.put(part, null);
+                out.add(new Pair(part, null));
             } else {
-                out.put(part.substring(0, eq), part.substring(eq + 1));
+                out.add(new Pair(part.substring(0, eq), part.substring(eq + 1)));
             }
         }
+        return out;
+    }
+
+    private record Pair(String key, String value) {
     }
 }

@@ -34,8 +34,9 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * deployment (or concurrent requests on one instance after a spend lands in
  * {@code log_entry_cost}) can admit traffic for up to roughly {@code T} seconds
  * after the true budget is exhausted — <em>except</em> on the direct-cloud path,
- * where {@link GatewayCloudAccounting} writes a finalized reservation into
- * {@code log_entry_cost} before the upstream call and invalidates this cache,
+ * where {@link GatewayCloudAccounting} writes an in-flight reservation into
+ * {@code log_entry} (counted by this service alongside {@code log_entry_cost})
+ * before the upstream call and invalidates this cache,
  * so concurrent admissions on the same instance see the reservation immediately.
  * Cross-instance lag remains bounded by {@code T} until the other instances'
  * caches expire. Example: TTL 15s → overshoot ≲ concurrent spend in any 15s
@@ -140,11 +141,23 @@ public class GatewayBudgetService {
                 .addValue("aki", apiKeyId)
                 .addValue("month", monthStart);
             Long total = jdbc.queryForObject("""
-                SELECT COALESCE(SUM(lec.cost_micro_cents), 0)
-                FROM log_entry_cost lec
-                WHERE lec.api_key_id = :aki
-                  AND lec.timestamp_request >= CAST(:month AS DATE)
-                  AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                SELECT COALESCE((
+                    SELECT SUM(lec.cost_micro_cents)
+                    FROM log_entry_cost lec
+                    WHERE lec.api_key_id = :aki
+                      AND lec.timestamp_request >= CAST(:month AS DATE)
+                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                ), 0) + COALESCE((
+                    SELECT SUM(le.settled_cost_micro_cents)
+                    FROM log_entry le
+                    WHERE le.api_key_id = :aki
+                      AND le.result_status IS NULL
+                      AND le.cost_finalized = TRUE
+                      AND le.settled_cost_micro_cents IS NOT NULL
+                      AND le.request_id LIKE 'gw-%%'
+                      AND le.timestamp_request >= CAST(:month AS DATE)
+                      AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                ), 0)
                 """, params, Long.class);
             return total == null ? 0L : total;
         });
@@ -173,13 +186,27 @@ public class GatewayBudgetService {
                 .addValue("tid", teamId)
                 .addValue("month", monthStart);
             Long total = jdbc.queryForObject("""
-                SELECT COALESCE(SUM(lec.cost_micro_cents), 0)
-                FROM log_entry_cost lec
-                WHERE lec.api_key_id = ANY(
-                        ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
-                      )
-                  AND lec.timestamp_request >= CAST(:month AS DATE)
-                  AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                SELECT COALESCE((
+                    SELECT SUM(lec.cost_micro_cents)
+                    FROM log_entry_cost lec
+                    WHERE lec.api_key_id = ANY(
+                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                          )
+                      AND lec.timestamp_request >= CAST(:month AS DATE)
+                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                ), 0) + COALESCE((
+                    SELECT SUM(le.settled_cost_micro_cents)
+                    FROM log_entry le
+                    WHERE le.api_key_id = ANY(
+                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                          )
+                      AND le.result_status IS NULL
+                      AND le.cost_finalized = TRUE
+                      AND le.settled_cost_micro_cents IS NOT NULL
+                      AND le.request_id LIKE 'gw-%%'
+                      AND le.timestamp_request >= CAST(:month AS DATE)
+                      AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                ), 0)
                 """, params, Long.class);
             return total == null ? 0L : total;
         });

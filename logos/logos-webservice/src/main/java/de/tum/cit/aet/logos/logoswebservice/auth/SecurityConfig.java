@@ -76,7 +76,6 @@ public class SecurityConfig {
     @Bean("logosCorsConfigurationSource")
     public CorsConfigurationSource logosCorsConfigurationSource(
             @Value("${logos.cors.allowed-origins:}") String allowedOrigins) {
-        CorsConfiguration cfg = new CorsConfiguration();
         // Default: no allowed origins. NOTE: this is not "same-origin allowed" —
         // browsers attach an Origin header to POST requests and WebSocket
         // handshakes even when the UI and API share an origin, so with an empty
@@ -88,20 +87,38 @@ public class SecurityConfig {
         // but credentialed `*` is rejected by Spring by design — use specific
         // origins in production.
         boolean credentialsSafe = true;
+        CorsConfiguration cfg = new CorsConfiguration();
+        CorsConfiguration inference = new CorsConfiguration();
         for (String origin : allowedOrigins.split(",")) {
             String o = origin.strip();
             if (o.isEmpty()) continue;
             if (o.contains("*")) {
                 cfg.addAllowedOriginPattern(o);
+                inference.addAllowedOriginPattern(o);
                 credentialsSafe = false;
             } else {
                 cfg.addAllowedOrigin(o);
+                inference.addAllowedOrigin(o);
             }
         }
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // Admin UI CORS stays tight. Inference paths previously went through the
+        // orchestrator (allow-all headers); preserve that for /v1|/openai|/jobs so
+        // cross-origin clients can send policy and other OpenAI-compatible headers.
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "logos_key", "logos-key"));
         cfg.setAllowCredentials(credentialsSafe);
+
+        inference.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        inference.setAllowedHeaders(List.of("*"));
+        inference.setAllowCredentials(credentialsSafe);
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/v1/**", inference);
+        source.registerCorsConfiguration("/v1", inference);
+        source.registerCorsConfiguration("/openai/**", inference);
+        source.registerCorsConfiguration("/openai", inference);
+        source.registerCorsConfiguration("/jobs/**", inference);
+        source.registerCorsConfiguration("/jobs", inference);
         source.registerCorsConfiguration("/**", cfg);
         return source;
     }

@@ -12,11 +12,12 @@ import org.springframework.stereotype.Service;
 /**
  * Budget-visible accounting for the direct-cloud path.
  *
- * <p>{@link GatewayBudgetService} sums {@code log_entry_cost}. In-flight rows
- * are not priced, so a reservation must land as a finalized settled cost before
- * the upstream call starts — otherwise concurrent requests can all pass the
- * same check. After the stream ends the reservation is reconciled (kept on
- * success as an approximate charge, zeroed on upstream failure).
+ * <p>{@link GatewayBudgetService} sums {@code log_entry_cost} plus in-flight
+ * gateway reservations ({@code result_status IS NULL}, {@code cost_finalized},
+ * non-null {@code settled_cost_micro_cents}). Reservations start in-flight so a
+ * crashed replica does not permanently charge success; {@link #reconcileStale}
+ * zeros abandoned rows. After the stream ends the reservation is reconciled
+ * (kept on success as an approximate charge, zeroed on upstream failure).
  */
 @Service
 public class GatewayCloudAccounting {
@@ -24,19 +25,22 @@ public class GatewayCloudAccounting {
     private final NamedParameterJdbcTemplate jdbc;
     private final GatewayBudgetService budgetService;
     private final long reservationMicroCents;
+    private final int staleAfterMinutes;
 
     public GatewayCloudAccounting(
             NamedParameterJdbcTemplate jdbc,
             GatewayBudgetService budgetService,
-            @Value("${logos.gateway.budget-reservation-micro-cents:1000000}") long reservationMicroCents) {
+            @Value("${logos.gateway.budget-reservation-micro-cents:1000000}") long reservationMicroCents,
+            @Value("${logos.gateway.budget-reservation-stale-minutes:30}") int staleAfterMinutes) {
         this.jdbc = jdbc;
         this.budgetService = budgetService;
         this.reservationMicroCents = Math.max(0L, reservationMicroCents);
+        this.staleAfterMinutes = Math.max(1, staleAfterMinutes);
     }
 
     /**
-     * Insert a budget-visible reservation and invalidate the process-local
-     * budget cache so the next admission check sees it.
+     * Insert a budget-visible in-flight reservation and invalidate the
+     * process-local budget cache so the next admission check sees it.
      *
      * @return log_entry id, or {@code null} when reservation amount is 0
      */
@@ -44,6 +48,7 @@ public class GatewayCloudAccounting {
         if (reservationMicroCents <= 0) {
             return null;
         }
+        reconcileStale();
         String requestId = "gw-" + UUID.randomUUID();
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("request_id", requestId)
@@ -66,7 +71,7 @@ public class GatewayCloudAccounting {
                 NOW(), NOW(),
                 :api_key_id, :team_id, :user_id, :environment,
                 :model_id, :provider_id, :request_id,
-                'success', TRUE, :settled,
+                NULL, TRUE, :settled,
                 'BILLING'
             )
             """, params, keys, new String[] {"id"});
@@ -75,15 +80,18 @@ public class GatewayCloudAccounting {
         return id == null ? null : id.intValue();
     }
 
-    /** Keep the reservation as approximate cost and stamp the response time. */
+    /** Promote the in-flight reservation to a successful approximate charge. */
     public void settleSuccess(Integer logEntryId) {
         if (logEntryId == null) {
             return;
         }
         jdbc.update("""
             UPDATE log_entry
-               SET timestamp_response = NOW()
+               SET timestamp_response = NOW(),
+                   result_status = 'success',
+                   cost_finalized = TRUE
              WHERE id = :id
+               AND result_status IS NULL
             """, new MapSqlParameterSource("id", logEntryId));
     }
 
@@ -105,5 +113,27 @@ public class GatewayCloudAccounting {
             """, new MapSqlParameterSource()
             .addValue("id", logEntryId)
             .addValue("err", msg));
+    }
+
+    /**
+     * Zero gateway reservations abandoned after process loss (no response,
+     * still in-flight past the stale window).
+     */
+    public void reconcileStale() {
+        jdbc.update("""
+            UPDATE log_entry
+               SET timestamp_response = NOW(),
+                   result_status = 'error',
+                   settled_cost_micro_cents = 0,
+                   cost_finalized = TRUE,
+                   error_message = 'gateway reservation abandoned (stale)'
+             WHERE result_status IS NULL
+               AND cost_finalized = TRUE
+               AND settled_cost_micro_cents IS NOT NULL
+               AND settled_cost_micro_cents > 0
+               AND request_id LIKE 'gw-%%'
+               AND timestamp_response IS NULL
+               AND timestamp_request < NOW() - make_interval(mins => :mins)
+            """, new MapSqlParameterSource("mins", staleAfterMinutes));
     }
 }

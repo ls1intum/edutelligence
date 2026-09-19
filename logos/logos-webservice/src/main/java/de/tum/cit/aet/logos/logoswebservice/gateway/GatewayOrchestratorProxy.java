@@ -67,10 +67,11 @@ public class GatewayOrchestratorProxy {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(target))
             .timeout(Duration.ofMinutes(30));
 
+        Set<String> requestExclude = GatewayHopByHop.requestExcludeNames(request.getHeaders("Connection"));
         Enumeration<String> headerNames = request.getHeaderNames();
         while (headerNames != null && headerNames.hasMoreElements()) {
             String name = headerNames.nextElement();
-            if (name == null || GatewayHopByHop.isRequestHopByHop(name)) {
+            if (name == null || requestExclude.contains(name.toLowerCase(Locale.ROOT))) {
                 continue;
             }
             Enumeration<String> values = request.getHeaders(name);
