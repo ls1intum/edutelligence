@@ -36,6 +36,9 @@ environment vars/secrets except the SSH/registry plumbing) to the node and runs
 The orchestrator's API surface is tiered:
 
 - **User-facing** (`/v1`, `/openai`, `/jobs`) — any valid Logos API key.
+  Traefik sends these to **logos-webservice** (inference gateway). Pure-cloud
+  named-model requests are answered there; local/logosnode and mixed traffic
+  is reverse-proxied to the orchestrator on the compose network.
 - **Cluster-internal** (`/logosdb/scheduler_state`, `/internal/*`) — the shared
   `LOGOS_INTERNAL_SECRET`, never a user key. `/logosdb/scheduler_state` used
   to accept any Logos API key and was publicly routed; it is now secret-gated
@@ -211,6 +214,55 @@ needed. Sleep/wake is unavailable (it requires CUDA virtual memory), so the
 server reclaims memory by stopping and restarting lanes instead.
 
 Full setup, sizing and troubleshooting: `logos/logos-workernode/MACOS.md`.
+
+## Inference gateway replicas
+
+Public `/v1`, `/openai`, and `/jobs` traffic lands on **logos-webservice**.
+The service has no fixed `container_name`, so Compose can run more than one
+replica; Traefik load-balances them under `logos-webservice-svc`.
+
+The deploy workflows (`logos_deploy-prod.yml`, `logos_deploy-dev.yml`,
+`logos_deploy-test.yml`) scale the core stack from the node's `.env`:
+
+```bash
+# on the core node .env (e.g. /opt/logos/.env)
+LOGOS_WEBSERVICE_REPLICAS=2
+```
+
+On the next `Logos - Deploy` run for `docker-compose.yaml`, the SSH step
+sources that file and runs:
+
+```bash
+docker compose -f …/docker-compose.yaml --env-file=…/.env \
+  up -d --remove-orphans --scale logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}
+```
+
+Worker compose files have no `logos-webservice` service, so those matrix
+entries omit `--scale`. For a one-off manual bump on the core node you can
+use the same `--scale` flag; prefer setting `LOGOS_WEBSERVICE_REPLICAS` so the
+next pipeline deploy does not collapse back to one replica.
+
+On the **dev** compose, drop or retarget the host publish `18082:8081` before
+scaling — published host ports cannot be shared across replicas. Liquibase
+serialises schema apply via its changelog lock; open SSE streams and the
+short-TTL budget cache are the remaining per-instance state (see
+`gateway/InferenceGatewayController`).
+
+Optional `.env` knobs:
+
+- `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count applied
+  by the deploy workflows on the core `docker-compose.yaml`. Cloud RPM is
+  enforced shared across replicas; cloud TPM estimates remain per-replica —
+  keep this at `1` when tight per-key TPM matters.
+- `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
+  accepts the public paths but proxies every request to the orchestrator after
+  API-key auth.
+- `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
+  overshoot bound; see `GatewayBudgetService`.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
+  cost reserved in `log_entry_cost` before each direct-cloud forward so
+  concurrent admissions see the spend; reconciled (kept or zeroed) when the
+  stream completes.
 
 ## Required configuration per GitHub environment
 

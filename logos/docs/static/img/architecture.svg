@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 650" width="940" height="650" role="img" aria-labelledby="title desc">
+  <title id="title">Logos - Phase 1 architecture (gateway split)</title>
+  <desc id="desc">
+    Client and UI enter the core node via a rate-limit gateway and Traefik.
+    Inference and admin paths land on Webservice replicas; local and mixed
+    traffic is proxied to the Orchestrator. Workers attach outbound over WebSocket.
+  </desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1A1D26"/>
+    </marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0B6E6A"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8A93A3"/>
+    </marker>
+    <marker id="arrow-muted-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 10 0 L 0 5 L 10 10 z" fill="#8A93A3"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="650" fill="#F7F8FA"/>
+
+  <text x="28" y="24" font-family="Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#1A1D26">Logos &#8212; Phase 1 architecture</text>
+  <text x="28" y="42" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#5A6170">Gateway split: public inference on Webservice; local/mixed proxied to Orchestrator; workers attach outbound</text>
+
+  <g id="client">
+    <rect x="48" y="56" width="112" height="40" rx="8" ry="8" fill="#FFFFFF" stroke="#C5CAD3" stroke-width="1.5"/>
+    <text x="104" y="72" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Client</text>
+    <text x="104" y="86" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">API consumers</text>
+  </g>
+  <g id="ui">
+    <rect x="188" y="56" width="112" height="40" rx="8" ry="8" fill="#FFFFFF" stroke="#C5CAD3" stroke-width="1.5"/>
+    <text x="244" y="72" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Logos UI</text>
+    <text x="244" y="86" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Angular admin</text>
+  </g>
+
+  <!-- CORE: snug around Rate / Traefik / WS / Orch / Postgres -->
+  <g id="core-node">
+    <rect x="28" y="120" width="430" height="318" rx="10" ry="10" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
+    <rect x="44" y="108" width="86" height="22" rx="6" ry="6" fill="#0B6E6A"/>
+    <text x="87" y="123" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#FFFFFF">Core node</text>
+
+    <rect x="48" y="140" width="148" height="44" rx="8" ry="8" fill="#E8F3F2" stroke="#0B6E6A" stroke-width="1.5"/>
+    <text x="122" y="157" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#1A1D26">Rate-limit gateway</text>
+    <text x="122" y="171" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">nginx &#183; per-IP limits</text>
+
+    <rect x="228" y="140" width="148" height="44" rx="8" ry="8" fill="#E8F3F2" stroke="#0B6E6A" stroke-width="1.5"/>
+    <text x="302" y="157" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#1A1D26">Traefik</text>
+    <text x="302" y="171" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">path routing &#183; LB</text>
+
+    <rect x="196" y="196" width="88" height="16" rx="4" ry="4" fill="#E8F3F2"/>
+    <text x="240" y="208" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#0B6E6A">/v1 /openai /jobs</text>
+    <rect x="320" y="196" width="68" height="16" rx="4" ry="4" fill="#E8F3F2"/>
+    <text x="354" y="208" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#0B6E6A">/api &#183; admin</text>
+
+    <rect x="186" y="220" width="232" height="60" rx="8" ry="8" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
+    <text x="302" y="240" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Webservice &#215;N</text>
+    <text x="302" y="255" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Inference gateway &#183; Spring</text>
+    <text x="302" y="268" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">API-key auth &#183; budget &#183; cloud forward</text>
+
+    <text x="322" y="300" text-anchor="start" font-family="Helvetica, Arial, sans-serif" font-size="10" font-style="italic" fill="#5A6170">local / mixed proxy</text>
+
+    <rect x="186" y="312" width="232" height="50" rx="8" ry="8" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
+    <text x="302" y="332" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Orchestrator &#215;1</text>
+    <text x="302" y="347" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">FastAPI &#183; schedule &#183; local/mixed</text>
+
+    <g id="postgres">
+      <ellipse cx="102" cy="268" rx="44" ry="9" fill="#F0F2F5" stroke="#8A93A3" stroke-width="1.5"/>
+      <rect x="58" y="268" width="88" height="46" fill="#F0F2F5"/>
+      <line x1="58" y1="268" x2="58" y2="314" stroke="#8A93A3" stroke-width="1.5"/>
+      <line x1="146" y1="268" x2="146" y2="314" stroke="#8A93A3" stroke-width="1.5"/>
+      <ellipse cx="102" cy="314" rx="44" ry="9" fill="#F0F2F5" stroke="#8A93A3" stroke-width="1.5"/>
+      <text x="102" y="290" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#1A1D26">Postgres</text>
+      <text x="102" y="304" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" fill="#5A6170">Webservice schema</text>
+    </g>
+  </g>
+
+  <!-- Agent in corridor (above cloud arrows) -->
+  <g id="agent">
+    <rect x="478" y="140" width="120" height="44" rx="8" ry="8" fill="#FFFFFF" stroke="#C5CAD3" stroke-width="1" stroke-dasharray="5 4"/>
+    <text x="538" y="158" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#5A6170">Agent stack</text>
+    <text x="538" y="172" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" fill="#8A93A3">optional</text>
+  </g>
+
+  <!-- CLOUD -->
+  <g id="cloud">
+    <rect x="620" y="208" width="296" height="136" rx="10" ry="10" fill="#FFFFFF" stroke="#8A93A3" stroke-width="1.5" stroke-dasharray="7 4"/>
+    <rect x="640" y="196" width="118" height="22" rx="6" ry="6" fill="#5A6170"/>
+    <text x="699" y="211" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#FFFFFF">Cloud providers</text>
+    <rect x="640" y="232" width="256" height="38" rx="8" ry="8" fill="#F0F2F5" stroke="#8A93A3" stroke-width="1.5"/>
+    <text x="768" y="255" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Azure OpenAI</text>
+    <rect x="640" y="284" width="256" height="38" rx="8" ry="8" fill="#F0F2F5" stroke="#8A93A3" stroke-width="1.5"/>
+    <text x="768" y="307" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">OpenAI</text>
+  </g>
+
+  <!-- WORKER -->
+  <g id="worker-node">
+    <rect x="186" y="478" width="260" height="136" rx="10" ry="10" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
+    <rect x="202" y="466" width="96" height="22" rx="6" ry="6" fill="#0B6E6A"/>
+    <text x="250" y="481" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#FFFFFF">Worker node</text>
+    <rect x="206" y="504" width="108" height="88" rx="8" ry="8" fill="#E8F3F2" stroke="#0B6E6A" stroke-width="1.5"/>
+    <text x="260" y="540" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Worker</text>
+    <text x="260" y="556" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">control plane</text>
+    <rect x="332" y="504" width="94" height="88" rx="8" ry="8" fill="#FFFFFF" stroke="#8A93A3" stroke-width="1.5"/>
+    <text x="379" y="540" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#1A1D26">Lanes</text>
+    <text x="379" y="556" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">vLLM runtime</text>
+  </g>
+
+  <!-- LEGEND -->
+  <g id="legend">
+    <rect x="480" y="478" width="436" height="136" rx="8" ry="8" fill="#FFFFFF" stroke="#E2E5EA" stroke-width="1"/>
+    <text x="496" y="500" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#8A93A3">LEGEND</text>
+    <line x1="496" y1="518" x2="532" y2="518" stroke="#0B6E6A" stroke-width="2"/>
+    <text x="542" y="522" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Primary request / control path</text>
+    <line x1="496" y1="540" x2="532" y2="540" stroke="#8A93A3" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="542" y="544" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Optional / secondary</text>
+    <text x="496" y="570" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Webservice &#215;N (Traefik LB) &#183; Orchestrator &#215;1</text>
+    <text x="496" y="590" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Workers dial outbound WebSocket; core never dials in</text>
+  </g>
+
+  <!-- EDGES -->
+  <path d="M104 96 L104 120 L122 120 L122 140" fill="none" stroke="#1A1D26" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M244 96 L244 108 L302 108 L302 140" fill="none" stroke="#1A1D26" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="272" y="104" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" fill="#5A6170">UI</text>
+  <path d="M196 162 L228 162" fill="none" stroke="#1A1D26" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Traefik → Agent (exits core to corridor) -->
+  <path d="M376 162 L458 162 L458 162 L478 162" fill="none" stroke="#8A93A3" stroke-width="1" stroke-dasharray="5 4" marker-end="url(#arrow-muted)"/>
+
+  <path d="M302 184 L302 220" fill="none" stroke="#0B6E6A" stroke-width="1.75" marker-end="url(#arrow-teal)"/>
+  <path d="M302 280 L302 312" fill="none" stroke="#0B6E6A" stroke-width="2" marker-end="url(#arrow-teal)"/>
+
+  <!-- Cloud: labels in corridor below agent -->
+  <path d="M418 250 L620 250" fill="none" stroke="#0B6E6A" stroke-width="1.5" marker-end="url(#arrow-teal)"/>
+  <text x="530" y="242" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#0B6E6A">pure-cloud (direct)</text>
+  <path d="M418 337 L580 337 L580 322 L620 322" fill="none" stroke="#8A93A3" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow-muted)"/>
+  <text x="500" y="331" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">optional (proxied)</text>
+
+  <path d="M146 286 L166 286 L166 250 L186 250" fill="none" stroke="#8A93A3" stroke-width="1.25" marker-end="url(#arrow-muted)" marker-start="url(#arrow-muted-start)"/>
+  <path d="M146 300 L166 300 L166 337 L186 337" fill="none" stroke="#8A93A3" stroke-width="1.25" marker-end="url(#arrow-muted)" marker-start="url(#arrow-muted-start)"/>
+
+  <path d="M260 504 L260 458 L302 458 L302 362" fill="none" stroke="#0B6E6A" stroke-width="2" marker-end="url(#arrow-teal)"/>
+  <text x="314" y="452" text-anchor="start" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#0B6E6A">outbound WebSocket</text>
+
+  <path d="M314 548 L332 548" fill="none" stroke="#8A93A3" stroke-width="1.5" marker-end="url(#arrow-muted)"/>
+</svg>

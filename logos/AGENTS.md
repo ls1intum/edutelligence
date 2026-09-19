@@ -9,7 +9,7 @@
 | Directory | Stack | Role |
 |-----------|-------|------|
 | `logos-orchestrator/` | Python 3.13, FastAPI, `uv` | Core proxy: auth, classification, scheduling, provider routing, request logging. See its own `AGENTS.md`. |
-| `logos-webservice/` | Java 25, Spring Boot, Maven | Admin/management REST API. **Owns the Postgres schema** via Liquibase. See its own `AGENTS.md`. |
+| `logos-webservice/` | Java 25, Spring Boot, Maven | Admin/management REST API **and** public inference gateway (`/v1`, `/openai`, `/jobs`). **Owns the Postgres schema** via Liquibase. See its own `AGENTS.md`. |
 | `logos-ui/` | Angular 22, npm | Web application for teams, keys, models, stats. See its own `AGENTS.md`. |
 | `logos-workernode/` | Python | GPU worker-node control plane: vLLM lane lifecycle, calibration, websocket bridge to the orchestrator. See its own `AGENTS.md`. |
 | `logos-agent/` | Python, FastAPI | Runs coding agents in isolated containers on spare serving capacity. See its own `AGENTS.md` and `README.md`. |
