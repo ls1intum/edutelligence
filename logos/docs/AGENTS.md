@@ -18,9 +18,9 @@ are path-based (`roles/app-developer`, `developer/architecture`, …).
 
 ## Role-guide screenshots (committed PNGs)
 
-The pages under `roles/` embed full-page shots from `static/img/roles/`. These
-**are** committed to the repo (exception to the usual "screenshots only in the
-PR description" rule). Whenever the UI for a documented page changes in a way
+The pages under `roles/` embed shots from `static/img/roles/`. These **are**
+committed to the repo (exception to the usual "screenshots only in the PR
+description" rule). Whenever the UI for a documented surface changes in a way
 that makes a shot stale — empty, wrong route, error banner, outdated chrome —
 refresh the matching PNG in the same PR that changes the docs (or a follow-up
 docs PR).
@@ -31,11 +31,58 @@ content, force light theme, use `localhost` not `127.0.0.1`) is the
 gist-host role docs shots — overwrite the files under `static/img/roles/`
 directly. Desktop viewport only (≈1440×900); no mobile variants for role docs.
 
+### Principles (what to shoot and how to write)
+
+Role guides explain **flows**, not a gallery of near-identical full pages.
+
+1. **One shot per distinct UI state — never per role when the UI is the same.**
+   If two roles see the same page (same tabs, same form, same wizard), capture
+   it **once** and link other roles to that section. Do **not** keep
+   `logos-admin-foo.png` / `app-admin-foo.png` / `app-developer-foo.png` that
+   differ only by the sidebar role badge or the API-key dropdown value.
+   Existing examples: AI Tools (six wizard steps), Batches (one page), Team
+   detail (one tab walkthrough + Logos-Admin-only Providers).
+
+2. **Do shoot every meaningful state of a flow.** Prefer depth over
+   duplication. For a documented feature, capture and explain:
+   - each **wizard / stepper** step
+   - each **tab** on a detail view
+   - each important **modal / dialog** (create, edit, confirm, reveal-once
+     secrets, …)
+   - other distinct panes the reader must understand (empty vs filled only
+     when the empty state is part of the product story — seeded happy-path
+     shots are the default)
+
+3. **Every committed PNG must appear in the docs.** No orphan files under
+   `static/img/roles/`. If you add a shot, name it in the shot matrix below
+   **and** embed it next to the prose that explains that state. If you remove
+   a shot from the guide, delete the PNG in the same change.
+
+4. **Explain the flow thoroughly.** Prose + screenshots walk the reader
+   through the task in order (what this step is for → what to click / enter
+   → what happens next). Do not dump a page shot with a one-line caption and
+   move on when the UI has multiple steps, tabs, or dialogs.
+
+5. **Name concepts consistently.** Use the same labels the UI shows
+   (tab titles, button text, field labels, role names like `Logos Admin` /
+   `App Admin` / `App Developer`, entities like **Application Keys**,
+   **My Workspace**, **Batches**). File names should mirror those concepts
+   (`team-detail-application-keys.png`, `ai-tools-step-connect.png`), not
+   invent synonyms (`api-keys` vs `application-keys`, `coding-tools` vs
+   `ai-tools`).
+
+When a surface is role-specific (different columns, extra tabs, admin-only
+actions), keep a **role-prefixed** list/page shot for that role. When only a
+slice differs (e.g. Providers on team detail), document the shared flow once
+and add the extra shot only where that role is explained.
+
 ### When to refresh
 
 - UI layout / labels / sidebar sections for a documented page changed.
 - A review says the shot is empty, wrong page, error page, or role-mismatched.
 - After merging large UI work into `main`, before a docs release.
+- A new modal, tab, or wizard step is part of a documented flow — add a shot
+  and prose for it; do not leave it undescribed.
 
 ### Stack
 
@@ -102,69 +149,71 @@ capturing.
 
 ### Shot matrix
 
-Overwrite exactly these files (path relative to `static/img/roles/`):
+Overwrite exactly these files (path relative to `static/img/roles/`). Shared
+flows use a **concept** name (no role prefix); role-only list pages keep the
+`logos-admin-` / `app-admin-` / `app-developer-` prefix.
 
-| File | Login as | Route |
-|---|---|---|
-| `logos-admin-statistics.png` | `tobias.wasner` | `/statistics` |
-| `logos-admin-models.png` | `tobias.wasner` | `/models` |
-| `logos-admin-providers.png` | `tobias.wasner` | `/providers` |
-| `logos-admin-policies.png` | `tobias.wasner` | `/policies` |
-| `logos-admin-billing.png` | `tobias.wasner` | `/billing` |
-| `logos-admin-user-management.png` | `tobias.wasner` | `/user-management` |
-| `logos-admin-team-management.png` | `tobias.wasner` | `/team-management` |
-| `logos-admin-agents.png` | `tobias.wasner` | `/agents` |
-| `logos-admin-my-workspace.png` | `tobias.wasner` | `/my-workspace` |
-| `app-admin-models.png` | `alexandra.szuminska` | `/models` |
-| `app-admin-user-management.png` | `alexandra.szuminska` | `/user-management` |
-| `app-admin-team-management.png` | `alexandra.szuminska` | `/team-management` |
-| `team-detail-overview.png` | owner or `logos_admin` | `/teams/<id>` — **Overview** |
-| `team-detail-members.png` | same | `/teams/<id>` — **Members** |
-| `team-detail-application-keys.png` | owner or `logos_admin` | `/teams/<id>` — **Application Keys** |
-| `team-detail-models.png` | owner or `logos_admin` | `/teams/<id>` — **Models** |
-| `team-detail-activity.png` | owner or `logos_admin` | `/teams/<id>` — **Activity** |
-| `team-detail-cloud-usage.png` | owner or `logos_admin` | `/teams/<id>` — **Cloud Usage** |
-| `team-detail-settings.png` | owner or `logos_admin` | `/teams/<id>` — **Settings** |
-| `team-detail-providers.png` | `tobias.wasner` (`logos_admin` only) | `/teams/<id>` — **Providers** |
-| `app-admin-my-workspace.png` | `alexandra.szuminska` | `/my-workspace` |
-| `batches.png` | any admin role | `/batches` |
-| `app-developer-models.png` | `henriette.huhn` | `/models` |
-| `app-developer-my-workspace.png` | `henriette.huhn` | `/my-workspace` |
-| `ai-tools-step-tool.png` | any role with a key | `/ai-tools` — step **Tool** |
-| `ai-tools-step-team.png` | same (needs **>1** API key) | `/ai-tools` — step **Team** |
-| `ai-tools-step-model.png` | same | `/ai-tools` — step **Model** |
-| `ai-tools-step-install.png` | same | `/ai-tools` — step **Install** |
-| `ai-tools-step-connect.png` | same | `/ai-tools` — step **Connect** |
-| `ai-tools-step-verify.png` | same | `/ai-tools` — step **Verify** |
+| File | Login as | Route / state | Documented in |
+|---|---|---|---|
+| `logos-admin-statistics.png` | `tobias.wasner` | `/statistics` | `roles/logos-admin.md` |
+| `logos-admin-models.png` | `tobias.wasner` | `/models` | `roles/logos-admin.md` |
+| `logos-admin-providers.png` | `tobias.wasner` | `/providers` | `roles/logos-admin.md` |
+| `logos-admin-policies.png` | `tobias.wasner` | `/policies` | `roles/logos-admin.md` |
+| `logos-admin-billing.png` | `tobias.wasner` | `/billing` | `roles/logos-admin.md` |
+| `logos-admin-user-management.png` | `tobias.wasner` | `/user-management` | `roles/logos-admin.md` |
+| `logos-admin-team-management.png` | `tobias.wasner` | `/team-management` | `roles/logos-admin.md` |
+| `logos-admin-agents.png` | `tobias.wasner` | `/agents` | `roles/logos-admin.md` |
+| `logos-admin-my-workspace.png` | `tobias.wasner` | `/my-workspace` | `roles/logos-admin.md` |
+| `app-admin-models.png` | `alexandra.szuminska` | `/models` | `roles/app-admin.md` |
+| `app-admin-user-management.png` | `alexandra.szuminska` | `/user-management` | `roles/app-admin.md` |
+| `app-admin-team-management.png` | `alexandra.szuminska` | `/team-management` | `roles/app-admin.md` |
+| `team-detail-overview.png` | owner or `logos_admin` | `/teams/<id>` — **Overview** | `roles/app-admin.md#teams` |
+| `team-detail-members.png` | same | `/teams/<id>` — **Members** | same |
+| `team-detail-application-keys.png` | owner or `logos_admin` | `/teams/<id>` — **Application Keys** | same |
+| `team-detail-models.png` | owner or `logos_admin` | `/teams/<id>` — **Models** | same |
+| `team-detail-activity.png` | owner or `logos_admin` | `/teams/<id>` — **Activity** | same |
+| `team-detail-cloud-usage.png` | owner or `logos_admin` | `/teams/<id>` — **Cloud Usage** | same |
+| `team-detail-settings.png` | owner or `logos_admin` | `/teams/<id>` — **Settings** | same |
+| `team-detail-providers.png` | `tobias.wasner` (`logos_admin` only) | `/teams/<id>` — **Providers** | `roles/logos-admin.md#teams` |
+| `app-admin-my-workspace.png` | `alexandra.szuminska` | `/my-workspace` | `roles/app-admin.md` |
+| `batches.png` | any admin role | `/batches` | `roles/app-admin.md#batches` (Logos Admin links) |
+| `app-developer-models.png` | `henriette.huhn` | `/models` | `roles/app-developer.md` |
+| `app-developer-my-workspace.png` | `henriette.huhn` | `/my-workspace` | `roles/app-developer.md` |
+| `ai-tools-step-tool.png` | any role with a key | `/ai-tools` — step **Tool** | `roles/app-developer.md#ai-tools` |
+| `ai-tools-step-team.png` | same (needs **>1** API key) | `/ai-tools` — step **Team** | same |
+| `ai-tools-step-model.png` | same | `/ai-tools` — step **Model** | same |
+| `ai-tools-step-install.png` | same | `/ai-tools` — step **Install** | same |
+| `ai-tools-step-connect.png` | same | `/ai-tools` — step **Connect** | same |
+| `ai-tools-step-verify.png` | same | `/ai-tools` — step **Verify** | same |
 
-Team detail is documented once under `roles/app-admin.md#teams` (tab walkthrough);
-Logos Admin links there and only adds the Providers shot. Do not keep
-separate `*-team-management-detail.png` per role.
+Shared flows (document once, link from other roles):
 
-AI Tools is **not** documented per role — the wizard is identical for every
-role. Keep one step walkthrough under `roles/app-developer.md#ai-tools` and
-link App Admin / Logos Admin there. Capture the six `ai-tools-step-*.png`
-files once (any role with a key; Team step needs more than one key). Do not
-reintroduce `*-ai-tools.png` per role.
-
-Batches is the same for App Admin and Logos Admin — one shot (`batches.png`)
-under `roles/app-admin.md#batches`; Logos Admin links there. Do not keep
-separate `*-batches.png` per role.
-
+- **Team detail** — tab walkthrough under `roles/app-admin.md#teams`; Logos
+  Admin links there and only adds **Providers**.
+- **AI Tools** — step walkthrough under `roles/app-developer.md#ai-tools`;
+  App Admin / Logos Admin link there. No per-role `*-ai-tools.png`.
+- **Batches** — one shot under `roles/app-admin.md#batches`; Logos Admin
+  links there. No per-role `*-batches.png`.
 
 ### Acceptance before committing PNGs
 
-- Correct route (sidebar highlight matches the page).
+- Correct route / state (sidebar highlight, active tab, open modal, wizard
+  step) matches the filename and the surrounding prose.
 - Real rows / KPIs / charts — **no** empty tables, **no** skeleton shimmer,
-  **no** error banners.
+  **no** error banners (unless documenting that state on purpose).
+- Every PNG in `static/img/roles/` is listed in the matrix **and** embedded
+  in a role guide; every embedded shot is explained in the flow, not left as
+  an unlabeled figure.
+- Concept names in prose, headings, alt text, and filenames match the UI.
 - Batches: at least one `in_progress` and one `completed` row.
 - My Workspace: rate-limit bars show used/limit (not blank).
-- Team detail: Overview with Members / Application Keys / Models / … tabs.
 - Light theme.
+- No near-duplicate per-role shots of the same UI state.
 
 ### Extending the seed
 
-Edit `seed/role-screenshots.sql` when a new role page needs demo entities.
-Keep it idempotent (wipe `environment = 'docs-role-screenshots'` / known demo
-names first). Prefer looking up Keycloak-synced `users.id` by username over
-hard-coded ids. Update this AGENTS.md shot matrix in the same change.
+Edit `seed/role-screenshots.sql` when a new role page or flow state needs demo
+entities. Keep it idempotent (wipe `environment = 'docs-role-screenshots'` /
+known demo names first). Prefer looking up Keycloak-synced `users.id` by
+username over hard-coded ids. Update this AGENTS.md shot matrix **and** the
+matching role-guide prose in the same change.
