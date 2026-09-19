@@ -115,7 +115,6 @@ Overwrite exactly these files (path relative to `static/img/roles/`):
 | `logos-admin-team-management.png` | `tobias.wasner` | `/team-management` |
 | `logos-admin-agents.png` | `tobias.wasner` | `/agents` |
 | `logos-admin-my-workspace.png` | `tobias.wasner` | `/my-workspace` |
-| `logos-admin-batches.png` | `tobias.wasner` | `/batches` |
 | `app-admin-models.png` | `alexandra.szuminska` | `/models` |
 | `app-admin-user-management.png` | `alexandra.szuminska` | `/user-management` |
 | `app-admin-team-management.png` | `alexandra.szuminska` | `/team-management` |
@@ -128,7 +127,7 @@ Overwrite exactly these files (path relative to `static/img/roles/`):
 | `team-detail-settings.png` | owner or `logos_admin` | `/teams/<id>` — **Settings** |
 | `team-detail-providers.png` | `tobias.wasner` (`logos_admin` only) | `/teams/<id>` — **Providers** |
 | `app-admin-my-workspace.png` | `alexandra.szuminska` | `/my-workspace` |
-| `app-admin-batches.png` | `alexandra.szuminska` | `/batches` |
+| `batches.png` | any admin role | `/batches` |
 | `app-developer-models.png` | `henriette.huhn` | `/models` |
 | `app-developer-my-workspace.png` | `henriette.huhn` | `/my-workspace` |
 | `ai-tools-step-tool.png` | any role with a key | `/ai-tools` — step **Tool** |
@@ -147,6 +146,10 @@ role. Keep one step walkthrough under `roles/app-developer.md#ai-tools` and
 link App Admin / Logos Admin there. Capture the six `ai-tools-step-*.png`
 files once (any role with a key; Team step needs more than one key). Do not
 reintroduce `*-ai-tools.png` per role.
+
+Batches is the same for App Admin and Logos Admin — one shot (`batches.png`)
+under `roles/app-admin.md#batches`; Logos Admin links there. Do not keep
+separate `*-batches.png` per role.
 
 
 ### Acceptance before committing PNGs

@@ -106,6 +106,7 @@ role; see the step-by-step walkthrough under
 
 The OpenAI Batch API in the browser: upload a `.jsonl` file, watch the job's
 progress, download the result file. See [batch processing](../batch-processing.md)
-for what happens server-side.
+for what happens server-side. The page is the same for every role that can
+open it (App Admin and Logos Admin).
 
-![Batches page](/img/roles/app-admin-batches.png)
+![Batches page](/img/roles/batches.png)
