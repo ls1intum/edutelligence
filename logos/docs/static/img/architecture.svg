@@ -10,8 +10,8 @@
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#1A1D26"/>
     </marker>
-    <marker id="arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0B6E6A"/>
+    <marker id="arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7C3AED"/>
     </marker>
     <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#8A93A3"/>
@@ -39,31 +39,31 @@
 
   <!-- CORE: snug around Rate / Traefik / WS / Orch / Postgres -->
   <g id="core-node">
-    <rect x="28" y="120" width="430" height="318" rx="10" ry="10" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
-    <rect x="44" y="108" width="86" height="22" rx="6" ry="6" fill="#0B6E6A"/>
+    <rect x="28" y="120" width="430" height="318" rx="10" ry="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2"/>
+    <rect x="44" y="108" width="86" height="22" rx="6" ry="6" fill="#7C3AED"/>
     <text x="87" y="123" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#FFFFFF">Core node</text>
 
-    <rect x="48" y="140" width="148" height="44" rx="8" ry="8" fill="#E8F3F2" stroke="#0B6E6A" stroke-width="1.5"/>
+    <rect x="48" y="140" width="148" height="44" rx="8" ry="8" fill="#EDE9FE" stroke="#7C3AED" stroke-width="1.5"/>
     <text x="122" y="157" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#1A1D26">Rate-limit gateway</text>
     <text x="122" y="171" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">nginx &#183; per-IP limits</text>
 
-    <rect x="228" y="140" width="148" height="44" rx="8" ry="8" fill="#E8F3F2" stroke="#0B6E6A" stroke-width="1.5"/>
+    <rect x="228" y="140" width="148" height="44" rx="8" ry="8" fill="#EDE9FE" stroke="#7C3AED" stroke-width="1.5"/>
     <text x="302" y="157" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#1A1D26">Traefik</text>
     <text x="302" y="171" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">path routing &#183; LB</text>
 
-    <rect x="196" y="196" width="88" height="16" rx="4" ry="4" fill="#E8F3F2"/>
-    <text x="240" y="208" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#0B6E6A">/v1 /openai /jobs</text>
-    <rect x="320" y="196" width="68" height="16" rx="4" ry="4" fill="#E8F3F2"/>
-    <text x="354" y="208" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#0B6E6A">/api &#183; admin</text>
+    <rect x="196" y="196" width="88" height="16" rx="4" ry="4" fill="#EDE9FE"/>
+    <text x="240" y="208" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#7C3AED">/v1 /openai /jobs</text>
+    <rect x="320" y="196" width="68" height="16" rx="4" ry="4" fill="#EDE9FE"/>
+    <text x="354" y="208" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="9" font-weight="700" fill="#7C3AED">/api &#183; admin</text>
 
-    <rect x="186" y="220" width="232" height="60" rx="8" ry="8" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
+    <rect x="186" y="220" width="232" height="60" rx="8" ry="8" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2"/>
     <text x="302" y="240" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Webservice &#215;N</text>
     <text x="302" y="255" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Inference gateway &#183; Spring</text>
     <text x="302" y="268" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">API-key auth &#183; budget &#183; cloud forward</text>
 
     <text x="322" y="300" text-anchor="start" font-family="Helvetica, Arial, sans-serif" font-size="10" font-style="italic" fill="#5A6170">local / mixed proxy</text>
 
-    <rect x="186" y="312" width="232" height="50" rx="8" ry="8" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
+    <rect x="186" y="312" width="232" height="50" rx="8" ry="8" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2"/>
     <text x="302" y="332" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Orchestrator &#215;1</text>
     <text x="302" y="347" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">FastAPI &#183; schedule &#183; local/mixed</text>
 
@@ -98,10 +98,10 @@
 
   <!-- WORKER -->
   <g id="worker-node">
-    <rect x="186" y="478" width="260" height="136" rx="10" ry="10" fill="#FFFFFF" stroke="#0B6E6A" stroke-width="2"/>
-    <rect x="202" y="466" width="96" height="22" rx="6" ry="6" fill="#0B6E6A"/>
+    <rect x="186" y="478" width="260" height="136" rx="10" ry="10" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2"/>
+    <rect x="202" y="466" width="96" height="22" rx="6" ry="6" fill="#7C3AED"/>
     <text x="250" y="481" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#FFFFFF">Worker node</text>
-    <rect x="206" y="504" width="108" height="88" rx="8" ry="8" fill="#E8F3F2" stroke="#0B6E6A" stroke-width="1.5"/>
+    <rect x="206" y="504" width="108" height="88" rx="8" ry="8" fill="#EDE9FE" stroke="#7C3AED" stroke-width="1.5"/>
     <text x="260" y="540" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#1A1D26">Worker</text>
     <text x="260" y="556" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">control plane</text>
     <rect x="332" y="504" width="94" height="88" rx="8" ry="8" fill="#FFFFFF" stroke="#8A93A3" stroke-width="1.5"/>
@@ -113,7 +113,7 @@
   <g id="legend">
     <rect x="480" y="478" width="436" height="136" rx="8" ry="8" fill="#FFFFFF" stroke="#E2E5EA" stroke-width="1"/>
     <text x="496" y="500" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#8A93A3">LEGEND</text>
-    <line x1="496" y1="518" x2="532" y2="518" stroke="#0B6E6A" stroke-width="2"/>
+    <line x1="496" y1="518" x2="532" y2="518" stroke="#7C3AED" stroke-width="2"/>
     <text x="542" y="522" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Primary request / control path</text>
     <line x1="496" y1="540" x2="532" y2="540" stroke="#8A93A3" stroke-width="1.5" stroke-dasharray="5 3"/>
     <text x="542" y="544" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">Optional / secondary</text>
@@ -130,20 +130,20 @@
   <!-- Traefik → Agent (exits core to corridor) -->
   <path d="M376 162 L458 162 L458 162 L478 162" fill="none" stroke="#8A93A3" stroke-width="1" stroke-dasharray="5 4" marker-end="url(#arrow-muted)"/>
 
-  <path d="M302 184 L302 220" fill="none" stroke="#0B6E6A" stroke-width="1.75" marker-end="url(#arrow-teal)"/>
-  <path d="M302 280 L302 312" fill="none" stroke="#0B6E6A" stroke-width="2" marker-end="url(#arrow-teal)"/>
+  <path d="M302 184 L302 220" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#arrow-violet)"/>
+  <path d="M302 280 L302 312" fill="none" stroke="#7C3AED" stroke-width="2" marker-end="url(#arrow-violet)"/>
 
   <!-- Cloud: labels in corridor below agent -->
-  <path d="M418 250 L620 250" fill="none" stroke="#0B6E6A" stroke-width="1.5" marker-end="url(#arrow-teal)"/>
-  <text x="530" y="242" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#0B6E6A">pure-cloud (direct)</text>
+  <path d="M418 250 L620 250" fill="none" stroke="#7C3AED" stroke-width="1.5" marker-end="url(#arrow-violet)"/>
+  <text x="530" y="242" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#7C3AED">pure-cloud (direct)</text>
   <path d="M418 337 L580 337 L580 322 L620 322" fill="none" stroke="#8A93A3" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow-muted)"/>
   <text x="500" y="331" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#5A6170">optional (proxied)</text>
 
   <path d="M146 286 L166 286 L166 250 L186 250" fill="none" stroke="#8A93A3" stroke-width="1.25" marker-end="url(#arrow-muted)" marker-start="url(#arrow-muted-start)"/>
   <path d="M146 300 L166 300 L166 337 L186 337" fill="none" stroke="#8A93A3" stroke-width="1.25" marker-end="url(#arrow-muted)" marker-start="url(#arrow-muted-start)"/>
 
-  <path d="M260 504 L260 458 L302 458 L302 362" fill="none" stroke="#0B6E6A" stroke-width="2" marker-end="url(#arrow-teal)"/>
-  <text x="314" y="452" text-anchor="start" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#0B6E6A">outbound WebSocket</text>
+  <path d="M260 504 L260 458 L302 458 L302 362" fill="none" stroke="#7C3AED" stroke-width="2" marker-end="url(#arrow-violet)"/>
+  <text x="314" y="452" text-anchor="start" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#7C3AED">outbound WebSocket</text>
 
   <path d="M314 548 L332 548" fill="none" stroke="#8A93A3" stroke-width="1.5" marker-end="url(#arrow-muted)"/>
 </svg>

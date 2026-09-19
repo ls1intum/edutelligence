@@ -1,32 +1,58 @@
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&display=swap");
 
+/* Logos product brand: violet primary (#7C3AED) from logos-ui tokens. */
 :root {
-  --ifm-color-primary: #0b6e6a;
-  --ifm-color-primary-dark: #085652;
-  --ifm-color-primary-darker: #074a47;
-  --ifm-color-primary-darkest: #053734;
-  --ifm-color-primary-light: #12827d;
-  --ifm-color-primary-lighter: #1a948e;
-  --ifm-color-primary-lightest: #2aada6;
+  --ifm-color-primary: #7c3aed;
+  --ifm-color-primary-dark: #6d28d9;
+  --ifm-color-primary-darker: #5b21b6;
+  --ifm-color-primary-darkest: #4c1d95;
+  --ifm-color-primary-light: #8b5cf6;
+  --ifm-color-primary-lighter: #a78bfa;
+  --ifm-color-primary-lightest: #c4b5fd;
   --ifm-font-family-base: "IBM Plex Sans", "Segoe UI", sans-serif;
   --ifm-code-font-size: 95%;
   --ifm-heading-font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
 [data-theme="dark"] {
-  --ifm-color-primary: #3db8b1;
-  --ifm-color-primary-dark: #2a9e97;
-  --ifm-color-primary-darker: #258f89;
-  --ifm-color-primary-darkest: #1d726d;
-  --ifm-color-primary-light: #55c4be;
-  --ifm-color-primary-lighter: #6ecec8;
-  --ifm-color-primary-lightest: #8fdad5;
+  --ifm-color-primary: #8b5cf6;
+  --ifm-color-primary-dark: #7c3aed;
+  --ifm-color-primary-darker: #6d28d9;
+  --ifm-color-primary-darkest: #5b21b6;
+  --ifm-color-primary-light: #a78bfa;
+  --ifm-color-primary-lighter: #c4b5fd;
+  --ifm-color-primary-lightest: #ddd6fe;
 }
 
 /* Keep the square navbar logo at a readable size (navbar height is 80px). */
 .navbar .navbar__brand img {
   height: 36px;
   width: 36px;
+}
+
+/* Heading deep-links: offset for sticky navbar; make the # permalink visible. */
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  scroll-margin-top: calc(var(--ifm-navbar-height) + 0.75rem);
+}
+
+.markdown .hash-link {
+  opacity: 0.35;
+  padding-left: 0.4rem;
+  transition: opacity 0.15s ease;
+}
+
+.markdown h1:hover .hash-link,
+.markdown h2:hover .hash-link,
+.markdown h3:hover .hash-link,
+.markdown h4:hover .hash-link,
+.markdown .hash-link:focus {
+  opacity: 1;
+  text-decoration: none;
 }
 
 /* Homepage MDX: drop default doc chrome padding/margins. */

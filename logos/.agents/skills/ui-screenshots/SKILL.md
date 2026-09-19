@@ -69,12 +69,17 @@ Before shooting:
 
 The Logos UI scrolls inside `.main-content` (shell), not the document — a plain `fullPage` screenshot only captures the first viewport. Unlock, then `fullPage: true`:
 
-- set `height: auto`, `max-height: none`, and `overflow` / `overflow-y: visible` (all `!important`) on `<html>`, `<body>`, `.shell-layout`, `.main-content`, and ancestors of the page root (e.g. `.stats-page`) up to `<html>`
-- also unlock every element whose computed `overflow-y` is `auto` or `scroll`
+- set `height: auto`, `max-height: none`, and `overflow` / `overflow-y: visible` (all `!important`) on `<html>`, `<body>`, and `.main-content`
+- on `.shell-layout`: keep **`min-height: 100vh` / `100dvh`**, set `height: auto`, `overflow: visible`, and `align-items: stretch` so the shell grows with tall pages **without** collapsing shorter than the viewport
+- on `.sidebar`: `align-self: stretch` and `min-height: 100%` so the glass sidebar stays full height (never a short floating card with empty lavender under it)
+- unlock ancestors of the page root (e.g. `.stats-page`) up to `<html>` the same way as `.main-content`
+- also unlock every element **inside `.main-content`** whose computed `overflow-y` is `auto` or `scroll`
+
+**Do not** set `height: auto` on `.shell-layout` without `min-height: 100vh` — that shrinks the flex shell to content height and leaves a short sidebar on sparse pages.
 
 **Do not** blanket-unlock every `overflow: hidden` node on the page (cards, chips, text ellipsis) — that breaks clipping and makes the shot look washed-out / “wrong theme”.
 
-Verify: when the page overflows, image height must be **greater than** the viewport (e.g. desktop 1440×900 → height ≫ 900).
+Verify: sidebar glass reaches the bottom of the image (tiny border-radius gap only). When the page overflows, image height must be **greater than** the viewport (e.g. desktop 1440×900 → height ≫ 900).
 
 ## 3. Host the images in a gist (do it this way or they won't render)
 

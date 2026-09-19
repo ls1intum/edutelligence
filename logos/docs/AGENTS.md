@@ -106,7 +106,7 @@ docker compose -f docker-compose.screenshots.yaml --project-name logos-doks up -
 
 # UI proxies /api → webservice :19082 (no Traefik in this compose):
 cat > /tmp/logos-doks-proxy.conf.json <<'EOF'
-{"/api": {"target": "http://127.0.0.1:19082", "secure": false, "changeOrigin": true, "logLevel": "warn"}}
+{"/api": {"target": "http://127.0.0.1:19082", "secure": false, "changeOrigin": true, "pathRewrite": {"^/api": ""}, "ws": true, "logLevel": "warn"}}
 EOF
 cd logos-ui && ng serve --port 4300 --proxy-config /tmp/logos-doks-proxy.conf.json
 ```

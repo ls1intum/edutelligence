@@ -31,7 +31,7 @@ model permissions. This is where a developer gets the secret to call the
 
 ![My Workspace page](/img/roles/app-developer-my-workspace.png)
 
-## AI Tools
+## AI Tools {#ai-tools}
 
 **AI Coding Tools** is a guided setup wizard shared by every role (the page
 itself does not change with the role badge). It walks you through connecting

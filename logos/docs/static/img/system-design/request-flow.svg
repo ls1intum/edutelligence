@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" aria-labelledby="title desc">
-  <title id="title">Logos  Inference Request Flow</title>
+  <title id="title">Logos â€” Inference Request Flow</title>
   <desc id="desc">Two paths after the inference gateway: pure-cloud forward from the Webservice, or proxy to the Orchestrator for local and mixed traffic.</desc>
   <defs>
     <marker id="af" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0 L10 5 L0 10 z" fill="#0F766E"/>
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/>
     </marker>
     <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" fill="#64748B"/>
@@ -13,77 +13,77 @@
   <rect width="960" height="540" fill="#FFFFFF"/>
 
   <text x="40" y="36" font-family="Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#0F172A">Inference request flow</text>
-  <text x="40" y="56" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#64748B">OpenAI-compatible paths: /v1 · /openai · /jobs</text>
+  <text x="40" y="56" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#64748B">OpenAI-compatible paths: /v1 Â· /openai Â· /jobs</text>
 
   <!-- Shared entry -->
   <rect x="40" y="90" width="120" height="48" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
   <text x="100" y="112" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Client</text>
   <text x="100" y="128" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">API key</text>
 
-  <rect x="200" y="90" width="140" height="48" rx="6" fill="#F0FDFA" stroke="#0F766E" stroke-width="1.5"/>
+  <rect x="200" y="90" width="140" height="48" rx="6" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
   <text x="270" y="112" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Rate-limit GW</text>
   <text x="270" y="128" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">per-IP</text>
 
-  <rect x="380" y="90" width="120" height="48" rx="6" fill="#F0FDFA" stroke="#0F766E" stroke-width="1.5"/>
+  <rect x="380" y="90" width="120" height="48" rx="6" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
   <text x="440" y="112" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Traefik</text>
-  <text x="440" y="128" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">path · LB</text>
+  <text x="440" y="128" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">path Â· LB</text>
 
-  <rect x="540" y="80" width="200" height="68" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="2"/>
+  <rect x="540" y="80" width="200" height="68" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2"/>
   <text x="640" y="108" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="700" fill="#0F172A">Webservice</text>
-  <text x="640" y="128" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">auth · budget · route</text>
+  <text x="640" y="128" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">auth Â· budget Â· route</text>
 
-  <path d="M160 114 H200" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#af)"/>
-  <path d="M340 114 H380" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#af)"/>
-  <path d="M500 114 H540" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#af)"/>
+  <path d="M160 114 H200" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#af)"/>
+  <path d="M340 114 H380" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#af)"/>
+  <path d="M500 114 H540" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#af)"/>
 
   <!-- Decision -->
   <path d="M640 148 V180" fill="none" stroke="#64748B" stroke-width="1.25"/>
-  <path d="M640 180 L700 220 L640 260 L580 220 Z" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
+  <path d="M640 180 L700 220 L640 260 L580 220 Z" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
   <text x="640" y="216" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#0F172A">pure</text>
   <text x="640" y="232" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#0F172A">cloud?</text>
 
   <!-- Path A: cloud -->
   <rect x="40" y="300" width="400" height="160" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
-  <text x="56" y="328" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F766E">Path A  Pure cloud</text>
+  <text x="56" y="328" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#7C3AED">Path A â€” Pure cloud</text>
   <text x="56" y="352" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Named model with only cloud deployments.</text>
 
-  <rect x="56" y="372" width="160" height="56" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.5"/>
+  <rect x="56" y="372" width="160" height="56" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
   <text x="136" y="396" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Webservice</text>
   <text x="136" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">direct HTTP forward</text>
 
   <rect x="260" y="372" width="160" height="56" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
   <text x="340" y="396" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Cloud provider</text>
-  <text x="340" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">Azure / OpenAI / &</text>
+  <text x="340" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">Azure / OpenAI / &amp;</text>
 
-  <path d="M216 400 H260" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#af)"/>
+  <path d="M216 400 H260" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#af)"/>
   <text x="56" y="448" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">Orchestrator is not on this path. Result logged + settled in PostgreSQL.</text>
 
   <!-- Path B: local/mixed -->
-  <rect x="480" y="300" width="440" height="160" rx="4" fill="#F0FDFA" stroke="#0F766E" stroke-width="1.75"/>
-  <text x="496" y="328" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F766E">Path B  Local / mixed</text>
-  <text x="496" y="352" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Local models, mixed routing, policies, jobs, &</text>
+  <rect x="480" y="300" width="440" height="160" rx="4" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.75"/>
+  <text x="496" y="328" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#7C3AED">Path B â€” Local / mixed</text>
+  <text x="496" y="352" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Local models, mixed routing, policies, jobs, &amp;</text>
 
-  <rect x="496" y="372" width="120" height="56" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.5"/>
+  <rect x="496" y="372" width="120" height="56" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
   <text x="556" y="396" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Orchestrator</text>
-  <text x="556" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">classify · schedule</text>
+  <text x="556" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">classify Â· schedule</text>
 
-  <rect x="656" y="372" width="110" height="56" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.5"/>
+  <rect x="656" y="372" width="110" height="56" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
   <text x="711" y="396" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Worker</text>
-  <text x="711" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">lane · vLLM</text>
+  <text x="711" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">lane Â· vLLM</text>
 
   <rect x="796" y="372" width="100" height="56" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
   <text x="846" y="396" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Cloud</text>
   <text x="846" y="414" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">optional</text>
 
-  <path d="M616 400 H656" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#af)"/>
+  <path d="M616 400 H656" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#af)"/>
   <path d="M766 400 H796" fill="none" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#ag)"/>
   <text x="496" y="448" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">Worker RPC over the outbound WebSocket registry.</text>
 
   <!-- Decision edges -->
-  <path d="M580 220 H200 V300" fill="none" stroke="#0F766E" stroke-width="1.5" marker-end="url(#af)"/>
-  <text x="210" y="270" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="#0F766E">yes</text>
-  <path d="M700 220 H700 V300" fill="none" stroke="#0F766E" stroke-width="1.5" marker-end="url(#af)"/>
-  <text x="708" y="270" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="#0F766E">no</text>
+  <path d="M580 220 H200 V300" fill="none" stroke="#7C3AED" stroke-width="1.5" marker-end="url(#af)"/>
+  <text x="210" y="270" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="#7C3AED">yes</text>
+  <path d="M700 220 H700 V300" fill="none" stroke="#7C3AED" stroke-width="1.5" marker-end="url(#af)"/>
+  <text x="708" y="270" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="#7C3AED">no</text>
 
-  <text x="40" y="510" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Admin UI traffic uses /api on the Webservice with Keycloak JWT  separate from the inference gateway.</text>
+  <text x="40" y="510" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Admin UI traffic uses /api on the Webservice with Keycloak JWT â€” separate from the inference gateway.</text>
 </svg>

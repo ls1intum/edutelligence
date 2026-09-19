@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 520" width="920" height="520" role="img" aria-labelledby="title desc">
-  <title id="title">Logos  Top-Level Design</title>
+  <title id="title">Logos â€” Top-Level Design</title>
   <desc id="desc">Application client (Angular) and API clients talk to the application server (Webservice + Orchestrator). Identity is Keycloak. Workers and cloud providers sit behind the server.</desc>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -12,25 +12,25 @@
   <!-- Client tier -->
   <rect x="40" y="36" width="200" height="120" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
   <text x="140" y="58" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#64748B" letter-spacing="0.06em">APPLICATION CLIENT</text>
-  <rect x="60" y="74" width="160" height="60" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
+  <rect x="60" y="74" width="160" height="60" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
   <text x="140" y="100" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="700" fill="#0F172A">Logos UI</text>
-  <text x="140" y="118" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Angular · browser</text>
+  <text x="140" y="118" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Angular Â· browser</text>
 
   <rect x="280" y="74" width="160" height="60" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
   <text x="360" y="100" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="700" fill="#0F172A">API Client</text>
   <text x="360" y="118" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">OpenAI-compatible SDK</text>
 
   <!-- Server tier -->
-  <rect x="40" y="200" width="520" height="200" rx="4" fill="#F0FDFA" stroke="#0F766E" stroke-width="2"/>
-  <text x="56" y="224" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#0F766E" letter-spacing="0.06em">APPLICATION SERVER · CORE NODE</text>
+  <rect x="40" y="200" width="520" height="200" rx="4" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2"/>
+  <text x="56" y="224" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#7C3AED" letter-spacing="0.06em">APPLICATION SERVER Â· CORE NODE</text>
 
-  <rect x="60" y="248" width="200" height="72" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-  <text x="160" y="276" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="700" fill="#0F172A">Webservice ×N</text>
-  <text x="160" y="296" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Spring · inference gateway</text>
+  <rect x="60" y="248" width="200" height="72" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+  <text x="160" y="276" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="700" fill="#0F172A">Webservice Ã—N</text>
+  <text x="160" y="296" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Spring Â· inference gateway</text>
 
-  <rect x="300" y="248" width="220" height="72" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-  <text x="410" y="276" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="700" fill="#0F172A">Orchestrator ×1</text>
-  <text x="410" y="296" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">FastAPI · schedule · workers</text>
+  <rect x="300" y="248" width="220" height="72" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+  <text x="410" y="276" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="13" font-weight="700" fill="#0F172A">Orchestrator Ã—1</text>
+  <text x="410" y="296" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">FastAPI Â· schedule Â· workers</text>
 
   <rect x="60" y="340" width="140" height="40" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
   <text x="130" y="365" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">PostgreSQL</text>
@@ -51,19 +51,19 @@
   <rect x="620" y="200" width="260" height="100" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
   <text x="750" y="222" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#64748B" letter-spacing="0.06em">CLOUD PROVIDERS</text>
   <rect x="650" y="240" width="200" height="40" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
-  <text x="750" y="265" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">Azure · OpenAI · &</text>
+  <text x="750" y="265" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">Azure Â· OpenAI Â· &amp;</text>
 
-  <rect x="620" y="340" width="260" height="100" rx="4" fill="#F0FDFA" stroke="#0F766E" stroke-width="1.75"/>
-  <text x="750" y="362" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#0F766E" letter-spacing="0.06em">WORKER NODES</text>
-  <rect x="650" y="380" width="200" height="40" rx="6" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.5"/>
-  <text x="750" y="405" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">GPU · vLLM lanes</text>
+  <rect x="620" y="340" width="260" height="100" rx="4" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.75"/>
+  <text x="750" y="362" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#7C3AED" letter-spacing="0.06em">WORKER NODES</text>
+  <rect x="650" y="380" width="200" height="40" rx="6" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+  <text x="750" y="405" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">GPU Â· vLLM lanes</text>
 
   <!-- Edges -->
   <path d="M140 156 V200" fill="none" stroke="#334155" stroke-width="1.5" marker-end="url(#a)"/>
   <path d="M360 134 V200" fill="none" stroke="#334155" stroke-width="1.5" marker-end="url(#a)"/>
   <path d="M560 284 H620" fill="none" stroke="#334155" stroke-width="1.5" marker-end="url(#a)"/>
-  <path d="M520 284 C560 284 560 400 620 400" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#a)"/>
+  <path d="M520 284 C560 284 560 400 620 400" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#a)"/>
   <path d="M520 220 C560 220 580 96 620 96" fill="none" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#a)"/>
 
-  <text x="40" y="490" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Clients never talk to workers or cloud providers directly  only to the core node.</text>
+  <text x="40" y="490" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Clients never talk to workers or cloud providers directly â€” only to the core node.</text>
 </svg>
