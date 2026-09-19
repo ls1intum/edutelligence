@@ -78,15 +78,6 @@
           }
         }
 
-        <!-- total line (model mode only — provider view is bars only) -->
-        @if (mode() === 'model' && totalLinePath()) {
-          <path
-            [attr.d]="totalLinePath()"
-            [attr.stroke]="totalLineColor"
-            class="rv-total-line"
-          />
-        }
-
         <!-- crosshair vertical guide -->
         @if (crosshair(); as ch) {
           <line

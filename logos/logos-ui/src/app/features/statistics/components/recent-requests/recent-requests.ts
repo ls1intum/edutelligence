@@ -483,6 +483,43 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return item.full_name || item.username || '';
   }
 
+  /**
+   * Whether this row was made with an application (service) key.
+   * Those are team credentials labelled by environment, not by a person.
+   */
+  isApplicationKey(item: RequestItem): boolean {
+    return item.api_key_type === 'application';
+  }
+
+  /**
+   * Real environment name for an application-key row, or empty when the
+   * database placeholder ("-") / a blank value would only add noise.
+   */
+  environmentOf(item: RequestItem): string {
+    const env = item.environment?.trim();
+    return env && env !== '-' ? env : '';
+  }
+
+  /**
+   * Whether the personal requester chip belongs on this row.
+   * Application keys have no person behind them — only team + environment.
+   */
+  showRequester(item: RequestItem): boolean {
+    return !this.isApplicationKey(item) && !!this.requesterOf(item);
+  }
+
+  /**
+   * Label for the key chip, or empty when the chip should not render.
+   *
+   * Application keys: the environment (falling back to the key name when no
+   * environment was set). Developer keys: omitted — the key name repeats the
+   * user (e.g. `tobias.wasner-Logos-key`) and is obsolete next to the user chip.
+   */
+  keyChipOf(item: RequestItem): string {
+    if (!this.isApplicationKey(item)) return '';
+    return this.environmentOf(item) || item.api_key_name?.trim() || '';
+  }
+
   /** Cloud cost in USD; null when no price is on record for the model. */
   costLabelOf(item: RequestItem): string | null {
     if (item.cost_microcents == null) return null;

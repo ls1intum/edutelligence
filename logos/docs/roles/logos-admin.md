@@ -57,7 +57,7 @@ Developers).
 
 ![Users page](/img/roles/logos-admin-user-management.png)
 
-## Teams
+## Teams {#teams}
 
 Teams, their owners, and members.
 

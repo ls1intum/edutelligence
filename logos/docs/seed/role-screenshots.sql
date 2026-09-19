@@ -208,19 +208,27 @@ WHERE t.name = 'Logos'
       WHERE k.name = 'docs-role-' || u.username || '-key'
   );
 
-INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, is_active, log, settings)
+INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, environment, is_active, log, settings)
 SELECT
     'lg-docs-app-logos',
     'docs-role-logos-app-key',
     'application',
     t.id,
     NULL,
+    'production',
     true,
     'BILLING',
     '{}'::jsonb
 FROM teams t
 WHERE t.name = 'Logos'
   AND NOT EXISTS (SELECT 1 FROM api_keys WHERE name = 'docs-role-logos-app-key');
+
+-- If the application key already exists from an earlier seed run, keep its
+-- environment aligned with what the statistics caller chips expect to show.
+UPDATE api_keys
+SET environment = 'production'
+WHERE name = 'docs-role-logos-app-key'
+  AND (environment IS NULL OR environment = '-' OR environment = '');
 
 -- Providers + models (names match the committed shots' catalogue style).
 INSERT INTO providers (name, base_url, provider_type, cloud_provider_type, privacy_level, auth_name, auth_format)
@@ -376,6 +384,31 @@ JOIN models m ON m.name = 'qwen-2.5-72b-instruct'
 JOIN providers pc ON pc.name = 'Docs Cloud (EU)'
 JOIN providers pl ON pl.name = 'Docs Local Worker'
 WHERE u.username IN ('tobias.wasner', 'alexandra.szuminska', 'henriette.huhn');
+
+-- A few application-key requests so Statistics Recent requests can show the
+-- environment chip (key icon + "production") next to the team.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-app-' || g.n,
+    k.id,
+    m.id,
+    p.id,
+    'success',
+    now() - ((g.n + 3) || ' seconds')::interval,
+    now() - ((g.n + 3) || ' seconds')::interval + interval '0.2 seconds',
+    now() - ((g.n + 3) || ' seconds')::interval + interval '0.3 seconds',
+    now() - ((g.n + 3) || ' seconds')::interval + interval '0.9 seconds',
+    false, 0, NULL, k.team_id, 'docs-role-screenshots',
+    true, true, 42000
+FROM generate_series(1, 3) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-logos-app-key'
+JOIN models m ON m.name = 'mistral-small-3.2-24b'
+JOIN providers p ON p.name = 'Docs Cloud (EU)';
 
 -- Older mistral traffic so Model Management Last Used shows a dated row
 -- (date + relative age), not only Never / Today.

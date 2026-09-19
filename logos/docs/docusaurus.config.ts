@@ -10,6 +10,7 @@ const config: Config = {
   organizationName: "ls1intum",
   projectName: "edutelligence",
   onBrokenLinks: "throw",
+  onBrokenAnchors: "throw",
   future: { v4: true },
   i18n: { defaultLocale: "en", locales: ["en"] },
   presets: [

@@ -14,7 +14,7 @@ an App Admin when it carries the OIDC role configured in
 
 The UI shows the role badge "App Admin" in the header menu.
 
-## Models
+## Models {#models}
 
 The deployment's model catalogue: name, description, and capabilities.
 App Admins see the list but not the per-model operator controls (weights,
@@ -30,7 +30,7 @@ never higher roles.
 
 ![Users page](/img/roles/app-admin-user-management.png)
 
-## Teams
+## Teams {#teams}
 
 Teams, their owners, and members. App Admins can create teams, add members,
 and manage the team's API keys — for the teams they own.
@@ -61,7 +61,7 @@ and set per-key limits / model permissions.
 
 ![Team detail — Application Keys](/img/roles/team-detail-application-keys.png)
 
-### Models
+### Models {#team-models}
 
 Which catalogue models this team may use.
 
@@ -102,7 +102,7 @@ key, and model, then install and connect. The page does not change with the
 role; see the step-by-step walkthrough under
 [App Developer → AI Tools](app-developer.md#ai-tools).
 
-## Batches
+## Batches {#batches}
 
 The OpenAI Batch API in the browser: upload a `.jsonl` file, watch the job's
 progress, download the result file. See [batch processing](../batch-processing.md)

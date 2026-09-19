@@ -83,14 +83,8 @@ export interface BarSegment {
   seriesKey: string;
 }
 
-export interface PolylinePoint {
-  x: number;
-  y: number;
-}
-
 export interface ChartData {
   rects: BarSegment[];
-  totalPolyline: PolylinePoint[];
   gridLines: Array<{ y: number; label: string }>;
   xLabels: Array<{ x: number; label: string }>;
   plotLeft: number;
@@ -184,7 +178,6 @@ export class RequestVolumeChartComponent implements OnChanges {
   ];
 
   // ── Chart layout constants (exposed for template) ───────────────────────
-  readonly totalLineColor = CHART_ROLE.total;
   readonly CHART_W = CHART_W;
   readonly CHART_H = CHART_H;
   readonly CHART_PAD_LEFT = CHART_PAD_LEFT;
@@ -207,7 +200,6 @@ export class RequestVolumeChartComponent implements OnChanges {
     const n = total.length;
     const empty: ChartData = {
       rects: [],
-      totalPolyline: [],
       gridLines: [],
       xLabels: [],
       plotLeft: CHART_PAD_LEFT,
@@ -292,15 +284,6 @@ export class RequestVolumeChartComponent implements OnChanges {
       rects.push(...segRects);
     }
 
-    // Total polyline only in model mode — provider view is bars only.
-    const totalPolyline: PolylinePoint[] =
-      mode === 'provider' || hidden.has('total')
-        ? []
-        : total.map((p, i) => ({
-            x: CHART_PAD_LEFT + i * slotW + slotW / 2,
-            y: CHART_PAD_TOP + plotH * (1 - Math.min(p.value / maxVal, 1)),
-          }));
-
     // Grid lines
     const gridLines = [0.25, 0.5, 0.75, 1.0].map((f) => ({
       y: CHART_PAD_TOP + plotH * (1 - f),
@@ -334,7 +317,6 @@ export class RequestVolumeChartComponent implements OnChanges {
 
     return {
       rects,
-      totalPolyline,
       gridLines,
       xLabels,
       plotLeft: CHART_PAD_LEFT,
@@ -358,7 +340,7 @@ export class RequestVolumeChartComponent implements OnChanges {
         color: modelClr[id] ?? seriesColor(idx),
       }));
     }
-    // Provider view: cloud/local bars only — no total line in the legend.
+    // Provider view: cloud/local bars only.
     return [
       { key: 'cloud', label: 'Cloud', color: CHART_ROLE.cloud },
       { key: 'local', label: 'Local', color: CHART_ROLE.local },
@@ -394,9 +376,6 @@ export class RequestVolumeChartComponent implements OnChanges {
         const val = map[id][i]?.value ?? 0;
         if (val > 0) rows.push({ label: lbl[id] ?? id, value: val, color: clr[id] ?? seriesColor(idx) });
       });
-      if (!hidden.has('total')) {
-        rows.push({ label: 'Total', value: total[i].value, color: CHART_ROLE.total });
-      }
     }
     const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
     const slotW = plotW / total.length;
@@ -420,31 +399,6 @@ export class RequestVolumeChartComponent implements OnChanges {
   zoomSelW = signal(0);
   /** Whether a drag is in progress */
   isDraggingSig = signal(false);
-
-  // ── Total-line smoothed path ─────────────────────────────────────────────
-  // Builds a smooth SVG path through the total points using a Catmull-Rom
-  // spline converted to cubic Béziers (tension 0 = standard Catmull-Rom).
-  readonly totalLinePath = computed(() => {
-    const pts = this.chartData().totalPolyline;
-    if (pts.length < 2) return '';
-    if (pts.length === 2) return `M${pts[0].x},${pts[0].y} L${pts[1].x},${pts[1].y}`;
-
-    let d = `M${pts[0].x},${pts[0].y}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i - 1] ?? pts[i];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2] ?? p2;
-
-      const c1x = p1.x + (p2.x - p0.x) / 6;
-      const c1y = p1.y + (p2.y - p0.y) / 6;
-      const c2x = p2.x - (p3.x - p1.x) / 6;
-      const c2y = p2.y - (p3.y - p1.y) / 6;
-
-      d += ` C${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y}`;
-    }
-    return d;
-  });
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['totalLineData']) this._total.set(this.totalLineData);

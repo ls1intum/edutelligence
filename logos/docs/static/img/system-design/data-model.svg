@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 620" width="980" height="620" role="img" aria-labelledby="title desc">
-  <title id="title">Logos  Simplified Data Model</title>
+  <title id="title">Logos â€” Simplified Data Model</title>
   <desc id="desc">Core entities: User, Team, ApiKey, Model, Provider, Policy, LogEntry, Batch, and related permission and usage tables.</desc>
   <defs>
     <marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -12,8 +12,8 @@
   <!-- Helper: entity box style via groups -->
   <!-- User -->
   <g transform="translate(40,40)">
-    <rect width="160" height="88" rx="4" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-    <rect width="160" height="28" rx="4" fill="#0F766E"/>
+    <rect width="160" height="88" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+    <rect width="160" height="28" rx="4" fill="#7C3AED"/>
     <text x="80" y="19" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">User</text>
     <text x="12" y="48" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">username</text>
     <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">role</text>
@@ -22,8 +22,8 @@
 
   <!-- Team -->
   <g transform="translate(280,40)">
-    <rect width="160" height="88" rx="4" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-    <rect width="160" height="28" rx="4" fill="#0F766E"/>
+    <rect width="160" height="88" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+    <rect width="160" height="28" rx="4" fill="#7C3AED"/>
     <text x="80" y="19" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">Team</text>
     <text x="12" y="48" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">name</text>
     <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">budget</text>
@@ -32,8 +32,8 @@
 
   <!-- ApiKey -->
   <g transform="translate(520,40)">
-    <rect width="180" height="106" rx="4" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-    <rect width="180" height="28" rx="4" fill="#0F766E"/>
+    <rect width="180" height="106" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+    <rect width="180" height="28" rx="4" fill="#7C3AED"/>
     <text x="90" y="19" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">ApiKey</text>
     <text x="12" y="48" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">key_value (secret)</text>
     <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">key_type</text>
@@ -53,8 +53,8 @@
 
   <!-- Model -->
   <g transform="translate(40,220)">
-    <rect width="180" height="106" rx="4" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-    <rect width="180" height="28" rx="4" fill="#0F766E"/>
+    <rect width="180" height="106" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+    <rect width="180" height="28" rx="4" fill="#7C3AED"/>
     <text x="90" y="19" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">Model</text>
     <text x="12" y="48" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">name / aliases</text>
     <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">capabilities</text>
@@ -64,8 +64,8 @@
 
   <!-- Provider -->
   <g transform="translate(300,220)">
-    <rect width="200" height="106" rx="4" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-    <rect width="200" height="28" rx="4" fill="#0F766E"/>
+    <rect width="200" height="106" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+    <rect width="200" height="28" rx="4" fill="#7C3AED"/>
     <text x="100" y="19" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">Provider</text>
     <text x="12" y="48" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">type: cloud | logosnode</text>
     <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">base URL / privacy</text>
@@ -75,12 +75,12 @@
 
   <!-- LogEntry -->
   <g transform="translate(580,220)">
-    <rect width="200" height="124" rx="4" fill="#FFFFFF" stroke="#0F766E" stroke-width="1.75"/>
-    <rect width="200" height="28" rx="4" fill="#0F766E"/>
+    <rect width="200" height="124" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.75"/>
+    <rect width="200" height="28" rx="4" fill="#7C3AED"/>
     <text x="100" y="19" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">LogEntry</text>
     <text x="12" y="48" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">timestamps / status</text>
-    <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">api_key · team · user</text>
-    <text x="12" y="84" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">model · provider</text>
+    <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">api_key Â· team Â· user</text>
+    <text x="12" y="84" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">model Â· provider</text>
     <text x="12" y="102" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">usage tokens</text>
     <text x="12" y="120" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">settled cost</text>
   </g>
@@ -92,7 +92,7 @@
     <text x="90" y="19" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">BatchObject</text>
     <text x="12" y="48" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">status / progress</text>
     <text x="12" y="66" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">execution: logos | cloud</text>
-    <text x="12" y="84" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">api_key · team</text>
+    <text x="12" y="84" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#334155">api_key Â· team</text>
   </g>
 
   <!-- Permissions note -->
@@ -125,6 +125,6 @@
   <path d="M610 344 V420" fill="none" stroke="#94A3B8" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ae)"/>
   <text x="618" y="390" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">batches</text>
 
-  <text x="40" y="560" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Simplified view  the Liquibase schema also covers agent sessions, calibration probes, hourly stats, and pricing detail.</text>
+  <text x="40" y="560" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Simplified view â€” the Liquibase schema also covers agent sessions, calibration probes, hourly stats, and pricing detail.</text>
   <text x="40" y="580" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Source of truth: logos-webservice Liquibase changelogs.</text>
 </svg>
