@@ -96,6 +96,14 @@
       </table>
     }
 
+    <!-- ── Most Asked Questions ─────────────────────────────────────────────
+         Distinct questions this team has asked, grouped by exact text and
+         ranked by how often they are asked. -->
+    <div class="ac-section-head ac-section-head--spaced">
+      <h3 class="ac-section-title">Most Asked Questions</h3>
+    </div>
+    <app-stats-most-asked-questions [questions]="activity()?.most_asked_questions ?? []" />
+
     <!-- ── Requests ─────────────────────────────────────────────────────────
          The counts above answer "is anything happening"; this answers "what",
          which is the question that follows within seconds of the first. -->

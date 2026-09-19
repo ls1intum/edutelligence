@@ -120,3 +120,4 @@ athena/test-results/
 
 # Personal Claude Code memory (never commit)
 CLAUDE.local.md
+laura_embeddings.pkl

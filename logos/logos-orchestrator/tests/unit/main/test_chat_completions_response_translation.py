@@ -89,7 +89,7 @@ async def test_sync_response_is_returned_as_a_chat_completion(monkeypatch):
     assert body["usage"]["completion_tokens"] == 2
 
     # The ledger keeps the upstream's own field names.
-    logged = dummy_db.payload_calls[0]
+    logged = dummy_db.store_calls[0]
     assert logged["payload"]["content"] == [{"type": "text", "text": "OK"}]
 
 

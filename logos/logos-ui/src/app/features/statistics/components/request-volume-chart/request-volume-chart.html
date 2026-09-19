@@ -61,6 +61,8 @@
               [attr.d]="roundedTopPath(rect)"
               [attr.fill]="rect.color"
               class="rv-bar"
+              [class.rv-bar--dimmed]="isBarDimmed(rect.seriesKey)"
+              [class.rv-bar--highlight]="isBarHighlighted(rect.seriesKey)"
             />
           } @else {
             <rect
@@ -70,12 +72,14 @@
               [attr.height]="rect.height"
               [attr.fill]="rect.color"
               class="rv-bar"
+              [class.rv-bar--dimmed]="isBarDimmed(rect.seriesKey)"
+              [class.rv-bar--highlight]="isBarHighlighted(rect.seriesKey)"
             />
           }
         }
 
-        <!-- total line (provider mode) -->
-        @if (mode() === 'provider' && totalLinePath()) {
+        <!-- total line (model mode only — provider view is bars only) -->
+        @if (mode() === 'model' && totalLinePath()) {
           <path
             [attr.d]="totalLinePath()"
             [attr.stroke]="totalLineColor"
@@ -123,8 +127,12 @@
         <button
           class="rvc-legend__item"
           [class.rvc-legend__item--off]="isHidden(item.key)"
+          [class.rvc-legend__item--hovered]="hoveredSeries() === item.key"
+          [class.rvc-legend__item--dimmed]="hoveredSeries() !== null && hoveredSeries() !== item.key"
           type="button"
           (click)="toggleSeries(item.key)"
+          (mouseenter)="onLegendEnter(item.key)"
+          (mouseleave)="onLegendLeave()"
         >
           <span class="rvc-legend__dot" [style.background]="item.color" aria-hidden="true"></span>
           {{ item.label }}

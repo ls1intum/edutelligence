@@ -88,6 +88,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // rather than merely useless.
         volatile Integer scopeUserId = null;
         volatile Integer scopeTeamId = null;
+        volatile Integer scopeProviderId = null;
+        volatile boolean scopeErrorsOnly = false;
 
         // One lifecycle bucket the request feed is narrowed to (queued, running,
         // error, finished); null shows all states. Deliberately not part of the
@@ -267,6 +269,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static void applyScope(SessionState state, Map<String, Object> msg) {
         state.scopeUserId = msg.get("user_id") instanceof Number n ? n.intValue() : null;
         state.scopeTeamId = msg.get("team_id") instanceof Number n ? n.intValue() : null;
+        state.scopeProviderId = msg.get("provider_id") instanceof Number n ? n.intValue() : null;
+        state.scopeErrorsOnly = Boolean.TRUE.equals(msg.get("errors_only"));
     }
 
     /**
@@ -487,7 +491,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         try {
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n ? n.intValue() : 60;
 
             send(session, Map.of("type", "timeline_init", "payload", stats));
@@ -512,7 +516,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
                 ? n.intValue() : state.bucketSeconds;
             send(session, Map.of("type", "stats", "payload", stats));
@@ -531,6 +535,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
             Map<String, Object> payload = requestLogService.getLatestRequests(
                 state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                state.scopeProviderId, state.scopeErrorsOnly,
                 state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false);
             mergeLiveStreams(payload);
             String sig = requestsSig(payload);
@@ -547,7 +552,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             boolean scopeMoved = false;
             if (state.feedStatus != null) {
                 String scopeSig = requestLogService.scopeMovementSig(
-                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId);
+                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                    state.scopeProviderId, state.scopeErrorsOnly);
                 if (scopeSig != null && !scopeSig.equals(state.prevScopeSig)) {
                     // The first probe after a fresh baseline (init, scope or
                     // range change re-pushed the aggregates moments ago) just
@@ -576,6 +582,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 if (state.feedStatus != null && (force || rowsChanged)) {
                     payload.put("total", requestLogService.countFeedRows(
                         state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                        state.scopeProviderId, state.scopeErrorsOnly,
                         state.feedStatus));
                 }
                 state.prevReqSig = sig;

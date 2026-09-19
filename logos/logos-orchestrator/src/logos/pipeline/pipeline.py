@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from logos import perf_trace
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.dbmodules import ThresholdLevel
@@ -236,7 +237,8 @@ class RequestPipeline:
         # 1. Classification. PROXY mode still runs the policy + token stages
         # (so policy thresholds remain enforced) but skips Laura's heavy ML
         # ranking — the caller already named the model.
-        classification_result = self._classify(request)
+        with perf_trace.phase(request_id, "pipeline.classify"):
+            classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
                 request_id=request_id,
@@ -295,7 +297,8 @@ class RequestPipeline:
 
         schedule_start_s = time.perf_counter()
         try:
-            scheduling_result = await self._scheduler.schedule(scheduling_request)
+            with perf_trace.phase(request_id, "pipeline.schedule"):
+                scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
             logger.warning("Request %s timed out waiting in queue", request_id)
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
@@ -391,13 +394,15 @@ class RequestPipeline:
         # 3. Resolve execution context (with authorization check)
         #    For logosnode providers, the lane may be starting (not yet ready to
         #    accept requests). Retry with backoff instead of failing immediately.
-        ctx_result = await self._resolve_context_with_retry(
-            scheduling_result=scheduling_result,
-            classification_result=classification_result,
-            request_path=request.request_path,
-            request_id=request_id,
-            schedule_start_s=schedule_start_s,
-        )
+        with perf_trace.phase(request_id, "pipeline.context"):
+            ctx_result = await self._resolve_context_with_retry(
+                scheduling_result=scheduling_result,
+                classification_result=classification_result,
+                request_path=request.request_path,
+                request_id=request_id,
+                schedule_start_s=schedule_start_s,
+                deployment_info=self._scheduled_deployment(request, scheduling_result),
+            )
         if not ctx_result.success:
             return ctx_result
 
@@ -434,6 +439,24 @@ class RequestPipeline:
     _CONTEXT_RESOLVE_TIMEOUT_S = global_timeout_s(600.0)
     _CONTEXT_RESOLVE_INTERVAL_S = 2.0
 
+    @staticmethod
+    def _scheduled_deployment(request: "PipelineRequest", scheduling_result) -> Optional[Dict[str, Any]]:
+        """The scheduled entry from the key's already-fetched deployment list.
+
+        The context resolver uses it to skip its database roundtrip for
+        logosnode targets ; callers without a deployment list (async
+        jobs) yield ``None`` and take the DB path.
+        """
+        return next(
+            (
+                d
+                for d in request.deployments
+                if d.get("model_id") == scheduling_result.model_id
+                and d.get("provider_id") == scheduling_result.provider_id
+            ),
+            None,
+        )
+
     async def _resolve_context_with_retry(
         self,
         scheduling_result,
@@ -441,6 +464,7 @@ class RequestPipeline:
         request_id: str,
         request_path: Optional[str] = None,
         schedule_start_s: Optional[float] = None,
+        deployment_info: Optional[Dict[str, Any]] = None,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
         deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
@@ -452,6 +476,8 @@ class RequestPipeline:
                     model_id=scheduling_result.model_id,
                     provider_id=scheduling_result.provider_id,
                     request_path=request_path,
+                    request_id=request_id,
+                    deployment_info=deployment_info,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
@@ -675,9 +701,44 @@ class RequestPipeline:
             usage_tokens=usage_tokens,
         )
 
+    def settle_completion(
+        self,
+        request_id: str,
+        result_status: str,
+        error_message: Optional[str] = None,
+        cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """Terminal accounting on this (event-loop) thread; returns the write's fields.
+
+        The request path calls this and hands the dict to ``write_completion``
+        on the write-behind queue thread — the recorder's shared state must
+        never be mutated off the event loop.
+        """
+        return self._monitoring.settle_and_take(
+            request_id=request_id,
+            result_status=result_status,
+            error_message=error_message,
+            cold_start=cold_start,
+            usage_tokens=usage_tokens,
+        )
+
+    def write_completion(self, request_id: str, fields: Dict[str, Any]) -> None:
+        """Terminal metrics write for a ``settle_completion`` result (any thread)."""
+        self._monitoring.write_completion(request_id, fields)
+
     def discard_request(self, request_id: str, result_status: str) -> None:
         """Close out a request whose terminal log row was written elsewhere."""
         self._monitoring.discard(request_id, result_status)
+
+    def take_monitoring_buffer(self, request_id: str) -> Dict[str, Any]:
+        """Drain the lifecycle fields buffered for a request .
+
+        Failure paths that persist the log row themselves call this before
+        ``discard_request`` and merge the fields into their own metrics
+        UPDATE, keeping the row identical to the sequential-write era.
+        """
+        return self._monitoring.take_buffer(request_id)
 
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist the limiter's admission decision on the request's log row."""
