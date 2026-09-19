@@ -36,14 +36,18 @@
                        idle check, and a slept lane with queued demand is woken
                        straight back up. -->
                   @switch (sleepAction(row.lane)) {
-                    <!-- The handlers take only one wake/sleep at a time and drop a
-                         second silently, so while one is in flight the buttons of
-                         the other lanes are disabled instead of looking clickable.
-                         The spinner stays on the lane that was actually clicked. -->
+                    <!-- All three handlers admit only one wake/sleep/drain at a
+                         time and drop a second silently, so while any one is in
+                         flight every lane-action button is disabled instead of
+                         looking clickable — gating on the per-action signal
+                         alone would leave the other two clickable, and a status
+                         refresh could swap a draining lane's button back to an
+                         enabled Sleep mid-drain. The spinner stays on the lane
+                         that was actually clicked. -->
                     @case ('wake') {
                       <button
                         class="btn-lane-action"
-                        [disabled]="wakingLaneId() !== null"
+                        [disabled]="anyLaneActionInFlight()"
                         (click)="handleWake(row.laneId)"
                         title="Wake this lane (weights stay resident, no cold load). The capacity planner decides on its own and may put it back to sleep once it goes idle."
                       >
@@ -53,11 +57,24 @@
                     @case ('sleep') {
                       <button
                         class="btn-lane-action"
-                        [disabled]="sleepingLaneId() !== null"
+                        [disabled]="anyLaneActionInFlight()"
                         (click)="handleSleep(row.laneId)"
                         title="Put this lane to sleep (weights stay resident, no cold load on wake). The capacity planner decides on its own and may wake it as soon as demand returns."
                       >
                         {{ sleepingLaneId() === row.laneId ? 'Sleeping…' : 'Sleep' }}
+                      </button>
+                    }
+                    @case ('drain') {
+                      <!-- The busy counterpart of Sleep: the lane keeps serving
+                           until the click, and the click then takes as long as
+                           the last in-flight request runs. -->
+                      <button
+                        class="btn-lane-action"
+                        [disabled]="anyLaneActionInFlight()"
+                        (click)="handleDrain(row.laneId)"
+                        title="Stop sending new requests to this lane, wait for the in-flight ones to finish, then put it to sleep — or unload it when the host cannot hold it. Takes as long as the last request runs."
+                      >
+                        {{ drainingLaneId() === row.laneId ? 'Draining…' : 'Drain' }}
                       </button>
                     }
                   }
