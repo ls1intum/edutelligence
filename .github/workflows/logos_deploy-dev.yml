@@ -154,19 +154,34 @@ jobs:
           proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
           proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
           script: |
-            # Core compose: scale logos-webservice from the node's .env
-            # (LOGOS_WEBSERVICE_REPLICAS, default 1). Worker compose files
-            # have no such service — skip --scale there.
-            set -a
-            # shellcheck disable=SC1091
-            . "${{ matrix.base-path }}/.env"
-            set +a
-            REPLICAS="${LOGOS_WEBSERVICE_REPLICAS:-1}"
+            # Scale logos-webservice from the node's .env without sourcing it
+            # (sourcing would evaluate $(...) / backticks in values).
+            ENV_FILE="${{ matrix.base-path }}/.env"
+            REPLICAS=1
+            if [ -f "$ENV_FILE" ]; then
+              RAW="$(grep -E '^[[:space:]]*LOGOS_WEBSERVICE_REPLICAS=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '\\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+              if [ -n "$RAW" ]; then
+                case "$RAW" in
+                  ''|*[!0-9]*)
+                    echo "Invalid LOGOS_WEBSERVICE_REPLICAS='$RAW' (want positive integer); using 1" >&2
+                    REPLICAS=1
+                    ;;
+                  *)
+                    if [ "$RAW" -ge 1 ]; then
+                      REPLICAS="$RAW"
+                    else
+                      echo "LOGOS_WEBSERVICE_REPLICAS=$RAW must be >= 1; using 1" >&2
+                      REPLICAS=1
+                    fi
+                    ;;
+                esac
+              fi
+            fi
             COMPOSE_FILE="${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }}"
             if [ "$(basename "$COMPOSE_FILE")" = "docker-compose.yaml" ]; then
-              docker compose -f "$COMPOSE_FILE" --env-file="${{ matrix.base-path }}/.env" up -d --remove-orphans --scale "logos-webservice=${REPLICAS}"
+              docker compose -f "$COMPOSE_FILE" --env-file="$ENV_FILE" up -d --remove-orphans --scale "logos-webservice=${REPLICAS}"
             else
-              docker compose -f "$COMPOSE_FILE" --env-file="${{ matrix.base-path }}/.env" up -d --remove-orphans
+              docker compose -f "$COMPOSE_FILE" --env-file="$ENV_FILE" up -d --remove-orphans
             fi
 
       - name: Clean up old images

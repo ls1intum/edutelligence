@@ -14,8 +14,10 @@ import jakarta.servlet.http.HttpServletRequest;
  * controller can reverse-proxy the raw body (Boot's default eager resolver
  * would otherwise consume the stream before {@code readAllBytes()}).
  *
- * <p>Management uploads ({@code /users/import}, batch files, …) still go
- * through the standard resolver. Replaces Boot's auto-configured
+ * <p>Gateway paths bypass Spring multipart parsing so the controller can
+ * reverse-proxy the raw body. {@link GatewayBodyReader} still caps that raw
+ * stream at 51 MiB. Management uploads ({@code /users/import}, batch files, …)
+ * still go through the standard resolver. Replaces Boot's auto-configured
  * {@code multipartResolver} bean.
  */
 @Configuration

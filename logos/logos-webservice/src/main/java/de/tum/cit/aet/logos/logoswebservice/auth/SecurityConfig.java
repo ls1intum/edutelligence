@@ -109,7 +109,21 @@ public class SecurityConfig {
         cfg.setAllowCredentials(credentialsSafe);
 
         inference.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        inference.setAllowedHeaders(List.of("*"));
+        // Explicit allowlist (not *): the orchestrator proxy forwards non-hop-by-hop
+        // headers, so browsers must not be able to attach arbitrary ones.
+        inference.setAllowedHeaders(List.of(
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "OpenAI-Organization",
+            "OpenAI-Project",
+            "OpenAI-Beta",
+            "logos_key",
+            "logos-key",
+            "policy",
+            "X-Request-ID",
+            "X-Logos-Batch-Execution"
+        ));
         inference.setAllowCredentials(credentialsSafe);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

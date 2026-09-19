@@ -33,7 +33,7 @@ import jakarta.servlet.http.HttpServletRequest;
  * <p><b>Remaining process state</b> (gateway is otherwise stateless per request):
  * <ul>
  *   <li>{@link GatewayBudgetService}'s short-TTL budget usage/limit cache</li>
- *   <li>{@link GatewayCloudRateLimiter}'s per-key RPM/TPM windows</li>
+ *   <li>{@link GatewayCloudRateLimiter}'s process-local TPM windows</li>
  *   <li>JDK {@link java.net.http.HttpClient} connection pools in the forwarders</li>
  * </ul>
  *
@@ -47,7 +47,6 @@ public class InferenceGatewayController {
 
     private final boolean enabled;
     private final GatewayAuthService authService;
-    private final GatewayBudgetService budgetService;
     private final GatewayCloudAccounting cloudAccounting;
     private final GatewayCloudForwarder cloudForwarder;
     private final GatewayCloudRateLimiter cloudRateLimiter;
@@ -57,7 +56,6 @@ public class InferenceGatewayController {
     public InferenceGatewayController(
             @Value("${logos.gateway.enabled:true}") boolean enabled,
             GatewayAuthService authService,
-            GatewayBudgetService budgetService,
             GatewayCloudAccounting cloudAccounting,
             GatewayCloudForwarder cloudForwarder,
             GatewayCloudRateLimiter cloudRateLimiter,
@@ -65,7 +63,6 @@ public class InferenceGatewayController {
             ObjectMapper objectMapper) {
         this.enabled = enabled;
         this.authService = authService;
-        this.budgetService = budgetService;
         this.cloudAccounting = cloudAccounting;
         this.cloudForwarder = cloudForwarder;
         this.cloudRateLimiter = cloudRateLimiter;
@@ -82,7 +79,7 @@ public class InferenceGatewayController {
         // cannot force large heap allocations on permitAll routes.
         if (!enabled) {
             GatewayKey key = authService.requireActiveKey(apiKeyValue);
-            byte[] body = request.getInputStream().readAllBytes();
+            byte[] body = GatewayBodyReader.read(request.getInputStream());
             log.debug("Gateway disabled — proxying {} {} keyId={} to orchestrator",
                 request.getMethod(), path, key.id());
             return orchestratorProxy.proxy(request, path, body);
@@ -96,14 +93,14 @@ public class InferenceGatewayController {
         if (multipart || path.startsWith("/jobs")
                 || GatewayRouteResolver.isListingOrWarmupPath(path, request.getMethod())) {
             authService.requireActiveKey(apiKeyValue);
-            byte[] body = request.getInputStream().readAllBytes();
+            byte[] body = GatewayBodyReader.read(request.getInputStream());
             log.debug("Orchestrator proxy {} {} (listing/jobs/multipart)", request.getMethod(), path);
             return orchestratorProxy.proxy(request, path, body);
         }
 
         // Named-model path: key-only auth first, then body, then deployments.
         GatewayKey key = authService.requireActiveKey(apiKeyValue);
-        byte[] body = request.getInputStream().readAllBytes();
+        byte[] body = GatewayBodyReader.read(request.getInputStream());
         String modelName = extractModelName(body, contentType);
 
         if (modelName != null
@@ -116,9 +113,9 @@ public class InferenceGatewayController {
                 ctx.deploymentsForModel(), request, modelName);
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
-                budgetService.enforceCloudBudget(ctx.key());
-                cloudRateLimiter.enforceAndRecord(ctx.key(), body);
-                Integer logId = cloudAccounting.reserve(ctx.key(), decision.deployment());
+                cloudRateLimiter.enforceTpm(ctx.key(), body);
+                Integer logId = cloudAccounting.admitAndReserve(
+                    ctx.key(), decision.deployment(), cloudRateLimiter.cloudRpmLimit(ctx.key()));
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());

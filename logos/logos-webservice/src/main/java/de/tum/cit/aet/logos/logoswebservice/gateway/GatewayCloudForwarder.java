@@ -143,21 +143,25 @@ public class GatewayCloudForwarder {
 
         InputStream upstreamBody = upstream.body();
         StreamingResponseBody stream = outputStream -> {
+            IOException streamError = null;
             try (upstreamBody; OutputStream out = outputStream) {
                 upstreamBody.transferTo(out);
                 out.flush();
-                if (upstreamOk) {
-                    if (onSuccess != null) {
-                        onSuccess.run();
-                    }
-                } else if (onFailure != null) {
-                    onFailure.accept("Upstream HTTP " + status);
-                }
             } catch (IOException e) {
+                streamError = e;
+            }
+            if (streamError != null) {
                 if (onFailure != null) {
-                    onFailure.accept(e.getMessage());
+                    onFailure.accept(streamError.getMessage());
                 }
-                throw e;
+                throw streamError;
+            }
+            if (upstreamOk) {
+                if (onSuccess != null) {
+                    onSuccess.run();
+                }
+            } else if (onFailure != null) {
+                onFailure.accept("Upstream HTTP " + status);
             }
         };
 

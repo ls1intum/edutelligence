@@ -2,6 +2,8 @@
 title: Architecture
 ---
 
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
 # Architecture and terminology
 
 This page is the terminology ground truth for all Logos documentation. The
@@ -57,9 +59,13 @@ and the [worker node guide](https://github.com/ls1intum/edutelligence/blob/main/
 
 ## How the pieces talk
 
-![Logos architecture — core node, gateway split, worker nodes, and cloud providers](/img/architecture.svg)
+<img
+  src={useBaseUrl('/img/architecture.svg')}
+  alt="Logos architecture — core node, gateway split, worker nodes, and cloud providers"
+  style={{width: '100%', height: 'auto'}}
+/>
 
-Editable source: [`architecture.drawio`](/img/architecture.drawio)
+Editable source: <a href={useBaseUrl('/img/architecture.drawio')}>architecture.drawio</a>
 (open in [diagrams.net](https://app.diagrams.net/)).
 
 Two properties fall out of this shape:

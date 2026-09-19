@@ -2,7 +2,6 @@ package de.tum.cit.aet.logos.logoswebservice.gateway;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.http.HttpStatus;
@@ -19,9 +18,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * the resolution order in {@code main.py}: key {@code cloud_*_limit}, then
  * generic {@code rpm_limit}/{@code tpm_limit}, then team defaults.
  *
- * <p>Process-local: multi-instance deployments enforce per replica (same as
- * the orchestrator's in-memory limiter). Traefik remains the cluster-wide
- * brake.
+ * <p><b>RPM</b> is enforced shared across webservice replicas via
+ * {@link GatewayCloudAccounting#admitAndReserve} (counts recent {@code gw-*}
+ * log rows under a per-key row lock). <b>TPM</b> remains process-local here
+ * (token estimates are not durable); Traefik is still the cluster-wide brake.
+ * Prefer {@code LOGOS_WEBSERVICE_REPLICAS=1} when tight per-key TPM matters.
  */
 @Service
 public class GatewayCloudRateLimiter {
@@ -31,7 +32,6 @@ public class GatewayCloudRateLimiter {
 
     private final ObjectMapper objectMapper;
     private final GatewayDeploymentRepository deploymentRepository;
-    private final ConcurrentHashMap<String, Deque<Long>> requestWindows = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Deque<long[]>> tokenWindows = new ConcurrentHashMap<>();
 
     public GatewayCloudRateLimiter(ObjectMapper objectMapper, GatewayDeploymentRepository deploymentRepository) {
@@ -39,15 +39,18 @@ public class GatewayCloudRateLimiter {
         this.deploymentRepository = deploymentRepository;
     }
 
+    /** Resolved cloud RPM limit for shared (cross-replica) enforcement, or null. */
+    public Integer cloudRpmLimit(GatewayKey key) {
+        return resolveLimits(key).rpm();
+    }
+
     /**
-     * Admit a direct-cloud request or throw 429.
-     *
-     * @return estimated tokens recorded for this admission (for later TPM accounting)
+     * Enforce process-local TPM for a direct-cloud request or throw 429.
      */
-    public int enforceAndRecord(GatewayKey key, byte[] body) {
+    public void enforceTpm(GatewayKey key, byte[] body) {
         Limits limits = resolveLimits(key);
-        if (limits.rpm() == null && limits.tpm() == null) {
-            return 0;
+        if (limits.tpm() == null) {
+            return;
         }
         int estimatedTokens = estimateTokens(body);
         String bucket = "cloud:" + key.id();
@@ -55,35 +58,21 @@ public class GatewayCloudRateLimiter {
         long cutoff = now - WINDOW_SECONDS * 1000L;
 
         synchronized (this) {
-            if (limits.tpm() != null) {
-                Deque<long[]> tok = tokenWindows.computeIfAbsent(bucket, k -> new ArrayDeque<>());
-                pruneTokens(tok, cutoff);
-                long total = 0;
-                for (long[] entry : tok) {
-                    total += entry[1];
-                }
-                if (total >= limits.tpm()) {
-                    throw new ResponseStatusException(
-                        HttpStatus.TOO_MANY_REQUESTS,
-                        "TPM limit reached (" + limits.tpm() + "/" + WINDOW_SECONDS + "s)");
-                }
+            Deque<long[]> tok = tokenWindows.computeIfAbsent(bucket, k -> new ArrayDeque<>());
+            pruneTokens(tok, cutoff);
+            long total = 0;
+            for (long[] entry : tok) {
+                total += entry[1];
             }
-            if (limits.rpm() != null) {
-                Deque<Long> req = requestWindows.computeIfAbsent(bucket, k -> new ArrayDeque<>());
-                pruneRequests(req, cutoff);
-                if (req.size() >= limits.rpm()) {
-                    throw new ResponseStatusException(
-                        HttpStatus.TOO_MANY_REQUESTS,
-                        "RPM limit reached (" + limits.rpm() + "/" + WINDOW_SECONDS + "s)");
-                }
-                req.addLast(now);
+            if (total + estimatedTokens > limits.tpm()) {
+                throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "TPM limit reached (" + limits.tpm() + "/" + WINDOW_SECONDS + "s)");
             }
-            if (limits.tpm() != null && estimatedTokens > 0) {
-                Deque<long[]> tok = tokenWindows.computeIfAbsent(bucket, k -> new ArrayDeque<>());
+            if (estimatedTokens > 0) {
                 tok.addLast(new long[] {now, estimatedTokens});
             }
         }
-        return estimatedTokens;
     }
 
     private Limits resolveLimits(GatewayKey key) {
@@ -152,12 +141,6 @@ public class GatewayCloudRateLimiter {
             return 0;
         }
         return Math.max(1, body.length / 4);
-    }
-
-    private static void pruneRequests(Deque<Long> dq, long cutoff) {
-        while (!dq.isEmpty() && dq.peekFirst() < cutoff) {
-            dq.removeFirst();
-        }
     }
 
     private static void pruneTokens(Deque<long[]> dq, long cutoff) {

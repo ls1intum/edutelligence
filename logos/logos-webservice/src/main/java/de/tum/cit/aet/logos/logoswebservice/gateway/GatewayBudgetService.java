@@ -144,17 +144,20 @@ public class GatewayBudgetService {
                 SELECT COALESCE((
                     SELECT SUM(lec.cost_micro_cents)
                     FROM log_entry_cost lec
+                    JOIN log_entry le ON le.id = lec.log_entry_id
                     WHERE lec.api_key_id = :aki
+                      AND (le.request_id IS NULL OR le.request_id NOT LIKE 'gw-%%')
                       AND lec.timestamp_request >= CAST(:month AS DATE)
                       AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0) + COALESCE((
                     SELECT SUM(le.settled_cost_micro_cents)
                     FROM log_entry le
                     WHERE le.api_key_id = :aki
-                      AND le.result_status IS NULL
+                      AND le.request_id LIKE 'gw-%%'
                       AND le.cost_finalized = TRUE
                       AND le.settled_cost_micro_cents IS NOT NULL
-                      AND le.request_id LIKE 'gw-%%'
+                      AND le.settled_cost_micro_cents > 0
+                      AND (le.result_status IS NULL OR le.result_status = 'success')
                       AND le.timestamp_request >= CAST(:month AS DATE)
                       AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0)
@@ -189,9 +192,11 @@ public class GatewayBudgetService {
                 SELECT COALESCE((
                     SELECT SUM(lec.cost_micro_cents)
                     FROM log_entry_cost lec
+                    JOIN log_entry le ON le.id = lec.log_entry_id
                     WHERE lec.api_key_id = ANY(
                             ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
                           )
+                      AND (le.request_id IS NULL OR le.request_id NOT LIKE 'gw-%%')
                       AND lec.timestamp_request >= CAST(:month AS DATE)
                       AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0) + COALESCE((
@@ -200,10 +205,11 @@ public class GatewayBudgetService {
                     WHERE le.api_key_id = ANY(
                             ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
                           )
-                      AND le.result_status IS NULL
+                      AND le.request_id LIKE 'gw-%%'
                       AND le.cost_finalized = TRUE
                       AND le.settled_cost_micro_cents IS NOT NULL
-                      AND le.request_id LIKE 'gw-%%'
+                      AND le.settled_cost_micro_cents > 0
+                      AND (le.result_status IS NULL OR le.result_status = 'success')
                       AND le.timestamp_request >= CAST(:month AS DATE)
                       AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0)

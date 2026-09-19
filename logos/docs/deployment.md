@@ -251,16 +251,12 @@ short-TTL budget cache are the remaining per-instance state (see
 Optional `.env` knobs:
 
 - `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count applied
-  by the deploy workflows on the core `docker-compose.yaml`.
+  by the deploy workflows on the core `docker-compose.yaml`. Cloud RPM is
+  enforced shared across replicas; cloud TPM estimates remain per-replica —
+  keep this at `1` when tight per-key TPM matters.
 - `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
   accepts the public paths but proxies every request to the orchestrator after
   API-key auth.
-- `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
-  overshoot bound; see `GatewayBudgetService`.
-- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
-  cost reserved in `log_entry_cost` before each direct-cloud forward so
-  concurrent admissions see the spend; reconciled (kept or zeroed) when the
-  stream completes.
 - `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
   overshoot bound; see `GatewayBudgetService`.
 - `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
