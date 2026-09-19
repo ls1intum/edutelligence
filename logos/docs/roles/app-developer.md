@@ -33,8 +33,54 @@ model permissions. This is where a developer gets the secret to call the
 
 ## AI Tools
 
-Ready-made tools built on the Logos API (transcription, translation, and the
-coding-agent entry points), configured against the user's own keys — no
-scripting needed to try a model.
+**AI Coding Tools** is a guided setup wizard shared by every role (the page
+itself does not change with the role badge). It walks you through connecting
+a coding assistant — Claude Code or OpenCode — to Logos with your own API
+key. The stepper renumbers itself: **Team** is skipped when you only have
+one key, and **Model** is skipped when that key can only reach one usable
+model.
 
-![AI Tools page](/img/roles/app-developer-ai-tools.png)
+### 1. Tool
+
+Pick Claude Code or OpenCode. The comparison table is the decision surface —
+same Logos models and key either way; they differ in where they run, how
+they treat the context window, and what they do to an existing setup.
+
+![AI Tools — choose tool](/img/roles/ai-tools-step-tool.png)
+
+### 2. Team
+
+Choose which team's key the assistant will use (billing and model
+permissions follow that key). Shown only when you have more than one key.
+
+![AI Tools — choose team](/img/roles/ai-tools-step-team.png)
+
+### 3. Model
+
+Pick the model the assistant should call. For Claude Code the wrapper maps
+every alias (`opus` / `sonnet` / `haiku`) to this one model so `/model`
+never leaves Logos.
+
+![AI Tools — choose model](/img/roles/ai-tools-step-model.png)
+
+### 4. Install
+
+OS-specific install commands for the tool itself (skip if you already have
+it). Tabs cover macOS, Linux, and Windows.
+
+![AI Tools — install](/img/roles/ai-tools-step-install.png)
+
+### 5. Connect
+
+Generated commands that wire the tool to this Logos deployment — for Claude
+Code that is the `claude-logos` wrapper (your plain `claude` Anthropic setup
+is left alone).
+
+![AI Tools — connect](/img/roles/ai-tools-step-connect.png)
+
+### 6. Verify
+
+Check the connection (`claude-logos --check`), update the wrapper, or
+uninstall it again.
+
+![AI Tools — verify](/img/roles/ai-tools-step-verify.png)

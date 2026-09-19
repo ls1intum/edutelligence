@@ -116,22 +116,28 @@ Overwrite exactly these files (path relative to `static/img/roles/`):
 | `logos-admin-team-management-detail.png` | `tobias.wasner` | `/teams/<Logos team id>` (Overview; tabs visible) |
 | `logos-admin-agents.png` | `tobias.wasner` | `/agents` |
 | `logos-admin-my-workspace.png` | `tobias.wasner` | `/my-workspace` |
-| `logos-admin-ai-tools.png` | `tobias.wasner` | `/ai-tools` |
 | `logos-admin-batches.png` | `tobias.wasner` | `/batches` |
 | `app-admin-models.png` | `alexandra.szuminska` | `/models` |
 | `app-admin-user-management.png` | `alexandra.szuminska` | `/user-management` |
 | `app-admin-team-management.png` | `alexandra.szuminska` | `/team-management` |
 | `app-admin-team-management-detail.png` | `alexandra.szuminska` | `/teams/<Logos team id>` |
 | `app-admin-my-workspace.png` | `alexandra.szuminska` | `/my-workspace` |
-| `app-admin-ai-tools.png` | `alexandra.szuminska` | `/ai-tools` |
 | `app-admin-batches.png` | `alexandra.szuminska` | `/batches` |
 | `app-developer-models.png` | `henriette.huhn` | `/models` |
 | `app-developer-my-workspace.png` | `henriette.huhn` | `/my-workspace` |
-| `app-developer-ai-tools.png` | `henriette.huhn` | `/ai-tools` |
+| `ai-tools-step-tool.png` | any role with a key | `/ai-tools` — step **Tool** |
+| `ai-tools-step-team.png` | same (needs **>1** API key) | `/ai-tools` — step **Team** |
+| `ai-tools-step-model.png` | same | `/ai-tools` — step **Model** |
+| `ai-tools-step-install.png` | same | `/ai-tools` — step **Install** |
+| `ai-tools-step-connect.png` | same | `/ai-tools` — step **Connect** |
+| `ai-tools-step-verify.png` | same | `/ai-tools` — step **Verify** |
 
-Shared pages (Users, AI Tools, …) must look the same across roles aside from
-the sidebar and the role badge — do not ship divergent chrome for the same
-page.
+AI Tools is **not** documented per role — the wizard is identical for every
+role. Keep one step walkthrough under `roles/app-developer.md#ai-tools` and
+link App Admin / Logos Admin there. Capture the six `ai-tools-step-*.png`
+files (give the user a second API key so **Team** is not skipped). Do not
+reintroduce `*-ai-tools.png` per role.
+
 
 ### Acceptance before committing PNGs
 

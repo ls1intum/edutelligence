@@ -85,10 +85,10 @@ role that has at least one team and key.
 
 ## AI Tools
 
-Ready-made tools built on the Logos API (transcription, translation, and the
-coding-agent entry points), configured against the user's own keys.
-
-![AI Tools page](/img/roles/logos-admin-ai-tools.png)
+Same guided setup as for every other role — pick a coding assistant, team
+key, and model, then install and connect. The page does not change with the
+role; see the step-by-step walkthrough under
+[App Developer → AI Tools](app-developer.md#ai-tools).
 
 ## Batches
 
