@@ -147,6 +147,10 @@ class MonitoringRecorder:
             "timeout_s": timeout_s,
         }
         self._buffer(request_id, **payload)
+        # The statistics recent-requests feed reads model_id off the log row
+        # while the request still queues. Buffering until completion left that
+        # column null for the whole flight, so queued rows showed no model.
+        self._write_live(request_id, model_id=model_id, provider_id=provider_id)
 
     def record_scheduled(
         self,
@@ -178,12 +182,13 @@ class MonitoringRecorder:
         start = previous[0] if previous is not None else time.monotonic()
         _request_states[request_id] = (start, model, provider)
 
+        scheduled_ts = datetime.datetime.now(datetime.timezone.utc)
         payload = {
             "model_id": model_id,
             "provider_id": provider_id,
             "priority_when_scheduled": priority_when_scheduled,
             "queue_depth_at_schedule": queue_depth_at_schedule,
-            "scheduled_ts": datetime.datetime.now(datetime.timezone.utc),
+            "scheduled_ts": scheduled_ts,
         }
 
         # Flatten provider metrics for DB columns
@@ -196,6 +201,15 @@ class MonitoringRecorder:
                 ]:
                     payload[key] = value
         self._buffer(request_id, **payload)
+        # Stage (queued → executing) and the serving model come from these
+        # columns; without an eager write the feed kept showing Queued with
+        # no model until the completion flush.
+        self._write_live(
+            request_id,
+            model_id=model_id,
+            provider_id=provider_id,
+            scheduled_ts=scheduled_ts,
+        )
 
     def _settle(
         self,
@@ -413,6 +427,17 @@ class MonitoringRecorder:
         used to produce. Unknown requests yield an empty dict.
         """
         return _field_buffers.pop(request_id, {})
+
+    def _write_live(self, request_id: str, **fields: object) -> None:
+        """Persist columns the live stats feed reads while a request runs.
+
+        Most lifecycle fields still ride the completion UPDATE so the hot
+        path stays cheap; model / provider / scheduled_ts must land earlier
+        or in-flight rows look blank and forever Queued.
+        """
+        live = {k: v for k, v in fields.items() if v is not None}
+        if live:
+            self._write(request_id, **live)
 
     def _write(self, request_id: str, **fields: object) -> None:
         try:
