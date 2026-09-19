@@ -110,4 +110,4 @@ Add a `## Screenshots` section with the raw gist URLs (commit-pinned), labelled 
 
 ## 5. Role-guide documentation shots (committed PNGs)
 
-When refreshing `docs/static/img/roles/*.png` or priming demo data so those pages are not empty, follow [`docs/AGENTS.md`](../../docs/AGENTS.md) instead of gist-hosting: login users, apply `docs/seed/role-screenshots.sql`, capture desktop shots of **each distinct UI state** (tabs, wizard steps, modals — not near-identical per-role pages), embed and explain every PNG in the role guide with UI-consistent names, and commit them with the docs change.
+When refreshing `docs/static/img/roles/*.png` or priming demo data so those pages are not empty, follow [`docs/AGENTS.md`](../../../docs/AGENTS.md) instead of gist-hosting: login users, apply `docs/seed/role-screenshots.sql`, capture desktop shots of **each distinct UI state** (tabs, wizard steps, modals — not near-identical per-role pages), embed and explain every PNG in the role guide with UI-consistent names, and commit them with the docs change.

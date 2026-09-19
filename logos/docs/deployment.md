@@ -258,8 +258,21 @@ Set the desired count in the core node's `.env` and apply it on `up`:
 # in the .env next to docker-compose.yaml
 LOGOS_WEBSERVICE_REPLICAS=2
 
+# Pass the same .env into Compose so the scale count is not expanded by the
+# host shell (a bare ${LOGOS_WEBSERVICE_REPLICAS:-1} would default to 1 when
+# the variable is only set in .env and not exported).
+docker compose --env-file .env up -d --scale logos-webservice=2
+```
+
+Or, with Compose interpolating from `.env`:
+
+```bash
+# docker-compose.yaml (or a compose override) already uses:
+#   deploy.replicas / scale via env — prefer an explicit count on --scale,
+#   or export before invoking:
+set -a && source .env && set +a
 docker compose --env-file .env up -d \
-  --scale logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}
+  --scale "logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}"
 ```
 
 On the **dev** compose, drop or retarget the host publish `18082:8081` before

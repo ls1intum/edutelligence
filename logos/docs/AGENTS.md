@@ -31,8 +31,10 @@ The pages under `roles/` embed shots from `static/img/roles/`. These **are**
 committed to the repo (exception to the usual "screenshots only in the PR
 description" rule). Whenever the UI for a documented surface changes in a way
 that makes a shot stale — empty, wrong route, error banner, outdated chrome —
-refresh the matching PNG in the same PR that changes the docs (or a follow-up
-docs PR).
+refresh the matching PNG in the **same PR**. A follow-up docs-only PR is
+allowed only when the UI change already merged without a docs update (debt
+cleanup); never defer the PNG refresh out of a UI PR that changes how a
+documented page looks.
 
 Capture technique (unlock `.main-content` scroll, wait for non-skeleton
 content, force light theme, use `localhost` not `127.0.0.1`) is the
@@ -223,6 +225,11 @@ Shared flows (document once, link from other roles):
 
 Edit `seed/role-screenshots.sql` when a new role page or flow state needs demo
 entities. Keep it idempotent (wipe `environment = 'docs-role-screenshots'` /
-known demo names first). Prefer looking up Keycloak-synced `users.id` by
-username over hard-coded ids. Update this AGENTS.md shot matrix **and** the
-matching role-guide prose in the same change.
+docs-namespaced demo entities first). Prefer looking up Keycloak-synced
+`users.id` by username over hard-coded ids. Update this AGENTS.md shot matrix
+**and** the matching role-guide prose in the same change.
+
+Prefer the throwaway screenshots compose DB (`doks-db`). The seed only
+deletes docs-namespaced providers/policies and models exclusive to those
+providers; it does not overwrite budget/limits on a pre-existing team just
+because it is named `Logos`.

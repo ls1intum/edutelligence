@@ -58,7 +58,7 @@
   <text x="800" y="182" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Lanes</text>
   <text x="800" y="200" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">vLLM · one per model</text>
 
-  <text x="800" y="268" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">× 0 & N GPU machines</text>
+  <text x="800" y="268" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">× 0 … N GPU machines</text>
 
   <!-- External -->
   <rect x="680" y="300" width="240" height="100" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
@@ -68,12 +68,12 @@
 
   <!-- Edges -->
   <path d="M260 140 H320" fill="none" stroke="#334155" stroke-width="1.5" marker-end="url(#ad)"/>
-  <path d="M620 206 H680" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#ad)"/>
+  <path d="M680 206 H620" fill="none" stroke="#0F766E" stroke-width="1.75" marker-end="url(#ad)"/>
   <text x="650" y="198" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#0F766E" font-weight="600">WS</text>
-  <path d="M620 350 H680" fill="none" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#ad)"/>
+  <path d="M680 350 H620" fill="none" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#ad)"/>
 
   <text x="40" y="460" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Deployment notes</text>
-  <text x="40" y="484" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">" Scale Webservice replicas behind Traefik; keep a single Orchestrator instance.</text>
-  <text x="40" y="504" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">" Workers dial out  no inbound ports on GPU machines (NAT / firewall friendly).</text>
-  <text x="40" y="524" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">" Production may use the organisations existing IdP instead of the bundled Keycloak.</text>
+  <text x="40" y="484" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">• Scale Webservice replicas behind Traefik; keep a single Orchestrator instance.</text>
+  <text x="40" y="504" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">• Workers dial out — no inbound ports on GPU machines (NAT / firewall friendly).</text>
+  <text x="40" y="524" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">• Production may use the organisation’s existing IdP instead of the bundled Keycloak.</text>
 </svg>

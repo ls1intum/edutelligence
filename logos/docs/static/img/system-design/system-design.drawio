@@ -27,7 +27,7 @@
         </mxCell>
         <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="client" target="core"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="api" target="core"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0F766E;strokeWidth=1.75;endArrow=block;endFill=1;" edge="1" parent="1" source="core" target="worker"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0F766E;strokeWidth=1.75;endArrow=block;endFill=1;" edge="1" parent="1" source="worker" target="core"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="core" target="cloud"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#94A3B8;strokeWidth=1.25;dashed=1;dashPattern=5 4;endArrow=block;endFill=1;" edge="1" parent="1" source="core" target="idp"><mxGeometry relative="1" as="geometry"/></mxCell>
       </root>
@@ -53,7 +53,7 @@
           <mxGeometry x="620" y="260" width="220" height="90" as="geometry"/>
         </mxCell>
         <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#334155;strokeWidth=1.5;endArrow=block;endFill=1;" edge="1" parent="1" source="devices" target="core"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e2" value="WS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0F766E;strokeWidth=1.75;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=10;fontColor=#0F766E;fontStyle=1;" edge="1" parent="1" source="core" target="worker"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" value="WS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0F766E;strokeWidth=1.75;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=10;fontColor=#0F766E;fontStyle=1;" edge="1" parent="1" source="worker" target="core"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#94A3B8;strokeWidth=1.25;dashed=1;dashPattern=5 4;endArrow=block;endFill=1;" edge="1" parent="1" source="core" target="ext"><mxGeometry relative="1" as="geometry"/></mxCell>
       </root>
     </mxGraphModel>
@@ -83,10 +83,18 @@
         <mxCell id="log" value="LogEntry&#xa;usage · cost" style="swimlane;fontStyle=1;align=center;verticalAlign=top;startSize=28;fillColor=#0F766E;strokeColor=#0F766E;fontColor=#FFFFFF;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
           <mxGeometry x="460" y="220" width="140" height="70" as="geometry"/>
         </mxCell>
+        <mxCell id="policy" value="Policy&#xa;privacy · topic" style="swimlane;fontStyle=1;align=center;verticalAlign=top;startSize=28;fillColor=#64748B;strokeColor=#64748B;fontColor=#FFFFFF;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="640" y="80" width="140" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="batch" value="BatchObject&#xa;status · progress" style="swimlane;fontStyle=1;align=center;verticalAlign=top;startSize=28;fillColor=#64748B;strokeColor=#64748B;fontColor=#FFFFFF;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="640" y="220" width="160" height="70" as="geometry"/>
+        </mxCell>
         <mxCell id="e1" value="member" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#64748B;endArrow=block;endFill=1;fontSize=10;fontColor=#64748B;" edge="1" parent="1" source="user" target="team"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e2" value="owns" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#64748B;endArrow=block;endFill=1;fontSize=10;fontColor=#64748B;" edge="1" parent="1" source="team" target="key"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e3" value="served by" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#64748B;endArrow=block;endFill=1;fontSize=10;fontColor=#64748B;" edge="1" parent="1" source="model" target="provider"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e4" value="logs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#64748B;endArrow=block;endFill=1;fontSize=10;fontColor=#64748B;" edge="1" parent="1" source="key" target="log"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" value="scopes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#94A3B8;dashed=1;dashPattern=4 3;endArrow=block;endFill=1;fontSize=10;fontColor=#64748B;" edge="1" parent="1" source="key" target="policy"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="batches" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#94A3B8;dashed=1;dashPattern=4 3;endArrow=block;endFill=1;fontSize=10;fontColor=#64748B;" edge="1" parent="1" source="key" target="batch"><mxGeometry relative="1" as="geometry"/></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

@@ -3,6 +3,12 @@
 -- Idempotent. Safe to re-run. Tags demo traffic with
 -- environment = 'docs-role-screenshots' so a wipe is precise.
 --
+-- Prefer the throwaway screenshots compose DB (`doks-db`). Against a shared
+-- development database the seed only deletes docs-namespaced providers /
+-- policies and models that are exclusive to those providers — it never
+-- overwrites an existing team's budget/limits just because it is named
+-- "Logos".
+--
 -- Prerequisite: log in once as tobias.wasner, alexandra.szuminska, and
 -- henriette.huhn (password: password) so Keycloak sync has created the
 -- users rows. See logos/docs/AGENTS.md.
@@ -41,40 +47,104 @@ WHERE created_by = 'docs-role-screenshots';
 DELETE FROM agent_workspaces
 WHERE created_by = 'docs-role-screenshots';
 
-DELETE FROM policies WHERE name IN (
+DELETE FROM policies
+WHERE name LIKE 'Docs — %'
+   OR name IN (
+    -- legacy unprefixed names from earlier seed revisions
     'Local-first routing', 'Cost saver for drafts', 'High-quality answers'
 );
 
+-- Demo models: only remove catalogue rows that are exclusive to the Docs
+-- providers (never delete a pre-existing model that also has other providers).
 DELETE FROM model_aliases
-WHERE model_id IN (SELECT id FROM models WHERE name IN (
-    'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
-));
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
 DELETE FROM model_capabilities
-WHERE model_id IN (SELECT id FROM models WHERE name IN (
-    'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
-));
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
 DELETE FROM token_prices
-WHERE model_id IN (SELECT id FROM models WHERE name IN (
-    'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
-));
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
 DELETE FROM team_model_permissions
-WHERE model_id IN (SELECT id FROM models WHERE name IN (
-    'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
-));
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
 DELETE FROM team_provider_permissions
 WHERE provider_id IN (SELECT id FROM providers WHERE name IN (
     'Docs Cloud (EU)', 'Docs Local Worker'
 ));
 DELETE FROM model_provider
-WHERE model_id IN (SELECT id FROM models WHERE name IN (
-    'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
-))
-   OR provider_id IN (SELECT id FROM providers WHERE name IN (
+WHERE provider_id IN (SELECT id FROM providers WHERE name IN (
     'Docs Cloud (EU)', 'Docs Local Worker'
 ));
-DELETE FROM models WHERE name IN (
+DELETE FROM models m
+WHERE m.name IN (
     'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
-);
+)
+  AND NOT EXISTS (SELECT 1 FROM model_provider mp WHERE mp.model_id = m.id);
 DELETE FROM providers WHERE name IN (
     'Docs Cloud (EU)', 'Docs Local Worker'
 );
@@ -100,16 +170,9 @@ SELECT
     500000000    -- $5.00 team member budget / month
 WHERE NOT EXISTS (SELECT 1 FROM teams WHERE name = 'Logos');
 
-UPDATE teams SET
-    default_cloud_rpm_limit = 5,
-    default_cloud_tpm_limit = 10000,
-    default_local_rpm_limit = 5,
-    default_local_tpm_limit = 10000,
-    default_monthly_budget_micro_cents = 100000000,
-    team_monthly_budget_micro_cents = 500000000
-WHERE name = 'Logos';
-
 -- Members: Alexandra owns; Tobias + Henriette are members.
+-- Do not overwrite budget/limits on a pre-existing "Logos" team — only the
+-- INSERT above sets demo defaults on a freshly created team.
 INSERT INTO team_members (user_id, team_id, is_owner)
 SELECT u.id, t.id, (u.username = 'alexandra.szuminska')
 FROM users u
@@ -250,9 +313,9 @@ SELECT v.name, v.description, v.privacy::threshold_enum,
        0, 0, 0, 0, v.priority, v.topic, t.id
 FROM teams t
 CROSS JOIN (VALUES
-    ('Local-first routing', 'Route to self-hosted models when they can answer.', 'LOCAL', 1, 'default'),
-    ('Cost saver for drafts', 'Prefer the cheapest models for drafting.', 'LOCAL', 2, 'drafting'),
-    ('High-quality answers', 'Use the most accurate models for customer-facing work.', 'LOCAL', 3, 'customer-facing')
+    ('Docs — Local-first routing', 'Route to self-hosted models when they can answer.', 'LOCAL', 1, 'default'),
+    ('Docs — Cost saver for drafts', 'Prefer the cheapest models for drafting.', 'LOCAL', 2, 'drafting'),
+    ('Docs — High-quality answers', 'Use the most accurate models for customer-facing work.', 'LOCAL', 3, 'customer-facing')
 ) AS v(name, description, privacy, priority, topic)
 WHERE t.name = 'Logos'
   AND NOT EXISTS (SELECT 1 FROM policies p WHERE p.name = v.name);
@@ -433,9 +496,7 @@ SELECT 'docs role-screenshots seed applied' AS status,
        (SELECT count(*) FROM models WHERE name IN (
             'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
        )) AS models,
-       (SELECT count(*) FROM policies WHERE name IN (
-            'Local-first routing', 'Cost saver for drafts', 'High-quality answers'
-       )) AS policies,
+       (SELECT count(*) FROM policies WHERE name LIKE 'Docs — %') AS policies,
        (SELECT count(*) FROM log_entry WHERE environment = 'docs-role-screenshots') AS log_entries,
        (SELECT count(*) FROM batch_objects WHERE upstream_id LIKE 'batch_docs_%') AS batches,
        (SELECT count(*) FROM agent_sessions WHERE created_by = 'docs-role-screenshots') AS agent_sessions;

@@ -19,6 +19,18 @@ describe('date utils', () => {
         age: '(2 days ago)',
       });
     });
+
+    it('uses calendar days so late yesterday is not "Today"', () => {
+      const earlyMorning = new Date('2026-08-26T00:01:00');
+      expect(formatLastUsedParts('2026-08-25T23:59:00', earlyMorning)).toEqual({
+        primary: '25.08.2026',
+        age: '(1 day ago)',
+      });
+      expect(formatLastUsedParts('2026-08-26T00:00:00', earlyMorning)).toEqual({
+        primary: 'Today',
+        age: null,
+      });
+    });
   });
 
   describe('formatLastUsed', () => {
@@ -53,10 +65,12 @@ describe('date utils', () => {
   });
 
   describe('daysSince', () => {
-    it('counts whole days between the timestamp and now', () => {
+    it('counts whole calendar days between the timestamp and now', () => {
       expect(daysSince('2026-08-26T12:00:00', now)).toBe(0);
       expect(daysSince('2026-08-25T11:59:59', now)).toBe(1);
       expect(daysSince('2026-07-27T12:00:00', now)).toBe(30);
+      // Same elapsed-ms trap: just after midnight vs late previous day.
+      expect(daysSince('2026-08-25T23:59:00', new Date('2026-08-26T00:01:00'))).toBe(1);
     });
 
     it('clamps future timestamps to 0', () => {

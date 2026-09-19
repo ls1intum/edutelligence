@@ -1,8 +1,13 @@
 const MS_PER_DAY = 86_400_000;
 
-/** Whole days between the ISO timestamp and now (clamped to 0 for future/rounding). */
+/** Local calendar day as a UTC-midnight ordinal (DST-safe day difference). */
+function localDayOrdinal(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / MS_PER_DAY;
+}
+
+/** Whole calendar days between the ISO timestamp and now (clamped to 0 for future). */
 export function daysSince(iso: string, now: Date = new Date()): number {
-  return Math.max(0, Math.floor((now.getTime() - new Date(iso).getTime()) / MS_PER_DAY));
+  return Math.max(0, localDayOrdinal(now) - localDayOrdinal(new Date(iso)));
 }
 
 /** Local date as "DD.MM.YYYY", e.g. "02.06.1996". */
@@ -41,7 +46,7 @@ export function formatLastUsedParts(
 ): LastUsedParts {
   if (!iso) return { primary: 'Never', age: null };
   const d = new Date(iso);
-  const diffDays = Math.floor((now.getTime() - d.getTime()) / MS_PER_DAY);
+  const diffDays = localDayOrdinal(now) - localDayOrdinal(d);
   if (diffDays <= 0) return { primary: 'Today', age: null };
   const age = diffDays === 1 ? '(1 day ago)' : `(${diffDays} days ago)`;
   return { primary: formatGermanDate(d), age };
