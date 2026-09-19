@@ -294,7 +294,54 @@ def test_step_budget_caps_a_step_at_the_deadline():
     assert planner._step_budget(time.monotonic() - 1.0, 60.0) == 0.0
 
 
+async def test_waiting_for_the_lane_lock_spends_the_endpoint_budget(monkeypatch):
+    # The budget starts before the lane lock: a planned reclaim holding it
+    # can wait out most of the endpoint's time, and the strict wait must only
+    # get what is left — not its full DRAIN_TIMEOUT_SECONDS on top.
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(planner_mod.time, "monotonic", lambda: clock["now"])
+    lane = _lane(active_requests=3)  # still busy when the drain finally runs
+    lanes = [lane]
+    planner = _planner(lanes)
+    _patch_ram_headroom(planner, monkeypatch, ok=True)
+    executor = _executor(planner, lanes, _sleep)
+
+    class SlowLock:
+        async def __aenter__(self):
+            # The reclaim held the lock for most of the budget.
+            clock["now"] = 1000.0 + CapacityPlanner.DRAIN_ENDPOINT_BUDGET_SECONDS - 10.0
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(planner, "_lane_lock", lambda pid, lid: SlowLock())
+    budgets = []
+
+    async def never_drains(pid, lid, timeout_seconds=30.0):
+        budgets.append(timeout_seconds)
+        return False  # the busy lane does not drain in what is left
+
+    planner._drain_lane = never_drains
+
+    result = await planner.drain_lane_manually(1, "lane-1")
+
+    # 10 s left for the strict wait — the lane does not drain in that, so the
+    # call ends as a drain timeout with the lane left exactly as found.
+    assert budgets == [10.0]
+    assert result["status"] == "drain_timeout"
+    executor.assert_not_awaited()
+    planner._registry.unmark_lane_cold.assert_called_once_with(1, "lane-1")
+    assert planner._marked_cold_lanes == set()
+
+
 async def test_the_terminal_step_gets_the_remaining_endpoint_budget(monkeypatch):
+    # A controlled clock: the deadline must be "drain start + the endpoint
+    # budget" exactly, independent of any wall-clock time the test process
+    # spends between the call and the assertion. (The event loop keeps its
+    # own clock reference, and no real sleep runs on this path — the strict
+    # wait is mocked — so freezing the module's monotonic is safe here.)
+    monkeypatch.setattr(planner_mod.time, "monotonic", lambda: 1000.0)
     lane = _lane()
     lanes = [lane]
     planner = _planner(lanes)
@@ -305,14 +352,8 @@ async def test_the_terminal_step_gets_the_remaining_endpoint_budget(monkeypatch)
     result = await planner.drain_lane_manually(1, "lane-1")
 
     assert result["status"] == "slept"
-    # The executor is handed the endpoint budget as an absolute monotonic
-    # deadline. The strict wait above was instant in this test, so the
-    # deadline is essentially "now + the full endpoint budget" — that shared
-    # pot, not the per-step budgets, is what keeps the whole call under the
-    # webservice timeout. The 1 s of slack covers the gap between the drain
-    # starting and this assertion running.
+    # That shared pot — not the per-step budgets — is what keeps the whole
+    # call under the webservice timeout.
     deadline = executor.await_args.kwargs.get("deadline")
     assert deadline is not None
-    now = time.monotonic()
-    assert now + CapacityPlanner.DRAIN_ENDPOINT_BUDGET_SECONDS - 1.0 < deadline
-    assert deadline <= now + CapacityPlanner.DRAIN_ENDPOINT_BUDGET_SECONDS
+    assert deadline == 1000.0 + CapacityPlanner.DRAIN_ENDPOINT_BUDGET_SECONDS

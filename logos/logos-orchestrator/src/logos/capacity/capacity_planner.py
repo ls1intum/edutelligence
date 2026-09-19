@@ -6937,25 +6937,34 @@ class CapacityPlanner:
         gone is an ``unloaded``, not an error.
 
         The whole run is budgeted by ``DRAIN_ENDPOINT_BUDGET_SECONDS``: the
-        strict wait takes its ``DRAIN_TIMEOUT_SECONDS`` of it, and the
-        remainder is handed to the executor as a shared deadline (see
+        clock starts before the lane lock, so even waiting for it (a planned
+        reclaim still working on this lane) spends the same budget, and the
+        strict wait takes only what is left of its ``DRAIN_TIMEOUT_SECONDS``.
+        The remainder is handed to the executor as a shared deadline (see
         ``_step_budget``), so the terminal step's drain, command and
         confirmation spend the time left on the call instead of stacking
         their individual budgets on top of the first wait. That is what keeps
         the answer within the webservice's read timeout on this call: when
         the budget runs out, whatever step is running is the one that times
-        out — mid-second-drain the sleep is refused before its command is
-        sent, mid-confirmation the terminal-state re-read below decides the
-        answer — and the lane is left serving or already offline, so a
-        budget run-out is an actionable error, never a dropped request.
+        out — an exhausted budget at the strict wait reads as "not drained"
+        and the lane keeps serving, mid-terminal-drain the sleep is refused
+        before its command is sent, mid-confirmation the terminal-state
+        re-read below decides the answer — and a budget run-out is always an
+        actionable error (the operator retries), never a dropped request.
 
         Returns a result dict; the endpoint maps it onto a status code.
         """
+        # The budget starts before the lane lock: a planned reclaim holding
+        # it can wait out a large share of the endpoint's time, and that wait
+        # must count against the webservice's read timeout, not on top of it.
+        started = time.monotonic()
+        deadline = started + self.DRAIN_ENDPOINT_BUDGET_SECONDS
         async with self._lane_lock(provider_id, lane_id):
-            started = time.monotonic()
             self._mark_lane_cold(provider_id, lane_id)
             try:
-                drained = await self._drain_lane(provider_id, lane_id, timeout_seconds=self.DRAIN_TIMEOUT_SECONDS)
+                drained = await self._drain_lane(
+                    provider_id, lane_id, timeout_seconds=self._step_budget(deadline, self.DRAIN_TIMEOUT_SECONDS)
+                )
                 if not drained:
                     return {
                         "status": "drain_timeout",
@@ -7045,7 +7054,7 @@ class CapacityPlanner:
                 await self._execute_action_with_confirmation(
                     terminal,
                     timeout_seconds=30.0,
-                    deadline=started + self.DRAIN_ENDPOINT_BUDGET_SECONDS,
+                    deadline=deadline,
                 )
 
                 # Read the terminal state from the lane itself: the executor's
