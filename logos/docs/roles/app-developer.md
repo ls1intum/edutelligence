@@ -16,8 +16,9 @@ reachable and the UI shows a **No Access** page instead.
 
 ## Models
 
-The models the user's team may use, with their queue state and health. This
-is the starting point for choosing a model name for API calls.
+The deployment's model catalogue, with what each model supports (function
+calling, vision, reasoning) and where it is served. Models can be searched
+and their details opened from the list.
 
 ![Models page](/img/roles/app-developer-models.png)
 

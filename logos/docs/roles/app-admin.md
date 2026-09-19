@@ -16,8 +16,9 @@ The UI shows the role badge "App Admin" in the header menu.
 
 ## Models
 
-All models the deployment can serve, with their provider, queue state, and
-health. App Admins see the list but not the per-model operator details.
+The deployment's model catalogue: name, description, and capabilities.
+App Admins see the list but not the per-model operator controls (weights,
+aliases, add/delete).
 
 ![Models page](/img/roles/app-admin-models.png)
 
@@ -37,6 +38,8 @@ shows its members, its API keys, and its per-team settings (queue priority,
 budget).
 
 ![Teams page](/img/roles/app-admin-team-management.png)
+
+![Team detail](/img/roles/app-admin-team-management-detail.png)
 
 ## My Workspace
 

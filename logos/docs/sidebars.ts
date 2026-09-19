@@ -9,7 +9,7 @@ const sidebars: SidebarsConfig = {
   ],
   adminSidebar: [
     { type: "doc", id: "admin/installation", label: "Self-hosted Installation" },
-    { type: "doc", id: "deployment", label: "Deployment Environments" },
+    { type: "doc", id: "deployment", label: "Deployment" },
     { type: "doc", id: "admin/configuration", label: "Configuration" },
     { type: "doc", id: "admin/worker-node", label: "Worker Nodes" },
     { type: "doc", id: "admin/operations", label: "Operations and Troubleshooting" },

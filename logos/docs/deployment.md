@@ -6,7 +6,7 @@ pinned tag pins a specific build. A deployment is the compose file plus a
 `.env` on each node, and an update is `docker compose pull` and
 `docker compose up -d`. Nothing is pushed to a node from CI, and a worker
 node needs no inbound port at all (see the
-[architecture overview](developer/architecture.md) for the subsystem
+[architecture overview](developer/architecture) for the subsystem
 breakdown).
 
 A deployment consists of:
@@ -26,7 +26,7 @@ A deployment consists of:
 | Image | Contents |
 |---|---|
 | `logos` | orchestrator |
-| `logos-webservice` | Spring admin and statistics service |
+| `logos-webservice` | Spring admin/statistics service and public inference gateway (`/v1`, `/openai`, `/jobs`) |
 | `logos-ui` | Angular frontend |
 | `logos-db` | PostgreSQL 17 plus `pg_cron` |
 | `logos-rate-gateway` | per-IP rate limiting (nginx) |
@@ -67,6 +67,9 @@ persist in the worker's `data/` volume, so an update does not reset them.
 The orchestrator's API surface is tiered:
 
 - **User-facing** (`/v1`, `/openai`, `/jobs`) — any valid Logos API key.
+  Traefik sends these to **logos-webservice** (inference gateway). Pure-cloud
+  named-model requests are answered there; local/logosnode and mixed traffic
+  is reverse-proxied to the orchestrator on the compose network.
 - **Cluster-internal** (`/logosdb/scheduler_state`, `/internal/*`) — the shared
   `LOGOS_INTERNAL_SECRET`, never a user key. `/logosdb/scheduler_state` used
   to accept any Logos API key and was publicly routed; it is now secret-gated
@@ -243,6 +246,44 @@ server reclaims memory by stopping and restarting lanes instead.
 
 Full setup, sizing and troubleshooting: `logos/logos-workernode/MACOS.md`.
 
+## Inference gateway replicas
+
+Public `/v1`, `/openai`, and `/jobs` traffic lands on **logos-webservice**.
+The service has no fixed `container_name`, so Compose can run more than one
+replica; Traefik load-balances them under `logos-webservice-svc`.
+
+Set the desired count in the core node's `.env` and apply it on `up`:
+
+```bash
+# in the .env next to docker-compose.yaml
+LOGOS_WEBSERVICE_REPLICAS=2
+
+docker compose --env-file .env up -d \
+  --scale logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}
+```
+
+On the **dev** compose, drop or retarget the host publish `18082:8081` before
+scaling — published host ports cannot be shared across replicas. Liquibase
+serialises schema apply via its changelog lock; open SSE streams and the
+short-TTL budget cache are the remaining per-instance state (see
+`gateway/InferenceGatewayController`).
+
+Optional `.env` knobs:
+
+- `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count for the
+  core `docker-compose.yaml`. Cloud RPM is enforced shared across replicas;
+  cloud TPM estimates remain per-replica — keep this at `1` when tight per-key
+  TPM matters.
+- `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
+  accepts the public paths but proxies every request to the orchestrator after
+  API-key auth.
+- `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
+  overshoot bound; see `GatewayBudgetService`.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
+  cost reserved in `log_entry_cost` before each direct-cloud forward so
+  concurrent admissions see the spend; reconciled (kept or zeroed) when the
+  stream completes.
+
 ## Environment variables
 
 All runtime configuration lives in the `.env` file next to the compose file.
@@ -256,7 +297,7 @@ set:
 | `ACME_EMAIL` | the Let's Encrypt contact address | — |
 | `LOGOS_INTERNAL_SECRET` | a strong random string — the shared secret between web service and orchestrator | — |
 | `KEYCLOAK_ISSUER_URI` | your identity provider's issuer (`https://<idp>/realms/<realm>`) | — |
-| `KEYCLOAK_ROLES_LOGOS_ADMIN` / `KEYCLOAK_ROLES_APP_ADMIN` | the OIDC role names that map to the Logos roles (see [roles](developer/architecture.md#roles)) | — |
+| `KEYCLOAK_ROLES_LOGOS_ADMIN` / `KEYCLOAK_ROLES_APP_ADMIN` | the OIDC role names that map to the Logos roles (see [roles](developer/architecture#roles)) | — |
 | `PROMETHEUS_API_KEY` | optional — gates `/metrics`; unset denies all | — |
 | `HF_TOKEN` | optional — HuggingFace token for gated models; also distributed to connected workers | or set per worker |
 | `LOGOS_URL` | — | the core node's URL, e.g. `https://logos.example.org` |

@@ -48,7 +48,7 @@ pip3 install -r requirements.txt
 
 Run with:
 ```bash
-python3 benchmark_logos.py --run-all-scenarios --logos-url https://<logos-url> --logos-key lg-key --workload workloads/workload_gsm8k_5llm.csv --logos-config logos/logos-workernode/config.yml --benchmark-local-cache /tmp-to-remove --logos-ssh-host logos-test.aet.cit.tum.de --logos-ssh-user ge69yun --gpu-host <gpu-node-a> <gpu-node-b>
+python3 benchmark_logos.py --run-all-scenarios --logos-url https://<logos-url> --logos-key lg-key --workload workloads/workload_gsm8k_5llm.csv --logos-config logos/logos-workernode/config.yml --benchmark-local-cache /tmp-to-remove --logos-ssh-host <logos-ssh-host> --logos-ssh-user <logos-ssh-user> --gpu-host <gpu-node-a> <gpu-node-b>
 ```
 ### Logos-Host (wo das Benchmark-Script läuft)
 

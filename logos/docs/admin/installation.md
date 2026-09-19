@@ -62,9 +62,9 @@ mirror, set both in `.env` — and log in to the registry once if it is
 private:
 
 ```bash
-REGISTRY=<your-registry>
+REGISTRY=<registry-host>/<namespace>
 IMAGE_TAG=<published tag>
-docker login <your-registry>   # private registries only
+docker login <registry-host>   # private registries only; host only, no path
 ```
 
 If you cannot pull from any registry, build the same images locally from

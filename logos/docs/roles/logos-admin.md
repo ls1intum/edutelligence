@@ -21,9 +21,9 @@ with live updates over the WebSocket statistics feed.
 
 ## Models
 
-All models the deployment can serve, with their provider, queue state, and
-health. Clicking a model opens its **Model Details** view: per-model request
-history, error reports, and scheduling statistics.
+The deployment's model catalogue with tags, aliases, capabilities, and
+scheduling weights. Clicking a model opens its **Model Details** view:
+per-model request history, error reports, and scheduling statistics.
 
 ![Models page](/img/roles/logos-admin-models.png)
 
@@ -64,14 +64,14 @@ keys, and its per-team settings (queue priority, budget).
 
 ![Teams page](/img/roles/logos-admin-team-management.png)
 
+![Team detail](/img/roles/logos-admin-team-management-detail.png)
+
 ## Agent Sessions
 
 The [agent runner's](https://github.com/ls1intum/edutelligence/blob/main/logos/logos-agent/README.md)
 coding-agent sessions: what each is working on, its state, and its pull
 request. The page is reachable to every Logos Admin; the **Agents** entry in
-the sidebar only appears when the deployment runs the optional agent stack,
-and without it the page reports that the runner is unreachable — as in the
-screenshot below.
+the sidebar only appears when the deployment runs the optional agent stack.
 
 ![Agent Sessions page](/img/roles/logos-admin-agents.png)
 
