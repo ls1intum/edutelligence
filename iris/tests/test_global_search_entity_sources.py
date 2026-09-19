@@ -150,6 +150,21 @@ class TestWireShapes:
         )
         assert dto.entity_candidates == []
 
+    def test_searches_nothing_normalizes_course_ids_to_an_empty_list(self):
+        # Artemis's own NON_EMPTY JSON policy drops an empty courseIds list from the wire,
+        # which would otherwise be indistinguishable here from "no scope requested" (None).
+        # searchesNothing carries that distinction instead, since a boolean always survives.
+        dto = GlobalSearchRequestDTO(
+            query="q", settings=_SETTINGS_JSON, searchesNothing=True
+        )
+        assert dto.course_ids is not None
+        assert not dto.course_ids
+
+    def test_unscoped_request_without_searches_nothing_leaves_course_ids_as_none(self):
+        dto = GlobalSearchRequestDTO(query="q", settings=_SETTINGS_JSON)
+        assert dto.course_ids is None
+        assert dto.searches_nothing is False
+
     def test_request_parses_camel_case_entity_candidates(self):
         dto = GlobalSearchRequestDTO(
             query="q",
@@ -310,9 +325,11 @@ class TestSemesterTwinDedup:
 
     NOW = datetime(2026, 9, 8, tzinfo=timezone.utc)
 
-    def _source(self, title, course="Patterns", ref=None, etype="lecture_unit"):
+    def _source(
+        self, title, course="Patterns", ref=None, etype="lecture_unit", course_id=1
+    ):
         source = _entity_source(title=title, etype=etype)
-        source.course = CourseInfo(id=1, name=course)
+        source.course = CourseInfo(id=course_id, name=course)
         source.reference_date = ref
         return source
 
@@ -320,39 +337,62 @@ class TestSemesterTwinDedup:
         return datetime(year, month, 1, tzinfo=timezone.utc)
 
     def test_released_twins_collapse_to_most_recent(self):
-        old = self._source("Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9))
-        cur = self._source("Mediator", "PSE", self._at(2026, 3))
+        # Twins are DIFFERENT courses (repeated semester offerings), so each
+        # instance carries its own real course_id — never the same one.
+        old = self._source(
+            "Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9), course_id=1
+        )
+        cur = self._source("Mediator", "PSE", self._at(2026, 3), course_id=2)
         kept = dedupe_semester_twins([old, cur], "what is the mediator", now=self.NOW)
         assert kept == [cur]
 
     def test_future_twins_collapse_to_soonest(self):
-        near = self._source("Mediator", "PSE", self._at(2027, 3))
-        far = self._source("Mediator (WS27/28)", "PSE (WS27/28)", self._at(2028, 3))
+        near = self._source("Mediator", "PSE", self._at(2027, 3), course_id=1)
+        far = self._source(
+            "Mediator (WS27/28)", "PSE (WS27/28)", self._at(2028, 3), course_id=2
+        )
         kept = dedupe_semester_twins([far, near], "mediator pattern", now=self.NOW)
         assert kept == [near]
 
     def test_released_beats_future(self):
-        future = self._source("Mediator", "PSE", self._at(2027, 3))
-        released = self._source("Mediator", "PSE", self._at(2026, 3))
+        future = self._source("Mediator", "PSE", self._at(2027, 3), course_id=1)
+        released = self._source("Mediator", "PSE", self._at(2026, 3), course_id=2)
         kept = dedupe_semester_twins([future, released], "mediator", now=self.NOW)
         assert kept == [released]
 
     def test_dated_query_keeps_all_twins(self):
-        old = self._source("Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9))
-        cur = self._source("Mediator", "PSE", self._at(2026, 3))
+        old = self._source(
+            "Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9), course_id=1
+        )
+        cur = self._source("Mediator", "PSE", self._at(2026, 3), course_id=2)
         kept = dedupe_semester_twins([old, cur], "mediator in WS23/24", now=self.NOW)
         assert kept == [old, cur]
 
     def test_distinct_courses_are_not_merged(self):
-        a = self._source("W01 Introduction", "Deep Learning", self._at(2026, 3))
-        b = self._source("W01 Introduction", "Patterns", self._at(2026, 3))
+        a = self._source(
+            "W01 Introduction", "Deep Learning", self._at(2026, 3), course_id=1
+        )
+        b = self._source("W01 Introduction", "Patterns", self._at(2026, 3), course_id=2)
         assert len(dedupe_semester_twins([a, b], "introduction", now=self.NOW)) == 2
 
     def test_undatable_twins_keep_first_seen_order(self):
-        first = self._source("Mediator", "PSE")
-        second = self._source("Mediator", "PSE")
+        first = self._source("Mediator", "PSE", course_id=1)
+        second = self._source("Mediator", "PSE", course_id=2)
         kept = dedupe_semester_twins([first, second], "mediator", now=self.NOW)
         assert kept == [first]
+
+    def test_same_course_same_title_entities_are_both_kept(self):
+        # Regression: two GENUINELY DISTINCT entities that happen to share a
+        # title within ONE course (e.g. two exercises both called "Quiz")
+        # are not semester twins and must never be merged into one.
+        quiz1 = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        quiz2 = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        kept = dedupe_semester_twins([quiz1, quiz2], "is there a quiz", now=self.NOW)
+        assert kept == [quiz1, quiz2]
 
     def test_render_parses_reference_date_as_utc(self):
         source = GlobalSearchPipeline._render_entity_sources(

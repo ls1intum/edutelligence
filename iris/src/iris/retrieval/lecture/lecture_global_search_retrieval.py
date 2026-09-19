@@ -215,28 +215,55 @@ def dedupe_semester_twins(
 ) -> list[EntitySourceDTO]:
     """Collapse semester twins of a repeated course to one instance.
 
-    Twins (same type, same suffix-stripped course and title) are relevance
-    ties by construction, so which one wins a context slot would otherwise
-    be arbitrary — and the answer LLM cannot prefer the current run of a
-    course it never sees. Among twins the most recent already-visible
-    instance survives (else the soonest upcoming). A query that names a
-    semester or year is exempt: the student may be asking about an old run.
-    Distinct offerings (series, cross-listings, other courses) have their
-    own keys and are never merged.
+    Twins (same type, same suffix-stripped course and title, DIFFERENT
+    course.id) are relevance ties by construction, so which one wins a
+    context slot would otherwise be arbitrary — and the answer LLM cannot
+    prefer the current run of a course it never sees. Among twins the most
+    recent already-visible instance survives (else the soonest upcoming). A
+    query that names a semester or year is exempt: the student may be
+    asking about an old run. Distinct offerings (series, cross-listings,
+    other courses) have their own keys and are never merged — and neither
+    are two same-titled entities that share ONE course.id: that is a real
+    coincidence (e.g. two exercises both called "Quiz"), not a repeated
+    offering, so both survive intact.
     """
     if not entity_sources or _DATED_QUERY_RE.search(query):
         return entity_sources
     now = now or datetime.now(timezone.utc)
-    best: dict[tuple[str, str, str], EntitySourceDTO] = {}
+    groups: dict[tuple[str, str, str], dict[int | None, list[EntitySourceDTO]]] = {}
     order: list[tuple[str, str, str]] = []
     for source in entity_sources:
         key = _twin_key(source)
-        if key not in best:
-            best[key] = source
+        course_id = source.course.id if source.course else None
+        if key not in groups:
+            groups[key] = {}
             order.append(key)
-        elif _prefers_instance(source, best[key], now):
-            best[key] = source
-    return [best[key] for key in order]
+        groups[key].setdefault(course_id, []).append(source)
+
+    result: list[EntitySourceDTO] = []
+    for key in order:
+        by_course = groups[key]
+        if len(by_course) == 1:
+            # Every same-titled candidate shares one course (or none carry
+            # course info) — nothing to pick between, keep them all.
+            result.extend(next(iter(by_course.values())))
+            continue
+        # Multiple courses share this title: pick the best-represented course
+        # (comparing each course's own best instance) and keep ALL of that
+        # course's entries for this title, so an in-course coincidence on the
+        # winning side is preserved too.
+        best_course_id, best_representative = None, None
+        for course_id, items in by_course.items():
+            representative = items[0]
+            for other in items[1:]:
+                if _prefers_instance(other, representative, now):
+                    representative = other
+            if best_representative is None or _prefers_instance(
+                representative, best_representative, now
+            ):
+                best_course_id, best_representative = course_id, representative
+        result.extend(by_course[best_course_id])
+    return result
 
 
 def _is_entity(candidate: "_Candidate") -> bool:

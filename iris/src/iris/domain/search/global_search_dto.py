@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
 
@@ -197,6 +197,11 @@ class GlobalSearchRequestDTO(BaseModel):
     # Optional course scope from the search UI's active course filter; the
     # retrieval intersects it with the access context.
     course_ids: list[int] | None = Field(default=None, alias="courseIds")
+    # True when Artemis already resolved the course scope to nothing (every requested
+    # course was excluded). Distinct from course_ids=None (unscoped): Artemis's own
+    # NON_EMPTY JSON policy drops an empty courseIds list from the wire, which would
+    # otherwise be indistinguishable from "no scope requested" on this side.
+    searches_nothing: bool = Field(default=False, alias="searchesNothing")
 
     @field_validator("query")
     @classmethod
@@ -204,6 +209,12 @@ class GlobalSearchRequestDTO(BaseModel):
         if not value.strip():
             raise ValueError("query must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def _normalize_empty_course_scope(self) -> "GlobalSearchRequestDTO":
+        if self.searches_nothing:
+            self.course_ids = []
+        return self
 
 
 class GlobalSearchResponseDTO(BaseModel):
