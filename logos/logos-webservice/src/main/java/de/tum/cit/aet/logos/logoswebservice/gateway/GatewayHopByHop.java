@@ -15,6 +15,8 @@ final class GatewayHopByHop {
     private static final Set<String> BASE = Set.of(
         "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
         "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length",
+        // h2c preface — must not be copied when re-buffering the body.
+        "http2-settings",
         // JDK HttpClient rejects these restricted request headers.
         "expect"
     );
