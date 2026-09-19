@@ -5,10 +5,9 @@
 ## Architecture documentation
 
 The published documentation — user, administrator, and developer guides, the
-subsystem and terminology reference, and deployment notes — lives at
-[https://ls1intum.github.io/edutelligence/logos/](https://ls1intum.github.io/edutelligence/logos/)
-(source: `logos/docs/`, built with Docusaurus by the `Build Logos Documentation`
-workflow).
+subsystem and terminology reference, and per-role UI guides — lives at
+<https://ls1intum.github.io/edutelligence/logos/> (source: `logos/docs/`,
+built with Docusaurus by the `Build Logos Documentation` workflow).
 
 See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
 
@@ -418,7 +417,7 @@ In DBeaver, create a new PostgreSQL connection and configure the **SSH** tab as 
 
 | Field | Value |
 |-------|-------|
-| Host/IP | `aetvm45.cit.tum.de` |
+| Host/IP | `logos-test.aet.cit.tum.de` |
 | Port | `22` |
 | User Name | your TUM username (e.g. `ge69yun`) |
 | Authentication | Public Key |

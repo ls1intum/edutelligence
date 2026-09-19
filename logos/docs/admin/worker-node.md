@@ -19,13 +19,13 @@ rule or its own TLS certificate.
    check the provider status in the Logos UI.
 
 The production Compose file pulls the worker image
-`${REGISTRY}/logos-workernode-vllm`. As with the main stack, the build
-workflow publishes it to the project's Harbor registry (team-internal) —
-see the [installation guide](installation.md) for the `REGISTRY`/`IMAGE_TAG`
-and login setup. Without access to that registry, build it locally from the
-worker directory (which is the build context). Put the values in the
-worker's `.env` and export them in the shell as well — the Docker CLI does
-not read `.env`:
+`${REGISTRY}/logos-workernode-vllm` from the public GHCR registry
+(`ghcr.io/ls1intum/edutelligence`) by default — no login required. Set
+`REGISTRY` and `IMAGE_TAG` in the worker's `.env` only if you pin a build or
+use a private mirror. If you cannot pull from any registry, build the image
+locally from the worker directory (which is the build context). Put the
+values in the worker's `.env` and export them in the shell as well — the
+Docker CLI does not read `.env`:
 
 ```bash
 export REGISTRY=<your-registry> IMAGE_TAG=<tag>

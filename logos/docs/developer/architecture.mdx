@@ -8,7 +8,9 @@ import useBaseUrl from '@docusaurus/useBaseUrl';
 
 This page is the terminology ground truth for all Logos documentation. The
 subsystem decomposition is defined here; every other document uses these
-names, so read this first if the docs feel abstract.
+names, so read this first if the docs feel abstract. For diagrams of how the
+pieces fit together (top-level design, deployment, data model, request flow),
+see [System Design](./system-design).
 
 Logos is an LLM engineering platform. Clients call it like an OpenAI
 endpoint (`/v1/chat/completions`, `/v1/models`, …) and get models back from
@@ -59,6 +61,10 @@ and the [worker node guide](https://github.com/ls1intum/edutelligence/blob/main/
 
 ## How the pieces talk
 
+The structural diagrams (top-level, deployment, data model, inference paths)
+live on [System Design](./system-design). The gateway-split overview below is the
+same story in one picture:
+
 <img
   src={useBaseUrl('/img/architecture.svg')}
   alt="Logos architecture — core node, gateway split, worker nodes, and cloud providers"
@@ -108,11 +114,11 @@ Two properties fall out of this shape:
 Logos has three roles. A user's role decides which UI pages are visible and
 which admin endpoints the web service accepts:
 
-| Role | UI label | Scope |
-|---|---|---|
-| `logos_admin` | Logos Admin | Full platform access: all pages, including providers, policies, billing, and agent sessions. |
-| `app_admin` | App Admin | Application administration: users, teams, and the shared developer pages. |
-| `app_developer` | App Developer | Developer tools: models, own workspace, AI tools. |
+| Role | UI label | Scope | Guide |
+|---|---|---|---|
+| `logos_admin` | Logos Admin | Full platform access: all pages, including providers, policies, billing, and agent sessions. | [Logos Admin](../roles/logos-admin.md) |
+| `app_admin` | App Admin | Application administration: users, teams, and the shared developer pages. | [App Admin](../roles/app-admin.md) |
+| `app_developer` | App Developer | Developer tools: models, own workspace, AI tools. | [App Developer](../roles/app-developer.md) |
 
 The role a user gets is derived at login from the roles of their identity
 provider account: an account carrying the configured `logos_admin` role

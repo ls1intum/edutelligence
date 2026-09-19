@@ -18,7 +18,13 @@ const config: Config = {
       {
         docs: {
           path: ".",
-          exclude: ["**/node_modules/**", "**/build/**"],
+          exclude: [
+            "**/node_modules/**",
+            "**/build/**",
+            "**/AGENTS.md",
+            "**/CLAUDE.md",
+            "**/seed/**",
+          ],
           routeBasePath: "/",
           sidebarPath: "./sidebars.ts",
           editUrl: "https://github.com/ls1intum/edutelligence/tree/main/logos/docs/",
@@ -40,6 +46,7 @@ const config: Config = {
         { type: "docSidebar", sidebarId: "userSidebar", label: "User Guide", position: "left" },
         { type: "docSidebar", sidebarId: "adminSidebar", label: "Administrator Guide", position: "left" },
         { type: "docSidebar", sidebarId: "developerSidebar", label: "Developer Guide", position: "left" },
+        { type: "docSidebar", sidebarId: "rolesSidebar", label: "Roles", position: "left" },
         { href: "https://github.com/ls1intum/edutelligence", label: "GitHub", position: "right" },
       ],
     },
@@ -50,6 +57,7 @@ const config: Config = {
           { label: "User Guide", to: "/user/getting-started" },
           { label: "Administrator Guide", to: "/admin/installation" },
           { label: "Developer Guide", to: "/developer/local-setup" },
+          { label: "Roles and Pages", to: "/roles/app-developer" },
         ] },
         { title: "Community", items: [
           { label: "GitHub", href: "https://github.com/ls1intum/edutelligence" },

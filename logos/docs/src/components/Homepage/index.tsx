@@ -25,15 +25,21 @@ const GUIDES: GuideCard[] = [
   },
   {
     title: "Developer Guide",
-    description: "Run Logos locally and learn the subsystem layout.",
-    to: "/developer/local-setup",
-    label: "Develop locally",
+    description: "System design diagrams and local development setup.",
+    to: "/developer/system-design",
+    label: "System design",
+  },
+  {
+    title: "Roles",
+    description: "What each role can see and do in the web interface.",
+    to: "/roles/app-developer",
+    label: "Browse by role",
   },
 ];
 
 export default function Homepage(): React.JSX.Element {
   const logo = useBaseUrl("/img/logos-logo.svg");
-  const architecture = useBaseUrl("/img/architecture.svg");
+  const architecture = useBaseUrl("/img/system-design/top-level.svg");
 
   return (
     <div className={styles.page}>
@@ -51,8 +57,8 @@ export default function Homepage(): React.JSX.Element {
             <Link className={styles.btnPrimary} to="/user/getting-started">
               Start with the User Guide
             </Link>
-            <Link className={styles.btnGhost} to="/developer/architecture">
-              View architecture
+            <Link className={styles.btnGhost} to="/developer/system-design">
+              View system design
             </Link>
           </div>
         </div>
@@ -61,7 +67,7 @@ export default function Homepage(): React.JSX.Element {
       <section className={styles.section}>
         <h2 className={styles.sectionHeading}>Choose a guide</h2>
         <p className={styles.sectionSubtitle}>
-          Three paths through the same platform — pick the one that matches
+          Four paths through the same platform — pick the one that matches
           what you are doing today.
         </p>
         <div className={styles.cardGrid}>
@@ -83,15 +89,17 @@ export default function Homepage(): React.JSX.Element {
             inference gateway; local and mixed traffic is proxied to the
             orchestrator; workers dial out over WebSocket.
           </p>
-          <Link className={styles.diagramLink} to="/developer/architecture">
+          <Link className={styles.diagramLink} to="/developer/system-design">
             <img
               src={architecture}
-              alt="Logos architecture diagram showing core node, gateway split, worker nodes, and cloud providers"
+              alt="Logos top-level system design — clients, core node, workers, and cloud providers"
               className={styles.diagram}
             />
           </Link>
           <p className={styles.diagramCaption}>
-            Full terminology and subsystem tables live in the{" "}
+            Top-level design, deployment, data model, and request flow live in{" "}
+            <Link to="/developer/system-design">System Design</Link>. Terminology
+            is in the{" "}
             <Link to="/developer/architecture">architecture reference</Link>.
           </p>
         </div>

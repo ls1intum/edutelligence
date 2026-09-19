@@ -1,35 +1,66 @@
-# Logos deployment environments
+# Logos deployment
 
-Logos images are built by the `Logos - Build` workflow and pushed to the Harbor
-registry (`${LOGOS_HARBOR_REGISTRY}/logos`). PR builds are tagged `pr-<number>`,
-builds on `main` are tagged `latest`.
+Logos deploys pull-based. Prebuilt images are published to the public GHCR
+registry `ghcr.io/ls1intum/edutelligence` — `latest` tracks `main`, and a
+pinned tag pins a specific build. A deployment is the compose file plus a
+`.env` on each node, and an update is `docker compose pull` and
+`docker compose up -d`. Nothing is pushed to a node from CI, and a worker
+node needs no inbound port at all (see the
+[architecture overview](developer/architecture) for the subsystem
+breakdown).
 
-The vLLM worker image is always built on the first run of a PR (and when a PR is
-reopened), which guarantees that its `pr-<number>` tag exists before a dev
-deployment. On later PR updates, the workflow reuses that tag unless files in
-the worker runtime (`logos_worker_node`), its copied tools, dependency list,
-Dockerfile/build-context rules, or its build workflow changed since the last
-successful worker build in that PR. Worker documentation, tests, research
-results, Compose files, and host configuration do not trigger an image rebuild.
-Pushes to `main` and releases continue to rebuild the worker image.
+A deployment consists of:
 
-One exception: `logos-workernode-mlx` (Apple Silicon) is published to **public
-GHCR** at `ghcr.io/ls1intum/logos-workernode-mlx` (org-level package, matching
-the `build-workernode-mlx` job and the `bootstrap-macos.sh` default), so a Mac
-can bootstrap without Harbor credentials. It is also the only image that is never
-run as a container — see the MLX section below.
+- One **core node** running the core stack: Traefik, the rate-limit gateway,
+  orchestrator, web service, UI, and PostgreSQL.
+- Zero or more **worker nodes** — GPU machines that run local vLLM models
+  and connect out to the core node (see the
+  [worker node guide](admin/worker-node.md)).
+- Optionally, the **agent stack** on the core node, which runs coding agents
+  on spare serving capacity (see the
+  [agent runner reference](https://github.com/ls1intum/edutelligence/blob/main/logos/logos-agent/README.md)).
+  It is opt-in: enable it with `COMPOSE_PROFILES=agent`.
 
-| Environment | Workflow | Trigger | Nodes (GitHub environments) |
-|---|---|---|---|
-| Prod | `Logos - Deploy to Prod` | auto after `Logos - Build` on `main`, or manual | `Logos - Prod`, `Logos Worker - Prod - deioma` |
-| Test | `Logos - Deploy to Test` | manual (`workflow_dispatch`, image-tag input) | `Logos - Test`, `Logos Worker - Prod - deimama`, `Logos Worker - Prod - deipapa` |
-| Dev | `Logos - Deploy to Dev` | manual (`workflow_dispatch`, image-tag input) | `Logos - Dev`, `Logos Worker - Test - hochbruegge` |
+## Images and registry
 
-Each deploy job copies the docker compose file and a generated `.env` (all
-environment vars/secrets except the SSH/registry plumbing) to the node and runs
-`docker compose up -d` there. Core nodes use `logos/docker-compose.yaml` under
-`/opt/logos`; worker nodes use `logos/logos-workernode/docker-compose.yml` under
-`/opt/logos-workernode`.
+| Image | Contents |
+|---|---|
+| `logos` | orchestrator |
+| `logos-webservice` | Spring admin/statistics service and public inference gateway (`/v1`, `/openai`, `/jobs`) |
+| `logos-ui` | Angular frontend |
+| `logos-db` | PostgreSQL 17 plus `pg_cron` |
+| `logos-rate-gateway` | per-IP rate limiting (nginx) |
+| `logos-agent`, `logos-agent-gateway`, `logos-agent-workspace` | the agent stack (only with the `agent` profile) |
+| `logos-workernode-vllm` | the worker node runtime (on the GPU host) |
+| `logos-workernode-mlx` | the Apple Silicon worker — published to **public GHCR** at `ghcr.io/ls1intum/logos-workernode-mlx`, and the only image that is never run as a container (see the MLX section below) |
+
+`REGISTRY` (default `ghcr.io/ls1intum/edutelligence`) and `IMAGE_TAG`
+(default `latest`) in the `.env` select the source. The public registry needs
+no login; a deployment with a private mirror sets `REGISTRY` and logs in once
+(`docker login`).
+
+## Updating
+
+The core node updates in place:
+
+```bash
+# in the .env next to docker-compose.yaml
+IMAGE_TAG=<new tag>   # or keep "latest"
+```
+
+```bash
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
+```
+
+The web service applies pending Liquibase migrations at startup, so a version
+jump is a normal event. Back up the persistent volumes first (see the
+[installation guide](admin/installation.md#persistent-data-and-upgrades)).
+
+Worker nodes update the same way from their worker directory: bump
+`IMAGE_TAG` in the worker's `.env`, then `docker compose pull` and
+`docker compose up -d`. Lane configuration and calibrated model profiles
+persist in the worker's `data/` volume, so an update does not reset them.
 
 ## Security & rate limiting
 
@@ -205,9 +236,9 @@ to `~/logos-workernode-mlx`, and runs the worker natively under a launchd
 agent. Running natively is also what keeps the orchestrator in control — a
 native process can fork `vllm serve` on command, which a container could not.
 
-Deploying a new version means re-running the bootstrap script on the node; it
-is idempotent and preserves `config.yml`, `.env` and `data/`. There is no
-`Logos - Deploy` job for these nodes yet.
+Updating to a new version means re-running the bootstrap script on the node
+instead of `docker compose pull`; it is idempotent and preserves `config.yml`,
+`.env` and `data/`.
 
 The orchestrator treats them as ordinary vLLM workers — no protocol change was
 needed. Sleep/wake is unavailable (it requires CUDA virtual memory), so the
@@ -221,26 +252,28 @@ Public `/v1`, `/openai`, and `/jobs` traffic lands on **logos-webservice**.
 The service has no fixed `container_name`, so Compose can run more than one
 replica; Traefik load-balances them under `logos-webservice-svc`.
 
-The deploy workflows (`logos_deploy-prod.yml`, `logos_deploy-dev.yml`,
-`logos_deploy-test.yml`) scale the core stack from the node's `.env`:
+Set the desired count in the core node's `.env` and apply it on `up`:
 
 ```bash
-# on the core node .env (e.g. /opt/logos/.env)
+# in the .env next to docker-compose.yaml
 LOGOS_WEBSERVICE_REPLICAS=2
+
+# Pass the same .env into Compose so the scale count is not expanded by the
+# host shell (a bare ${LOGOS_WEBSERVICE_REPLICAS:-1} would default to 1 when
+# the variable is only set in .env and not exported).
+docker compose --env-file .env up -d --scale logos-webservice=2
 ```
 
-On the next `Logos - Deploy` run for `docker-compose.yaml`, the SSH step
-sources that file and runs:
+Or, with Compose interpolating from `.env`:
 
 ```bash
-docker compose -f …/docker-compose.yaml --env-file=…/.env \
-  up -d --remove-orphans --scale logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}
+# docker-compose.yaml (or a compose override) already uses:
+#   deploy.replicas / scale via env — prefer an explicit count on --scale,
+#   or export before invoking:
+set -a && source .env && set +a
+docker compose --env-file .env up -d \
+  --scale "logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}"
 ```
-
-Worker compose files have no `logos-webservice` service, so those matrix
-entries omit `--scale`. For a one-off manual bump on the core node you can
-use the same `--scale` flag; prefer setting `LOGOS_WEBSERVICE_REPLICAS` so the
-next pipeline deploy does not collapse back to one replica.
 
 On the **dev** compose, drop or retarget the host publish `18082:8081` before
 scaling — published host ports cannot be shared across replicas. Liquibase
@@ -250,10 +283,10 @@ short-TTL budget cache are the remaining per-instance state (see
 
 Optional `.env` knobs:
 
-- `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count applied
-  by the deploy workflows on the core `docker-compose.yaml`. Cloud RPM is
-  enforced shared across replicas; cloud TPM estimates remain per-replica —
-  keep this at `1` when tight per-key TPM matters.
+- `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count for the
+  core `docker-compose.yaml`. Cloud RPM is enforced shared across replicas;
+  cloud TPM estimates remain per-replica — keep this at `1` when tight per-key
+  TPM matters.
 - `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
   accepts the public paths but proxies every request to the orchestrator after
   API-key auth.
@@ -264,40 +297,27 @@ Optional `.env` knobs:
   concurrent admissions see the spend; reconciled (kept or zeroed) when the
   stream completes.
 
-## Required configuration per GitHub environment
+## Environment variables
 
-Repository-level (already configured): `LOGOS_HARBOR_REGISTRY`,
-`LOGOS_HARBOR_USER` (vars), `LOGOS_HARBOR_PASSWORD` (secret), and the
-`DEPLOYMENT_GATEWAY_*` vars/secrets inherited from the organization.
+All runtime configuration lives in the `.env` file next to the compose file.
+The [`.env.example` in the repository](https://github.com/ls1intum/edutelligence/blob/main/logos/.env.example)
+documents every variable with its default; the ones a fresh deployment must
+set:
 
-### Core node (e.g. `Logos - Dev`)
+| Variable | Core node | Worker node |
+|---|---|---|
+| `LOGOS_DOMAIN` | the core node's fully qualified domain | — |
+| `ACME_EMAIL` | the Let's Encrypt contact address | — |
+| `LOGOS_INTERNAL_SECRET` | a strong random string — the shared secret between web service and orchestrator | — |
+| `KEYCLOAK_ISSUER_URI` | your identity provider's issuer (`https://<idp>/realms/<realm>`) | — |
+| `KEYCLOAK_ROLES_LOGOS_ADMIN` / `KEYCLOAK_ROLES_APP_ADMIN` | the OIDC role names that map to the Logos roles (see [roles](developer/architecture#roles)) | — |
+| `PROMETHEUS_API_KEY` | optional — gates `/metrics`; unset denies all | — |
+| `HF_TOKEN` | optional — HuggingFace token for gated models; also distributed to connected workers | or set per worker |
+| `LOGOS_URL` | — | the core node's URL, e.g. `https://logos.example.org` |
+| `LOGOS_API_KEY` | — | the worker's shared key from the registration response |
 
-Variables:
-
-- `VM_HOST`, `VM_USERNAME` — target VM and SSH user
-- `LOGOS_DOMAIN`, `LOGOS_CERT_RESOLVER`, `LOGOS_CORS_ALLOWED_ORIGINS`, `ACME_EMAIL`
-- `KEYCLOAK_ADMIN_BASE_URL`, `KEYCLOAK_AUDIENCE`, `KEYCLOAK_CLIENT_ID`,
-  `KEYCLOAK_ISSUER_URI`, `KEYCLOAK_JWKS_URI`, `KEYCLOAK_ROLES_APP_ADMIN`,
-  `KEYCLOAK_ROLES_LOGOS_ADMIN`, `KEYCLOAK_SYNC_CLIENT_ID`,
-  `KEYCLOAK_SYNC_ENABLED`, `KEYCLOAK_TEAM_ROLE_SUFFIXES`
-
-Secrets:
-
-- `VM_SSH_PRIVATE_KEY`
-- `LOGOS_INTERNAL_SECRET`
-- `KEYCLOAK_SYNC_CLIENT_SECRET`
-- `PROMETHEUS_API_KEY`
-
-### Worker node (e.g. `Logos Worker - Test - hochbruegge`)
-
-Variables:
-
-- `VM_HOST`, `VM_USERNAME` — target GPU node and SSH user
-- `LOGOS_URL` — URL of the core node's orchestrator this worker registers with
-- `LOGOS_TMPFS_CACHE_PATH`, `TMPFS_SIZE`, `LOGOS_MODELS_MOUNT`
-
-Secrets:
-
-- `VM_SSH_PRIVATE_KEY`
-- `LOGOS_API_KEY` — key the worker uses to authenticate against the orchestrator
-- `HF_TOKEN`
+The worker's hardware configuration — models, lane port range, vLLM
+overrides — lives in its `config.yml`, never in `.env`. See the
+[worker node guide](admin/worker-node.md) and the
+[detailed worker setup](https://github.com/ls1intum/edutelligence/blob/main/logos/logos-orchestrator/docs/node-provider-setup.md)
+for the registration request and troubleshooting.
