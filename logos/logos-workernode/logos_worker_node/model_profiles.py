@@ -157,12 +157,17 @@ class ModelProfileRecord:
     # Host-RAM footprint of the lane process tree once loaded. The master's
     # capacity planner uses this to reason about host RAM as a resource axis
     # parallel to VRAM — necessary because vLLM sleep_l1/sleep_l2 free VRAM
-    # but retain weights in host RAM. EMA-updated from worker telemetry.
+    # but retain weights in host RAM. Updated as a high-water mark from
+    # worker telemetry: long-lived EngineCores accumulate sticky host
+    # shared-memory that sleep→wake does not clear, so averaging fresh lean
+    # replicas with heavy ones would understate lasting pressure.
     host_ram_mb: float | None = None
     # Host-RAM still held when the lane is sleeping (level 1). Approximately
     # equal to host_ram_mb in practice — sleep_l1 moves weights from VRAM to
     # host RAM rather than freeing them — but tracked separately so the
     # planner can use the right value depending on the candidate's state.
+    # Also a high-water mark: sticky shm that survives sleep/wake is part of
+    # the lasting residency the host must afford.
     host_ram_residual_mb: float | None = None
     # Peak transient host-RAM allocation observed during the calibrated
     # sleep call (level 1 / level 2). Distinct from host_ram_residual_mb,
@@ -762,22 +767,23 @@ class ModelProfileRegistry:
 
         *sleeping* selects which field is updated: when False, host_ram_mb
         (awake footprint); when True, host_ram_residual_mb (level-1 sleep).
-        EMA-blended with prior measurements.
+
+        Both fields are high-water marks, not EMA averages. Long-lived
+        EngineCores accumulate sticky host shared-memory that sleep→wake does
+        not clear; blending a heavy observation with a fresh lean replica
+        would understate the lasting ceiling the planner needs for cold-load
+        and sleep-vs-stop gates.
         """
         if host_ram_mb <= 0:
             return
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
             if sleeping:
-                profile.host_ram_residual_mb = (
-                    host_ram_mb
-                    if profile.host_ram_residual_mb is None
-                    else _ema(profile.host_ram_residual_mb, host_ram_mb)
-                )
+                prior = profile.host_ram_residual_mb
+                profile.host_ram_residual_mb = host_ram_mb if prior is None else max(prior, host_ram_mb)
             else:
-                profile.host_ram_mb = (
-                    host_ram_mb if profile.host_ram_mb is None else _ema(profile.host_ram_mb, host_ram_mb)
-                )
+                prior = profile.host_ram_mb
+                profile.host_ram_mb = host_ram_mb if prior is None else max(prior, host_ram_mb)
             profile.last_measured_epoch = time.time()
         self._persist()
 
