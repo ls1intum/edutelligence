@@ -2,6 +2,20 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
+def printed_page_number(display_page_number: Optional[int]) -> Optional[int]:
+    """The number printed on a slide, or None when it carries none.
+
+    Ingestion marks a slide whose number could not be read as ``-1`` (older records as ``0``),
+    which is no number at all. Everything that shows a page to the agent — the retrieval results,
+    the student's current position, the point-out sent to Artemis — goes through here, so a slide
+    is never described by a nonsensical number and the three never disagree about which slides
+    count as unnumbered.
+    """
+    if display_page_number is None or display_page_number <= 0:
+        return None
+    return display_page_number
+
+
 @dataclass
 class LectureUnitRetrievalDTO:
     """Data Transfer Object for retrieving lecture unit details.
