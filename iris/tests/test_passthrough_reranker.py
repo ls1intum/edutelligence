@@ -58,7 +58,8 @@ def test_passthrough_reranker_preserves_order_and_filters_invalid_documents():
 def test_passthrough_reranker_handles_zero_and_oversized_limits():
     reranker = _passthrough_reranker()
 
-    assert not reranker.rerank("query", ["a", "b"], top_n=0)
+    zero_result = reranker.rerank("query", ["a", "b"], top_n=0)
+    assert zero_result == []  # pylint: disable=use-implicit-booleaness-not-comparison
     assert reranker.rerank("query", ["a", "b"], top_n=10) == [0, 1]
 
 
