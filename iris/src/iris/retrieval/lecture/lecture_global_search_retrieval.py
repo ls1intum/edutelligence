@@ -557,9 +557,20 @@ class LectureGlobalSearchRetrieval:
         the final attempt's drop accounting is kept in telemetry — an earlier
         attempt's drops describe rows the wider, final fetch re-examines
         anyway.
+
+        ``auto_cut`` (the answer path) can make a lane return fewer than
+        ``lane_depth`` rows well before either lane is actually exhausted: it
+        is Weaviate's own quality cutoff at a natural score cliff, not a
+        signal that nothing more exists. Trusting a short autocut result as
+        exhaustion would stop here before ever fetching a visible row that
+        autocut excluded outright. So the first time visibility filtering
+        leaves too few results under autocut, this drops autocut and retries
+        the same depth with the fixed limit before trusting the length-based
+        exhaustion check or expanding further.
         """
         lane_depth = max(limit, _LANE_DEPTH)
         depth_cap = settings.global_search_lane_depth_max
+        use_autocut = auto_cut
         while True:
             seg_objects, trans_objects = self._search_lanes(
                 query,
@@ -568,11 +579,15 @@ class LectureGlobalSearchRetrieval:
                 lane_depth,
                 course_ids,
                 exclude_course_ids,
-                auto_cut,
+                use_autocut,
                 telemetry,
             )
+            # Only a fixed-limit lane returning short of what it asked for means
+            # genuinely exhausted; an autocut-shortened result says nothing either way.
             exhausted = (
-                len(seg_objects) < lane_depth and len(trans_objects) < lane_depth
+                not use_autocut
+                and len(seg_objects) < lane_depth
+                and len(trans_objects) < lane_depth
             )
             telemetry.drop_counts = Counter()
             telemetry.drop_details = []
@@ -589,7 +604,12 @@ class LectureGlobalSearchRetrieval:
                 policy,
             )
             deduped = _dedupe_by_snippet(scored, telemetry)
-            if len(deduped) >= limit or exhausted or lane_depth >= depth_cap:
+            if len(deduped) >= limit:
+                return deduped
+            if use_autocut:
+                use_autocut = False
+                continue
+            if exhausted or lane_depth >= depth_cap:
                 return deduped
             lane_depth = min(lane_depth * 2, depth_cap)
 

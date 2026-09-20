@@ -449,6 +449,51 @@ def test_lane_expands_past_a_full_window_of_filtered_hits_to_reach_a_visible_one
     assert (first_depth, second_depth) == (25, 50)
 
 
+def test_autocut_shortened_lane_retries_at_the_same_depth_without_autocut_first():
+    # auto_cut (the answer path) can make Weaviate stop a lane at a natural score
+    # cliff well short of lane_depth — a quality signal, not evidence the lane is
+    # exhausted. If everything above that cliff turns out hidden or unreleased,
+    # the search must drop autocut and retry the SAME depth with the fixed limit
+    # before trusting the length-based exhaustion check, since a visible result
+    # autocut excluded outright can sit right below that cliff.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    visible = _candidate(0.8, "visible content", ("http://a", 1, 10))
+
+    retrieval._search_lanes = Mock(
+        side_effect=[
+            ([SimpleNamespace()] * 3, []),  # autocut stopped early at a score cliff
+            ([SimpleNamespace()] * 25, []),  # same depth, no autocut: the full window
+        ]
+    )
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(side_effect=[[], [visible]])
+
+    result = retrieval._search_lanes_until_visible(
+        query="anything",
+        vector=[0.1],
+        alpha=0.75,
+        limit=1,
+        course_ids=None,
+        exclude_course_ids=None,
+        auto_cut=True,
+        policy=_VisibilityPolicy.from_context(None),
+        telemetry=_SearchTelemetry(),
+    )
+
+    assert result == [visible]
+    assert retrieval._search_lanes.call_count == 2
+    first_depth, first_autocut = (
+        retrieval._search_lanes.call_args_list[0].args[3],
+        retrieval._search_lanes.call_args_list[0].args[6],
+    )
+    second_depth, second_autocut = (
+        retrieval._search_lanes.call_args_list[1].args[3],
+        retrieval._search_lanes.call_args_list[1].args[6],
+    )
+    assert (first_depth, first_autocut) == (25, True)
+    assert (second_depth, second_autocut) == (25, False)
+
+
 def test_lane_stops_expanding_once_a_lane_is_exhausted():
     # Fewer hits than requested means Weaviate has nothing more to offer;
     # retrying further would just repeat the same (still-filtered) result.
