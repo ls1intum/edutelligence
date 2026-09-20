@@ -132,10 +132,11 @@ def _segment_summary_pipeline():
     segment_collection = MagicMock()
     segment_collection.query.fetch_objects.return_value.objects = []
     slide = SimpleNamespace(
+        uuid="slide-1",
         properties={
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
             LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
-        }
+        },
     )
     page_chunk_collection = MagicMock()
     page_chunk_collection.query.fetch_objects.return_value.objects = [slide]

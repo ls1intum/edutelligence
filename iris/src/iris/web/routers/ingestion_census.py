@@ -193,12 +193,16 @@ def get_course_ingestion_census(
                 LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
             ],
         )
-        real_rows = [
+        generation_matches = [
             row
             for row in chunk_objects
             if row.properties.get(LectureUnitPageChunkSchema.INGESTION_RUN_ID.value)
             in real_generations
         ]
+        # confirmed_generations only confirms one row per generation; a second,
+        # row-level pass keeps an object-store-missing sibling in an otherwise-real
+        # generation from inflating the exact chunk_count/page range below.
+        real_rows = confirmed_rows(db.lectures, generation_matches)
         pages = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_NUMBER.value)
         versions = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_VERSION.value)
         # Scoped to this one unit, so a cap hit here only makes THIS unit's
@@ -248,12 +252,14 @@ def get_course_ingestion_census(
         entry = unit(unit_id)
         if len(all_transcription_objects) >= _UNIT_ROW_LIMIT:
             entry.truncated = True
-        confirmed_transcriptions = [
+        generation_matches = [
             row
             for row in all_transcription_objects
             if row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
             in real_generations
         ]
+        # See the page-chunk loop above for why a second, row-level pass is needed.
+        confirmed_transcriptions = confirmed_rows(db.transcriptions, generation_matches)
         entry.transcription_count = len(confirmed_transcriptions)
 
     for unit_id in _discover_unit_ids(

@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
-from weaviate.classes.query import Filter, Metrics
+from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 from weaviate.exceptions import UnexpectedStatusCodeError
 from weaviate.util import generate_uuid5
@@ -16,6 +16,7 @@ from iris.common.ingestion_errors import (
 )
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.config import settings
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import (
@@ -29,7 +30,11 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
-from iris.vector_database.batch_verify import delete_many_with_retry
+from iris.vector_database.batch_verify import (
+    confirmed_rows,
+    delete_many_with_retry,
+    fetch_with_retry,
+)
 from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -194,12 +199,22 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 Filter.any_of(conditions),
             ]
         )
-        delete_result = delete_many_with_retry(
-            self.lecture_unit_segment_collection,
-            stale_filter,
-            "stale lecture unit segments",
-            retry=getattr(self, "_retry", None),
-        )
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
+        with batch_update_lock:
+            with job_handler.current_job_guard(
+                self.lecture_unit_dto.base_url,
+                self.lecture_unit_dto.course_id,
+                self.lecture_unit_dto.lecture_id,
+                self.lecture_unit_dto.lecture_unit_id,
+                self.cancel_event,
+                "lecture unit segment prune",
+            ):
+                delete_result = delete_many_with_retry(
+                    self.lecture_unit_segment_collection,
+                    stale_filter,
+                    "stale lecture unit segments",
+                    retry=getattr(self, "_retry", None),
+                )
         if delete_result.matches:
             logger.info(
                 "[%s / unit %d] Pruned %d stale segment(s) outside slides %d-%d",
@@ -245,17 +260,15 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         ).objects
 
     def _get_slide_range(self) -> Tuple[int, int]:
-        """Full page-number span of the unit, over every chunk of every generation.
+        """Full page-number span of the unit, over every ghost-free chunk of every generation.
 
-        Uses a server-side aggregate min/max rather than fetching objects and
-        reducing in Python: an unbounded ``fetch_objects`` returns only the
-        client's default page, so a unit larger than that page (or one whose
-        chunk set is inflated by coexisting generations) yielded a truncated
-        range and summaries were produced for only the first slides. The
-        aggregate scans all matching rows and is unaffected by page size or
-        generation count.
+        Confirms scanned rows against the object store before deriving the range: a
+        scan-visible-but-object-store-missing ghost row on an outlying page would
+        otherwise expand the range, cause spurious segment summaries to be written
+        for pages that don't exist, and make the final manifest-based audit fail on
+        every retry, since a ghost can never be deleted.
         """
-        slide_span = self._aggregate_page_number_span(
+        slide_span = self._confirmed_page_number_span(
             self.lecture_unit_page_chunk_collection,
             self._get_lecture_slide_filter(),
             LectureUnitPageChunkSchema.PAGE_NUMBER.value,
@@ -263,7 +276,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         if slide_span is not None:
             return slide_span
 
-        transcript_span = self._aggregate_page_number_span(
+        transcript_span = self._confirmed_page_number_span(
             self.lecture_transcription_collection,
             self._get_lecture_transcription_filter(),
             LectureTranscriptionSchema.PAGE_NUMBER.value,
@@ -284,20 +297,30 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             f"pages and no transcript; there is no content to summarize",
         )
 
-    @staticmethod
-    def _aggregate_page_number_span(collection, unit_filter, page_number_property):
-        """Server-side (min, max) of a page-number property, or None when empty."""
-        result = collection.aggregate.over_all(
-            filters=unit_filter,
-            total_count=True,
-            return_metrics=[
-                Metrics(page_number_property).integer(minimum=True, maximum=True)
-            ],
-        )
-        if result.total_count == 0:
+    def _confirmed_page_number_span(
+        self, collection, unit_filter, page_number_property
+    ):
+        """Object-store-confirmed (min, max) of a page-number property, or None when empty.
+
+        Fetches rather than aggregates, unlike the raw min/max this replaced, because
+        confirming against the object store needs the actual candidate ids; the fetch
+        is bounded the same way confirmed_generations is elsewhere in this pipeline --
+        a unit with more rows than that would mean an unrealistic page count.
+        """
+        retry = getattr(self, "_retry", None)
+        rows = fetch_with_retry(
+            lambda: collection.query.fetch_objects(
+                filters=unit_filter,
+                limit=settings.lecture_ingestion.skip_check_fetch_limit,
+                return_properties=[page_number_property],
+            ),
+            retry=retry,
+        ).objects
+        confirmed = confirmed_rows(collection, rows, retry=retry)
+        if not confirmed:
             return None
-        metric = result.properties[page_number_property]
-        return int(metric.minimum), int(metric.maximum)
+        numbers = [int(row.properties[page_number_property]) for row in confirmed]
+        return min(numbers), max(numbers)
 
     def _get_lecture_slide_filter(self):
         slide_filter = Filter.by_property(

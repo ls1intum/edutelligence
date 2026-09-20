@@ -1,4 +1,6 @@
-"""Tests for LectureUnitSegmentSummaryPipeline._get_slide_range's empty-content case."""
+"""Tests for LectureUnitSegmentSummaryPipeline._get_slide_range: the empty-content
+case, and that a ghost row (scan-visible but object-store-missing) does not expand
+the range."""
 
 # pylint: disable=protected-access
 
@@ -16,23 +18,18 @@ from iris.pipeline.lecture_unit_segment_summary_pipeline import (
 )
 
 
-def _empty_span_collection() -> SimpleNamespace:
-    return SimpleNamespace(
-        aggregate=SimpleNamespace(
-            over_all=MagicMock(return_value=SimpleNamespace(total_count=0))
-        )
-    )
+def _row(uuid: str, page_number: int) -> SimpleNamespace:
+    return SimpleNamespace(uuid=uuid, properties={"page_number": page_number})
 
 
-def _span_collection(minimum: int, maximum: int) -> SimpleNamespace:
-    metric = SimpleNamespace(minimum=minimum, maximum=maximum)
+def _collection(rows: list, ghost_uuids: set = frozenset()) -> SimpleNamespace:
+    def confirm_by_id(object_uuid):
+        return None if object_uuid in ghost_uuids else SimpleNamespace()
+
     return SimpleNamespace(
-        aggregate=SimpleNamespace(
-            over_all=MagicMock(
-                return_value=SimpleNamespace(
-                    total_count=1, properties={"page_number": metric}
-                )
-            )
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows)),
+            fetch_object_by_id=MagicMock(side_effect=confirm_by_id),
         )
     )
 
@@ -51,7 +48,7 @@ def _pipeline(page_chunks, transcriptions) -> LectureUnitSegmentSummaryPipeline:
 
 
 def test_raises_when_neither_page_chunks_nor_transcript_rows_exist():
-    pipeline = _pipeline(_empty_span_collection(), _empty_span_collection())
+    pipeline = _pipeline(_collection([]), _collection([]))
 
     with pytest.raises(IngestionStageError) as exc_info:
         pipeline._get_slide_range()
@@ -61,12 +58,35 @@ def test_raises_when_neither_page_chunks_nor_transcript_rows_exist():
 
 
 def test_uses_the_pdf_span_when_page_chunks_exist():
-    pipeline = _pipeline(_span_collection(1, 6), _empty_span_collection())
+    rows = [_row("a", 1), _row("b", 6)]
+    pipeline = _pipeline(_collection(rows), _collection([]))
 
     assert pipeline._get_slide_range() == (1, 6)
 
 
 def test_falls_back_to_the_transcript_span_without_a_pdf():
-    pipeline = _pipeline(_empty_span_collection(), _span_collection(1, 4))
+    rows = [_row("a", 1), _row("b", 4)]
+    pipeline = _pipeline(_collection([]), _collection(rows))
 
     assert pipeline._get_slide_range() == (1, 4)
+
+
+def test_a_ghost_row_does_not_expand_the_range():
+    # A scan-visible-but-object-store-missing row on page 99 must not widen the
+    # range: the confirmed rows top out at page 6, so the ghost's 99 is excluded.
+    rows = [_row("a", 1), _row("b", 6), _row("ghost", 99)]
+    pipeline = _pipeline(_collection(rows, ghost_uuids={"ghost"}), _collection([]))
+
+    assert pipeline._get_slide_range() == (1, 6)
+
+
+def test_all_ghost_rows_falls_back_like_no_rows_at_all():
+    rows = [_row("ghost", 1), _row("ghost2", 6)]
+    pipeline = _pipeline(
+        _collection(rows, ghost_uuids={"ghost", "ghost2"}), _collection([])
+    )
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        pipeline._get_slide_range()
+
+    assert exc_info.value.error_code == NO_INGESTIBLE_CONTENT

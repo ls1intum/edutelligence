@@ -757,6 +757,7 @@ def test_stale_segments_are_pruned_after_the_slide_loop():
         base_url="https://artemis.example",
         lecture_name="Lecture",
     )
+    pipeline.cancel_event = None
     delete_many = MagicMock(return_value=_delete_result(matches=2))
     pipeline.lecture_unit_segment_collection = SimpleNamespace(
         data=SimpleNamespace(delete_many=delete_many)
@@ -776,6 +777,7 @@ def test_stale_segment_prune_failure_fails_the_run():
         base_url="https://artemis.example",
         lecture_name="Lecture",
     )
+    pipeline.cancel_event = None
     pipeline.lecture_unit_segment_collection = SimpleNamespace(
         data=SimpleNamespace(
             delete_many=MagicMock(return_value=_delete_result(failed=1, matches=2))
@@ -800,6 +802,7 @@ def test_prune_without_keep_uuids_only_filters_by_page_range():
         base_url="https://artemis.example",
         lecture_name="Lecture",
     )
+    pipeline.cancel_event = None
     captured = {}
 
     def delete_many(where):
@@ -832,6 +835,7 @@ def test_prune_with_keep_uuids_also_excludes_non_matching_ids_in_range():
         base_url="https://artemis.example",
         lecture_name="Lecture",
     )
+    pipeline.cancel_event = None
     captured = {}
 
     def delete_many(where):
@@ -861,6 +865,7 @@ def test_prune_with_empty_keep_uuids_behaves_like_no_keep_uuids():
         base_url="https://artemis.example",
         lecture_name="Lecture",
     )
+    pipeline.cancel_event = None
     captured = {}
 
     def delete_many(where):
@@ -889,9 +894,9 @@ def test_call_passes_every_written_uuid_to_the_stale_prune(monkeypatch):
         base_url="https://artemis.example",
         lecture_name="Lecture",
     )
+    pipeline.cancel_event = None
     pipeline.callback = None
     pipeline.tokens = []
-    pipeline.cancel_event = None
     monkeypatch.setattr(pipeline, "_get_slide_range", lambda: (1, 3))
     monkeypatch.setattr(pipeline, "_get_transcriptions", lambda *_a, **_k: [])
     monkeypatch.setattr(pipeline, "_get_slides", lambda *_a, **_k: [])

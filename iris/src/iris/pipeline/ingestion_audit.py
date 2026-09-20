@@ -203,12 +203,18 @@ class IngestionAudit:
             ],
             retry=self._retry,
         )
-        chunks = [
+        generation_matches = [
             chunk
             for chunk in all_chunks
             if chunk.properties.get(LectureUnitPageChunkSchema.INGESTION_RUN_ID.value)
             in real_generations
         ]
+        # confirmed_generations only confirms one row per generation; a ghost sibling in
+        # an otherwise-real generation would still be counted here without this second,
+        # row-level pass.
+        chunks = confirmed_rows(
+            self.page_chunk_collection, generation_matches, retry=self._retry
+        )
         if len(all_chunks) >= _FETCH_LIMIT:
             return [
                 f"page chunk read hit the fetch cap of {_FETCH_LIMIT}; "
@@ -290,12 +296,17 @@ class IngestionAudit:
             ],
             retry=self._retry,
         )
-        rows = [
+        generation_matches = [
             row
             for row in all_rows
             if row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
             in real_generations
         ]
+        # See _verify_page_chunks for why a second, row-level pass is needed on
+        # top of the generation-level confirmation.
+        rows = confirmed_rows(
+            self.transcription_collection, generation_matches, retry=self._retry
+        )
         if len(all_rows) >= _FETCH_LIMIT:
             return [
                 f"transcription read hit the fetch cap of {_FETCH_LIMIT}; "
