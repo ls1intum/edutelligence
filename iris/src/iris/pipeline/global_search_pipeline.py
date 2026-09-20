@@ -544,16 +544,32 @@ class GlobalSearchPipeline(SubPipeline):
         # the used sources, so renumber onto that list. Must run AFTER the
         # fallback — renumbering before it left a fallback answer's markers
         # pointing at the wrong (or out-of-range) position in the final list.
+        #
+        # Renumbering must match the ORDER THE RESPONSE ACTUALLY SERIALIZES, not
+        # the ranked order the LLM saw: the client resolves marker N against
+        # `sources` (lecture) then `entitySources` (entity) as two separate,
+        # concatenated arrays, so an entity ranked between two lecture sources
+        # would otherwise get a marker number that lands on the wrong array
+        # once the two types are split onto the wire.
         ordered_used = sorted(used_indices)
-        answer = renumber_citation_markers(
-            answer,
-            {old + 1: new + 1 for new, old in enumerate(ordered_used)},
-        )
-
-        used_lecture = [
-            s for s in used_sources if isinstance(s, LectureSearchResultDTO)
+        indexed_used_sources = list(zip(ordered_used, used_sources))
+        used_lecture_indexed = [
+            (old, s)
+            for old, s in indexed_used_sources
+            if isinstance(s, LectureSearchResultDTO)
         ]
-        used_entities = [s for s in used_sources if isinstance(s, EntitySourceDTO)]
+        used_entities_indexed = [
+            (old, s)
+            for old, s in indexed_used_sources
+            if isinstance(s, EntitySourceDTO)
+        ]
+        old_to_new = {}
+        for new, (old, _) in enumerate(used_lecture_indexed + used_entities_indexed):
+            old_to_new[old + 1] = new + 1
+        answer = renumber_citation_markers(answer, old_to_new)
+
+        used_lecture = [s for _, s in used_lecture_indexed]
+        used_entities = [s for _, s in used_entities_indexed]
         if answer:
             logger.info(
                 "[global-search] outcome=answered answer_len=%d "

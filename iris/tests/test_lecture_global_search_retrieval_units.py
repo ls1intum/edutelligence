@@ -382,3 +382,62 @@ def test_empty_course_scope_with_no_entity_sources_still_returns_nothing():
     )
 
     assert result == []
+
+
+def test_lane_expands_past_a_full_window_of_filtered_hits_to_reach_a_visible_one():
+    # Release-date/visibility filtering happens AFTER retrieval, so a fixed
+    # 25-row window can be entirely unreleased or hidden while a visible,
+    # relevant result sits at position 26+. The first fetch returns a FULL
+    # window (signalling more may exist) that filters down to nothing; the
+    # search must double the depth and retry rather than stopping there.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    visible = _candidate(0.8, "visible content", ("http://a", 1, 10))
+
+    retrieval._search_lanes = Mock(
+        side_effect=[
+            ([SimpleNamespace()] * 25, []),  # full window: maybe more exist
+            ([SimpleNamespace()] * 30, []),  # wider fetch: the visible hit
+        ]
+    )
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(side_effect=[[], [visible]])
+
+    result = retrieval._search_lanes_until_visible(
+        query="anything",
+        vector=[0.1],
+        alpha=0.75,
+        limit=5,
+        course_ids=None,
+        auto_cut=False,
+        policy=_VisibilityPolicy.from_context(None),
+        telemetry=_SearchTelemetry(),
+    )
+
+    assert result == [visible]
+    assert retrieval._search_lanes.call_count == 2
+    first_depth = retrieval._search_lanes.call_args_list[0].args[3]
+    second_depth = retrieval._search_lanes.call_args_list[1].args[3]
+    assert (first_depth, second_depth) == (25, 50)
+
+
+def test_lane_stops_expanding_once_a_lane_is_exhausted():
+    # Fewer hits than requested means Weaviate has nothing more to offer;
+    # retrying further would just repeat the same (still-filtered) result.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval._search_lanes = Mock(return_value=([SimpleNamespace()] * 3, []))
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(return_value=[])
+
+    result = retrieval._search_lanes_until_visible(
+        query="anything",
+        vector=[0.1],
+        alpha=0.75,
+        limit=5,
+        course_ids=None,
+        auto_cut=False,
+        policy=_VisibilityPolicy.from_context(None),
+        telemetry=_SearchTelemetry(),
+    )
+
+    assert not result
+    retrieval._search_lanes.assert_called_once()

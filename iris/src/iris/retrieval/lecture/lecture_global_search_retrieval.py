@@ -467,26 +467,13 @@ class LectureGlobalSearchRetrieval:
         if policy is None:
             policy = _VisibilityPolicy.from_context(None)
         telemetry = _SearchTelemetry()
-        seg_objects, trans_objects = (
-            ([], [])
+        deduped = (
+            []
             if skip_content_lanes
-            else self._search_lanes(
-                query, vector, alpha, limit, course_ids, auto_cut, telemetry
+            else self._search_lanes_until_visible(
+                query, vector, alpha, limit, course_ids, auto_cut, policy, telemetry
             )
         )
-        units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
-            seg_objects, trans_objects, telemetry
-        )
-        scored = self._map_candidates(
-            seg_objects,
-            trans_objects,
-            units_by_id,
-            start_times,
-            slides_by_display_page,
-            telemetry,
-            policy,
-        )
-        deduped = _dedupe_by_snippet(scored, telemetry)
         entity_pool = [
             _Candidate(0.0, dto, (None, None, None))
             for dto in (entity_sources or [])[:_MAX_ENTITY_CANDIDATES]
@@ -502,7 +489,7 @@ class LectureGlobalSearchRetrieval:
         self._log_results(query, course_ids, alpha, auto_cut, telemetry, top)
         return [c.dto for c in top]
 
-    def _search_lanes(
+    def _search_lanes_until_visible(
         self,
         query: str,
         vector: list[float],
@@ -510,15 +497,65 @@ class LectureGlobalSearchRetrieval:
         limit: int,
         course_ids: list[int] | None,
         auto_cut: bool,
+        policy: "_VisibilityPolicy",
+        telemetry: "_SearchTelemetry",
+    ) -> list["_Candidate"]:
+        """Fetch lanes and map+filter to visible candidates, expanding the lane
+        depth on retry until there are enough or the lanes are exhausted.
+
+        Release-date and slide-visibility filtering happens AFTER retrieval
+        (in _segment_to_dto/_transcription_to_dto), so a fixed-depth fetch can
+        be entirely consumed by unreleased or hidden rows while a visible,
+        relevant result sits just beyond that depth. Each retry re-fetches
+        from scratch at a doubled depth rather than incrementally, so only
+        the final attempt's drop accounting is kept in telemetry — an earlier
+        attempt's drops describe rows the wider, final fetch re-examines
+        anyway.
+        """
+        lane_depth = max(limit, _LANE_DEPTH)
+        depth_cap = settings.global_search_lane_depth_max
+        while True:
+            seg_objects, trans_objects = self._search_lanes(
+                query, vector, alpha, lane_depth, course_ids, auto_cut, telemetry
+            )
+            exhausted = (
+                len(seg_objects) < lane_depth and len(trans_objects) < lane_depth
+            )
+            telemetry.drop_counts = Counter()
+            telemetry.drop_details = []
+            units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
+                seg_objects, trans_objects, telemetry
+            )
+            scored = self._map_candidates(
+                seg_objects,
+                trans_objects,
+                units_by_id,
+                start_times,
+                slides_by_display_page,
+                telemetry,
+                policy,
+            )
+            deduped = _dedupe_by_snippet(scored, telemetry)
+            if len(deduped) >= limit or exhausted or lane_depth >= depth_cap:
+                return deduped
+            lane_depth = min(lane_depth * 2, depth_cap)
+
+    def _search_lanes(
+        self,
+        query: str,
+        vector: list[float],
+        alpha: float,
+        lane_depth: int,
+        course_ids: list[int] | None,
+        auto_cut: bool,
         telemetry: "_SearchTelemetry",
     ) -> tuple[list[Any], list[Any]]:
-        """Query both collection lanes in parallel.
+        """Query both collection lanes in parallel at the given candidate depth.
 
-        Lanes fetch CANDIDATES at _LANE_DEPTH; the final ordering is decided
-        by the reranker (or the fused scores when no reranker is available).
+        The final ordering is decided by the reranker (or the fused scores
+        when no reranker is available).
         """
         auto_limit = _AUTOCUT_GROUPS if auto_cut else None
-        lane_depth = max(limit, _LANE_DEPTH)
         t_search = time.perf_counter()
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             seg_future = executor.submit(

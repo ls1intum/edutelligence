@@ -25,6 +25,7 @@ from iris.domain.status.global_search_status_update_dto import (
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.pipeline.global_search_pipeline import (
     GlobalSearchPipeline,
+    SearchIntent,
     _source_label,
     _today_line,
     parse_answer_response,
@@ -445,6 +446,62 @@ class TestSemesterTwinDedup:
         # [2] referenced entity_grounded's context position; renumbered onto the
         # 1-item final list it must become [1], not stay out of range.
         assert answer == "Yes, see the exercise.[1]"
+
+    def test_citation_numbers_survive_an_entity_ranked_between_two_lecture_sources(
+        self,
+    ):
+        # Regression: the client resolves marker N against `sources` (lecture)
+        # then `entitySources` (entity) as two separate, concatenated arrays.
+        # Renumbering by raw ranked position (rather than by the actual
+        # lecture-then-entity split order) would leave a citation pointing at
+        # the wrong array whenever an entity is ranked between two lecture
+        # sources, which is expected whenever both types compete on one
+        # shared relevance score.
+        lecture_a = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Patterns"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=3,
+                name="Slides",
+                link="/l",
+                pageNumber=1,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Lecture content A.",
+        )
+        entity = _entity_source(title="Flyweight quiz")
+        lecture_b = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Patterns"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=4,
+                name="Slides 2",
+                link="/l2",
+                pageNumber=2,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Lecture content B.",
+        )
+        grounded_sources = [lecture_a, entity, lecture_b]  # ranked order
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "First point.[1] Second point.[2] Third point.[3]"
+        )
+
+        response = pipeline(
+            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert response.sources == [lecture_a, lecture_b]
+        assert response.entity_sources == [entity]
+        # [1] (lecture_a) keeps its number; [2] (the entity, ranked 2nd) must
+        # renumber past both lecture sources to [3]; [3] (lecture_b) becomes
+        # [2] since it is the second lecture source once split onto the wire.
+        assert response.answer == "First point.[1] Second point.[3] Third point.[2]"
 
     def test_navigate_prompt_is_internally_consistent_about_the_no_answer_sentinel(
         self,

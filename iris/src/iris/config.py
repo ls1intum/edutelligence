@@ -230,6 +230,16 @@ class Settings(BaseModel):
         "timeout (which can exceed the caller's own timeout and surface as a "
         "failed search in the UI).",
     )
+    global_search_lane_depth_max: int = Field(
+        default=10_000,
+        description="Upper bound on the per-lane candidate depth while "
+        "retrying for enough visible results. Release-date and slide-"
+        "visibility filtering happens AFTER retrieval, so a fixed-depth fetch "
+        "can be entirely consumed by unreleased or hidden rows while a "
+        "visible, relevant result sits just beyond that depth; the search "
+        "doubles the depth and retries until enough visible candidates "
+        "survive filtering, a lane is exhausted, or this cap is hit.",
+    )
 
     @classmethod
     def get_settings(cls):
