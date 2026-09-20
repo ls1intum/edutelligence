@@ -81,11 +81,17 @@ _DEFAULT_ALPHA = 0.75
 # the WHOLE summary is, not a phrase that can appear anywhere in one. Unanchored,
 # "single character" or "solely of repeated" match plenty of legitimate content
 # ("A token can represent a single character.") mid-sentence.
+#
+# The "single word/phrase/character/letter" alternative additionally requires a
+# colon right after the noun: the placeholder shape names the noun as a LABEL
+# for the quoted content that follows ("Single word: 'Loading'."), which a
+# factual sentence using the same noun as its subject does not ("Single
+# character encodings map symbols to integers." has no colon there).
 _LOW_INFO_PATTERNS = re.compile(
     r"^there is no content"  # ingestion placeholder (empty slide)
     r"|^no spoken content"  # transcription placeholder (silent/music video)
     r"|^solely of repeated"  # music-only / repeated-symbol transcriptions
-    r"|^single (word|phrase|character|letter)",  # one-word junk slide
+    r"|^single (word|phrase|character|letter)\s*:",  # one-word junk slide
     re.IGNORECASE,
 )
 
@@ -197,6 +203,11 @@ class _Candidate:
     score: float
     dto: LectureSearchResultDTO
     unit_key: tuple[Any, Any, Any]
+    # Which _search_lanes result this came from ("seg"/"trans"), or "" for a
+    # candidate constructed outside that split (entity pool, rerank rebuild).
+    # _search_lanes_until_visible needs this to tell "the merged pool has
+    # enough" apart from "one lane is starved while the other carries it".
+    lane: str = ""
 
 
 _SEMESTER_PAREN_RE = re.compile(
@@ -597,6 +608,13 @@ class LectureGlobalSearchRetrieval:
         leaves too few results under autocut, this drops autocut and retries
         the same depth with the fixed limit before trusting the length-based
         exhaustion check or expanding further.
+
+        Exhaustion and the "enough visible results" check are both tracked
+        PER LANE, not on the merged pool: five visible segment hits already
+        meeting ``limit`` must not stop a transcription lane that came back
+        saturated (a full ``lane_depth`` batch) with zero visible results —
+        that lane may have a relevant, visible row just beyond the current
+        depth, and a healthy sibling lane must not mask it.
         """
         lane_depth = max(limit, _LANE_DEPTH)
         depth_cap = settings.global_search_lane_depth_max
@@ -613,12 +631,10 @@ class LectureGlobalSearchRetrieval:
                 telemetry,
             )
             # Only a fixed-limit lane returning short of what it asked for means
-            # genuinely exhausted; an autocut-shortened result says nothing either way.
-            exhausted = (
-                not use_autocut
-                and len(seg_objects) < lane_depth
-                and len(trans_objects) < lane_depth
-            )
+            # that lane is genuinely exhausted; an autocut-shortened result says
+            # nothing either way.
+            seg_exhausted = not use_autocut and len(seg_objects) < lane_depth
+            trans_exhausted = not use_autocut and len(trans_objects) < lane_depth
             telemetry.drop_counts = Counter()
             telemetry.drop_details = []
             units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
@@ -634,12 +650,16 @@ class LectureGlobalSearchRetrieval:
                 policy,
             )
             deduped = _dedupe_by_snippet(scored, telemetry)
-            if len(deduped) >= limit:
+            seg_visible = sum(1 for c in deduped if c.lane == "seg")
+            trans_visible = sum(1 for c in deduped if c.lane == "trans")
+            seg_satisfied = seg_exhausted or seg_visible >= limit
+            trans_satisfied = trans_exhausted or trans_visible >= limit
+            if len(deduped) >= limit and seg_satisfied and trans_satisfied:
                 return deduped
             if use_autocut:
                 use_autocut = False
                 continue
-            if exhausted or lane_depth >= depth_cap:
+            if (seg_exhausted and trans_exhausted) or lane_depth >= depth_cap:
                 return deduped
             lane_depth = min(lane_depth * 2, depth_cap)
 
@@ -757,7 +777,11 @@ class LectureGlobalSearchRetrieval:
             if dto is None:
                 telemetry.record_drop("seg", drop_reason, obj.properties)
                 continue
-            scored.append(_Candidate(_fused_score(obj), dto, _unit_key(obj.properties)))
+            scored.append(
+                _Candidate(
+                    _fused_score(obj), dto, _unit_key(obj.properties), lane="seg"
+                )
+            )
         for obj in trans_objects:
             dto, drop_reason = self._transcription_to_dto(
                 obj.properties, units_by_id, slides_by_display_page, policy
@@ -765,7 +789,11 @@ class LectureGlobalSearchRetrieval:
             if dto is None:
                 telemetry.record_drop("trans", drop_reason, obj.properties)
                 continue
-            scored.append(_Candidate(_fused_score(obj), dto, _unit_key(obj.properties)))
+            scored.append(
+                _Candidate(
+                    _fused_score(obj), dto, _unit_key(obj.properties), lane="trans"
+                )
+            )
         scored.sort(key=lambda c: c.score, reverse=True)
         telemetry.mapped = len(scored)
         return scored

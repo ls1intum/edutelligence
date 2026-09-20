@@ -72,6 +72,15 @@ class TestLowInformationFilter:
         # summary IS, not a phrase that can appear incidentally inside real explanatory content.
         assert not _is_low_information("A token can represent a single character.")
 
+    def test_factual_sentence_starting_with_the_noun_is_kept(self):
+        # Anchoring alone isn't a complete placeholder signature: a real sentence can also legitimately
+        # START with "single character" as its subject, not just contain the phrase mid-sentence. The
+        # placeholder shape names the noun as a label for quoted content ("Single word: 'Loading'."),
+        # which this sentence's lack of a colon after the noun distinguishes it from.
+        assert not _is_low_information(
+            "Single character encodings map symbols to integers."
+        )
+
     def test_short_but_complete_summary_is_kept(self):
         # A concise, correct summary is valid content, not junk; a character-count
         # floor previously dropped it purely for being short.
@@ -291,9 +300,9 @@ def test_rerank_floor_keeps_weak_but_plausible_candidates():
     assert floor - junk_ceiling > 3 * 0.01
 
 
-def _candidate(score, snippet, unit_key):
+def _candidate(score, snippet, unit_key, lane=""):
     dto = SimpleNamespace(snippet=snippet)
-    return _Candidate(score, dto, unit_key)
+    return _Candidate(score, dto, unit_key, lane=lane)
 
 
 def test_expansion_fetches_siblings_by_join_not_by_ranking():
@@ -501,7 +510,7 @@ def test_autocut_shortened_lane_retries_at_the_same_depth_without_autocut_first(
     # before trusting the length-based exhaustion check, since a visible result
     # autocut excluded outright can sit right below that cliff.
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
-    visible = _candidate(0.8, "visible content", ("http://a", 1, 10))
+    visible = _candidate(0.8, "visible content", ("http://a", 1, 10), lane="seg")
 
     retrieval._search_lanes = Mock(
         side_effect=[
@@ -536,6 +545,58 @@ def test_autocut_shortened_lane_retries_at_the_same_depth_without_autocut_first(
     )
     assert (first_depth, first_autocut) == (25, True)
     assert (second_depth, second_autocut) == (25, False)
+
+
+def test_a_healthy_lane_does_not_mask_a_saturated_starved_sibling_lane():
+    # Five visible segment hits already meet the limit, but a saturated (full
+    # lane_depth) transcription lane with zero visible results might have a
+    # relevant, visible row just beyond the current depth. The merged count
+    # alone must not stop the search before that lane gets a chance to widen.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    seg_hits = [
+        _candidate(
+            0.9 - i * 0.01, f"segment content {i}", ("http://a", 1, i), lane="seg"
+        )
+        for i in range(5)
+    ]
+    trans_hit = _candidate(
+        0.5, "transcription content", ("http://a", 1, 99), lane="trans"
+    )
+
+    retrieval._search_lanes = Mock(
+        side_effect=[
+            (
+                [SimpleNamespace()] * 25,
+                [SimpleNamespace()] * 25,
+            ),  # both lanes saturated
+            (
+                [SimpleNamespace()] * 25,
+                [SimpleNamespace()] * 26,
+            ),  # trans lane widened, exhausted
+        ]
+    )
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(
+        side_effect=[
+            list(seg_hits),  # first pass: all 25 transcription hits are hidden
+            [*seg_hits, trans_hit],  # second pass: the widened lane surfaces one
+        ]
+    )
+
+    result = retrieval._search_lanes_until_visible(
+        query="anything",
+        vector=[0.1],
+        alpha=0.75,
+        limit=5,
+        course_ids=None,
+        exclude_course_ids=None,
+        auto_cut=False,
+        policy=_VisibilityPolicy.from_context(None),
+        telemetry=_SearchTelemetry(),
+    )
+
+    assert retrieval._search_lanes.call_count == 2
+    assert trans_hit in result
 
 
 def test_lane_stops_expanding_once_a_lane_is_exhausted():
