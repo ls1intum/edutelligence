@@ -120,6 +120,14 @@ class TestEntityCardRenderer:
         )
         assert "public discussion channel" in card
 
+    def test_channel_card_omits_visibility_when_unknown(self):
+        # channelIsPublic is optional; treating a missing value as False would
+        # inject a false "private" fact into reranking and the answer context.
+        card = render_entity_card(
+            _candidate_dto(entityType="channel", title="tech-support")
+        )
+        assert "discussion channel" not in card
+
     def test_card_is_never_empty(self):
         assert render_entity_card(EntityCandidateDTO(entityType="exam"))
 

@@ -95,7 +95,7 @@ def render_entity_card(candidate: EntityCandidateDTO) -> str:
         facts.append(f"programming language {candidate.programming_language}")
     if candidate.short_name:
         facts.append(f"short name {candidate.short_name}")
-    if etype == "channel":
+    if etype == "channel" and candidate.channel_is_public is not None:
         visibility = "public" if candidate.channel_is_public else "private"
         facts.append(f"a {visibility} discussion channel for messages and questions")
     if candidate.faq_state:
