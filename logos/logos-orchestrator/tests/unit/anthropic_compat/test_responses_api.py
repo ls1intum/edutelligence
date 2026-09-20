@@ -78,9 +78,11 @@ def test_tool_call_and_result_become_top_level_items():
         }
     )
     assert result["input"] == [
-        # input_text, not output_text: an output item would also need an id
-        # and a status, and a request message carries neither.
-        {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "running"}]},
+        # output_text for the assistant's own history: the API validates
+        # assistant content against output_text/refusal, and the id and
+        # status that go with it belong to the wrapping message item, which
+        # this translation already carries as type and role.
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "running"}]},
         {"type": "function_call", "call_id": "toolu_1", "name": "Bash", "arguments": '{"command": "ls"}'},
         {"type": "function_call_output", "call_id": "toolu_1", "output": "a.py"},
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "thanks"}]},
@@ -259,12 +261,13 @@ def test_multibyte_character_split_across_chunks_survives():
     assert "".join(d["delta"]["text"] for n, d in _events(out) if n == "content_block_delta") == "Größe 🎉"
 
 
-def test_assistant_history_uses_request_content_types():
-    """Replayed assistant text must be a request message, not an output item.
+def test_assistant_history_uses_output_text_parts():
+    """Replayed assistant text must carry the part type the API validates for it.
 
-    ``output_text`` belongs to an output item, which also carries an ``id`` and
-    a ``status``; emitting it without them is not a valid input item, so the
-    second turn of any conversation could be rejected outright.
+    ``input_text`` is only accepted on user messages; assistant content is
+    checked against ``output_text`` and ``refusal``, so a request that replays
+    the previous answer as ``input_text`` is rejected with a 400 on the second
+    turn of any conversation.
     """
     result = to_responses(
         {
@@ -277,8 +280,8 @@ def test_assistant_history_uses_request_content_types():
             ],
         }
     )
-    kinds = {part["type"] for item in result["input"] for part in item["content"]}
-    assert kinds == {"input_text"}
+    kinds = [(item["role"], part["type"]) for item in result["input"] for part in item["content"]]
+    assert kinds == [("user", "input_text"), ("assistant", "output_text"), ("user", "input_text")]
     assert all("id" not in item and "status" not in item for item in result["input"])
 
 

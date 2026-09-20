@@ -129,7 +129,7 @@ public class VramService {
             sample.put("scheduler_signals", parseJsonOrEmpty(s.getSchedulerSignals()));
 
             // Only the latest sample per provider needs the rich payload — the
-            // frontend only ever reads scheduler_signals/loaded_models off the
+            // user interface only ever reads scheduler_signals/loaded_models off the
             // last point in a provider's series. Strip it from the one we just
             // superseded so historical points don't ship it too.
             Map<String, Object> previous = lastSampleByProvider.put(pid, sample);
@@ -170,9 +170,10 @@ public class VramService {
 
     /**
      * Attaches live connection metadata (connected/connection_state/
-     * last_heartbeat) from the orchestrator's worker registry and adds
-     * configured providers without snapshots in range, so offline providers
-     * still show up — and show up as offline — on the statistics page.
+     * last_heartbeat/connected_at/worker_started_at) from the orchestrator's
+     * worker registry and adds configured providers without snapshots in
+     * range, so offline providers still show up — and show up as offline —
+     * on the statistics page.
      */
     private List<Map<String, Object>> enrichProviders(Map<Integer, Map<String, Object>> providersData) {
         Map<Integer, Map<String, Object>> statusById = orchestratorStatusClient.getProviderStatusById();
@@ -190,6 +191,8 @@ public class VramService {
             provider.put("connected", status.get("connected"));
             provider.put("connection_state", status.get("connection_state"));
             provider.put("last_heartbeat", status.get("last_heartbeat"));
+            provider.put("connected_at", status.get("connected_at"));
+            provider.put("worker_started_at", status.get("worker_started_at"));
             provider.put("calibrating",
                 Boolean.TRUE.equals(status.get("calibrating")) ? Boolean.TRUE : null);
         }

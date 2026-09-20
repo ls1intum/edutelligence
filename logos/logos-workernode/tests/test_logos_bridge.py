@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from logos_worker_node.logos_bridge import LogosBridgeClient, _CalibrationSession
@@ -122,6 +124,194 @@ async def test_authenticate_accepts_explicit_ws_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_authenticate_applies_central_hf_token(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_keeps_local_hf_token_when_server_sends_none(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "local-token")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": ""}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "local-token"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_reverts_when_central_hf_token_is_removed(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "local-token")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    hf_token_by_call = ["central-token", ""]
+
+    class _Resp:
+        def __init__(self, hf_token: str) -> None:
+            self._hf_token = hf_token
+            self.status_code = 200
+            self.content = b"{}"
+
+        def json(self):
+            return {"ws_url": "wss://logos.example/ws", "hf_token": self._hf_token}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp(hf_token_by_call.pop(0))
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "local-token"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_applies_central_token_before_startup(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client.bootstrap_hf_token()
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_swallows_auth_failures(monkeypatch):
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client.bootstrap_hf_token()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_noop_when_disabled(monkeypatch):
+    cfg = LogosConfig(enabled=False)
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    async def _fail_authenticate():
+        raise AssertionError("bootstrap_hf_token must not authenticate when disabled")
+
+    monkeypatch.setattr(client, "_authenticate", _fail_authenticate)
+    await client.bootstrap_hf_token()
+
+
+@pytest.mark.asyncio
 async def test_execute_infer_command_passthrough(monkeypatch):
     app = _DummyApp()
     lane_manager = type("LaneMgr", (), {})()
@@ -157,10 +347,8 @@ async def test_execute_infer_command_passthrough(monkeypatch):
             assert url.endswith("/v1/chat/completions")
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
     result = await client._execute_infer_command(  # noqa: SLF001
         {
             "lane_id": "lane-a",
@@ -208,10 +396,8 @@ async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(mon
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
         {
@@ -268,10 +454,8 @@ async def test_execute_infer_command_base64_encodes_binary_multipart_response(mo
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
         {
@@ -329,10 +513,8 @@ async def test_execute_infer_command_preserves_binary_when_json_parsing_fails(mo
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
         {
@@ -567,6 +749,76 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
     runtime_status.assert_not_awaited()
 
 
+def _app_with_vllm_engine_config(endpoints):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(running_vllm_endpoints=lambda: endpoints)
+    app.state.config = SimpleNamespace(
+        engines=SimpleNamespace(vllm=SimpleNamespace(metrics_path="/custom-metrics", metrics_timeout_seconds=7))
+    )
+    return app
+
+
+@pytest.mark.asyncio
+async def test_send_vllm_metrics_forwards_merged_text(monkeypatch):
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _app_with_vllm_engine_config([("lane-a", "model-a", 19001)])
+    client = LogosBridgeClient(app, cfg)
+
+    collect = AsyncMock(return_value="vllm:num_requests_running 1.0\n")
+    monkeypatch.setattr("logos_worker_node.logos_bridge.collect_vllm_metrics_text", collect)
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    collect.assert_awaited_once_with([("lane-a", "model-a", 19001)], metrics_path="/custom-metrics", timeout_s=7)
+    assert sends == [
+        {
+            "type": "vllm_metrics",
+            "worker_id": client.worker_id,
+            "metrics_text": "vllm:num_requests_running 1.0\n",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_vllm_metrics_forwards_empty_export_too(monkeypatch):
+    """An empty export must still be sent — it's what tells the orchestrator
+
+    the last lane went away, so it can drop the stale series instead of
+    keeping the latest non-empty snapshot forever."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _app_with_vllm_engine_config([])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.collect_vllm_metrics_text",
+        AsyncMock(return_value=""),
+    )
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    assert sends == [
+        {
+            "type": "vllm_metrics",
+            "worker_id": client.worker_id,
+            "metrics_text": "",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
     """Idle worker (no lane churn) must still resend runtime status periodically.
@@ -585,10 +837,11 @@ async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
-            return last_revision  # never changes
+            return last_revision, last_count_revision  # never changes
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -633,13 +886,14 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
             iterations[0] += 1
             if iterations[0] >= 5:
                 client._stopping.set()
-            return last_revision
+            return last_revision, last_count_revision
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -660,6 +914,169 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
     await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
 
     assert send_calls == []
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_loop_count_bump_sends_patch_not_full_build(monkeypatch):
+    """A count change (no lifecycle change, no interval elapsed) must take the
+    in-memory patch path : the loop must NOT rebuild the full status
+    (all lanes, all probes) just because a request was counted."""
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        status_refresh_interval_seconds=60,
+    )
+    app = _DummyApp()
+
+    class _CountBumpLaneManager:
+        status_revision = 0
+
+        def __init__(self):
+            self.count_revision = 0
+
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
+            await asyncio.sleep(0)
+            self.count_revision += 1
+            return last_revision, self.count_revision
+
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _CountBumpLaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {  # noqa: SLF001
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+
+    calls: list[str] = []
+
+    async def _fake_full(_ws, force=False):
+        calls.append("full")
+        return True
+
+    async def _fake_patch(_ws):
+        calls.append("patch")
+        if len(calls) >= 2:
+            client._stopping.set()
+        return True
+
+    client._send_runtime_status = _fake_full  # type: ignore[method-assign]  # noqa: SLF001
+    client._send_count_update = _fake_patch  # type: ignore[method-assign]  # noqa: SLF001
+
+    fake_time = SimpleNamespace(monotonic=lambda: 0.0)
+    monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
+
+    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+
+    assert calls == ["patch", "patch"]
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_patches_lane_and_capacity_counts(monkeypatch):
+    """The patch updates each lane's active_requests and the capacity total,
+    sends a normal status message, and leaves the stored baseline unmutated."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 2, "lane-b": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [
+            {"lane_id": "lane-a", "active_requests": 0, "runtime_state": "loaded"},
+            {"lane_id": "lane-b", "active_requests": 0, "runtime_state": "loaded"},
+        ],
+        "capacity": {"active_requests": 0, "lane_count": 2},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is True
+    assert len(sends) == 1
+    runtime = sends[0]["runtime"]
+    assert sends[0]["type"] == "status"
+    lanes = {lane["lane_id"]: lane["active_requests"] for lane in runtime["lanes"]}
+    assert lanes == {"lane-a": 2, "lane-b": 1}
+    assert runtime["capacity"]["active_requests"] == 3
+    # Deep copy: the baseline keeps its own (unpatched) objects.
+    assert client._last_runtime_payload is not baseline  # noqa: SLF001
+    assert baseline["lanes"][0]["active_requests"] == 0
+    assert baseline["capacity"]["active_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_with_unchanged_counts_is_still_sent(monkeypatch):
+    """An increment and decrement can both land between the last push and the
+    count-triggered snapshot: the patched payload then matches the previous
+    one, but the push must still go out — the orchestrator's per-snapshot
+    forwarding budget resets only on a new status push."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            # The +1/-1 pair cancelled out since the baseline push.
+            return {"lane-a": 0}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    # Establish the baseline bookkeeping exactly as the initial push would.
+    await client._send_runtime_payload(object(), baseline, force=True)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert len(sends) == 1
+    sends.clear()
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is True
+    assert len(sends) == 1
+    assert sends[0]["runtime"]["lanes"][0]["active_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_without_baseline_falls_back_to_full_build(monkeypatch):
+    """Before the first full push there is no payload to patch — the count
+    update must fall back to a forced full build."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {}  # noqa: SLF001
+    client._send_runtime_status = AsyncMock(return_value=True)  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_count_update(None)  # noqa: SLF001
+
+    client._send_runtime_status.assert_awaited_once_with(None, force=True)  # type: ignore[attr-defined]
 
 
 def test_runtime_has_transient_lanes_uses_last_payload():
@@ -699,7 +1116,7 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     lane_manager._MAX_EVENT_LOG = 500
     lane_manager._mark_status_dirty = lambda: None
     lane_manager.destroy_all = AsyncMock(return_value=None)
-    # Calibration-session GPU-slice guard (issue #592): the session holds a
+    # Calibration-session GPU-slice guard: the session holds a
     # power-of-two slice and frees only the lanes on it, keeping leftover lanes.
     lane_manager.begin_calibration_session = MagicMock(return_value=frozenset({0, 1}))
     lane_manager.destroy_lanes_on_gpus = AsyncMock(return_value=1)
@@ -778,24 +1195,70 @@ async def test_start_calibration_session_refuses_when_node_unhealthy(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_start_calibration_session_refuses_on_metal_backend(tmp_path, monkeypatch):
-    """Calibration measures against nvidia-smi and samples /proc/meminfo —
-    neither exists on macOS, so the Metal backend must refuse the session up
-    front, by construction and without any operator flag. The refusal must
-    start no session and name model_profile_overrides as the alternative."""
+async def test_start_calibration_session_routes_metal_backend_to_metal_probe(tmp_path, monkeypatch):
+    """On Metal, the session must start (not refuse) and route each model
+    to calibrate_model_metal — never calibrate_with_tp_escalation, which
+    would call nvidia-smi. sleep_level is forced to 0 regardless of what
+    was requested: CuMemAllocator sleep is CUDA-only."""
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
-    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["some/model"],
+    )
     client = LogosBridgeClient(app, cfg)
 
+    # The precheck classifies Metal models too (only the CUDA-only
+    # VRAM-fit half is skipped), so it needs HF metadata to not look like
+    # a permanently-unsupported repo (which would skip the model before
+    # it ever reaches calibrate_model_metal).
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="hf"),
+    )
+
+    seen_kwargs: dict = {}
+
+    def _fake_calibrate_metal(plan, **kwargs):
+        seen_kwargs.update(kwargs)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=8192.0,
+        )
+
+    def _must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("calibrate_with_tp_escalation must not run on the Metal backend")
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration_metal.calibrate_model_metal",
+        _fake_calibrate_metal,
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        _must_not_be_called,
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
     response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
-    assert response["ok"] is False
-    assert response.get("calibration_unavailable") is True
-    assert response.get("reason_code") == "metal-backend"
-    assert "model_profile_overrides" in response["error"]
-    assert client._active_calibration_session is None  # noqa: SLF001
+    assert response["ok"] is True
+    assert response["sleep_level"] == 0
+    await _drain_session(client)
+
+    assert "cancel_event" in seen_kwargs  # reached the Metal probe with real kwargs
     events = [e.event for e in app.state.lane_manager._event_log]
-    assert "calibration_session_started" not in events
+    assert "calibration_session_started" in events
+    assert "calibration_session_finished" in events
 
 
 @pytest.mark.asyncio
@@ -882,6 +1345,55 @@ async def test_stop_calibration_session_sets_cancel_event(tmp_path):
     assert response["was_active"] is True
     assert response["current_model"] == "test/model"
     assert session.cancel_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_stop_calibration_session_kills_stuck_probe_after_grace_period(tmp_path, monkeypatch):
+    """A cancel that lands inside the blocking warmup HTTP call (no
+    cancel_event support there) leaves wait_ready's usual ~2s bail-out
+    unusable — the session task simply won't finish within the 15s grace
+    period. The stop handler must then kill the registered probe
+    subprocess directly rather than let it hold the GPU for the warmup's
+    full 600s/120s timeout."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=[],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    from logos_worker_node.logos_bridge import _CalibrationSession
+
+    session = _CalibrationSession(sleep_level=1)
+    session.current_model = "test/model"
+    fake_proc = MagicMock()
+    session.set_current_proc(fake_proc)
+
+    # Never finishes on its own — simulates a probe stuck inside the
+    # blocking warmup call.
+    session.task = asyncio.create_task(asyncio.sleep(60))
+    client._active_calibration_session = session  # noqa: SLF001
+
+    stop_vllm_mock = MagicMock()
+    monkeypatch.setattr("logos_worker_node.calibration.stop_vllm", stop_vllm_mock)
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.asyncio.wait_for",
+        AsyncMock(side_effect=asyncio.TimeoutError),
+    )
+
+    response = await client._handle_stop_calibration_session()  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["was_active"] is True
+    stop_vllm_mock.assert_called_once_with(fake_proc)
+
+    session.task.cancel()
+    try:
+        await session.task
+    except asyncio.CancelledError:
+        pass
 
 
 @pytest.mark.asyncio
@@ -1071,7 +1583,7 @@ async def test_nosleep_model_with_profile_is_not_recalibrated(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_session_frees_calibrating_slice_before_calibrating(tmp_path, monkeypatch):
     """Live lanes on the calibration's GPU slice hold VRAM. The session must
-    free that slice up front (issue #592) or the kv-cache search OOMs and
+    free that slice up front or the kv-cache search OOMs and
     blacklists every probe size — but it must NOT free the whole node: lanes
     on the leftover GPUs keep serving during the session."""
     from logos_worker_node import config as _wcfg
@@ -1233,6 +1745,9 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
     assert len(seen_plans) == 1
     assert seen_plans[0]["_hf_weight_bytes"] == 4 * 1024 * 1024 * 1024
     assert seen_plans[0]["_hf_max_tp_ceiling"] == 1
+    # No pipeline_tag/architectures on this HfModelMetadata —
+    # classify_model_kind defaults to "generative".
+    assert seen_plans[0]["_detected_model_kind"] == "generative"
 
     # A successful calibration overwrites the HF estimate with the real
     # measurement, but the HF-only fields (never measured by calibration)
@@ -1243,6 +1758,58 @@ async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatc
     assert profile.base_residency_mb == 4200.0
     assert profile.kv_per_token_bytes == 1024
     assert profile.max_context_length == 8192
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_classifies_transcription_model_into_plan(tmp_path, monkeypatch):
+    """A Whisper-like model's HF pipeline_tag must reach the calibration
+    plan as _detected_model_kind, routing the functional probe to
+    /v1/audio/transcriptions instead of /v1/completions. Isolated from
+    the VRAM-fit math: weight_bytes is left unset."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/whisper-large-v3"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            pipeline_tag="automatic-speech-recognition",
+            architectures=["WhisperForConditionalGeneration"],
+            source="hf",
+        ),
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=1000.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert seen_plans[0]["_detected_model_kind"] == "transcription"
 
 
 @pytest.mark.asyncio
@@ -1359,11 +1926,13 @@ async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monkeypatch):
-    """No nvidia-smi on Metal, so the VRAM-fit half could never run — skip
-    the whole precheck up front instead of fetching HF metadata for
-    nothing. Metal profiles come from model_profile_overrides, not this."""
+async def test_run_compatibility_precheck_skips_vram_fit_on_metal_backend(tmp_path, monkeypatch):
+    """No nvidia-smi on Metal, so only the VRAM-fit half is skipped — HF
+    metadata is still fetched and classified (model_kind is a pure
+    Hub/config.json lookup, backend-independent), so a Metal pooling or
+    transcription model isn't silently misclassified as generative."""
     from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
 
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
@@ -1371,16 +1940,26 @@ async def test_run_compatibility_precheck_skips_on_metal_backend(tmp_path, monke
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
     client = LogosBridgeClient(app, cfg)
 
-    fetch_spy = MagicMock(side_effect=AssertionError("should not fetch HF metadata on Metal"))
-    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", fetch_spy)
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,
+            pipeline_tag="feature-extraction",
+            source="hf",
+        ),
+    )
+    vram_spy = MagicMock(side_effect=AssertionError("nvidia-smi must never run on Metal"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", vram_spy)
 
     response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
 
     assert response["ok"] is True
-    assert response["hf_source"] == "skipped:metal-backend"
+    assert response["hf_source"] == "hf"
+    assert response["model_kind"] == "pooling"
     assert response["fit_tp_idle"] is None
+    assert response["per_gpu_total_mb"] is None
     assert response["unsupported_reason"] is None
-    fetch_spy.assert_not_called()
+    vram_spy.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1881,6 +2460,51 @@ async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_d
 
 
 @pytest.mark.asyncio
+async def test_run_compatibility_precheck_reports_model_kind(tmp_path, monkeypatch):
+    """The precheck classifies every model it fetches HF metadata for,
+    generative default included, so the calibration loop can route its
+    functional probe without a second HF lookup."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(pipeline_tag="feature-extraction", source="hf"),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/embedding-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "pooling"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_model_kind_defaults_generative_on_fetch_failure(tmp_path, monkeypatch):
+    """No HF metadata at all (network down, unknown model, ...) must still
+    default to "generative" — never a fatal probe for a model we have no
+    classification signal for."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network down")),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/unreachable-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "generative"
+
+
+@pytest.mark.asyncio
 async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_path, monkeypatch):
     """The standalone RPC has no session plan to read gpu_devices or
     kv_cache_dtype from — it must look the model up in config.yml itself.
@@ -2162,10 +2786,9 @@ async def _run_stream(monkeypatch, chunks: list[bytes], status_code: int = 200) 
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
     upstream = _FakeUpstream(status_code, chunks)
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _FakeStreamClient(upstream),
-    )
+    # The relay uses one pooled client shared by all commands , so
+    # the fake is pinned on the instance, not the httpx class.
+    monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
     ws = _CollectWS()
     await client._execute_stream_command(  # noqa: SLF001
         ws, "cmd-1", {"lane_id": "lane-a", "payload": {"messages": []}}
@@ -2640,7 +3263,7 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Cancelling an abandoned request (#735)
+# Cancelling an abandoned request
 #
 # Every request to a worker is multiplexed over one WebSocket, so there is no
 # per-request connection whose close tells vLLM to stop. When the client
@@ -2682,10 +3305,8 @@ def _stream_client_fixture(monkeypatch, upstream):
         app,
         LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
     )
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _FakeStreamClient(upstream),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
     return client, lane_manager
 
 
@@ -2820,10 +3441,20 @@ async def test_cancel_command_only_touches_its_target(monkeypatch):
         app,
         LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
     )
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _FakeStreamClient(next(upstreams)),
-    )
+
+    class _TwoUpstreamClient:
+        # Both commands share the pooled relay client ; distinguish
+        # them per send instead of per client instance.
+        def build_request(self, *a, **k):  # noqa: ANN002, ANN003
+            return SimpleNamespace()
+
+        async def send(self, request, stream=True):  # noqa: ARG002
+            return next(upstreams)
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(client, "_relay_client", _TwoUpstreamClient())  # noqa: SLF001
     ws = _CollectWS()
 
     for cmd_id in ("cmd-a", "cmd-b"):
@@ -2871,9 +3502,14 @@ async def test_hello_advertises_the_cancel_action():
 
 
 @pytest.mark.asyncio
-async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
+async def test_cancelling_a_non_streaming_infer_aborts_the_relay_request(monkeypatch):
     """The sync `infer` path is exposed the same way — a client that leaves
-    mid-request would otherwise keep the lane busy for the whole generation."""
+    mid-request would otherwise keep the lane busy for the whole generation.
+
+    Since the relay uses one pooled client  there is no per-request
+    connection to close: cancelling the task aborts the in-flight POST (httpx
+    releases the connection as it unwinds) and the shared client keeps
+    serving every other command."""
     app = _DummyApp()
     lane_manager = type("LaneMgr", (), {})()
     lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
@@ -2885,24 +3521,21 @@ async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
     )
 
     posting = asyncio.Event()
-    state = {"closed": False}
+    post_aborted = asyncio.Event()
 
     class _BlockingHttpClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
-            state["closed"] = True
-            return False
-
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             posting.set()
-            await asyncio.Event().wait()  # generation never finishes
+            try:
+                await asyncio.Event().wait()  # generation never finishes
+            except asyncio.CancelledError:
+                post_aborted.set()
+                raise
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _BlockingHttpClient(),
-    )
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(client, "_relay_client", _BlockingHttpClient())  # noqa: SLF001
 
     ws = _CollectWS()
     await client._handle_message(  # noqa: SLF001
@@ -2923,8 +3556,53 @@ async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert state["closed"] is True, "the relay connection to the lane stayed open"
+    assert post_aborted.is_set(), "the in-flight relay request was never aborted"
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_the_pooled_relay_client(monkeypatch) -> None:
+    """The relay client is shared by every command , so its
+    lifecycle belongs to the bridge: stop() — not any command — may close it."""
+    app = _DummyApp()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    relay = AsyncMock()
+    monkeypatch.setattr(client, "_relay_client", relay)
+
+    await client.stop()
+
+    relay.aclose.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stream_finally_does_not_close_the_shared_client(monkeypatch) -> None:
+    """Closing the pooled client after one stream would break every other
+    in-flight command: the finally may only close the streamed response,
+    which is what makes vLLM abort the sequence."""
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    upstream = _FakeUpstream(200, [b"tok1"])
+    relay = _FakeStreamClient(upstream)
+    relay.aclose = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(client, "_relay_client", relay)
+
+    ws = _CollectWS()
+    await client._execute_stream_command(  # noqa: SLF001
+        ws, "cmd-1", {"lane_id": "lane-a", "payload": {"messages": []}}
+    )
+
+    relay.aclose.assert_not_awaited()
+    assert [f["type"] for f in ws.frames] == ["stream_start", "stream_chunk", "stream_end"]
 
 
 # ---------------------------------------------------------------------------

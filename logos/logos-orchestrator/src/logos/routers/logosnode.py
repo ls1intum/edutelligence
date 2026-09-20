@@ -42,6 +42,53 @@ logger = logging.getLogger("LogosLogger")
 
 router = APIRouter()
 
+# A worker's merged vLLM /metrics text is otherwise unbounded — several lanes'
+# full native exposition text, forwarded as-is. Cap it well above any sane
+# per-worker payload so a misbehaving or compromised worker can't inflate the
+# orchestrator's own /metrics scrape with an unbounded blob.
+_MAX_VLLM_METRICS_BYTES = 4 * 1024 * 1024
+
+
+def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
+    """Return *value* if it's an acceptable vllm_metrics payload, else None.
+
+    Rejects (and logs) anything that isn't a string, or a string over
+    _MAX_VLLM_METRICS_BYTES, instead of forwarding it into the cache that
+    every Prometheus scrape of this orchestrator reads from.
+    """
+    if not isinstance(value, str):
+        logger.warning(
+            "Dropping vllm_metrics from provider %s: metrics_text was %s, not a string",
+            provider_id,
+            type(value).__name__,
+        )
+        return None
+    # Strict, not "ignore"/"surrogatepass": a lone surrogate is valid inside
+    # a JSON string escape (e.g. an unpaired \uD800), but prometheus_client's
+    # generate_latest() strictly UTF-8-encodes the merged exposition output
+    # later — one such character reaching the cache in an otherwise-valid
+    # HELP string or label would raise UnicodeEncodeError there and break
+    # every scrape of this orchestrator's /metrics, not just this worker's
+    # series. Rejecting it here, at the only point that still knows which
+    # worker sent it, keeps that failure a dropped update instead of a
+    # cluster-wide outage.
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        logger.warning(
+            "Dropping vllm_metrics from provider %s: metrics_text contains an unpaired surrogate",
+            provider_id,
+        )
+        return None
+    if encoded_length > _MAX_VLLM_METRICS_BYTES:
+        logger.warning(
+            "Dropping oversized vllm_metrics from provider %s (over %d bytes)",
+            provider_id,
+            _MAX_VLLM_METRICS_BYTES,
+        )
+        return None
+    return value
+
 
 def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | None) -> None:
     for job_id, (job_provider_id, expected_session_id) in list(_benchmark_sessions_by_job.items()):
@@ -169,6 +216,10 @@ def _logosnode_insecure_dev_mode_enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _central_hf_token() -> str:
+    return os.getenv("HF_TOKEN", "").strip()
+
+
 def _is_tls_request(request: Request) -> bool:
     if _logosnode_insecure_dev_mode_enabled():
         return True
@@ -181,9 +232,20 @@ def _is_tls_request(request: Request) -> bool:
 
 def _require_tls_request(request: Request) -> None:
     if not _is_tls_request(request):
+        # Name what actually arrived. A worker that dials https:// and still
+        # lands here was stripped of its TLS signal somewhere in the proxy
+        # chain (an untrusted hop rewrites X-Forwarded-Proto to the plain
+        # scheme of its own entrypoint), and without these two values the
+        # rejection is indistinguishable from a genuinely cleartext caller.
         raise HTTPException(
             status_code=400,
-            detail="TLS is required for logosnode auth/session endpoints",
+            detail=(
+                "TLS is required for logosnode auth/session endpoints "
+                f"(request arrived with scheme={request.url.scheme!r}, "
+                f"x-forwarded-proto={request.headers.get('x-forwarded-proto', '')!r}; "
+                "if the caller used https, a reverse-proxy hop is dropping the "
+                "forwarded headers)"
+            ),
         )
 
 
@@ -227,6 +289,12 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
             auth_name="",
             auth_format="{}",
             provider_type="logosnode",
+            # add_provider rejects a missing privacy_level outright, so omitting
+            # it made this endpoint return 400 for every request. The caller
+            # states the level (required and validated on the request model) —
+            # assuming LOCAL here would hand the most trusted tier to any worker
+            # that self-registers, rented hardware included.
+            privacy_level=data.privacy_level,
         )
 
     if code != 200:
@@ -294,6 +362,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         "ws_url": _build_logosnode_ws_url(request, token),
         "worker_id": worker_id,
         "expires_in_seconds": 60,
+        "hf_token": _central_hf_token(),
     }
 
 
@@ -378,6 +447,12 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         )
             elif msg_type == "heartbeat":
                 await _main._logosnode_registry.mark_heartbeat(ticket.provider_id)
+            elif msg_type == "vllm_metrics":
+                metrics_text = _validated_vllm_metrics_text(
+                    payload.get("metrics_text", ""), provider_id=ticket.provider_id
+                )
+                if metrics_text is not None:
+                    await _main._logosnode_registry.on_vllm_metrics(ticket.provider_id, metrics_text)
             elif msg_type == "command_result":
                 await _main._logosnode_registry.on_command_result(ticket.provider_id, payload)
             elif msg_type == "stream_start":
@@ -531,3 +606,53 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
         "count": len(models),
         "models": models,
     }
+
+
+@router.post("/logosdb/providers/logosnode/stop_calibration", tags=["logosnode"])
+async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
+    """Cancel a worker's in-progress calibration session, if any.
+
+    The worker owns the teardown via cancel_event; nothing partial is
+    written for the model in progress — it's just left uncalibrated for
+    a later session.
+    """
+    _require_root_access(data.logos_key)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        result = await _main._logosnode_registry.send_command(
+            data.provider_id,
+            "stop_calibration_session",
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Admin stop-calibration: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning(
+            "Admin stop-calibration: stop_calibration_session failed on provider=%s: %s",
+            pname,
+            exc,
+        )
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    was_active = bool(result.get("was_active", False))
+    current_model = result.get("current_model")
+    logger.info(
+        "Admin stop-calibration: provider=%s was_active=%s current_model=%s",
+        pname,
+        was_active,
+        current_model or "<none>",
+    )
+    return JSONResponse(
+        content={
+            "message": (
+                f"Calibration session on {pname} cancelled (was calibrating {current_model})"
+                if was_active
+                else f"No calibration session was running on {pname}"
+            ),
+            "was_active": was_active,
+            "current_model": current_model,
+        }
+    )

@@ -12,6 +12,8 @@ public record TeamListResponseDTO(
     Integer default_cloud_tpm_limit,
     Integer default_local_rpm_limit,
     Integer default_local_tpm_limit,
+    /** Queue priority of the team's traffic (1..10); null = not set. */
+    Integer priority,
     Boolean is_caller_owner,
     boolean managed
 ) {}

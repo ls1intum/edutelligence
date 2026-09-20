@@ -1,0 +1,124 @@
+@use 'styles/glass' as *;
+
+// ==========================================================================
+// Prices tab
+// ==========================================================================
+
+.prices-header {
+  margin-bottom: 24px;
+
+  h2,
+  p {
+    margin: 0;
+  }
+
+  h2 {
+    color: rgb(var(--color-typography-100));
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  p {
+    max-width: 720px;
+    margin-top: 3px;
+    color: rgb(var(--color-typography-500));
+    font-size: var(--font-size-sm);
+  }
+}
+
+.prices-message {
+  padding: 32px;
+  border: 1px dashed rgb(var(--color-outline-200));
+  border-radius: 10px;
+  color: rgb(var(--color-typography-700));
+  text-align: center;
+}
+
+.price-provider-card {
+  @include glass-surface;
+
+  padding: 24px;
+
+  & + .price-provider-card {
+    margin-top: 20px;
+  }
+}
+
+.price-provider-card__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+
+  h3 {
+    margin: 0;
+    color: rgb(var(--color-typography-100));
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
+.price-provider-card__cloud-type {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgb(var(--color-accent-green) / var(--opacity-soft));
+  color: rgb(var(--color-accent-green));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.price-provider-card__empty {
+  margin: 0;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+}
+
+.price-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+
+  th {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgb(var(--color-outline-200));
+    color: rgb(var(--color-typography-500));
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    text-align: left;
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgb(var(--color-outline-200) / var(--opacity-soft));
+    color: rgb(var(--color-typography-100));
+  }
+
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+}
+
+.price-table__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  small {
+    color: rgb(var(--color-typography-500));
+  }
+}
+
+.price-table__row--current td {
+  font-weight: var(--font-weight-semibold);
+}
+
+.price-table__current-badge {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgb(var(--color-accent-green) / var(--opacity-soft));
+  color: rgb(var(--color-accent-green));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}

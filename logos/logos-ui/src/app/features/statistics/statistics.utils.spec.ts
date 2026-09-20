@@ -1,7 +1,9 @@
 import {
   extractProviderHostRamMb,
+  formatBucketRange,
   formatPercent,
   formatTokenCount,
+  formatUptime,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -257,5 +259,55 @@ describe('formatPercent', () => {
     expect(formatPercent(1, 1_000_000_000)).toBe('<0.000001%');
     // The last share that still fits six decimals keeps its exact reading.
     expect(formatPercent(1, 100_000_000)).toBe('0.000001%');
+  });
+});
+
+/**
+ * "Uptime since" label used for the worker-uptime and ws-connection-uptime
+ * chips on the statistics page's worker panel.
+ */
+describe('formatUptime', () => {
+  const nowMs = new Date('2026-09-16T12:00:00Z').getTime();
+
+  it('reads null for a missing or unparseable timestamp', () => {
+    expect(formatUptime(null, nowMs)).toBeNull();
+    expect(formatUptime(undefined, nowMs)).toBeNull();
+    expect(formatUptime('not-a-date', nowMs)).toBeNull();
+  });
+
+  it('reads null for a timestamp in the future (clock skew)', () => {
+    expect(formatUptime('2026-09-16T12:00:01Z', nowMs)).toBeNull();
+  });
+
+  it('reads "<1m" for a connection under a minute old', () => {
+    expect(formatUptime('2026-09-16T11:59:30Z', nowMs)).toBe('<1m');
+  });
+
+  it('reads whole minutes under an hour', () => {
+    expect(formatUptime('2026-09-16T11:42:00Z', nowMs)).toBe('18m');
+  });
+
+  it('reads hours and minutes under a day', () => {
+    expect(formatUptime('2026-09-16T06:30:00Z', nowMs)).toBe('5h 30m');
+  });
+
+  it('reads days and hours at a day or more', () => {
+    expect(formatUptime('2026-09-13T04:00:00Z', nowMs)).toBe('3d 8h');
+  });
+});
+
+/**
+ * Explicit volume-bucket ranges for chart tooltips.
+ */
+describe('formatBucketRange', () => {
+  it('formats a five-minute bucket as a time range', () => {
+    // Local-time formatting: pin the instant so the label is stable across TZ.
+    const start = new Date(2026, 8, 18, 4, 30, 0).getTime();
+    expect(formatBucketRange(start, 5 * 60_000)).toBe('04:30 – 04:35');
+  });
+
+  it('formats a daily bucket as a single calendar day', () => {
+    const start = new Date(2026, 8, 1, 0, 0, 0).getTime();
+    expect(formatBucketRange(start, 86_400_000)).toBe('Sep 1');
   });
 });

@@ -825,6 +825,24 @@
 
         }
 
+        <!-- Access -->
+        @case ('access') {
+
+          <app-model-access />
+
+        }
+
+        <!-- Prices -->
+        @case ('prices') {
+
+          <app-model-prices-tab
+            [loading]="pricesLoading()"
+            [hasError]="pricesError()"
+            [cards]="priceProviderCards()"
+          />
+
+        }
+
       }
 
     </section>

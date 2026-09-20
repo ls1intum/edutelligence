@@ -157,12 +157,17 @@ class ModelProfileRecord:
     # Host-RAM footprint of the lane process tree once loaded. The master's
     # capacity planner uses this to reason about host RAM as a resource axis
     # parallel to VRAM — necessary because vLLM sleep_l1/sleep_l2 free VRAM
-    # but retain weights in host RAM. EMA-updated from worker telemetry.
+    # but retain weights in host RAM. Updated as a high-water mark from
+    # worker telemetry: long-lived EngineCores accumulate sticky host
+    # shared-memory that sleep→wake does not clear, so averaging fresh lean
+    # replicas with heavy ones would understate lasting pressure.
     host_ram_mb: float | None = None
     # Host-RAM still held when the lane is sleeping (level 1). Approximately
     # equal to host_ram_mb in practice — sleep_l1 moves weights from VRAM to
     # host RAM rather than freeing them — but tracked separately so the
     # planner can use the right value depending on the candidate's state.
+    # Also a high-water mark: sticky shm that survives sleep/wake is part of
+    # the lasting residency the host must afford.
     host_ram_residual_mb: float | None = None
     # Peak transient host-RAM allocation observed during the calibrated
     # sleep call (level 1 / level 2). Distinct from host_ram_residual_mb,
@@ -197,7 +202,7 @@ class ModelProfileRecord:
     # True when calibration has classified this model as permanently
     # unsupported on this worker — bad repo id, gated repo without token,
     # vLLM architecture mismatch, etc. (see FatalLoadErrorPattern in
-    # calibration.py). The master's calibration orchestrator skips models
+    # vllm_compat.py). The master's calibration orchestrator skips models
     # flagged this way so it doesn't burn a maintenance window each night
     # watching the same identity-level error reproduce. Cleared by an
     # operator (delete the entry from calibration_unsupported_models.txt
@@ -207,16 +212,22 @@ class ModelProfileRecord:
     # Reason code matching FatalLoadErrorPattern.reason_code, for diagnostics.
     # Surfaced to ops in master logs alongside `calibration_unsupported=True`.
     calibration_unsupported_reason: str | None = None
+    # Metal only: this node's working-set budget (MB) when this model last
+    # failed calibration with a capacity-like error. The orchestrator
+    # compares this across nodes to skip retrying on any node no bigger.
+    # Clear a false positive: set this key to null under
+    # capabilities_overrides.<model> in config.yml.
+    metal_capacity_floor_mb: float | None = None
     # --max-model-len that calibration auto-injected because the operator's
     # pinned kv_cache_memory_bytes couldn't hold one request at the model's
-    # default max_seq_len (see calibration.py's _extract_vllm_max_model_len_suggestion).
+    # default max_seq_len (see vllm_compat.py's _extract_vllm_max_model_len_suggestion).
     # None = the model fit at default and no flag was passed during calibration.
     # The lane spawner reuses this so production matches the configuration that
     # actually passed the binary search.
     calibration_max_model_len: int | None = None
     # --max-num-seqs that calibration auto-injected for a hybrid Mamba/SSM
     # model whose state-cache block pool was smaller than vLLM's default 1024
-    # (see calibration.py's _extract_vllm_max_num_seqs_suggestion). None = no
+    # (see vllm_compat.py's _extract_vllm_max_num_seqs_suggestion). None = no
     # cap was needed. The lane spawner reuses this so production runs with the
     # same ceiling that passed calibration — otherwise the lane reverts to
     # 1024 and aborts CUDA-graph capture at startup.
@@ -283,6 +294,7 @@ class ModelProfileRecord:
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,
+            "metal_capacity_floor_mb": self.metal_capacity_floor_mb,
             "calibration_max_model_len": self.calibration_max_model_len,
             "calibration_max_num_seqs": self.calibration_max_num_seqs,
             "kv_cache_to_max_model_len_pairs": self.kv_cache_to_max_model_len_pairs,
@@ -353,7 +365,7 @@ class ModelProfileRegistry:
         (re-inferred at spawn time, a stale value from upstream) produces
         measurements that describe a different configuration — recording
         them, or letting the runtime TP overwrite the calibrated one, would
-        leave a split-brain profile (see issue #616).
+        leave a split-brain profile.
         """
         return (
             tensor_parallel_size is not None
@@ -505,6 +517,17 @@ class ModelProfileRegistry:
         if "host_ram_residual_mb" in overrides:
             profile.host_ram_residual_mb = float(overrides["host_ram_residual_mb"])
             applied.append(f"host_ram_residual={profile.host_ram_residual_mb:.0f}MB")
+        if "metal_capacity_floor_mb" in overrides:
+            # null clears a floor a false-positive capacity failure set
+            # (see mark_capacity_floor) — the only way to undo it, since
+            # that method only ever raises the stored value.
+            value = overrides["metal_capacity_floor_mb"]
+            if value is None:
+                profile.metal_capacity_floor_mb = None
+                applied.append("metal_capacity_floor=cleared")
+            else:
+                profile.metal_capacity_floor_mb = float(value)
+                applied.append(f"metal_capacity_floor={profile.metal_capacity_floor_mb:.0f}MB")
 
         if applied:
             logger.info("Applied manual overrides for %s: %s", model_name, ", ".join(applied))
@@ -744,22 +767,23 @@ class ModelProfileRegistry:
 
         *sleeping* selects which field is updated: when False, host_ram_mb
         (awake footprint); when True, host_ram_residual_mb (level-1 sleep).
-        EMA-blended with prior measurements.
+
+        Both fields are high-water marks, not EMA averages. Long-lived
+        EngineCores accumulate sticky host shared-memory that sleep→wake does
+        not clear; blending a heavy observation with a fresh lean replica
+        would understate the lasting ceiling the planner needs for cold-load
+        and sleep-vs-stop gates.
         """
         if host_ram_mb <= 0:
             return
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
             if sleeping:
-                profile.host_ram_residual_mb = (
-                    host_ram_mb
-                    if profile.host_ram_residual_mb is None
-                    else _ema(profile.host_ram_residual_mb, host_ram_mb)
-                )
+                prior = profile.host_ram_residual_mb
+                profile.host_ram_residual_mb = host_ram_mb if prior is None else max(prior, host_ram_mb)
             else:
-                profile.host_ram_mb = (
-                    host_ram_mb if profile.host_ram_mb is None else _ema(profile.host_ram_mb, host_ram_mb)
-                )
+                prior = profile.host_ram_mb
+                profile.host_ram_mb = host_ram_mb if prior is None else max(prior, host_ram_mb)
             profile.last_measured_epoch = time.time()
         self._persist()
 
@@ -811,6 +835,22 @@ class ModelProfileRegistry:
                 return False
             profile.calibration_unsupported = unsupported
             profile.calibration_unsupported_reason = reason_code if unsupported else None
+        self._persist()
+        return True
+
+    def mark_capacity_floor(self, model_name: str, floor_mb: float) -> bool:
+        """Record that this model failed to fit under *floor_mb* on this node.
+
+        Only ever raises the stored value — see the config.yml override in
+        _apply_manual_overrides to undo a false positive instead.
+        """
+        with self._lock:
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            current = profile.metal_capacity_floor_mb
+            new_floor = floor_mb if current is None else max(current, floor_mb)
+            if new_floor == current:
+                return False
+            profile.metal_capacity_floor_mb = new_floor
         self._persist()
         return True
 
@@ -985,6 +1025,7 @@ class ModelProfileRegistry:
                     sleep_mode_disabled=profile_data.get("sleep_mode_disabled"),
                     calibration_unsupported=profile_data.get("calibration_unsupported"),
                     calibration_unsupported_reason=profile_data.get("calibration_unsupported_reason"),
+                    metal_capacity_floor_mb=profile_data.get("metal_capacity_floor_mb"),
                     calibration_max_model_len=(
                         int(profile_data["calibration_max_model_len"])
                         if profile_data.get("calibration_max_model_len")

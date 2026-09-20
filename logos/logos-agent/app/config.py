@@ -48,6 +48,12 @@ def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 # either of those modules so neither has to import the other.
 REPLY_FILE = "reply.md"
 
+# The directory a session answers a review's inline comments in: one file
+# per comment, named after the comment's id, so the runner can post each
+# answer into the thread it belongs to rather than one big comment that
+# answers every thread somewhere none of them was asked.
+REPLY_DIR = "replies"
+
 # The file the runner appends to whenever it freezes a session, relative to
 # the session's state directory — not the artefact directory: the state
 # directory is the runner's own, mounted into the session read-only, so the
@@ -110,12 +116,15 @@ class Settings:
     # injects the model credential — the container sends none of its own.
     # The default is the compose service name of that gateway.
     session_model_url: str = os.getenv("LOGOS_AGENT_SESSION_MODEL_URL", "http://logos-agent-gateway")
+    # Shared orchestrator internal secret. Capacity reads present it instead
+    # of a Logos key: the scheduler_state payload carries cluster internals
+    # (queue depth, lane state) that a user key must not be able to read.
     internal_secret: str = os.getenv("LOGOS_INTERNAL_SECRET", "")
-    # The Logos key: the runner authenticates its capacity reads with it, and
-    # the session gateway injects it into the agent's model calls. It is what
-    # makes agent traffic ordinary, accounted Logos traffic — give it LOW
-    # priority and a token budget so agent work never outranks a user at the
-    # scheduler. It no longer enters a session container at all.
+    # The Logos key: the session gateway injects it into the agent's model
+    # calls. It is what makes agent traffic ordinary, accounted Logos
+    # traffic — give it LOW priority and a token budget so agent work never
+    # outranks a user at the scheduler. It no longer enters a session
+    # container at all.
     agent_api_key: str = os.getenv("LOGOS_AGENT_API_KEY", "")
     # Which model drives a session that does not name one. Optional: when it
     # is unset and the key reaches exactly one locally served model, that one

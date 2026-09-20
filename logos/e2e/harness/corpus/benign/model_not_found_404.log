@@ -1,0 +1,6 @@
+INFO 05-03 15:20:40 [api_server.py:1000] vLLM API server version 0.11.0
+ERROR 05-03 15:20:41 [core.py:712] EngineCore failed to start.
+ERROR 05-03 15:20:41 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/transformers/utils/hub.py", line 421, in cached_file
+ERROR 05-03 15:20:41 [core.py:712]     raise EnvironmentError(...)
+ERROR 05-03 15:20:41 [core.py:712] OSError: Qwen/Qwen3-Coder-30B-Instrukt is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+Process EngineCore_DP0: exited with code 1

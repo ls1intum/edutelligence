@@ -98,7 +98,7 @@ def test_fully_filtered_model_keeps_its_widest_lane(monkeypatch):
     when the model's widest lane would have served it, and even when the
     estimate (not the request) is what overshoots. The engine is the right
     place to say "too long": it either serves the request or answers its own
-    honest 400 (#810).
+    honest 400.
     """
     registry = MagicMock()
     registry.active_provider_ids = lambda: [NARROW_PROVIDER]

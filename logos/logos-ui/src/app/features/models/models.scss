@@ -97,14 +97,37 @@
 }
 
 // Last used: models without recent traffic are deprecation candidates.
+// Date and relative age stack so the cell stays inside its grid track.
 .last-used {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
   font-size: var(--font-size-md);
+  line-height: 1.25;
   color: rgb(var(--color-typography-700));
-  white-space: nowrap;
+
+  &__primary,
+  &__age {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__age {
+    font-size: var(--font-size-sm);
+    color: rgb(var(--color-typography-700) / 0.85);
+  }
 
   &--stale {
     color: rgb(var(--color-warning));
+
+    .last-used__age { color: inherit; }
   }
+}
+
+.col-last-used {
+  overflow: hidden;
 }
 
 // ── Form dialogs ──────────────────────────────────────────────────────────

@@ -28,3 +28,7 @@ jobs:
   build-iris:
     uses: ./.github/workflows/iris_docs-build.yml
     secrets: inherit
+
+  build-logos:
+    uses: ./.github/workflows/logos_docs-build.yml
+    secrets: inherit

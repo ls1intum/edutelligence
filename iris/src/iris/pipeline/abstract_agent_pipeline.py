@@ -61,6 +61,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     tracing_context: Optional[TracingContext]
     query_text: str
     lecture_content_storage: dict
+    # Material at the student's current viewing position, shared between the current-position tool
+    # that reads it out and the point-out tool that invalidates it after moving the student.
+    current_view_storage: dict
     faq_storage: dict
     accessed_memory_storage: list
     allow_lecture_tool: bool
@@ -655,6 +658,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.local = local  # Store local flag in state
         state.query_text = ""
         state.lecture_content_storage = {}
+        state.current_view_storage = {}
         state.faq_storage = {}
         state.accessed_memory_storage = []
         state.allow_lecture_tool = False

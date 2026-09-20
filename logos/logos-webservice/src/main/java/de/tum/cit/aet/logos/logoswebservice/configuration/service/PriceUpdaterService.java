@@ -264,6 +264,9 @@ public class PriceUpdaterService {
         for (Map.Entry<String, Object> entry : data.entrySet()) {
             String rawKey = entry.getKey();
             Object costObj = entry.getValue();
+            if (costObj == null) {
+                continue;
+            }
             // LiteLLM represents search-context pricing as
             // {search_context_size_low: x, search_context_size_medium: x,
             // search_context_size_high: x}. Preserve low/high as distinct

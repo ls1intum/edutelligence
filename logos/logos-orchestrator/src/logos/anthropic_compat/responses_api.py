@@ -94,12 +94,15 @@ def _translate_message(message: Dict[str, Any]) -> List[Dict[str, Any]]:
     for block in blocks:
         kind = block.get("type")
         if kind == "text":
-            # ``input_text`` for every role, the assistant's own history
-            # included. ``output_text`` belongs to an output item, which also
-            # carries an ``id`` and a ``status`` this translation has nothing
-            # to fill in — sending it without them can be rejected outright,
-            # so a second turn that replays an assistant answer would 400.
-            parts.append({"type": "input_text", "text": str(block.get("text") or "")})
+            # The part type is a property of the message's role, not of the
+            # item: user text is ``input_text``, replayed assistant text is
+            # ``output_text`` (the ``id`` and ``status`` that go with it
+            # belong to the wrapping message item, not to the part). Upstream
+            # validates assistant content against exactly ``output_text`` and
+            # ``refusal`` — an ``input_text`` part there is rejected with a
+            # 400 on the second turn of any conversation.
+            part_type = "output_text" if is_assistant else "input_text"
+            parts.append({"type": part_type, "text": str(block.get("text") or "")})
         elif kind == "image" and not is_assistant:
             url = image_data_url(block)
             if url:

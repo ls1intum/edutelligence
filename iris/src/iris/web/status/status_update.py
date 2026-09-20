@@ -18,6 +18,8 @@ from iris.domain.communication.communication_tutor_suggestion_status_update_dto 
 )
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
+from iris.domain.status.command_dto import CommandDTO
+from iris.domain.status.command_result_dto import CommandResultDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
@@ -35,6 +37,12 @@ from iris.domain.status.status_update_dto import StatusUpdateDTO
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
+
+# How long to wait for Artemis to carry out a command on the client and reply. Must exceed the
+# Artemis-side client-ack timeout (5s) plus the HTTP round trip, so a slow client surfaces as
+# "not applied" rather than a transport error. Lower this only after Artemis' own timeout has been
+# lowered and deployed — the other order makes Iris give up while an answer is still on its way.
+COMMAND_TIMEOUT_SECONDS = 10
 
 
 class StatusCallback:
@@ -259,6 +267,52 @@ class StatusCallback:
         )
         logger.warning(message)
         capture_message(message)
+
+    def execute_command(self, command: CommandDTO) -> CommandResultDTO:
+        """Synchronously ask Artemis to carry out a command on the client (e.g. a point-out) and
+        return whether it was applied.
+
+        Blocks until Artemis has driven the client and replied, so the agent tool learns the real
+        outcome before formulating its answer. Any transport failure or timeout is treated as
+        "not applied" so the pipeline never hangs on a command.
+
+        Args:
+            command: The command Artemis should carry out.
+
+        Returns:
+            The result reported by Artemis (``applied``).
+        """
+        # The command endpoint is the sibling of the status endpoint (…/runs/{runId}/command).
+        # Guard the derivation so a callback URL that unexpectedly lacks "/status" surfaces as
+        # "not applied" instead of silently POSTing to a wrong URL.
+        if "/status" not in self.url:
+            logger.warning(
+                "Cannot derive command URL from callback URL without a '/status' suffix; "
+                "treating the command as not applied."
+            )
+            return CommandResultDTO(applied=False)
+        command_url = self.url.rsplit("/status", 1)[0] + "/command"
+        try:
+            resp = requests.post(
+                command_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.run_id}",
+                },
+                json=command.model_dump(by_alias=True, exclude_none=True),
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            return CommandResultDTO.model_validate(resp.json())
+        except Exception as e:
+            # Refused connection, read timeout, error status, unparseable body: all mean the command
+            # did not happen, and the agent is told that rather than the pipeline breaking over it.
+            # All are reported, because none is an ordinary result — Artemis' client-ack timeout sits
+            # below ours, so a command the client ignored arrives as a valid ``applied: false`` and
+            # never reaches this handler. Anything that does means the call itself went wrong.
+            logger.warning("Iris command could not be executed by Artemis: %s", e)
+            capture_exception(e)
+            return CommandResultDTO(applied=False)
 
 
 class ChatRunCallback(StatusCallback):

@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
 # Container path of the model volume. Compose mounts the model volume here,
-# and existing Ollama-era configs (and the engines.ollama migration) may
-# still carry LEGACY_OLLAMA_MODELS_PATH — WorkerConfig._translate_legacy_ollama_models_path
+# and existing legacy configs (and the engine migration) may still carry
+# Legacy model-path setting — WorkerConfig._translate_legacy_ollama_models_path
 # rewrites it to NEW_MODELS_PATH so a config left on the old path keeps working.
 NEW_MODELS_PATH = "/usr/share/logos/models"
 LEGACY_OLLAMA_MODELS_PATH = "/usr/share/ollama/.ollama/models"
@@ -568,6 +568,12 @@ class LogosConfig(BaseModel):
     # reporting the stale snapshot from the last lane transition. Signature
     # dedupe in _send_runtime_status still suppresses true no-op resends.
     status_refresh_interval_seconds: int = Field(default=15, ge=1)
+    # How often to push this worker's merged vLLM /metrics (all running
+    # lanes, relabeled by lane_id) to the orchestrator. Independent of
+    # status_refresh_interval_seconds: counters change on every scrape-worthy
+    # tick, so gating this on the status dedupe signature would mean sending
+    # it constantly instead of on a predictable cadence.
+    vllm_metrics_interval_seconds: int = Field(default=15, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -813,7 +819,7 @@ class DeviceSummary(BaseModel):
     timestamp: datetime
     mode: Literal["nvidia", "derived", "none", "metal"] = "none"
     nvidia_smi_available: bool = False
-    # Backend-neutral successor to nvidia_smi_available: "this worker measured
+    # engine-neutral successor to nvidia_smi_available: "this worker measured
     # the numbers below on real hardware, so free_memory_mb can be trusted".
     # nvidia-smi is one such source, Metal's device_info() is another. Kept as
     # a separate field so pre-Metal orchestrators, which only know
@@ -909,6 +915,9 @@ class WorkerRuntimeStatus(BaseModel):
     worker_id: str
     service_version: str
     timestamp: datetime
+    # Fixed for the process lifetime — distinct from transport.last_connected_at,
+    # which moves on every bridge reconnect.
+    process_started_at: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
     host_memory: HostMemorySummary | None = None
