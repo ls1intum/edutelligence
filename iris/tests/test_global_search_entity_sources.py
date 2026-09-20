@@ -435,6 +435,28 @@ class TestSemesterTwinDedup:
         )
         assert kept == [winner, other_a, other_b]
 
+    def test_singleton_losing_course_survives_when_the_selected_course_has_several(
+        self,
+    ):
+        # The reverse of the case above: course_id=1 (the more recent, "selected" course)
+        # itself contributes two distinct entities under this key, which is exactly the
+        # same evidence of coincidence rather than lineage — a singleton losing course
+        # (course_id=2) must not be discarded just because it lost the one-vs-one
+        # tie-break the OTHER side never actually offered.
+        selected_a = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        selected_b = self._source(
+            "Quiz", "Patterns", self._at(2026, 6), etype="exercise", course_id=1
+        )
+        singleton_loser = self._source(
+            "Quiz", "Patterns", self._at(2025, 3), etype="exercise", course_id=2
+        )
+        kept = dedupe_semester_twins(
+            [selected_a, selected_b, singleton_loser], "is there a quiz", now=self.NOW
+        )
+        assert kept == [selected_a, selected_b, singleton_loser]
+
     def test_render_parses_reference_date_as_utc(self):
         source = GlobalSearchPipeline._render_entity_sources(
             [_candidate_dto(startDate="2026-03-01T10:00:00")]
