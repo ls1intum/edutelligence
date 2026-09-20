@@ -201,6 +201,33 @@ def test_retrieval_instruction_is_query_side_prefix():
     assert QWEN3_RETRIEVAL_INSTRUCTION.endswith("Query: ")
 
 
+def test_embed_retrieval_query_embeds_the_raw_query_when_no_instruction_is_configured():
+    # A standard OpenAI/Azure embedding model (the oai-embedding-small default
+    # included) has no instruction-tuned protocol to satisfy; folding the Qwen3
+    # instruction into its query would just embed that text as query content.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval._retrieval_instruction = None
+    retrieval.llm_embedding = Mock()
+
+    retrieval.embed_retrieval_query("what is backpropagation")
+
+    retrieval.llm_embedding.embed.assert_called_once_with("what is backpropagation")
+
+
+def test_embed_retrieval_query_folds_the_configured_instruction():
+    # Only a deployment that set retrieval_instruction on its embedding model
+    # entry (an instruction-tuned model like Qwen3-Embedding) gets the fold.
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval._retrieval_instruction = "Instruct: do the thing\nQuery: "
+    retrieval.llm_embedding = Mock()
+
+    retrieval.embed_retrieval_query("what is backpropagation")
+
+    retrieval.llm_embedding.embed.assert_called_once_with(
+        "Instruct: do the thing\nQuery: what is backpropagation"
+    )
+
+
 def test_rerank_floor_keeps_weak_but_plausible_candidates():
     """The floor removes garbage, not weak answers.
 

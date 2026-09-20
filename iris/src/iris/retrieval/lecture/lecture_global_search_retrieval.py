@@ -46,13 +46,14 @@ from iris.vector_database.lecture_unit_segment_schema import (
 
 logger = get_logger(__name__)
 
-# Qwen3-Embedding is instruction-tuned for ASYMMETRIC retrieval: the query is
-# embedded with this instruction prefix while documents stay raw (ingestion must
-# never use it — both sides shifting cancels the benefit). The wording keeps the
-# scaffold the model was trained on ("Given a ... query, retrieve ... passages
-# that answer the query") with the domain injected: student queries against
-# lecture materials, covering both question-type queries ("answer") and
-# navigational/topic queries ("cover").
+# Reference value for a Qwen3-Embedding deployment's retrieval_instruction config
+# field (see OpenAIEmbeddingModel), not applied automatically here. Qwen3-Embedding
+# is instruction-tuned for ASYMMETRIC retrieval: the query is embedded with this
+# instruction prefix while documents stay raw (ingestion must never use it — both
+# sides shifting cancels the benefit). The wording keeps the scaffold the model was
+# trained on ("Given a ... query, retrieve ... passages that answer the query")
+# with the domain injected: student queries against lecture materials, covering
+# both question-type queries ("answer") and navigational/topic queries ("cover").
 QWEN3_RETRIEVAL_INSTRUCTION = (
     "Instruct: Given a search query from a university student, retrieve relevant "
     "passages from lecture materials that answer or cover the query\nQuery: "
@@ -399,6 +400,13 @@ class LectureGlobalSearchRetrieval:
             "global_search_pipeline", "default", "embedding", local=local
         )
         self.llm_embedding = LlmRequestHandler(model_id=embedding_model)
+        # Only a deployment actually serving an instruction-tuned embedding model
+        # (e.g. Qwen3-Embedding) configures retrieval_instruction on that model
+        # entry; every other provider (the oai-embedding-small default included)
+        # leaves it unset and embeds the raw query. See OpenAIEmbeddingModel.
+        self._retrieval_instruction = getattr(
+            LlmManager().get_llm_by_id(embedding_model), "retrieval_instruction", None
+        )
         self.collection = init_lecture_unit_segment_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
@@ -406,13 +414,19 @@ class LectureGlobalSearchRetrieval:
         self.reranker_model_id = resolve_reranker_model(local)
 
     def embed_retrieval_query(self, query: str) -> list[float]:
-        """Embed a USER QUERY with the Qwen3 retrieval instruction prefix.
+        """Embed a USER QUERY, folding in the configured model's retrieval
+        instruction if it has one (see __init__).
 
         Query-side only (asymmetric retrieval): documents are ingested raw and
         must stay raw — both sides carrying the instruction cancels the
         benefit. Never apply this to document-shaped text.
         """
-        return self.llm_embedding.embed(QWEN3_RETRIEVAL_INSTRUCTION + query)
+        # getattr, not self._retrieval_instruction: many unit tests construct this
+        # class via __new__ (bypassing __init__) and only stub the attributes their
+        # scenario needs, so an instance without this one must still embed raw.
+        instruction = getattr(self, "_retrieval_instruction", None)
+        text = f"{instruction}{query}" if instruction else query
+        return self.llm_embedding.embed(text)
 
     def search(
         self,
