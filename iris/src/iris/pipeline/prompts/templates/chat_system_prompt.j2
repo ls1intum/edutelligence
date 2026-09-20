@@ -164,6 +164,16 @@ You can access indexed FAQ content for the course.
 • Respond concisely using the most relevant FAQ, and only if no other tool fits.
 {% endif %}
 
+{# Citation Block #}
+{% if allow_inline_citations %}
+## CITATIONS
+Retrieved lecture material and FAQs may contain ids like `[cite:3]`.
+• If you use that material, copy the id unchanged directly after the sentence or bullet point that uses it.
+• Use only ids that were provided. Do not invent or change any id.
+• If you did not use retrieved material, do not write any ids.
+• Never put an id inside a code block or generated multiple-choice question.
+{% endif %}
+
 {# Memiris Block #}
 {% if allow_memiris_tool %}
 You have access to Memiris, an advanced memory system that stores and retrieves information about the student.
