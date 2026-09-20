@@ -242,7 +242,9 @@ def test_page_chunking_stops_after_first_page_vision_result():
     )
     pipeline.cancel_event = threading.Event()
     pipeline.callback = MagicMock()
-    pipeline._resolve_course_language = MagicMock(return_value="en")
+    pipeline._resolve_course_language = MagicMock(  # pylint: disable=protected-access
+        return_value="en"
+    )
 
     def interpret_and_cancel(*_args, **_kwargs):
         pipeline.cancel_event.set()
