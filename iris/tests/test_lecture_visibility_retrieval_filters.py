@@ -115,7 +115,9 @@ def test_global_search_filters_hidden_slide_aggregate():
 
 def test_global_search_filters_unreleased_transcription_but_not_released_one():
     props = {
-        LectureTranscriptionSchema.SEGMENT_TEXT.value: "Transcript",
+        LectureTranscriptionSchema.SEGMENT_TEXT.value: (
+            "A real transcript excerpt long enough to clear the low-information filter."
+        ),
         LectureTranscriptionSchema.LECTURE_UNIT_ID.value: 10,
         LectureTranscriptionSchema.BASE_URL.value: "https://artemis.example",
         LectureTranscriptionSchema.COURSE_ID.value: 30,
@@ -673,7 +675,9 @@ RELEASED_IN_FUTURE = datetime(2099, 1, 1, tzinfo=timezone.utc)
 
 def _segment_object(course_id=30, hidden_until=None):
     props = {
-        LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: "Segment summary",
+        LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: (
+            "A real segment summary long enough to clear the low-information filter."
+        ),
         LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 10,
         LectureUnitSegmentSchema.BASE_URL.value: "https://artemis.example",
         LectureUnitSegmentSchema.COURSE_ID.value: course_id,
