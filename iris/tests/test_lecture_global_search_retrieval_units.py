@@ -51,6 +51,8 @@ def _segment_props(unit_id: int = 1, page: int = 1, snippet: str | None = None) 
 
 
 class TestLowInformationFilter:
+    """Deterministic placeholder-phrase matching, independent of snippet length."""
+
     def test_ingestion_placeholder_is_dropped(self):
         assert _is_low_information("There is no content on this slide.")
 
