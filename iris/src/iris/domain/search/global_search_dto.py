@@ -44,6 +44,11 @@ class LectureSearchRequestDTO(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=20)
     course_ids: list[int] | None = Field(default=None, alias="courseIds")
+    # Only needed for a caller with no course_ids ceiling to narrow itself (unrestricted
+    # access); every other caller already has exclusions baked into course_ids.
+    exclude_course_ids: list[int] = Field(
+        default_factory=list, alias="excludeCourseIds"
+    )
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
 
     @field_validator("query")

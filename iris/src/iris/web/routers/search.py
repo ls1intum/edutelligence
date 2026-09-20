@@ -46,5 +46,6 @@ def _traced_lecture_search(
         dto.query,
         dto.limit,
         course_ids=dto.course_ids,
+        exclude_course_ids=dto.exclude_course_ids,
         access_context=dto.access_context,
     )

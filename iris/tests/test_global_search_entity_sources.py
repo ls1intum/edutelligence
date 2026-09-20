@@ -6,7 +6,7 @@ the pointer tier, and the pipeline's context labeling."""
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from iris.domain.search.global_search_dto import (
     AccessContext,
@@ -16,6 +16,7 @@ from iris.domain.search.global_search_dto import (
     GlobalSearchRequestDTO,
     GlobalSearchResponseDTO,
     LectureInfo,
+    LectureSearchRequestDTO,
     LectureSearchResultDTO,
     LectureUnitInfo,
 )
@@ -43,6 +44,7 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
     _SearchTelemetry,
     dedupe_semester_twins,
 )
+from iris.web.routers import search as search_router
 
 _SETTINGS_JSON = {
     "authenticationToken": "t",
@@ -174,6 +176,13 @@ class TestWireShapes:
             query="q", settings=_SETTINGS_JSON, excludeCourseIds=[5]
         )
         assert dto.exclude_course_ids == [5]
+
+    def test_lecture_search_request_parses_exclude_course_ids(self):
+        dto = LectureSearchRequestDTO(query="q", excludeCourseIds=[5])
+        assert dto.exclude_course_ids == [5]
+
+        dto = LectureSearchRequestDTO(query="q")
+        assert dto.exclude_course_ids == []
 
     def test_request_parses_camel_case_entity_candidates(self):
         dto = GlobalSearchRequestDTO(
@@ -564,3 +573,24 @@ class TestPipelineHelpers:
         assert sources[0].course == CourseInfo(id=11, name="Test course")
         assert "RNN and LSTM Fundamentals" in sources[0].snippet
         assert sources[1].course is None
+
+
+class TestLectureSearchRoute:
+    """The synchronous /api/v1/search/lectures route forwards course exclusions,
+    which an unrestricted caller relies on since it has no course_ids ceiling
+    for the access context to narrow itself."""
+
+    def test_forwards_exclude_course_ids_to_the_retriever(self):
+        dto = LectureSearchRequestDTO(query="q", courseIds=[9], excludeCourseIds=[5])
+        with (
+            patch.object(search_router, "VectorDatabase"),
+            patch.object(search_router, "LectureGlobalSearchRetrieval") as mock_cls,
+        ):
+            mock_retrieval = mock_cls.return_value
+            mock_retrieval.search.return_value = []
+
+            search_router._traced_lecture_search(dto)
+
+        mock_retrieval.search.assert_called_once()
+        assert mock_retrieval.search.call_args.kwargs["exclude_course_ids"] == [5]
+        assert mock_retrieval.search.call_args.kwargs["course_ids"] == [9]
