@@ -76,11 +76,16 @@ _DEFAULT_ALPHA = 0.75
 # Deliberately pattern-based rather than a length cutoff: a genuinely short but
 # complete summary ("A stack is LIFO.") is valid content, not junk, and a raw
 # character-count floor cannot tell the two apart.
+#
+# Every alternative is anchored to the start of the snippet: these describe what
+# the WHOLE summary is, not a phrase that can appear anywhere in one. Unanchored,
+# "single character" or "solely of repeated" match plenty of legitimate content
+# ("A token can represent a single character.") mid-sentence.
 _LOW_INFO_PATTERNS = re.compile(
     r"^there is no content"  # ingestion placeholder (empty slide)
-    r"|no spoken content"  # transcription placeholder (silent/music video)
-    r"|solely of repeated"  # music-only / repeated-symbol transcriptions
-    r"|single (word|phrase|character|letter)",  # one-word junk slides
+    r"|^no spoken content"  # transcription placeholder (silent/music video)
+    r"|^solely of repeated"  # music-only / repeated-symbol transcriptions
+    r"|^single (word|phrase|character|letter)",  # one-word junk slide
     re.IGNORECASE,
 )
 

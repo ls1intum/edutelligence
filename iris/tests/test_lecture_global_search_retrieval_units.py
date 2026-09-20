@@ -60,12 +60,17 @@ class TestLowInformationFilter:
         assert _is_low_information("no spoken content in this segment")
 
     def test_single_word_slide_is_dropped(self):
-        assert _is_low_information("The slide contains a single word: 'Loading'.")
+        assert _is_low_information("Single word: 'Loading'.")
 
     def test_real_summary_is_kept(self):
         assert not _is_low_information(
             "The slide summarizes PETS, an MBRL method using bootstrapped ensembles."
         )
+
+    def test_generic_phrase_mid_sentence_is_kept(self):
+        # Every alternative is anchored to the start of the snippet: these describe what the whole
+        # summary IS, not a phrase that can appear incidentally inside real explanatory content.
+        assert not _is_low_information("A token can represent a single character.")
 
     def test_short_but_complete_summary_is_kept(self):
         # A concise, correct summary is valid content, not junk; a character-count
