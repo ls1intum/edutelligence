@@ -39,3 +39,11 @@ INGESTION_AUDIT_FAILED = "INGESTION_AUDIT_FAILED"
 # a placeholder segment that the audit would later reject with no indication
 # of the real cause.
 NO_INGESTIBLE_CONTENT = "NO_INGESTIBLE_CONTENT"
+# A page-number span was derived from a fetch that hit its row cap. The cap counts rows,
+# not pages, so the true minimum or maximum could sit in the untruncated remainder;
+# trusting the capped subset would write and prune the wrong segment span and fail the
+# manifest-based audit on every retry, since nothing about a wrong-but-plausible range
+# self-heals. Raised instead of silently proceeding, mirroring
+# check_if_attachment_needs_update's "never trust a possibly partial sample" rule for the
+# same fetch bound.
+PAGE_RANGE_FETCH_CAPPED = "PAGE_RANGE_FETCH_CAPPED"

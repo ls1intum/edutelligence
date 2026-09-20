@@ -12,6 +12,7 @@ from weaviate.util import generate_uuid5
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.ingestion_errors import (
     NO_INGESTIBLE_CONTENT,
+    PAGE_RANGE_FETCH_CAPPED,
     IngestionStageError,
 )
 from iris.common.logging_config import get_logger
@@ -306,16 +307,28 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         confirming against the object store needs the actual candidate ids; the fetch
         is bounded the same way confirmed_generations is elsewhere in this pipeline --
         a unit with more rows than that would mean an unrealistic page count.
+
+        A capped scan raises rather than deriving a span from it: the limit counts rows,
+        not pages, so the true minimum or maximum could sit in the untruncated remainder,
+        which would silently write and prune the wrong segment span.
         """
         retry = getattr(self, "_retry", None)
+        limit = settings.lecture_ingestion.skip_check_fetch_limit
         rows = fetch_with_retry(
             lambda: collection.query.fetch_objects(
                 filters=unit_filter,
-                limit=settings.lecture_ingestion.skip_check_fetch_limit,
+                limit=limit,
                 return_properties=[page_number_property],
             ),
             retry=retry,
         ).objects
+        if len(rows) >= limit:
+            raise IngestionStageError(
+                PAGE_RANGE_FETCH_CAPPED,
+                f"Lecture unit {self.lecture_unit_dto.lecture_unit_id} has at least "
+                f"{limit} rows for {page_number_property}; cannot confirm the true "
+                f"page-number span from a capped scan",
+            )
         confirmed = confirmed_rows(collection, rows, retry=retry)
         if not confirmed:
             return None

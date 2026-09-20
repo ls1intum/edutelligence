@@ -5,14 +5,16 @@ the range."""
 # pylint: disable=protected-access
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from iris.common.ingestion_errors import (
     NO_INGESTIBLE_CONTENT,
+    PAGE_RANGE_FETCH_CAPPED,
     IngestionStageError,
 )
+from iris.config import settings
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
 )
@@ -90,3 +92,17 @@ def test_all_ghost_rows_falls_back_like_no_rows_at_all():
         pipeline._get_slide_range()
 
     assert exc_info.value.error_code == NO_INGESTIBLE_CONTENT
+
+
+def test_a_capped_fetch_raises_instead_of_trusting_a_truncated_span():
+    # The fetch limit counts rows, not pages: if the scan comes back with at least
+    # as many rows as the cap, the true min/max could be in the untruncated
+    # remainder, so this must fail loudly rather than derive a span from it.
+    rows = [_row("a", 1), _row("b", 6)]
+    pipeline = _pipeline(_collection(rows), _collection([]))
+
+    with patch.object(settings.lecture_ingestion, "skip_check_fetch_limit", 2):
+        with pytest.raises(IngestionStageError) as exc_info:
+            pipeline._get_slide_range()
+
+    assert exc_info.value.error_code == PAGE_RANGE_FETCH_CAPPED
