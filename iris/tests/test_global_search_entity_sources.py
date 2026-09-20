@@ -394,6 +394,28 @@ class TestSemesterTwinDedup:
         kept = dedupe_semester_twins([quiz1, quiz2], "is there a quiz", now=self.NOW)
         assert kept == [quiz1, quiz2]
 
+    def test_multiple_distinct_entities_in_the_losing_course_all_survive(self):
+        # Regression: course_id=2 shares a title with course_id=1 by coincidence
+        # (a generic module name reused across unrelated courses), not because
+        # it is a repeated offering of course 1 — evidenced by it contributing
+        # TWO distinct entities under this key, not one. Even though course 1
+        # is picked as the "current instance" (most recent), course 2's two
+        # entities are not interchangeable with a single winner and must not
+        # be discarded as a group.
+        winner = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        other_a = self._source(
+            "Quiz", "Patterns", self._at(2025, 3), etype="exercise", course_id=2
+        )
+        other_b = self._source(
+            "Quiz", "Patterns", self._at(2025, 9), etype="exercise", course_id=2
+        )
+        kept = dedupe_semester_twins(
+            [winner, other_a, other_b], "is there a quiz", now=self.NOW
+        )
+        assert kept == [winner, other_a, other_b]
+
     def test_render_parses_reference_date_as_utc(self):
         source = GlobalSearchPipeline._render_entity_sources(
             [_candidate_dto(startDate="2026-03-01T10:00:00")]

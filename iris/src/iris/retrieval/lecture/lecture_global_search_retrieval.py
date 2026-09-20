@@ -221,11 +221,18 @@ def dedupe_semester_twins(
     prefer the current run of a course it never sees. Among twins the most
     recent already-visible instance survives (else the soonest upcoming). A
     query that names a semester or year is exempt: the student may be
-    asking about an old run. Distinct offerings (series, cross-listings,
-    other courses) have their own keys and are never merged — and neither
-    are two same-titled entities that share ONE course.id: that is a real
-    coincidence (e.g. two exercises both called "Quiz"), not a repeated
-    offering, so both survive intact.
+    asking about an old run.
+
+    A course only loses its entry to a same-key winner when it is
+    unambiguously the winner's twin analog: exactly one entity under this
+    key. Course names are the only signal available to link semester
+    instances of "the same" course, so two courses can share a key by
+    coincidence rather than lineage (a generic module name reused across
+    unrelated programs); a course contributing more than one entity here is
+    evidence of that, not a repeated offering, so its entities are never
+    discarded as a group. The same holds a fortiori for two same-titled
+    entities that share ONE course.id (e.g. two exercises both called
+    "Quiz") — both survive intact.
     """
     if not entity_sources or _DATED_QUERY_RE.search(query):
         return entity_sources
@@ -248,10 +255,13 @@ def dedupe_semester_twins(
             # course info) — nothing to pick between, keep them all.
             result.extend(next(iter(by_course.values())))
             continue
-        # Multiple courses share this title: pick the best-represented course
-        # (comparing each course's own best instance) and keep ALL of that
-        # course's entries for this title, so an in-course coincidence on the
-        # winning side is preserved too.
+        # Multiple courses share this title: find the best-represented course
+        # (comparing each course's own best instance) to prefer as the
+        # current semester instance. A losing course is only dropped when it
+        # has exactly one entity under this key — the unambiguous twin analog
+        # of the winner. A losing course with more than one entity holds
+        # entities that cannot all be "the same slot" as the winner's single
+        # entry, so they are kept rather than discarded as a group.
         best_course_id, best_representative = None, None
         for course_id, items in by_course.items():
             representative = items[0]
@@ -262,7 +272,9 @@ def dedupe_semester_twins(
                 representative, best_representative, now
             ):
                 best_course_id, best_representative = course_id, representative
-        result.extend(by_course[best_course_id])
+        for course_id, items in by_course.items():
+            if course_id == best_course_id or len(items) > 1:
+                result.extend(items)
     return result
 
 
