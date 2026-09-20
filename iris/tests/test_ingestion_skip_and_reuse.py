@@ -30,6 +30,7 @@ _RUN_ID = "run-current"
 
 def _transcription_pipeline(rows) -> TranscriptionIngestionPipeline:
     pipeline = object.__new__(TranscriptionIngestionPipeline)
+    pipeline.cancel_event = None
     pipeline.dto = SimpleNamespace(
         lecture_unit=SimpleNamespace(
             course_id=1,
@@ -133,6 +134,7 @@ def _unit_lecture_dto(content_unchanged: bool) -> SimpleNamespace:
 
 def test_unit_pipeline_reuses_stored_summary_when_content_is_unchanged():
     pipeline = object.__new__(LectureUnitPipeline)
+    pipeline.cancel_event = None
     pipeline.weaviate_client = MagicMock()
     pipeline.local = False
     pipeline.callback = None
@@ -186,6 +188,7 @@ def test_unit_pipeline_reuses_stored_summary_when_content_is_unchanged():
 
 def test_unit_pipeline_recomputes_when_stored_stamp_differs():
     pipeline = object.__new__(LectureUnitPipeline)
+    pipeline.cancel_event = None
     pipeline.weaviate_client = MagicMock()
     pipeline.local = False
     pipeline.callback = None
@@ -232,6 +235,7 @@ def test_unit_pipeline_recomputes_when_stored_stamp_differs():
 
 def test_unit_pipeline_stamps_the_ingestion_ledger():
     pipeline = object.__new__(LectureUnitPipeline)
+    pipeline.cancel_event = None
     pipeline.weaviate_client = MagicMock()
     pipeline.local = False
     pipeline.callback = None

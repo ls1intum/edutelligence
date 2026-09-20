@@ -1,9 +1,12 @@
+from threading import Event
 from typing import Optional
 
 from weaviate.classes.query import Filter
 
+from iris.common.cancellation import raise_if_cancelled
 from iris.common.logging_config import get_logger
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
@@ -31,13 +34,19 @@ class LectureUnitPipeline(SubPipeline):
     then updating the vector database with the processed lecture unit information.
     """
 
-    def __init__(self, local: bool = False, callback: Optional[StatusCallback] = None):
+    def __init__(
+        self,
+        local: bool = False,
+        callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
+    ):
         super().__init__(implementation_id="lecture_unit_pipeline")
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.local = local
         self.callback = callback
+        self.cancel_event = cancel_event
         embedding_model = resolve_model(
             "lecture_unit_pipeline", "default", "embedding", local=local
         )
@@ -108,6 +117,7 @@ class LectureUnitPipeline(SubPipeline):
         lecture_unit: LectureUnitDTO,
         initial_properties: Optional[dict] = None,
     ):
+        cancel_event = self.cancel_event
         lecture_unit_filter = self._filter(lecture_unit)
         if initial_properties is None:
             initial_units = self.lecture_unit_collection.query.fetch_objects(
@@ -131,6 +141,7 @@ class LectureUnitPipeline(SubPipeline):
                     lecture_unit,
                     local=self.local,
                     callback=self.callback,
+                    cancel_event=cancel_event,
                 )()
             )
             lecture_unit.lecture_unit_summary, tokens_unit_summary = (
@@ -141,106 +152,123 @@ class LectureUnitPipeline(SubPipeline):
                     local=self.local,
                 )()
             )
+            raise_if_cancelled(
+                cancel_event, lecture_unit.lecture_unit_id, "lecture unit embedding"
+            )
             embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
             tokens = tokens_unit_summary + token_unit_segment_summary
 
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
+
         with batch_update_lock:
-            latest_units = self.lecture_unit_collection.query.fetch_objects(
-                filters=lecture_unit_filter, limit=1
-            ).objects
-            latest_properties = latest_units[0].properties if latest_units else {}
+            with job_handler.current_job_guard(
+                lecture_unit.base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
+                lecture_unit.lecture_unit_id,
+                cancel_event,
+                "lecture unit replacement",
+            ):
+                latest_units = self.lecture_unit_collection.query.fetch_objects(
+                    filters=lecture_unit_filter, limit=1
+                ).objects
+                latest_properties = latest_units[0].properties if latest_units else {}
 
-            def metadata_value(property_name: str, incoming_value):
-                """Keep metadata updated while this expensive re-ingestion was running."""
-                initial_value = initial_properties.get(property_name)
-                latest_value = latest_properties.get(property_name)
-                return latest_value if latest_value != initial_value else incoming_value
+                def metadata_value(property_name: str, incoming_value):
+                    """Keep metadata updated while this expensive re-ingestion was running."""
+                    initial_value = initial_properties.get(property_name)
+                    latest_value = latest_properties.get(property_name)
+                    return (
+                        latest_value
+                        if latest_value != initial_value
+                        else incoming_value
+                    )
 
-            def ledger_value(property_name: str, incoming_value):
-                """Preserve the stored ledger value when this run did not recompute it."""
-                if incoming_value is not None:
-                    return incoming_value
-                return latest_properties.get(property_name)
+                def ledger_value(property_name: str, incoming_value):
+                    """Preserve the stored ledger value when this run did not recompute it."""
+                    if incoming_value is not None:
+                        return incoming_value
+                    return latest_properties.get(property_name)
 
-            # Write-new-then-sweep: insert this run's row first, then remove
-            # every other row of the unit (previous generation, duplicates,
-            # legacy rows). A crash between the two leaves a duplicate that the
-            # next run's sweep and the audit's row-count check both catch,
-            # instead of a window with no unit row at all. Both halves retry a
-            # transient store condition in place rather than failing the run.
-            retry = WeaviateWriteRetry.for_request()
-            unit_row_properties = {
-                LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
-                LectureUnitSchema.COURSE_NAME.value: metadata_value(
-                    LectureUnitSchema.COURSE_NAME.value, lecture_unit.course_name
-                ),
-                LectureUnitSchema.COURSE_DESCRIPTION.value: metadata_value(
-                    LectureUnitSchema.COURSE_DESCRIPTION.value,
-                    lecture_unit.course_description,
-                ),
-                # The resolved language this run ingested under; the reconciler
-                # compares it against the course's declared language to detect a
-                # unit ingested in the wrong language and re-ingest it.
-                LectureUnitSchema.COURSE_LANGUAGE.value: lecture_unit.course_language,
-                LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
-                LectureUnitSchema.LECTURE_NAME.value: metadata_value(
-                    LectureUnitSchema.LECTURE_NAME.value, lecture_unit.lecture_name
-                ),
-                LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
-                LectureUnitSchema.LECTURE_UNIT_NAME.value: metadata_value(
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value,
-                    lecture_unit.lecture_unit_name,
-                ),
-                LectureUnitSchema.LECTURE_UNIT_LINK.value: metadata_value(
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value,
-                    lecture_unit.lecture_unit_link,
-                ),
-                LectureUnitSchema.VIDEO_LINK.value: metadata_value(
-                    LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
-                ),
-                LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
-                LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
-                LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
-                    LectureUnitSchema.RELEASE_DATE.value
-                ),
-                LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
-                    LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
-                ),
-                LectureUnitSchema.CONTENT_FINGERPRINT.value: lecture_unit.content_fingerprint,
-                LectureUnitSchema.INGESTION_RUN_ID.value: lecture_unit.ingestion_run_id,
-                LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: ledger_value(
-                    LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value,
-                    lecture_unit.expected_chunk_counts_json,
-                ),
-                LectureUnitSchema.PIPELINE_VERSION.value: ledger_value(
-                    LectureUnitSchema.PIPELINE_VERSION.value,
-                    lecture_unit.pipeline_version,
-                ),
-                LectureUnitSchema.QUALITY_SCORE.value: ledger_value(
-                    LectureUnitSchema.QUALITY_SCORE.value,
-                    lecture_unit.quality_score,
-                ),
-                LectureUnitSchema.QUALITY_FLAGS.value: ledger_value(
-                    LectureUnitSchema.QUALITY_FLAGS.value,
-                    lecture_unit.quality_flags_json,
-                ),
-            }
-            new_uuid = retry.run(
-                lambda: self.lecture_unit_collection.data.insert(
-                    properties=unit_row_properties, vector=embedding
-                ),
-                description=f"unit row of lecture unit {lecture_unit.lecture_unit_id}",
-            )
-            # Keep the row just written and purge every other unit row by unit
-            # identity: previous generations, legacy rows, and index-only ghost
-            # rows that a delete-by-id or delete-by-run-id cannot reach. Writing
-            # the new row first keeps the unit from ever losing its row on a crash.
-            purge_other_rows(
-                self.lecture_unit_collection,
-                lecture_unit_filter,
-                [new_uuid],
-                f"unit row of lecture unit {lecture_unit.lecture_unit_id}",
-                retry=retry,
-            )
+                # Write-new-then-sweep: insert this run's row first, then remove
+                # every other row of the unit (previous generation, duplicates,
+                # legacy rows). A crash between the two leaves a duplicate that the
+                # next run's sweep and the audit's row-count check both catch,
+                # instead of a window with no unit row at all. Both halves retry a
+                # transient store condition in place rather than failing the run.
+                retry = WeaviateWriteRetry.for_request()
+                unit_row_properties = {
+                    LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
+                    LectureUnitSchema.COURSE_NAME.value: metadata_value(
+                        LectureUnitSchema.COURSE_NAME.value, lecture_unit.course_name
+                    ),
+                    LectureUnitSchema.COURSE_DESCRIPTION.value: metadata_value(
+                        LectureUnitSchema.COURSE_DESCRIPTION.value,
+                        lecture_unit.course_description,
+                    ),
+                    # The resolved language this run ingested under; the reconciler
+                    # compares it against the course's declared language to detect a
+                    # unit ingested in the wrong language and re-ingest it.
+                    LectureUnitSchema.COURSE_LANGUAGE.value: lecture_unit.course_language,
+                    LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
+                    LectureUnitSchema.LECTURE_NAME.value: metadata_value(
+                        LectureUnitSchema.LECTURE_NAME.value, lecture_unit.lecture_name
+                    ),
+                    LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
+                    LectureUnitSchema.LECTURE_UNIT_NAME.value: metadata_value(
+                        LectureUnitSchema.LECTURE_UNIT_NAME.value,
+                        lecture_unit.lecture_unit_name,
+                    ),
+                    LectureUnitSchema.LECTURE_UNIT_LINK.value: metadata_value(
+                        LectureUnitSchema.LECTURE_UNIT_LINK.value,
+                        lecture_unit.lecture_unit_link,
+                    ),
+                    LectureUnitSchema.VIDEO_LINK.value: metadata_value(
+                        LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
+                    ),
+                    LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
+                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
+                    LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
+                        LectureUnitSchema.RELEASE_DATE.value
+                    ),
+                    LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
+                        LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
+                    ),
+                    LectureUnitSchema.CONTENT_FINGERPRINT.value: lecture_unit.content_fingerprint,
+                    LectureUnitSchema.INGESTION_RUN_ID.value: lecture_unit.ingestion_run_id,
+                    LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: ledger_value(
+                        LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value,
+                        lecture_unit.expected_chunk_counts_json,
+                    ),
+                    LectureUnitSchema.PIPELINE_VERSION.value: ledger_value(
+                        LectureUnitSchema.PIPELINE_VERSION.value,
+                        lecture_unit.pipeline_version,
+                    ),
+                    LectureUnitSchema.QUALITY_SCORE.value: ledger_value(
+                        LectureUnitSchema.QUALITY_SCORE.value,
+                        lecture_unit.quality_score,
+                    ),
+                    LectureUnitSchema.QUALITY_FLAGS.value: ledger_value(
+                        LectureUnitSchema.QUALITY_FLAGS.value,
+                        lecture_unit.quality_flags_json,
+                    ),
+                }
+                new_uuid = retry.run(
+                    lambda: self.lecture_unit_collection.data.insert(
+                        properties=unit_row_properties, vector=embedding
+                    ),
+                    description=f"unit row of lecture unit {lecture_unit.lecture_unit_id}",
+                )
+                # Keep the row just written and purge every other unit row by unit
+                # identity: previous generations, legacy rows, and index-only ghost
+                # rows that a delete-by-id or delete-by-run-id cannot reach. Writing
+                # the new row first keeps the unit from ever losing its row on a crash.
+                purge_other_rows(
+                    self.lecture_unit_collection,
+                    lecture_unit_filter,
+                    [new_uuid],
+                    f"unit row of lecture unit {lecture_unit.lecture_unit_id}",
+                    retry=retry,
+                )
 
         return tokens

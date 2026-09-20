@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" role="img" aria-labelledby="title desc">
+  <title id="title">Logos — Deployment Overview</title>
+  <desc id="desc">Typical deployment: user devices with the browser UI and API clients; one core node; zero or more worker nodes; external IdP and cloud providers.</desc>
+  <defs>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#334155"/>
+    </marker>
+  </defs>
+  <rect width="960" height="560" fill="#FFFFFF"/>
+
+  <!-- Devices -->
+  <rect x="40" y="40" width="220" height="200" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+  <text x="150" y="64" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#64748B" letter-spacing="0.05em">USER DEVICES</text>
+  <rect x="60" y="84" width="180" height="56" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="150" y="108" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Browser</text>
+  <text x="150" y="126" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Logos UI</text>
+  <rect x="60" y="156" width="180" height="56" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="150" y="180" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">App / CI / SDK</text>
+  <text x="150" y="198" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">API key · /v1</text>
+
+  <!-- Core node (device node style) -->
+  <rect x="320" y="40" width="300" height="360" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2"/>
+  <rect x="320" y="40" width="300" height="32" rx="4" fill="#7C3AED"/>
+  <text x="470" y="61" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">«device» Core node</text>
+
+  <rect x="340" y="88" width="260" height="36" rx="5" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.25"/>
+  <text x="470" y="111" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">Rate-limit gateway</text>
+
+  <rect x="340" y="136" width="260" height="36" rx="5" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.25"/>
+  <text x="470" y="159" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">Traefik</text>
+
+  <rect x="340" y="184" width="260" height="44" rx="5" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+  <text x="470" y="203" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Webservice ×N</text>
+  <text x="470" y="219" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">inference gateway · /api</text>
+
+  <rect x="340" y="240" width="260" height="44" rx="5" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+  <text x="470" y="259" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Orchestrator ×1</text>
+  <text x="470" y="275" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">local / mixed · worker registry</text>
+
+  <rect x="340" y="296" width="120" height="40" rx="5" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.25"/>
+  <text x="400" y="321" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="#0F172A">PostgreSQL</text>
+
+  <rect x="480" y="296" width="120" height="40" rx="5" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.25"/>
+  <text x="540" y="321" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="600" fill="#0F172A">Logos UI</text>
+
+  <rect x="340" y="348" width="260" height="36" rx="5" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="4 3"/>
+  <text x="470" y="371" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">Agent stack (optional)</text>
+
+  <!-- Worker nodes -->
+  <rect x="680" y="40" width="240" height="200" rx="4" fill="#FFFFFF" stroke="#7C3AED" stroke-width="2"/>
+  <rect x="680" y="40" width="240" height="32" rx="4" fill="#7C3AED"/>
+  <text x="800" y="61" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">«device» Worker node</text>
+  <rect x="700" y="92" width="200" height="48" rx="5" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+  <text x="800" y="112" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Worker control</text>
+  <text x="800" y="128" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">outbound WebSocket</text>
+  <rect x="700" y="156" width="200" height="60" rx="5" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.25"/>
+  <text x="800" y="182" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Lanes</text>
+  <text x="800" y="200" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#64748B">vLLM · one per model</text>
+
+  <text x="800" y="268" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">× 0 … N GPU machines</text>
+
+  <!-- External -->
+  <rect x="680" y="300" width="240" height="100" rx="4" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+  <text x="800" y="324" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="11" font-weight="700" fill="#64748B" letter-spacing="0.05em">EXTERNAL</text>
+  <text x="800" y="352" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">Keycloak / IdP</text>
+  <text x="800" y="376" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" fill="#0F172A">Cloud providers</text>
+
+  <!-- Edges -->
+  <path d="M260 140 H320" fill="none" stroke="#334155" stroke-width="1.5" marker-end="url(#ad)"/>
+  <path d="M680 206 H620" fill="none" stroke="#7C3AED" stroke-width="1.75" marker-end="url(#ad)"/>
+  <text x="650" y="198" font-family="Helvetica,Arial,sans-serif" font-size="10" fill="#7C3AED" font-weight="600">WS</text>
+  <path d="M680 350 H620" fill="none" stroke="#94A3B8" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#ad)"/>
+
+  <text x="40" y="460" font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#0F172A">Deployment notes</text>
+  <text x="40" y="484" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">• Scale Webservice replicas behind Traefik; keep a single Orchestrator instance.</text>
+  <text x="40" y="504" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">• Workers dial out — no inbound ports on GPU machines (NAT / firewall friendly).</text>
+  <text x="40" y="524" font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#64748B">• Production may use the organisation's existing IdP instead of the bundled Keycloak.</text>
+</svg>

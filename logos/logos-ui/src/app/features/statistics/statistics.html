@@ -342,136 +342,129 @@
     <!-- ── Local Providers: what the hardware is doing right now ──────── -->
     } @else {
 
-      <!-- ── Provider-scoped glass row ─────────────────────────────────────── -->
-      <div class="stats-glass-row">
-        <!-- Shared provider selector -->
-        <div class="stats-glass-row__header">
-          <span class="stats-glass-row__label">Provider</span>
-          <app-select
-            [options]="vramProviderOptions()"
-            [value]="selectedVramProvider()"
-            [compact]="true"
-            [collapseWhenSingle]="true"
-            ariaLabel="Select provider"
-            (valueChange)="setSelectedVramProvider($event)"
-          />
-          @if (vramReady() && !selectedProviderCalibrating() && selectedProviderFreeVramLabel()) {
-            <span
-              class="stats-provider-vram-badge"
-              title="Free VRAM of the selected provider (latest sample)"
-            >{{ selectedProviderFreeVramLabel() }}</span>
-          }
-          @if (selectedProviderCalibrating()) {
-            <span class="stats-provider-badge stats-provider-badge--calibrating">
-              <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Calibrating…
-            </span>
-          }
-        </div>
-
-        <!-- Three chart panels -->
-        <div class="stats-panel-row">
-
-          <!-- VRAM utilization -->
-          <app-stats-chart-panel
-            title="VRAM utilization"
-            [subtitle]="selectedVramProvider()
-              ? selectedVramProvider()! + (vramSummary().modelsLoaded
-                  ? ' · ' + vramSummary().modelsLoaded + ' model' + (vramSummary().modelsLoaded === 1 ? '' : 's') + ' loaded'
-                  : '')
-              : 'Memory across local providers.'"
-          >
-            @if (!vramReady()) {
+      @if (!vramReady()) {
+        <div class="stats-glass-row">
+          <div class="stats-panel-row">
+            <app-stats-chart-panel title="VRAM utilization" subtitle="Memory across local providers.">
               <app-stats-skeleton variant="donut" />
-            } @else if (hasSelectedProviderLanes()) {
-              <app-stats-lane-memory-pie
-                metric="vram"
-                [lanes]="selectedProviderLanes()"
-                [totalMb]="selectedProviderTotalVramMb()"
-                [freeMb]="selectedProviderFreeVramMb()"
-              />
-            } @else if (!vramPieData().length) {
-              <app-stats-empty-state message="No memory data yet." />
-            } @else {
-              <app-stats-vram-donut
-                [data]="vramPieData()"
-                centerTop="used"
-                [centerMiddle]="vramSummary().usedGb.toFixed(1) + ' GB'"
-                [centerBottom]="'of ' + vramSummary().totalGb.toFixed(1) + ' GB'"
-                valueSuffix=" GB"
-                [valueDecimals]="2"
-              />
-            }
-          </app-stats-chart-panel>
-
-          <!-- RAM utilization -->
-          <!-- Host RAM gets the same per-model breakdown as the GPU memory
-               beside it: sleeping lanes keep their weights in it and the
-               worker's model cache draws from it, so which model is holding the
-               host's memory is as real a question as it is for the card. -->
-          <app-stats-chart-panel
-            title="RAM utilization"
-            [subtitle]="selectedVramProvider()
-              ? selectedVramProvider()! + ' · host memory'
-              : 'Host memory across local providers.'"
-          >
-            @if (!vramReady()) {
+            </app-stats-chart-panel>
+            <app-stats-chart-panel title="RAM utilization" subtitle="Host memory across local providers.">
               <app-stats-skeleton variant="donut" />
-            } @else if (!selectedProviderRamMb().reported) {
-              <app-stats-empty-state message="This provider does not report host RAM." />
-            } @else {
-              <app-stats-lane-memory-pie
-                metric="ram"
-                [lanes]="hasSelectedProviderLaneRam() ? selectedProviderLanes() : {}"
-                [totalMb]="selectedProviderRamMb().totalMb"
-                [freeMb]="selectedProviderRamMb().freeMb"
-              />
-            }
-          </app-stats-chart-panel>
-
-          <!-- Lane health -->
-          <app-stats-chart-panel
-            title="Lane health"
-            subtitle="Per-lane runtime state, KV cache, and TTFT."
-          >
-            <span panelRight>
-              @if (vramReady() && totalLanesAcrossProviders() > 0) {
-                <span class="stats-panel-badge">
-                  {{ totalLanesAcrossProviders() }} lane{{ totalLanesAcrossProviders() === 1 ? '' : 's' }}
-                </span>
-              }
-            </span>
-            @if (!vramReady()) {
+            </app-stats-chart-panel>
+            <app-stats-chart-panel title="Lane health" subtitle="Per-lane runtime state, KV cache, and TTFT.">
               <app-stats-skeleton variant="lane" />
-            } @else {
-              <app-stats-lane-health-panel
-                [lanesByProvider]="lanesByProvider()"
-                [providerMeta]="vramProviderMetaByName()"
-                [selectedProvider]="selectedVramProvider()"
-              />
-            }
-          </app-stats-chart-panel>
-
-          <!-- Workers & GPUs -->
-          <app-stats-chart-panel
-            title="Workers &amp; GPUs"
-            subtitle="Per-device hardware metrics from local providers."
-          >
-            @if (!vramReady()) {
+            </app-stats-chart-panel>
+            <app-stats-chart-panel title="Workers &amp; GPUs" subtitle="Per-device hardware metrics from local providers.">
               <app-stats-skeleton variant="gpu" />
-            } @else {
-              <app-stats-worker-gpu-panel
-                [providerLatestSamples]="latestSampleByProvider()"
-                [providerDevices]="devicesByProvider()"
-                [providerMeta]="vramProviderMetaByName()"
-                [lanesByProvider]="lanesByProvider()"
-                [activeProvider]="selectedVramProvider()"
-                [nowMs]="nowMs()"
-              />
-            }
-          </app-stats-chart-panel>
-
+            </app-stats-chart-panel>
+          </div>
         </div>
-      </div>
+      } @else if (providerGlassRows().length === 0) {
+        <div class="stats-glass-row">
+          <app-stats-empty-state message="No local providers connected yet." />
+        </div>
+      } @else {
+        <div class="stats-providers-stack">
+          @for (row of providerGlassRows(); track row.name) {
+            <div class="stats-glass-row">
+              <div class="stats-glass-row__header">
+                <span class="stats-glass-row__label">{{ row.name }}</span>
+                @if (!row.online) {
+                  <span class="stats-provider-badge stats-provider-badge--offline">offline</span>
+                }
+                @if (row.calibrating) {
+                  <span class="stats-provider-badge stats-provider-badge--calibrating">
+                    <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Calibrating…
+                  </span>
+                }
+              </div>
+
+              <div class="stats-panel-row">
+
+                <app-stats-chart-panel
+                  title="VRAM utilization"
+                  [subtitle]="row.name + (row.modelsLoaded
+                    ? ' · ' + row.modelsLoaded + ' model' + (row.modelsLoaded === 1 ? '' : 's') + ' loaded'
+                    : '')"
+                >
+                  @if (row.hasLanes) {
+                    <app-stats-lane-memory-pie
+                      metric="vram"
+                      [lanes]="row.lanes"
+                      [totalMb]="row.totalVramMb"
+                      [freeMb]="row.freeVramMb"
+                    />
+                  } @else if (!row.fallbackVramPie.length) {
+                    <app-stats-empty-state message="No memory data yet." />
+                  } @else {
+                    <app-stats-vram-donut
+                      [data]="row.fallbackVramPie"
+                      centerTop="used"
+                      [centerMiddle]="row.vramUsedGb.toFixed(1) + ' GB'"
+                      [centerBottom]="'of ' + row.vramTotalGb.toFixed(1) + ' GB'"
+                      valueSuffix=" GB"
+                      [valueDecimals]="2"
+                    />
+                  }
+                </app-stats-chart-panel>
+
+                <!-- Host RAM gets the same per-model breakdown as the GPU memory
+                     beside it: sleeping lanes keep their weights in it and the
+                     worker's model cache draws from it, so which model is holding the
+                     host's memory is as real a question as it is for the card. -->
+                <app-stats-chart-panel
+                  title="RAM utilization"
+                  [subtitle]="row.name + ' · host memory'"
+                >
+                  @if (!row.ram.reported) {
+                    <app-stats-empty-state message="This provider does not report host RAM." />
+                  } @else {
+                    <app-stats-lane-memory-pie
+                      metric="ram"
+                      [lanes]="row.hasLaneRam ? row.lanes : {}"
+                      [totalMb]="row.ram.totalMb"
+                      [freeMb]="row.ram.freeMb"
+                    />
+                  }
+                </app-stats-chart-panel>
+
+                <app-stats-chart-panel
+                  title="Lane health"
+                  subtitle="Per-lane runtime state, KV cache, and TTFT."
+                >
+                  <span panelRight>
+                    @if (row.laneCount > 0) {
+                      <span class="stats-panel-badge">
+                        {{ row.laneCount }} lane{{ row.laneCount === 1 ? '' : 's' }}
+                      </span>
+                    }
+                  </span>
+                  <app-stats-lane-health-panel
+                    [lanesByProvider]="lanesByProvider()"
+                    [providerMeta]="vramProviderMetaByName()"
+                    [selectedProvider]="row.name"
+                  />
+                </app-stats-chart-panel>
+
+                <app-stats-chart-panel
+                  title="Workers &amp; GPUs"
+                  subtitle="Per-device hardware metrics from local providers."
+                >
+                  <app-stats-worker-gpu-panel
+                    [providerLatestSamples]="latestSampleByProvider()"
+                    [providerDevices]="devicesByProvider()"
+                    [providerMeta]="vramProviderMetaByName()"
+                    [lanesByProvider]="lanesByProvider()"
+                    [activeProvider]="row.name"
+                    [nowMs]="nowMs()"
+                  />
+                </app-stats-chart-panel>
+
+              </div>
+            </div>
+          }
+        </div>
+      }
 
     }
   }

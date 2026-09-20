@@ -1,3 +1,4 @@
+from threading import Event
 from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
@@ -8,6 +9,7 @@ from weaviate.client import WeaviateClient
 from weaviate.exceptions import UnexpectedStatusCodeError
 from weaviate.util import generate_uuid5
 
+from iris.common.cancellation import raise_if_cancelled
 from iris.common.ingestion_errors import (
     NO_INGESTIBLE_CONTENT,
     IngestionStageError,
@@ -15,6 +17,7 @@ from iris.common.ingestion_errors import (
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -27,6 +30,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 from iris.vector_database.batch_verify import delete_many_with_retry
+from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -63,11 +67,13 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         lecture_unit_dto: LectureUnitDTO,
         local: bool = False,
         callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
     ) -> None:
         super().__init__(implementation_id="lecture_unit_segment_summary_pipeline")
         self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.callback = callback
+        self.cancel_event = cancel_event
 
         self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
@@ -97,12 +103,18 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
     def __call__(self) -> [str]:
         # One shared retry budget for every segment write and the stale prune.
         self._retry = WeaviateWriteRetry.for_request()
+        cancel_event = self.cancel_event
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
         written_uuids = []
         total_slides = slide_number_end - slide_number_start + 1
         for slide_index in range(slide_number_start, slide_number_end + 1):
+            raise_if_cancelled(
+                cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment summary",
+            )
             if self.callback is not None:
                 self.callback.update(
                     stage_name="segment-summaries",
@@ -376,6 +388,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         display_page_number: int,
         hidden_until=None,
     ):
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
         retry = getattr(self, "_retry", None) or WeaviateWriteRetry.for_request()
         segment_uuid = self._segment_uuid(slide_number)
         properties = {
@@ -407,4 +420,13 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 else:
                     raise
 
-        retry.run(upsert, description=f"segment upsert slide {slide_number}")
+        with batch_update_lock:
+            with job_handler.current_job_guard(
+                self.lecture_unit_dto.base_url,
+                self.lecture_unit_dto.course_id,
+                self.lecture_unit_dto.lecture_id,
+                self.lecture_unit_dto.lecture_unit_id,
+                self.cancel_event,
+                "lecture unit segment write",
+            ):
+                retry.run(upsert, description=f"segment upsert slide {slide_number}")

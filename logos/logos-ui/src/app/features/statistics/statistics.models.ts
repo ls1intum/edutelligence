@@ -275,6 +275,11 @@ export interface RequestItem {
   full_name: string | null;
   api_key_name: string | null;
   api_key_type: string | null;
+  /**
+   * Application-key environment the request was logged under. Null / "-" for
+   * developer keys (and application keys that never set one).
+   */
+  environment: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;

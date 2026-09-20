@@ -7,6 +7,7 @@ import tempfile
 import time
 from collections import Counter
 from datetime import datetime
+from threading import Event
 from typing import Optional
 
 import fitz
@@ -18,6 +19,8 @@ from langdetect.lang_detect_exception import LangDetectException
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.cancellation import raise_if_cancelled
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.ingestion_errors import (
     PAGE_INGESTION_FAILED,
     SLIDE_VISION_FAILED,
@@ -38,6 +41,7 @@ from ..domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from ..domain.data.slide_vision_dto import SlideVisionDTO
 from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
+from ..ingestion.ingestion_job_handler import ingestion_job_handler
 from ..llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -225,12 +229,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         callback: ingestion_status_callback,
         variant: Variant,
         local: bool = False,
+        cancel_event: Optional[Event] = None,
     ):
         super().__init__(implementation_id=self.PIPELINE_ID)
         self.collection = init_lecture_unit_page_chunk_schema(client)
         self.lecture_unit_collection = init_lecture_unit_schema(client)
         self.dto = dto
         self.callback = callback
+        self.cancel_event = cancel_event
         chat_model = variant.model("chat", local)
         embedding_model = variant.model("embedding", local)
         self.llm_chat = LlmRequestHandler(chat_model)
@@ -250,7 +256,13 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     @observe(name="Lecture Unit Page Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
+            raise_if_cancelled(
+                self.cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page ingestion start",
+            )
             pdf_path = save_pdf(self.dto.lecture_unit.pdf_file_base64)
+            doc = None
             try:
                 doc = fitz.open(pdf_path)
                 force_reingest = self.dto.lecture_unit.force_reingest
@@ -259,6 +271,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 ):
                     self.course_language = self._resolve_course_language(doc)
                     self.restore_display_page_numbers_from_existing_chunks()
+                    self.kept_previous_generation = True
                     self.skipped = True
                     self.callback.update()
                     self.callback.update()
@@ -279,6 +292,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     )
                 )
             finally:
+                if doc is not None:
+                    doc.close()
                 cleanup_temporary_file(pdf_path)
             self._record_chunk_manifest_and_quality(chunks)
             if force_reingest and self._previous_generation_scores_better():
@@ -300,14 +315,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.callback.update()
                 return self.course_language, self.tokens
             self.callback.update()
-            prepared_chunks = self.embed_chunks(chunks)
+            prepared_chunks = self._prepare_chunk_vectors(chunks)
             self.callback.update()
             logger.info(
                 "[%s] Replacing %d chunks in Weaviate",
                 self.dto.lecture_unit.lecture_unit_name,
                 len(prepared_chunks),
             )
-            self.replace_chunks(prepared_chunks)
+            self._replace_prepared_chunks(prepared_chunks)
 
             self.callback.update(tokens=self.tokens)
 
@@ -316,6 +331,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.dto.lecture_unit.course_name,
             )
             return self.course_language, self.tokens
+        except IngestionCancelledException:
+            raise
         except IngestionStageError as e:
             if not e.tokens:
                 e.tokens = list(self.tokens)
@@ -566,11 +583,17 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             by_page[page_number] for page_number in sorted(by_page)
         ]
 
-    def embed_chunks(self, chunks):
+    def _prepare_chunk_vectors(self, chunks):
         """Embed all chunks before any write, outside the shared write lock."""
+        cancel_event = self.cancel_event
         prepared_chunks = []
         total = len(chunks)
         for i, chunk in enumerate(chunks):
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "lecture page embedding",
+            )
             if i % 10 == 0:
                 self.callback.update(
                     stage_name="embedding", stage_progress=i, stage_total=total
@@ -581,7 +604,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             prepared_chunks.append((chunk, embedding))
         return prepared_chunks
 
-    def replace_chunks(self, prepared_chunks):
+    def _replace_prepared_chunks(self, prepared_chunks):
         """Swap in this run's generation of page chunks: write new, then purge.
 
         All fallible LLM work is done by now. The new generation is inserted
@@ -593,21 +616,30 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         worst both generations coexist briefly, and the next run's purge or the
         structural skip check (which rejects mixed generations) converges the unit.
         """
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
         with batch_update_lock:
-            # One retry budget for the whole swap: a transient store condition
-            # re-submits only the dropped chunks, never the vision/embedding work.
-            retry = WeaviateWriteRetry.for_request()
-            written_ids = write_batch_with_retry(
-                self.collection, prepared_chunks, "lecture page chunks", retry=retry
-            )
-            purge_other_rows(
-                self.collection,
-                self._get_page_chunk_filter(),
-                written_ids,
-                "outdated lecture page chunks",
-                retry=retry,
-            )
-            self._converge_to_single_generation(prepared_chunks, retry)
+            with job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
+                self.dto.lecture_unit.course_id,
+                self.dto.lecture_unit.lecture_id,
+                self.dto.lecture_unit.lecture_unit_id,
+                self.cancel_event,
+                "lecture page replacement",
+            ):
+                # One retry budget for the whole swap: a transient store condition
+                # re-submits only the dropped chunks, never the vision/embedding work.
+                retry = WeaviateWriteRetry.for_request()
+                written_ids = write_batch_with_retry(
+                    self.collection, prepared_chunks, "lecture page chunks", retry=retry
+                )
+                purge_other_rows(
+                    self.collection,
+                    self._get_page_chunk_filter(),
+                    written_ids,
+                    "outdated lecture page chunks",
+                    retry=retry,
+                )
+                self._converge_to_single_generation(prepared_chunks, retry)
 
     def _distinct_page_run_ids(self, retry) -> set:
         """The distinct *real* ingestion generations currently held for this unit.
@@ -681,80 +713,103 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         so a missing or misread number is inferred from its neighbours rather than
         stored as -1.
         """
-        doc = fitz.open(lecture_pdf)
-        self.course_language = self._resolve_course_language(doc)
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=512, chunk_overlap=102
-        )
-        prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
-        logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
-
-        # Phase 1: vision per page — collect the merged text and the raw slide number.
-        pages: list[tuple[int, str]] = []
-        raw_display_numbers: list[int] = []
-        old_page_text = ""
-        for page_num in range(doc.page_count):
-            self.callback.update(
-                stage_name="vision",
-                stage_progress=page_num + 1,
-                stage_total=doc.page_count,
+        doc = None
+        cancel_event = self.cancel_event
+        try:
+            doc = fitz.open(lecture_pdf)
+            self.course_language = self._resolve_course_language(doc)
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=512, chunk_overlap=102
             )
-            page = doc.load_page(page_num)
-            page_text = page.get_text()
+            prefix = f"[{lecture_unit_slide_dto.lecture_name} / {lecture_unit_slide_dto.lecture_unit_name}]"
+            logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
 
-            matrix = fitz.Matrix(5, 5)
-            pix = page.get_pixmap(matrix=matrix)
-            img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
-
-            vision_result = self.interpret_image(
-                img_base64,
-                old_page_text,
-                lecture_unit_slide_dto.lecture_name,
-                self.course_language,
-            )
-            raw_display_numbers.append(vision_result.display_page_number)
-
-            if vision_result.academic_description:
-                page_text = self.merge_page_content_and_image_interpretation(
-                    page_text, vision_result.academic_description
+            # Phase 1: vision per page — collect the merged text and the raw slide number.
+            pages: list[tuple[int, str]] = []
+            raw_display_numbers: list[int] = []
+            old_page_text = ""
+            for page_num in range(doc.page_count):
+                raise_if_cancelled(
+                    cancel_event,
+                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                    "lecture page chunking",
                 )
-            pages.append((page_num, page_text))
-            old_page_text = page_text
+                self.callback.update(
+                    stage_name="vision",
+                    stage_progress=page_num + 1,
+                    stage_total=doc.page_count,
+                )
+                page = doc.load_page(page_num)
+                page_text = page.get_text()
 
-        # Phase 2: reconcile the independently-read numbers into a consistent sequence.
-        display_page_numbers = self._reconcile_display_page_numbers(raw_display_numbers)
+                matrix = fitz.Matrix(5, 5)
+                pix = page.get_pixmap(matrix=matrix)
+                img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
 
-        # Phase 3: build the chunks with the reconciled numbers.
-        data = []
-        for (page_num, page_text), display_page_number in zip(
-            pages, display_page_numbers
-        ):
-            page_splits = text_splitter.create_documents([page_text])
-            data.extend(
-                create_page_data(
-                    page_num,
-                    page_splits,
-                    lecture_unit_slide_dto,
+                raise_if_cancelled(
+                    cancel_event,
+                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                    "before lecture page vision",
+                )
+                vision_result = self.interpret_image(
+                    img_base64,
+                    old_page_text,
+                    lecture_unit_slide_dto.lecture_name,
                     self.course_language,
-                    base_url,
-                    display_page_number,
-                    self._hidden_until_by_page.get(page_num + 1),
                 )
+                raise_if_cancelled(
+                    cancel_event,
+                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
+                    "after lecture page vision",
+                )
+                raw_display_numbers.append(vision_result.display_page_number)
+
+                if vision_result.academic_description:
+                    page_text = self.merge_page_content_and_image_interpretation(
+                        page_text, vision_result.academic_description
+                    )
+                pages.append((page_num, page_text))
+                old_page_text = page_text
+
+            # Phase 2: reconcile the independently-read numbers into a consistent sequence.
+            display_page_numbers = self._reconcile_display_page_numbers(
+                raw_display_numbers
             )
-        if lecture_unit_slide_dto is not None:
-            lecture_unit_slide_dto.display_page_numbers = display_page_numbers
+
+            # Phase 3: build the chunks with the reconciled numbers.
+            data = []
+            for (page_num, page_text), display_page_number in zip(
+                pages, display_page_numbers
+            ):
+                page_splits = text_splitter.create_documents([page_text])
+                data.extend(
+                    create_page_data(
+                        page_num,
+                        page_splits,
+                        lecture_unit_slide_dto,
+                        self.course_language,
+                        base_url,
+                        display_page_number,
+                        self._hidden_until_by_page.get(page_num + 1),
+                    )
+                )
+            if lecture_unit_slide_dto is not None:
+                lecture_unit_slide_dto.display_page_numbers = display_page_numbers
+                logger.info(
+                    "%s Display page numbers (reconciled): %s",
+                    prefix,
+                    display_page_numbers,
+                )
             logger.info(
-                "%s Display page numbers (reconciled): %s",
+                "%s PDF chunking complete: %d chunks from %d pages",
                 prefix,
-                display_page_numbers,
+                len(data),
+                doc.page_count,
             )
-        logger.info(
-            "%s PDF chunking complete: %d chunks from %d pages",
-            prefix,
-            len(data),
-            doc.page_count,
-        )
-        return data
+            return data
+        finally:
+            if doc is not None:
+                doc.close()
 
     @staticmethod
     def _reconcile_display_page_numbers(raw_numbers: list[int]) -> list[int]:

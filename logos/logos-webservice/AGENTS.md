@@ -1,6 +1,6 @@
 # AGENTS.md — logos-webservice
 
-Spring Boot (Java 25, Maven) service: all management REST APIs for the Logos platform — identity (`/me`, `/users`, `/teams`), configuration (models, providers, policies, permissions), admin export/import, operations (stats, billing, request logs), and the stats websockets. Runs alongside `logos-orchestrator`; Traefik routes `/api/*` here at priority 200 (stripping the `/api` prefix — Spring sees paths without it) and lets the orchestrator answer the rest.
+Spring Boot (Java 25, Maven) service: management REST APIs for the Logos platform — identity (`/me`, `/users`, `/teams`), configuration (models, providers, policies, permissions), admin export/import, operations (stats, billing, request logs), and the stats websockets — **and** the public inference gateway for `/v1/**`, `/openai/**`, `/jobs/**` (`gateway/`). Traefik routes those prefixes here at priority 100 (multi-instance via Compose scale); `/api/*` stays at priority 200 with the `/api` prefix stripped. Cloud named-model traffic is answered in-process; local/logosnode and mixed paths are reverse-proxied to `logos-orchestrator`.
 
 **This service owns the Postgres schema** via Liquibase.
 
@@ -22,9 +22,10 @@ mvn compile -q             # fast check
 
 ## Architecture
 
-- **Auth**: Keycloak JWT (resource server). `auth/JwtAuthInterceptor` maps claims onto the request, `KeycloakUserSyncService` keeps local `users` rows in sync. Special cases: `POST /internal/models_discovered` is gated on the internal secret, not JWT; `/logosdb/get_model_health` likewise (see `auth/SecurityConfig.java`).
+- **Auth**: Keycloak JWT (resource server) for management APIs. `auth/JwtAuthInterceptor` maps claims onto the request, `KeycloakUserSyncService` keeps local `users` rows in sync. Special cases: `POST /internal/models_discovered` is gated on the internal secret, not JWT; `/logosdb/get_model_health` likewise; `/v1/**`, `/openai/**`, `/jobs/**` use Logos API keys in the inference gateway (see `auth/SecurityConfig.java` and `gateway/`).
+- **Inference gateway** (`gateway/`): one-query auth+permissions on the named-model cloud path; approximate monthly budget with a short TTL cache (see `GatewayBudgetService`); streaming cloud forward or orchestrator reverse-proxy. Remaining process state is named on `InferenceGatewayController`.
 - **JPA**: `ddl-auto=validate` — entities never create tables; Liquibase is the only source of schema.
-- Each domain package follows `controller/ service/ repository/ entity/ dto/` (see `README.md` for the package map); `admin/` has no entities/repositories of its own, `common/` has no sub-packages.
+- Each domain package follows `controller/ service/ repository/ entity/ dto/` (see `README.md` for the package map); `admin/` has no entities/repositories of its own, `common/` has no sub-packages; `gateway/` is the inference front door.
 
 ## Tests
 

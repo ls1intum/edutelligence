@@ -41,7 +41,7 @@ def _delete_result(failed: int = 0, matches: int = 0) -> SimpleNamespace:
 
 
 def _patch_pdf(monkeypatch, page_count: int = 1) -> None:
-    fake_doc = SimpleNamespace(page_count=page_count)
+    fake_doc = SimpleNamespace(page_count=page_count, close=MagicMock())
     monkeypatch.setattr(
         "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
         MagicMock(return_value="/tmp/test.pdf"),
@@ -100,6 +100,7 @@ def _page_pipeline(
     pipeline._hidden_until_by_page = {}
     pipeline.skipped = False
     pipeline.kept_previous_generation = False
+    pipeline.cancel_event = None
 
     def record_delete(**_kwargs):
         events.append("delete")
@@ -261,6 +262,7 @@ def test_unit_row_replacement_fails_run_when_delete_fails(monkeypatch):
     pipeline.weaviate_client = MagicMock()
     pipeline.local = True
     pipeline.callback = None
+    pipeline.cancel_event = None
     pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
 
     # No stored row is reused, so the pipeline writes a new row and then purges
@@ -501,6 +503,7 @@ def test_update_pipeline_forwards_stage_error_code_once():
     )
     pipeline.variant_id = "default"
     pipeline._is_local = False
+    pipeline.cancel_event = None
     pipeline._run_ingestion = MagicMock(
         side_effect=IngestionStageError(SLIDE_VISION_FAILED, "page 4 failed")
     )
@@ -888,6 +891,7 @@ def test_call_passes_every_written_uuid_to_the_stale_prune(monkeypatch):
     )
     pipeline.callback = None
     pipeline.tokens = []
+    pipeline.cancel_event = None
     monkeypatch.setattr(pipeline, "_get_slide_range", lambda: (1, 3))
     monkeypatch.setattr(pipeline, "_get_transcriptions", lambda *_a, **_k: [])
     monkeypatch.setattr(pipeline, "_get_slides", lambda *_a, **_k: [])

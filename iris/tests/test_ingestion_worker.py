@@ -9,14 +9,13 @@ upstreams, auth pairing from the announcement, and heartbeat bookkeeping.
 # Tests reach into worker internals and import a couple of modules lazily; both are expected here.
 # pylint: disable=protected-access,import-outside-toplevel
 
-import logging
 import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from iris.common.boot_id import BOOT_ID
-from iris.ingestion.worker import _WEDGED_UNIT_SKIP_THRESHOLD, IngestionWorker
+from iris.ingestion.worker import IngestionWorker
 
 
 def _response(status_code=200, body=None):
@@ -213,31 +212,6 @@ class TestClaim:
         )
         assert "done" not in worker._active  # pylint: disable=protected-access
 
-    def test_a_duplicate_skip_does_not_starve_the_next_upstream_of_its_own_capacity(
-        self,
-    ):
-        # upstream a hands back one job that _start_job skips as a duplicate (no thread
-        # started); upstream b must still be offered the full, unspent capacity.
-        worker = IngestionWorker()
-        worker.register_upstream("http://a:8080", "key-a")
-        worker.register_upstream("http://b:8080", "key-b")
-        with patch.object(worker, "_start_job", side_effect=[False]):
-            with patch(
-                "iris.ingestion.worker.http_requests.post",
-                side_effect=[
-                    _response(body={"jobs": [{"a": 1}]}),
-                    _response(body={"jobs": []}),
-                ],
-            ) as post:
-                worker._claim_once()  # pylint: disable=protected-access
-        first, second = post.call_args_list
-        assert (
-            first.kwargs["json"]["maxJobs"] == worker._config.capacity
-        )  # pylint: disable=protected-access
-        assert (
-            second.kwargs["json"]["maxJobs"] == worker._config.capacity
-        )  # pylint: disable=protected-access
-
 
 class TestHeartbeat:
     """Heartbeating: active-token reporting, idle upstreams, failure recovery."""
@@ -293,19 +267,21 @@ class TestHeartbeat:
 
 
 class TestStartJob:
-    """_start_job registers a run in _active for lease renewal only when the job handler
-    actually starts its thread. A run skipped as a per-unit duplicate must leave no entry:
-    an unstarted thread reads is_alive() == False, so it would be pruned on the next tick,
-    stop renewing its lease, and make Artemis reclaim a claim it already activated — a spin.
+    """_start_job always starts its thread and registers a run in _active for lease
+    renewal: add_job supersedes rather than skips, so a reclaimed-lease retry always
+    starts and there is no "skipped duplicate" case any more.
     """
 
-    def _start_job(self, worker, upstream_url, add_job_started):
+    def _start_job(self, worker, upstream_url):
         dto = SimpleNamespace(
-            settings=SimpleNamespace(authentication_token="tok-12345678"),
+            settings=SimpleNamespace(
+                authentication_token="tok-12345678",
+                artemis_base_url="https://artemis.example",
+            ),
             lecture_unit=SimpleNamespace(course_id=1, lecture_id=2, lecture_unit_id=3),
         )
         handler = MagicMock()
-        handler.add_job.return_value = add_job_started
+        handler.create_cancellation_event.return_value = "cancel-event-sentinel"
         upstream = SimpleNamespace(url=upstream_url)
         with (
             patch(
@@ -315,61 +291,38 @@ class TestStartJob:
             ),
             patch("iris.web.utils.validate_pipeline_variant", return_value="variant"),
             patch("iris.web.routers.webhooks.ingestion_job_handler", handler),
-            patch("iris.web.routers.webhooks.run_lecture_update_pipeline_worker"),
+            patch(
+                "iris.web.routers.webhooks.run_lecture_update_pipeline_worker"
+            ) as run_worker,
         ):
             worker._start_job({"job": 1}, upstream)  # pylint: disable=protected-access
-        return handler
+        return handler, run_worker
 
     def test_started_run_is_registered_for_lease_renewal(self):
         worker = IngestionWorker()
-        handler = self._start_job(worker, "http://a:8080", add_job_started=True)
+        handler, _ = self._start_job(worker, "http://a:8080")
         handler.add_job.assert_called_once()
+        assert handler.add_job.call_args.kwargs["base_url"] == "https://artemis.example"
         assert handler.add_job.call_args.kwargs["course_id"] == 1
         assert handler.add_job.call_args.kwargs["lecture_unit_id"] == 3
+        assert (
+            handler.add_job.call_args.kwargs["cancel_event"] == "cancel-event-sentinel"
+        )
         active = worker._active  # pylint: disable=protected-access
         assert "tok-12345678" in active
         assert active["tok-12345678"].upstream_url == "http://a:8080"
 
-    def test_deduplicated_run_leaves_no_zombie_entry(self):
-        worker = IngestionWorker()
-        self._start_job(worker, "http://a:8080", add_job_started=False)
-        assert "tok-12345678" not in worker._active  # pylint: disable=protected-access
-
-    def test_return_value_reports_whether_a_thread_actually_started(self):
-        worker = IngestionWorker()
-        dto = SimpleNamespace(
-            settings=SimpleNamespace(authentication_token="tok-a"),
-            lecture_unit=SimpleNamespace(course_id=1, lecture_id=2, lecture_unit_id=3),
-        )
-        upstream = SimpleNamespace(url="http://a:8080")
-        for add_job_started in (True, False):
-            handler = MagicMock()
-            handler.add_job.return_value = add_job_started
-            with (
-                patch(
-                    "iris.domain.ingestion.ingestion_pipeline_execution_dto"
-                    ".IngestionPipelineExecutionDto.model_validate",
-                    return_value=dto,
-                ),
-                patch("iris.web.utils.validate_pipeline_variant", return_value="v"),
-                patch("iris.web.routers.webhooks.ingestion_job_handler", handler),
-                patch("iris.web.routers.webhooks.run_lecture_update_pipeline_worker"),
-            ):
-                # pylint: disable-next=protected-access
-                assert worker._start_job({"job": 1}, upstream) is add_job_started
-
-    def test_repeated_dedup_skips_escalate_to_a_warning_and_reset_on_start(
-        self, caplog
+    def test_pipeline_thread_receives_the_same_cancel_event_registered_with_add_job(
+        self,
     ):
-        # A thread that never exits keeps getting reclaimed and re-skipped; once the counter reaches
-        # the threshold the skip is logged at WARNING so the wedged unit is diagnosable, and the
-        # counter clears once a run for the unit finally starts.
+        # The pipeline's own current_job_guard checks this exact cancel_event later; if the
+        # thread was built with a different one (or None), a superseding claim could never
+        # cancel it. The thread is never actually started here (add_job itself is mocked
+        # away), so this inspects the constructor args rather than running it.
         worker = IngestionWorker()
-        with caplog.at_level(logging.WARNING, logger="iris.ingestion.worker"):
-            for _ in range(_WEDGED_UNIT_SKIP_THRESHOLD):
-                self._start_job(worker, "http://a:8080", add_job_started=False)
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert warnings, "a wedged unit must escalate to a WARNING"
-        assert "skipped" in warnings[-1].getMessage()
-        self._start_job(worker, "http://a:8080", add_job_started=True)
-        assert 3 not in worker._dedup_skips  # pylint: disable=protected-access
+        handler, run_worker = self._start_job(worker, "http://a:8080")
+        thread = handler.add_job.call_args.kwargs["process"]
+        assert thread._target is run_worker  # pylint: disable=protected-access
+        assert (
+            thread._args[2] == "cancel-event-sentinel"
+        )  # pylint: disable=protected-access

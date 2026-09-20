@@ -72,18 +72,19 @@ export class LaneMemoryPieComponent {
       return a.model.localeCompare(b.model);
     });
 
-    for (const [, lane] of sortedLanes) {
+    for (const [laneId, lane] of sortedLanes) {
       const valueMb = this.laneValueMb(lane);
       if (valueMb === null || valueMb <= 0) continue;
       allocatedMb += valueMb;
 
-      // Shorten model name to last path segment for legend readability
+      // Shorten model name to last path segment for legend readability.
+      // Include laneId so two deployments of the same model stay distinguishable.
       const shortModel = lane.model.includes('/') ? lane.model.split('/').pop()! : lane.model;
 
       result.push({
         value: Number((valueMb / 1024).toFixed(3)),
         color: getLaneStateColor(lane.runtime_state),
-        text: `${shortModel} [${lane.runtime_state}]`,
+        text: `${shortModel} · ${laneId} [${lane.runtime_state}]`,
       });
     }
 

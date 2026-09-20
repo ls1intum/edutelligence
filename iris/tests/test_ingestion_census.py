@@ -329,6 +329,7 @@ def test_census_wire_format_uses_camel_case():
 
 def test_unit_pipeline_stamps_the_fingerprint_verbatim():
     pipeline = object.__new__(LectureUnitPipeline)
+    pipeline.cancel_event = None
     insert = MagicMock(return_value="33333333-3333-3333-3333-333333333333")
     pipeline.lecture_unit_collection = SimpleNamespace(
         query=SimpleNamespace(

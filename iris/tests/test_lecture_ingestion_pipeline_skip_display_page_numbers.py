@@ -9,6 +9,7 @@ from iris.vector_database.lecture_unit_page_chunk_schema import (
 
 def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatch):
     pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.cancel_event = None
 
     lecture_unit = SimpleNamespace(
         pdf_file_base64="",
@@ -35,7 +36,6 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
     )
     pipeline.tokens = []
     pipeline.course_language = None
-    pipeline.get_course_language = MagicMock(return_value="en")
 
     version_chunk = SimpleNamespace(
         properties={
@@ -87,6 +87,7 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
         load_page=MagicMock(
             return_value=SimpleNamespace(get_text=MagicMock(return_value="page text"))
         ),
+        close=MagicMock(),
     )
     monkeypatch.setattr(
         "iris.pipeline.lecture_ingestion_pipeline.save_pdf",

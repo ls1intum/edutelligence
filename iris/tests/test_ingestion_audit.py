@@ -268,6 +268,7 @@ def test_run_ingestion_audits_before_the_terminal_callback():
     pipeline.dto = _dto()
     pipeline.variant_id = "default"
     pipeline._is_local = False
+    pipeline.cancel_event = None
     callback = MagicMock()
     order = []
     callback.finish.side_effect = lambda **_kwargs: order.append("finish")
@@ -295,6 +296,7 @@ def test_run_fails_with_audit_code_when_the_audit_rejects_the_unit():
     pipeline.dto = _dto()
     pipeline.variant_id = "default"
     pipeline._is_local = False
+    pipeline.cancel_event = None
     callback = MagicMock()
 
     with (

@@ -44,11 +44,6 @@ _REQUEST_TIMEOUT_SECONDS = 30
 # ones; runs already in flight keep being heartbeated until they finish.
 _UPSTREAM_EXPIRY_SECONDS = 300.0
 
-# Consecutive per-unit dedup skips before the skip is logged as a wedged unit. A
-# thread cannot be killed, so a run stuck forever keeps being reclaimed and
-# re-skipped; escalating makes that state diagnosable instead of silent.
-_WEDGED_UNIT_SKIP_THRESHOLD = 3
-
 
 @dataclass
 class _Upstream:
@@ -84,11 +79,6 @@ class IngestionWorker:
         self._upstreams: dict[str, _Upstream] = {}
         self._threads: list[threading.Thread] = []
         self._rotation = 0
-        # Consecutive dedup skips per lecture unit, cleared when a worker-started run for it starts or
-        # ends (_prune_finished). A unit blocked by a push-started run has no _active entry, so its
-        # counter is not evicted — bounded by distinct units and transient (Artemis suppresses push
-        # while a worker is present).
-        self._dedup_skips: dict[int, int] = {}
 
     # ---------------------------------------------------------- discovery
 
@@ -226,8 +216,6 @@ class IngestionWorker:
             token for token, run in self._active.items() if not run.thread.is_alive()
         ]
         for token in finished:
-            # The finished thread was what blocked its unit, so its skip counter can go too.
-            self._dedup_skips.pop(self._active[token].lecture_unit_id, None)
             del self._active[token]
 
     def _claim_loop(self) -> None:
@@ -248,12 +236,10 @@ class IngestionWorker:
             slots -= self._claim_from(upstream, slots)
 
     def _claim_from(self, upstream: _Upstream, slots: int) -> int:
-        """Claim up to ``slots`` jobs from one upstream; returns how many actually started.
+        """Claim up to ``slots`` jobs from one upstream and start all of them.
 
-        Not the same as how many Artemis handed back: a job that ``_start_job`` skips as a
-        per-unit duplicate frees no thread and must not be counted as having consumed a slot,
-        or a duplicate in one upstream's response can make this tick under-claim from the next
-        upstream even though real capacity was never spent.
+        Every claimed job starts immediately: ``add_job`` supersedes rather than skips, so
+        there is no "duplicate, not counted" case here any more.
         """
         try:
             response = self._post(
@@ -268,9 +254,12 @@ class IngestionWorker:
         # The request already asked for at most `slots`; re-clamp the response too, instead of
         # trusting the upstream to honor that limit, since starting more than the requested
         # slots would exceed this worker's own configured capacity.
-        return sum(1 for job in jobs[:slots] if self._start_job(job, upstream))
+        claimed = jobs[:slots]
+        for job in claimed:
+            self._start_job(job, upstream)
+        return len(claimed)
 
-    def _start_job(self, job: dict, upstream: _Upstream) -> bool:
+    def _start_job(self, job: dict, upstream: _Upstream) -> None:
         # Import here: the webhooks router pulls in the full pipeline stack, and
         # importing it at module load time would create a cycle through main.
         # pylint: disable=import-outside-toplevel
@@ -292,53 +281,33 @@ class IngestionWorker:
         )
         token = dto.settings.authentication_token
         unit_id = dto.lecture_unit.lecture_unit_id
+        # The same key the pipeline's own current_job_guard checks later, so a
+        # reclaimed-lease retry correctly supersedes a still-alive prior run for
+        # this unit rather than racing it (see ingestion_job_handler.add_job).
+        cancel_event = ingestion_job_handler.create_cancellation_event()
         thread = threading.Thread(
-            target=run_lecture_update_pipeline_worker, args=(dto, variant)
+            target=run_lecture_update_pipeline_worker,
+            args=(dto, variant, cancel_event),
         )
-        # add_job dedups per unit like the push path and reports whether it started the thread. Run it
-        # under _lock so the start and the _active insert are atomic: only a started run is tracked,
-        # and no prune can observe a not-yet-alive thread and drop a live run.
+        # Run under _lock so the start and the _active insert are atomic: no prune
+        # can observe a not-yet-alive thread and drop a live run.
         with self._lock:
-            started = ingestion_job_handler.add_job(
+            ingestion_job_handler.add_job(
                 process=thread,
+                base_url=dto.settings.artemis_base_url,
                 course_id=dto.lecture_unit.course_id,
                 lecture_id=dto.lecture_unit.lecture_id,
                 lecture_unit_id=unit_id,
+                cancel_event=cancel_event,
             )
-            if started:
-                self._active[token] = _ActiveRun(
-                    thread=thread, upstream_url=upstream.url, lecture_unit_id=unit_id
-                )
-                self._dedup_skips.pop(unit_id, None)
-            else:
-                skips = self._dedup_skips.get(unit_id, 0) + 1
-                self._dedup_skips[unit_id] = skips
-        if not started:
-            # A prior run for this unit is still draining here. Leave the claim untracked: its lease
-            # lapses and Artemis reclaims it (via lease expiry — findStuckStates skips leased rows).
-            # A thread that keeps draining is reclaimed and re-skipped each cycle, so escalate: the
-            # unit stays blocked until that thread exits (a wedged one, only on a worker restart).
-            if skips >= _WEDGED_UNIT_SKIP_THRESHOLD:
-                logger.warning(
-                    "Unit %d skipped %d times: a prior run's thread is still alive; the unit stays "
-                    "blocked until that thread exits",
-                    unit_id,
-                    skips,
-                )
-            else:
-                logger.info(
-                    "Duplicate ingestion job for unit %d from %s already running; leaving the claim "
-                    "for Artemis to reclaim",
-                    unit_id,
-                    upstream.url,
-                )
-            return False
+            self._active[token] = _ActiveRun(
+                thread=thread, upstream_url=upstream.url, lecture_unit_id=unit_id
+            )
         logger.info(
             "Claimed ingestion job for unit %d from %s",
             unit_id,
             upstream.url,
         )
-        return True
 
     # -------------------------------------------------------- heartbeat loop
 

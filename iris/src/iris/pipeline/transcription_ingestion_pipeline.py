@@ -1,4 +1,5 @@
 from functools import reduce
+from threading import Event
 from typing import Any, Dict, List, Optional
 
 from langchain_core.output_parsers import StrOutputParser
@@ -7,6 +8,8 @@ from langchain_core.runnables import Runnable
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
 
+from iris.common.cancellation import raise_if_cancelled
+from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.ingestion_errors import (
     TRANSCRIPT_INGESTION_FAILED,
     IngestionStageError,
@@ -20,6 +23,7 @@ from iris.domain.data.metrics.transcription_dto import (
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -32,6 +36,7 @@ from iris.pipeline.prompts.transcription_ingestion_prompts import (
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 from iris.vector_database.batch_verify import (
+    delete_many_with_retry,
     fetch_with_retry,
     purge_other_rows,
     write_batch_with_retry,
@@ -71,11 +76,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
         dto: Optional[IngestionPipelineExecutionDto],
         callback: IngestionStatusCallback,
         local: bool = False,
+        cancel_event: Optional[Event] = None,
     ) -> None:
         super().__init__(implementation_id="transcription_ingestion_pipeline")
         self.client = client
         self.dto = dto
         self.callback = callback
+        self.cancel_event = cancel_event
         self.collection = init_lecture_transcription_schema(client)
         pipeline_id = "transcription_ingestion_pipeline"
         embedding_model = resolve_model(
@@ -96,6 +103,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
+            lecture_unit = self.dto.lecture_unit
             self.callback.update()
             if (
                 not self.dto.lecture_unit.force_reingest
@@ -118,7 +126,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.callback.update()
 
             self.callback.update()
-            chunks = self.chunk_transcription(self.dto.lecture_unit)
+            chunks = self.chunk_transcription(lecture_unit)
             self.callback.update()
 
             self.callback.update()
@@ -128,14 +136,18 @@ class TranscriptionIngestionPipeline(SubPipeline):
             self.callback.update()
             logger.info(
                 "[%s / %s] Embedding and indexing %d transcription chunks into Weaviate",
-                self.dto.lecture_unit.lecture_name,
-                self.dto.lecture_unit.lecture_unit_name,
+                lecture_unit.lecture_name,
+                lecture_unit.lecture_unit_name,
                 len(chunks),
             )
-            self.batch_insert(chunks)
+            prepared_chunks = self._prepare_batch_insert(chunks)
+            self.callback.update()
+            self._replace_prepared_chunks(lecture_unit, prepared_chunks)
             self.callback.update()
 
-            return self.dto.lecture_unit.transcription.language, self.tokens
+            return lecture_unit.transcription.language, self.tokens
+        except IngestionCancelledException:
+            raise
         except IngestionStageError as e:
             if not e.tokens:
                 e.tokens = list(self.tokens)
@@ -223,18 +235,23 @@ class TranscriptionIngestionPipeline(SubPipeline):
         }
         return stored_pages != expected_pages
 
-    def batch_insert(self, chunks):
-        """Embed outside the shared write lock, then write-new-then-sweep.
+    def _lecture_unit_id(self) -> Optional[int]:
+        lecture_unit = self.dto.lecture_unit if self.dto is not None else None
+        return lecture_unit.lecture_unit_id if lecture_unit is not None else None
 
-        The new generation is inserted and verified first; only then is
-        everything that does not belong to this run removed. A crash mid-write
-        never leaves the unit without a transcription: at worst two
-        generations coexist briefly until the next run's sweep.
-        """
+    def _prepare_batch_insert(self, chunks):
+        """Embed every chunk outside the shared write lock."""
+        cancel_event = self.cancel_event
+        lecture_unit_id = self._lecture_unit_id()
         prepared_chunks = []
         try:
             total = len(chunks)
             for i, chunk in enumerate(chunks):
+                raise_if_cancelled(
+                    cancel_event,
+                    lecture_unit_id,
+                    "transcription embedding",
+                )
                 if i % 5 == 0:
                     self.callback.update(
                         stage_name="transcript-embedding",
@@ -245,32 +262,65 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
                 )
                 prepared_chunks.append((chunk, embed_chunk))
+        except IngestionCancelledException:
+            raise
         except Exception as e:
             logger.error("Error embedding lecture transcription chunk: %s", e)
             raise
+        return prepared_chunks
 
+    def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
+        """Write-new-then-sweep, inside the shared write lock and job guard.
+
+        The new generation is inserted and verified first; only then is
+        everything that does not belong to this run removed. A crash mid-write
+        never leaves the unit without a transcription: at worst two
+        generations coexist briefly until the next run's sweep.
+        """
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
         with batch_update_lock:
-            # One retry budget for the swap: a transient store condition re-submits
-            # only the dropped chunks, never the summary/embedding work above.
-            retry = WeaviateWriteRetry.for_request()
-            written_ids = write_batch_with_retry(
-                self.collection,
-                prepared_chunks,
-                "transcription chunks",
-                retry=retry,
-                open_batch=lambda collection: collection.batch.dynamic(),
-            )
-            purge_other_rows(
-                self.collection,
-                self._get_unit_filter(self.dto.lecture_unit),
-                written_ids,
-                "outdated transcription chunks",
-                retry=retry,
-            )
+            with job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
+                lecture_unit.lecture_unit_id,
+                self.cancel_event,
+                "transcription replacement",
+            ):
+                # One retry budget for the swap: a transient store condition re-submits
+                # only the dropped chunks, never the summary/embedding work above.
+                retry = WeaviateWriteRetry.for_request()
+                if not prepared_chunks:
+                    # Nothing new to protect via write-then-sweep ordering: the
+                    # transcript is genuinely empty (not a transient failure --
+                    # chunk_transcription already ran), so simply clear whatever
+                    # transcription is stored instead of leaving it stale forever.
+                    delete_many_with_retry(
+                        self.collection,
+                        self._get_unit_filter(self.dto.lecture_unit),
+                        "transcription chunks (empty transcript)",
+                        retry=retry,
+                    )
+                    return
+                written_ids = write_batch_with_retry(
+                    self.collection,
+                    prepared_chunks,
+                    "transcription chunks",
+                    retry=retry,
+                    open_batch=lambda collection: collection.batch.dynamic(),
+                )
+                purge_other_rows(
+                    self.collection,
+                    self._get_unit_filter(self.dto.lecture_unit),
+                    written_ids,
+                    "outdated transcription chunks",
+                    retry=retry,
+                )
 
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO
     ) -> List[Dict[str, Any]]:
+        cancel_event = self.cancel_event
         chunks = []
 
         slide_chunks = {}
@@ -309,6 +359,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
             len(slide_chunks),
         )
         for i, segment in enumerate(slide_chunks.values()):
+            raise_if_cancelled(
+                cancel_event,
+                transcription.lecture_unit_id,
+                "transcription chunking",
+            )
             # If the segment is shorter than 1200 characters, we can just add it as is
             if len(segment[LectureTranscriptionSchema.SEGMENT_TEXT.value]) < 1200:
                 # Add the segment to the chunks list and replace the chunk separator character with a space
@@ -338,6 +393,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
             offset_start = offset_slide_chunk
             for _, chunk in enumerate(semantic_chunks):
+                raise_if_cancelled(
+                    cancel_event,
+                    transcription.lecture_unit_id,
+                    "transcription chunking",
+                )
                 offset_end = offset_start + len(self.remove_separator_char(chunk))
 
                 start_time = self.get_transcription_segment_of_char_position(
@@ -397,9 +457,15 @@ class TranscriptionIngestionPipeline(SubPipeline):
         return self.replace_separator_char(text, "")
 
     def summarize_chunks(self, chunks: List[Dict[str, Any]]):
+        cancel_event = self.cancel_event
         chunks_with_summaries = []
         total = len(chunks)
         for i, chunk in enumerate(chunks):
+            raise_if_cancelled(
+                cancel_event,
+                self.dto.lecture_unit.lecture_unit_id,
+                "transcription summarization",
+            )
             slide = chunk.get(LectureTranscriptionSchema.PAGE_NUMBER.value, "?")
             logger.info(
                 "[%s / %s] Summarizing chunk %d/%d (slide %s)",
