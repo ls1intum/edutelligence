@@ -267,10 +267,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             try:
                 doc = fitz.open(pdf_path)
                 force_reingest = self.dto.lecture_unit.force_reingest
+                requested_language = self._resolve_course_language(doc)
                 if not force_reingest and not self.check_if_attachment_needs_update(
-                    doc.page_count
+                    doc.page_count, requested_language
                 ):
-                    self.course_language = self._resolve_course_language(doc)
+                    self.course_language = requested_language
                     self.restore_display_page_numbers_from_existing_chunks()
                     self.kept_previous_generation = True
                     self.skipped = True
@@ -413,12 +414,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             json.loads(stored_flags) if stored_flags else None
         )
 
-    def check_if_attachment_needs_update(self, page_count: int) -> bool:
+    def check_if_attachment_needs_update(
+        self, page_count: int, requested_language: str
+    ) -> bool:
         """Decide structurally whether the stored chunks are current and complete.
 
         Skipping is only safe when every stored chunk carries the current
         attachment version (a None version is a legacy row, and inequality
         instead of "less than" also re-ingests after a version rollback), the
+        current requested language (a None or mismatched language means the
+        course's declared language changed since these chunks were generated;
+        skipping would stamp the new language on the unit row while the actual
+        chunk text, embeddings, and per-chunk course_language still reflect the
+        old one, permanently hiding the mismatch from reconciliation), the
         chunks cover exactly pages 1..page_count, all rows belong to a single
         ingestion generation (mixed run ids mean a crashed write left old and
         new rows side by side), and the stored per-page chunk counts match
@@ -435,6 +443,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     LectureUnitPageChunkSchema.PAGE_VERSION.value,
                     LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
                     LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+                    LectureUnitPageChunkSchema.COURSE_LANGUAGE.value,
                 ],
             )
         ).objects
@@ -456,6 +465,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 LectureUnitPageChunkSchema.PAGE_VERSION.value
             )
             if version is None or version != self.dto.lecture_unit.attachment_version:
+                return True
+            stored_language = chunk.properties.get(
+                LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
+            )
+            if not stored_language or stored_language != requested_language:
                 return True
             # A null display number is legacy data written before the field existed
             # (or before slide detection). Re-ingest so the current pipeline

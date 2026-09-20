@@ -45,6 +45,9 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
             # A non-null display number keeps the unit skippable; a null one would
             # (correctly) force a re-ingest to repopulate it.
             LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
+            # Matches lecture_unit.course_language: a mismatch would (correctly)
+            # force a re-ingest instead of skipping.
+            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: "en",
         },
     )
     existing_chunks = [

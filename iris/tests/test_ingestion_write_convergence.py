@@ -89,6 +89,7 @@ def _page_pipeline(
         chunk_counts_by_page=None,
         quality_score=None,
         quality_flags=None,
+        course_language="en",
     )
     pipeline.dto = SimpleNamespace(
         lecture_unit=lecture_unit,
@@ -321,7 +322,7 @@ def test_attachment_needs_update_is_structural():
         )
     )
 
-    def needs_update(stored_chunks, page_count):
+    def needs_update(stored_chunks, page_count, requested_language="en"):
         rows = [
             SimpleNamespace(
                 uuid=f"chunk-{page}-{version}-{run_id}",
@@ -330,9 +331,10 @@ def test_attachment_needs_update_is_structural():
                     LectureUnitPageChunkSchema.PAGE_VERSION.value: version,
                     LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: run_id,
                     LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: display,
+                    LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: language,
                 },
             )
-            for page, version, run_id, display in stored_chunks
+            for page, version, run_id, display, language in stored_chunks
         ]
         pipeline.collection = SimpleNamespace(
             query=SimpleNamespace(
@@ -340,24 +342,59 @@ def test_attachment_needs_update_is_structural():
                 fetch_object_by_id=MagicMock(return_value=SimpleNamespace()),
             )
         )
-        return pipeline.check_if_attachment_needs_update(page_count)
+        return pipeline.check_if_attachment_needs_update(page_count, requested_language)
 
     run = _CURRENT_RUN_ID
     assert needs_update([], page_count=2) is True
-    assert needs_update([(1, None, run, 1), (2, None, run, 2)], page_count=2) is True
-    assert needs_update([(1, 3, run, 1), (2, 3, run, 2)], page_count=2) is True
-    assert needs_update([(1, 2, run, 1)], page_count=2) is True
     assert (
-        needs_update([(1, 2, run, 1), (2, 2, run, 2), (3, 2, run, 3)], page_count=2)
+        needs_update([(1, None, run, 1, "en"), (2, None, run, 2, "en")], page_count=2)
+        is True
+    )
+    assert (
+        needs_update([(1, 3, run, 1, "en"), (2, 3, run, 2, "en")], page_count=2) is True
+    )
+    assert needs_update([(1, 2, run, 1, "en")], page_count=2) is True
+    assert (
+        needs_update(
+            [(1, 2, run, 1, "en"), (2, 2, run, 2, "en"), (3, 2, run, 3, "en")],
+            page_count=2,
+        )
         is True
     )
     # Mixed ingestion generations mean a crashed write left old and new rows.
-    assert needs_update([(1, 2, run, 1), (2, 2, "run-old", 2)], page_count=2) is True
+    assert (
+        needs_update([(1, 2, run, 1, "en"), (2, 2, "run-old", 2, "en")], page_count=2)
+        is True
+    )
     # A null display number is legacy data; re-ingest to repopulate real numbers.
-    assert needs_update([(1, 2, run, None), (2, 2, run, 2)], page_count=2) is True
-    assert needs_update([(1, 2, run, 1), (2, 2, run, 2)], page_count=2) is False
+    assert (
+        needs_update([(1, 2, run, None, "en"), (2, 2, run, 2, "en")], page_count=2)
+        is True
+    )
+    assert (
+        needs_update([(1, 2, run, 1, "en"), (2, 2, run, 2, "en")], page_count=2)
+        is False
+    )
     # Legacy rows without any run id stay skippable when otherwise complete.
-    assert needs_update([(1, 2, None, 1), (2, 2, None, 2)], page_count=2) is False
+    assert (
+        needs_update([(1, 2, None, 1, "en"), (2, 2, None, 2, "en")], page_count=2)
+        is False
+    )
+    # The requested language changed since these chunks were generated: the
+    # unit row must not be stamped with the new language while the chunk text
+    # and embeddings still reflect the old one.
+    assert (
+        needs_update(
+            [(1, 2, run, 1, "en"), (2, 2, run, 2, "en")],
+            page_count=2,
+            requested_language="de",
+        )
+        is True
+    )
+    # A null stored language is legacy data written before the field existed.
+    assert (
+        needs_update([(1, 2, run, 1, None), (2, 2, run, 2, None)], page_count=2) is True
+    )
 
 
 def test_attachment_needs_update_when_all_chunks_are_ghosts():
@@ -385,6 +422,7 @@ def test_attachment_needs_update_when_all_chunks_are_ghosts():
                 LectureUnitPageChunkSchema.PAGE_VERSION.value: 2,
                 LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: _CURRENT_RUN_ID,
                 LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: page,
+                LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: "en",
             },
         )
         for page in (1, 2)
@@ -396,7 +434,7 @@ def test_attachment_needs_update_when_all_chunks_are_ghosts():
         )
     )
 
-    assert pipeline.check_if_attachment_needs_update(2) is True
+    assert pipeline.check_if_attachment_needs_update(2, "en") is True
 
 
 def test_attachment_needs_update_when_stored_chunk_counts_mismatch():
@@ -423,6 +461,7 @@ def test_attachment_needs_update_when_stored_chunk_counts_mismatch():
                 LectureUnitPageChunkSchema.PAGE_VERSION.value: 2,
                 LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: _CURRENT_RUN_ID,
                 LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: page,
+                LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: "en",
             }
         )
         for page in (1, 2)
@@ -434,7 +473,7 @@ def test_attachment_needs_update_when_stored_chunk_counts_mismatch():
     )
 
     # Pages 1..2 are covered, but page 1 should hold two chunks and holds one.
-    assert pipeline.check_if_attachment_needs_update(2) is True
+    assert pipeline.check_if_attachment_needs_update(2, "en") is True
 
 
 def test_interpret_image_retries_then_fails_the_run():
