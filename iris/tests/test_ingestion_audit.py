@@ -275,6 +275,7 @@ def test_run_ingestion_audits_before_the_terminal_callback():
 
     with (
         patch("iris.pipeline.lecture_ingestion_update_pipeline.VectorDatabase"),
+        patch("iris.pipeline.lecture_ingestion_update_pipeline.delete_many_with_retry"),
         patch(
             "iris.pipeline.lecture_ingestion_update_pipeline.LectureUnitPipeline"
         ) as unit_pipeline_cls,
@@ -305,6 +306,7 @@ def test_run_fails_with_audit_code_when_the_audit_rejects_the_unit():
             return_value=callback,
         ),
         patch("iris.pipeline.lecture_ingestion_update_pipeline.VectorDatabase"),
+        patch("iris.pipeline.lecture_ingestion_update_pipeline.delete_many_with_retry"),
         patch(
             "iris.pipeline.lecture_ingestion_update_pipeline.LectureUnitPipeline"
         ) as unit_pipeline_cls,
@@ -322,6 +324,53 @@ def test_run_fails_with_audit_code_when_the_audit_rejects_the_unit():
     callback.finish.assert_not_called()
     callback.fail.assert_called_once()
     assert callback.fail.call_args.kwargs["code"] == INGESTION_AUDIT_FAILED
+
+
+def test_run_ingestion_purges_stale_content_when_pdf_and_transcript_are_absent():
+    # A dispatch with neither a PDF nor a transcript means Artemis currently
+    # associates neither with the unit (removed, or never present). Any rows
+    # still stored from an earlier generation are stale and must be purged, or
+    # the manifest-based audit (which expects zero content here) would fail
+    # forever with nothing able to clean them up.
+    pipeline = object.__new__(LectureIngestionUpdatePipeline)
+    pipeline.dto = _dto()
+    pipeline.variant_id = "default"
+    pipeline._is_local = False
+    pipeline.cancel_event = None
+    callback = MagicMock()
+
+    page_chunk_collection = MagicMock()
+    page_chunk_collection.data.delete_many.return_value = SimpleNamespace(
+        failed=0, matches=0, successful=0
+    )
+    transcription_collection = MagicMock()
+    transcription_collection.data.delete_many.return_value = SimpleNamespace(
+        failed=0, matches=0, successful=0
+    )
+
+    with (
+        patch("iris.pipeline.lecture_ingestion_update_pipeline.VectorDatabase"),
+        patch(
+            "iris.pipeline.lecture_ingestion_update_pipeline.init_lecture_unit_page_chunk_schema",
+            return_value=page_chunk_collection,
+        ),
+        patch(
+            "iris.pipeline.lecture_ingestion_update_pipeline.init_lecture_transcription_schema",
+            return_value=transcription_collection,
+        ),
+        patch(
+            "iris.pipeline.lecture_ingestion_update_pipeline.LectureUnitPipeline"
+        ) as unit_pipeline_cls,
+        patch(
+            "iris.pipeline.lecture_ingestion_update_pipeline.IngestionAudit"
+        ) as audit_cls,
+    ):
+        unit_pipeline_cls.return_value.return_value = []
+        audit_cls.for_client.return_value.verify.return_value = None
+        pipeline._run_ingestion(callback, {})
+
+    page_chunk_collection.data.delete_many.assert_called_once()
+    transcription_collection.data.delete_many.assert_called_once()
 
 
 def test_segments_are_complete_is_true_when_nothing_is_expected():

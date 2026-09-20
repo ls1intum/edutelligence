@@ -5,6 +5,8 @@ from pathlib import Path
 from threading import Event
 from typing import Optional
 
+from weaviate.classes.query import Filter
+
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.common.ingestion_errors import IngestionStageError
@@ -32,7 +34,16 @@ from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
 from iris.tracing import observe
-from iris.vector_database.database import VectorDatabase
+from iris.vector_database.batch_verify import delete_many_with_retry
+from iris.vector_database.database import VectorDatabase, batch_update_lock
+from iris.vector_database.lecture_transcription_schema import (
+    LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 logger = get_logger(__name__)
@@ -524,6 +535,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
         else:
             self._send_heartbeats(callback, 6, "missing PDF page ingestion")
+            self._purge_stale_page_chunks(client)
 
         # Transcription ingestion
         has_transcript = (
@@ -548,6 +560,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
         else:
             self._send_heartbeats(callback, 8, "missing transcription ingestion")
+            self._purge_stale_transcription(client)
 
         # Lecture unit summary. When every content sub-pipeline structurally
         # skipped (or kept its previous generation), the stored unit summary
@@ -624,6 +637,92 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 display_page_numbers=self.dto.lecture_unit.display_page_numbers,
                 tokens=tokens,
             )
+
+    def _purge_stale_page_chunks(self, client) -> None:
+        """Clear any page chunks stored for this unit when this dispatch has no PDF.
+
+        Artemis rebuilds the full attachment/transcript payload from its current
+        DB state on every dispatch (fresh, retry, or worker-claimed), so a
+        PDF-less dispatch means the attachment is not currently associated with
+        the unit -- removed, or never present. Any chunks still stored from an
+        earlier generation are therefore stale, and nothing else ever removes
+        them: the manifest-based audit expects zero chunks in this case and
+        would otherwise fail on every retry forever. Mirrors
+        TranscriptionIngestionPipeline._replace_prepared_chunks's "genuinely
+        empty -> clear what's stored" handling one level up. delete_many is
+        idempotent, so this is safe to call unconditionally, including when
+        nothing is stored.
+        """
+        lecture_unit = self.dto.lecture_unit
+        collection = init_lecture_unit_page_chunk_schema(client)
+        unit_filter = (
+            Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
+                self.dto.settings.artemis_base_url
+            )
+            & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+                lecture_unit.course_id
+            )
+            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
+                lecture_unit.lecture_id
+            )
+            & Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit.lecture_unit_id)
+        )
+        with batch_update_lock:
+            with ingestion_job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
+                lecture_unit.lecture_unit_id,
+                self.cancel_event,
+                "PDF removal purge",
+            ):
+                delete_many_with_retry(
+                    collection,
+                    unit_filter,
+                    "stale page chunks (no PDF in this dispatch)",
+                )
+
+    def _purge_stale_transcription(self, client) -> None:
+        """Clear any transcription rows stored for this unit when this dispatch
+        has no transcript.
+
+        Mirrors _purge_stale_page_chunks: an absent transcript in the request
+        means Artemis currently associates none with the unit (removed, video
+        source changed, or never present), so any surviving rows are stale and
+        would otherwise fail the manifest-based audit on every retry forever.
+        """
+        lecture_unit = self.dto.lecture_unit
+        collection = init_lecture_transcription_schema(client)
+        unit_filter = (
+            Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
+                self.dto.settings.artemis_base_url
+            )
+            & Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
+                lecture_unit.course_id
+            )
+            & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
+                lecture_unit.lecture_id
+            )
+            & Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit.lecture_unit_id)
+        )
+        with batch_update_lock:
+            with ingestion_job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
+                lecture_unit.lecture_unit_id,
+                self.cancel_event,
+                "transcription removal purge",
+            ):
+                delete_many_with_retry(
+                    collection,
+                    unit_filter,
+                    "stale transcription rows (no transcript in this dispatch)",
+                )
 
     # ── Checkpoint helpers ───────────────────────────────────────────────
 
