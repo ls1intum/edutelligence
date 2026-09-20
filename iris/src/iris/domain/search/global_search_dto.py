@@ -197,6 +197,13 @@ class GlobalSearchRequestDTO(BaseModel):
     # Optional course scope from the search UI's active course filter; the
     # retrieval intersects it with the access context.
     course_ids: list[int] | None = Field(default=None, alias="courseIds")
+    # Courses to hide from the search regardless of course_ids/access context.
+    # Only needed when Artemis cannot subtract the exclusion itself (an
+    # unrestricted caller with no course ceiling to narrow) — every other
+    # caller already has exclusions baked into course_ids.
+    exclude_course_ids: list[int] = Field(
+        default_factory=list, alias="excludeCourseIds"
+    )
     # True when Artemis already resolved the course scope to nothing (every requested
     # course was excluded). Distinct from course_ids=None (unscoped): Artemis's own
     # NON_EMPTY JSON policy drops an empty courseIds list from the wire, which would

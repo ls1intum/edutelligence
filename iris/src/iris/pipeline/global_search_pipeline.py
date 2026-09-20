@@ -435,6 +435,7 @@ class GlobalSearchPipeline(SubPipeline):
         access_context: AccessContext | None = None,
         entity_candidates: list[EntityCandidateDTO] | None = None,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
         stream_handler=None,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
@@ -451,6 +452,9 @@ class GlobalSearchPipeline(SubPipeline):
                                   rerank pool so the answer can draw on course
                                   information (dates, points, channels, FAQs) as well
                                   as lecture content.
+        :param exclude_course_ids: Courses to hide regardless of course_ids/access
+                                   context — only needed for an unrestricted caller
+                                   with no course ceiling to narrow locally.
         :return: An answer with source references.
         """
         # Guard: skip the full LLM pipeline for navigation queries
@@ -462,13 +466,14 @@ class GlobalSearchPipeline(SubPipeline):
                 query=query,
                 limit=limit,
                 course_ids=course_ids,
+                exclude_course_ids=exclude_course_ids,
                 access_context=access_context,
             )
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
         entity_sources = self._render_entity_sources(entity_candidates)
         sources = self._retrieve_sources(
-            query, limit, access_context, entity_sources, course_ids
+            query, limit, access_context, entity_sources, course_ids, exclude_course_ids
         )
         if not sources:
             logger.info("[global-search] outcome=no_sources query=%r", query[:120])
@@ -642,6 +647,7 @@ class GlobalSearchPipeline(SubPipeline):
         access_context: AccessContext | None = None,
         entity_sources: list[EntitySourceDTO] | None = None,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
     ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
         """Candidate retrieval with the instruct query embedding.
 
@@ -657,6 +663,7 @@ class GlobalSearchPipeline(SubPipeline):
             limit=limit,
             alpha=0.5,
             course_ids=course_ids,
+            exclude_course_ids=exclude_course_ids,
             auto_cut=True,
             access_context=access_context,
             entity_sources=entity_sources,
@@ -670,6 +677,7 @@ class GlobalSearchPipeline(SubPipeline):
                 limit=limit,
                 alpha=0.1,
                 course_ids=course_ids,
+                exclude_course_ids=exclude_course_ids,
                 auto_cut=True,
                 access_context=access_context,
                 entity_sources=entity_sources,

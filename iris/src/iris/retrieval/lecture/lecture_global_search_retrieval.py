@@ -293,6 +293,31 @@ def _unit_key(props: dict[str, Any]) -> tuple[Any, Any, Any]:
     return (props.get("base_url"), props.get("course_id"), props.get("lecture_unit_id"))
 
 
+def _course_scope_filter(
+    course_id_property: str,
+    course_ids: list[int] | None,
+    exclude_course_ids: list[int] | None,
+) -> Filter | None:
+    """Build the course-scope filter for a Weaviate lane query.
+
+    ``course_ids`` and ``exclude_course_ids`` are independent, additive
+    constraints rather than alternatives: Artemis sends exclusions on their
+    own precisely for the caller with no course_ids ceiling to narrow
+    locally (an unrestricted caller), so both may be present, either alone,
+    or neither.
+    """
+    clauses = []
+    if course_ids:
+        clauses.append(Filter.by_property(course_id_property).contains_any(course_ids))
+    if exclude_course_ids:
+        clauses.append(
+            Filter.by_property(course_id_property).contains_none(exclude_course_ids)
+        )
+    if not clauses:
+        return None
+    return clauses[0] if len(clauses) == 1 else Filter.all_of(clauses)
+
+
 def _snippet_key(dto: "LectureSearchResultDTO") -> str:
     return (dto.snippet or "")[:_DEDUP_KEY_CHARS].casefold().strip()
 
@@ -395,6 +420,7 @@ class LectureGlobalSearchRetrieval:
         limit: int,
         alpha: float = _DEFAULT_ALPHA,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
         auto_cut: bool = False,
         access_context: AccessContext | None = None,
         entity_sources: list[EntitySourceDTO] | None = None,
@@ -407,6 +433,9 @@ class LectureGlobalSearchRetrieval:
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param course_ids: Optional list of course IDs to restrict the search scope.
                            When None, searches all ingested courses (global search).
+        :param exclude_course_ids: Courses to hide regardless of course_ids/access
+                                   context — only needed for an unrestricted caller
+                                   with no course ceiling for Artemis to narrow itself.
         :param auto_cut: Cut each sub-search at its natural score cliff (use for
                          generation contexts, not for the UI results list).
         :param access_context: Optional permissions filter resolved by Artemis. Intersected
@@ -437,6 +466,7 @@ class LectureGlobalSearchRetrieval:
             alpha=alpha,
             limit=limit,
             course_ids=effective_course_ids,
+            exclude_course_ids=exclude_course_ids,
             auto_cut=auto_cut,
             policy=_VisibilityPolicy.from_context(access_context),
             entity_sources=entity_sources,
@@ -450,6 +480,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
         auto_cut: bool = False,
         policy: "_VisibilityPolicy | None" = None,
         entity_sources: list[EntitySourceDTO] | None = None,
@@ -471,7 +502,15 @@ class LectureGlobalSearchRetrieval:
             []
             if skip_content_lanes
             else self._search_lanes_until_visible(
-                query, vector, alpha, limit, course_ids, auto_cut, policy, telemetry
+                query,
+                vector,
+                alpha,
+                limit,
+                course_ids,
+                exclude_course_ids,
+                auto_cut,
+                policy,
+                telemetry,
             )
         )
         entity_pool = [
@@ -496,6 +535,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None,
+        exclude_course_ids: list[int] | None,
         auto_cut: bool,
         policy: "_VisibilityPolicy",
         telemetry: "_SearchTelemetry",
@@ -516,7 +556,14 @@ class LectureGlobalSearchRetrieval:
         depth_cap = settings.global_search_lane_depth_max
         while True:
             seg_objects, trans_objects = self._search_lanes(
-                query, vector, alpha, lane_depth, course_ids, auto_cut, telemetry
+                query,
+                vector,
+                alpha,
+                lane_depth,
+                course_ids,
+                exclude_course_ids,
+                auto_cut,
+                telemetry,
             )
             exhausted = (
                 len(seg_objects) < lane_depth and len(trans_objects) < lane_depth
@@ -547,6 +594,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         lane_depth: int,
         course_ids: list[int] | None,
+        exclude_course_ids: list[int] | None,
         auto_cut: bool,
         telemetry: "_SearchTelemetry",
     ) -> tuple[list[Any], list[Any]]:
@@ -565,6 +613,7 @@ class LectureGlobalSearchRetrieval:
                 alpha,
                 lane_depth,
                 course_ids,
+                exclude_course_ids,
                 auto_limit,
             )
             trans_future = executor.submit(
@@ -574,6 +623,7 @@ class LectureGlobalSearchRetrieval:
                 alpha,
                 lane_depth,
                 course_ids,
+                exclude_course_ids,
                 auto_limit,
             )
         seg_objects = seg_future.result()
@@ -1053,14 +1103,11 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
         auto_limit: int | None = None,
     ) -> list[Any]:
-        filters = (
-            Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
-                course_ids
-            )
-            if course_ids
-            else None
+        filters = _course_scope_filter(
+            LectureUnitSegmentSchema.COURSE_ID.value, course_ids, exclude_course_ids
         )
         return self.collection.query.hybrid(
             query=query,
@@ -1079,6 +1126,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
         auto_limit: int | None = None,
     ) -> list[Any]:
         """Search LectureTranscriptions restricted to segments with no associated slide
@@ -1087,13 +1135,14 @@ class LectureGlobalSearchRetrieval:
         page_filter = Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
         ).equal(-1)
-        if course_ids:
-            course_filter = Filter.by_property(
-                LectureTranscriptionSchema.COURSE_ID.value
-            ).contains_any(course_ids)
-            filters = Filter.all_of([page_filter, course_filter])
-        else:
-            filters = page_filter
+        course_filter = _course_scope_filter(
+            LectureTranscriptionSchema.COURSE_ID.value, course_ids, exclude_course_ids
+        )
+        filters = (
+            Filter.all_of([page_filter, course_filter])
+            if course_filter is not None
+            else page_filter
+        )
         return self.transcription_collection.query.hybrid(
             query=query,
             alpha=alpha,

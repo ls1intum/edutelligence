@@ -18,6 +18,7 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
     QWEN3_RETRIEVAL_INSTRUCTION,
     LectureGlobalSearchRetrieval,
     _Candidate,
+    _course_scope_filter,
     _SearchTelemetry,
     _VisibilityPolicy,
 )
@@ -408,6 +409,7 @@ def test_lane_expands_past_a_full_window_of_filtered_hits_to_reach_a_visible_one
         alpha=0.75,
         limit=5,
         course_ids=None,
+        exclude_course_ids=None,
         auto_cut=False,
         policy=_VisibilityPolicy.from_context(None),
         telemetry=_SearchTelemetry(),
@@ -434,6 +436,7 @@ def test_lane_stops_expanding_once_a_lane_is_exhausted():
         alpha=0.75,
         limit=5,
         course_ids=None,
+        exclude_course_ids=None,
         auto_cut=False,
         policy=_VisibilityPolicy.from_context(None),
         telemetry=_SearchTelemetry(),
@@ -441,3 +444,52 @@ def test_lane_stops_expanding_once_a_lane_is_exhausted():
 
     assert not result
     retrieval._search_lanes.assert_called_once()
+
+
+class TestCourseScopeFilter:
+    """course_ids and exclude_course_ids are independent, additive constraints:
+    an unrestricted caller has no course_ids ceiling to narrow locally, so
+    Artemis sends only exclusions, which must still reach the Weaviate query."""
+
+    def test_no_constraints_produces_no_filter(self):
+        assert _course_scope_filter("course_id", None, None) is None
+        assert _course_scope_filter("course_id", [], []) is None
+
+    def test_only_inclusion_produces_a_contains_any_filter(self):
+        result = _course_scope_filter("course_id", [9, 11], None)
+        assert result.operator.value == "ContainsAny"
+        assert result.value == [9, 11]
+
+    def test_only_exclusion_produces_a_contains_none_filter(self):
+        # The scenario this exists for: an unrestricted caller with no course_ids
+        # ceiling for Artemis to narrow itself, so the exclusion must reach the
+        # query on its own rather than being dropped for lack of a course_ids list.
+        result = _course_scope_filter("course_id", None, [5])
+        assert result.operator.value == "ContainsNone"
+        assert result.value == [5]
+
+    def test_both_constraints_combine_with_and(self):
+        result = _course_scope_filter("course_id", [9, 11], [5])
+        assert result.operator.value == "And"
+        sub_operators = {f.operator.value for f in result.filters}
+        assert sub_operators == {"ContainsAny", "ContainsNone"}
+
+
+def test_search_segments_applies_the_exclusion_filter_with_no_course_ids():
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval.collection = Mock()
+    retrieval.collection.query.hybrid.return_value = Mock(objects=[])
+
+    retrieval._search_segments(
+        query="anything",
+        vector=[0.1],
+        alpha=0.75,
+        limit=25,
+        course_ids=None,
+        exclude_course_ids=[5],
+    )
+
+    sent_filter = retrieval.collection.query.hybrid.call_args.kwargs["filters"]
+    assert sent_filter is not None
+    assert sent_filter.operator.value == "ContainsNone"
+    assert sent_filter.value == [5]

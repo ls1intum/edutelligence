@@ -166,6 +166,15 @@ class TestWireShapes:
         assert dto.course_ids is None
         assert dto.searches_nothing is False
 
+    def test_exclude_course_ids_parses_camel_case_and_defaults_to_empty(self):
+        dto = GlobalSearchRequestDTO(query="q", settings=_SETTINGS_JSON)
+        assert dto.exclude_course_ids == []
+
+        dto = GlobalSearchRequestDTO(
+            query="q", settings=_SETTINGS_JSON, excludeCourseIds=[5]
+        )
+        assert dto.exclude_course_ids == [5]
+
     def test_request_parses_camel_case_entity_candidates(self):
         dto = GlobalSearchRequestDTO(
             query="q",

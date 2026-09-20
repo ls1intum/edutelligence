@@ -379,6 +379,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 query=dto.query,
                 limit=dto.limit,
                 course_ids=dto.course_ids,
+                exclude_course_ids=dto.exclude_course_ids,
                 access_context=dto.access_context,
             )
             logger.info(
@@ -411,6 +412,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 access_context=dto.access_context,
                 entity_candidates=dto.entity_candidates,
                 course_ids=dto.course_ids,
+                exclude_course_ids=dto.exclude_course_ids,
                 stream_handler=sender.on_delta if sender else None,
             )
         finally:
