@@ -36,6 +36,7 @@ from iris.pipeline.prompts.transcription_ingestion_prompts import (
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 from iris.vector_database.batch_verify import (
+    confirmed_rows,
     delete_many_with_retry,
     fetch_with_retry,
     purge_other_rows,
@@ -233,7 +234,14 @@ class TranscriptionIngestionPipeline(SubPipeline):
             segment.slide_number
             for segment in self.dto.lecture_unit.transcription.segments
         }
-        return stored_pages != expected_pages
+        if stored_pages != expected_pages:
+            return True
+
+        # A structurally complete scan can still be all ghosts (scan-visible,
+        # object-store-missing): the final audit confirms every row, so trusting
+        # the raw scan here would skip re-ingestion forever while the audit fails
+        # on every retry, with nothing able to break the loop.
+        return len(confirmed_rows(self.collection, rows)) != len(rows)
 
     def _lecture_unit_id(self) -> Optional[int]:
         lecture_unit = self.dto.lecture_unit if self.dto is not None else None

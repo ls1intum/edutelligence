@@ -38,13 +38,14 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
     pipeline.course_language = None
 
     version_chunk = SimpleNamespace(
+        uuid="version-chunk-1",
         properties={
             LectureUnitPageChunkSchema.PAGE_VERSION.value: 7,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
             # A non-null display number keeps the unit skippable; a null one would
             # (correctly) force a re-ingest to repopulate it.
             LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
-        }
+        },
     )
     existing_chunks = [
         SimpleNamespace(
@@ -78,7 +79,8 @@ def test_skip_path_restores_display_page_numbers_from_existing_chunks(monkeypatc
                     SimpleNamespace(objects=[version_chunk]),
                     SimpleNamespace(objects=existing_chunks),
                 ]
-            )
+            ),
+            fetch_object_by_id=MagicMock(return_value=SimpleNamespace()),
         )
     )
 

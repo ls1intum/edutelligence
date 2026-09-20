@@ -324,18 +324,20 @@ def test_attachment_needs_update_is_structural():
     def needs_update(stored_chunks, page_count):
         rows = [
             SimpleNamespace(
+                uuid=f"chunk-{page}-{version}-{run_id}",
                 properties={
                     LectureUnitPageChunkSchema.PAGE_NUMBER.value: page,
                     LectureUnitPageChunkSchema.PAGE_VERSION.value: version,
                     LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: run_id,
                     LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: display,
-                }
+                },
             )
             for page, version, run_id, display in stored_chunks
         ]
         pipeline.collection = SimpleNamespace(
             query=SimpleNamespace(
-                fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows))
+                fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows)),
+                fetch_object_by_id=MagicMock(return_value=SimpleNamespace()),
             )
         )
         return pipeline.check_if_attachment_needs_update(page_count)
@@ -356,6 +358,45 @@ def test_attachment_needs_update_is_structural():
     assert needs_update([(1, 2, run, 1), (2, 2, run, 2)], page_count=2) is False
     # Legacy rows without any run id stay skippable when otherwise complete.
     assert needs_update([(1, 2, None, 1), (2, 2, None, 2)], page_count=2) is False
+
+
+def test_attachment_needs_update_when_all_chunks_are_ghosts():
+    # A structurally complete scan can still be all ghosts (scan-visible,
+    # object-store-missing). Trusting the raw scan here would skip re-ingestion
+    # forever while the manifest-based audit fails on every retry, since nothing
+    # about an all-ghost result self-heals.
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            attachment_version=2, course_id=1, lecture_id=2, lecture_unit_id=3
+        ),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        )
+    )
+    ghost_rows = [
+        SimpleNamespace(
+            uuid=f"ghost-{page}",
+            properties={
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value: page,
+                LectureUnitPageChunkSchema.PAGE_VERSION.value: 2,
+                LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: _CURRENT_RUN_ID,
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: page,
+            },
+        )
+        for page in (1, 2)
+    ]
+    pipeline.collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=ghost_rows)),
+            fetch_object_by_id=MagicMock(return_value=None),
+        )
+    )
+
+    assert pipeline.check_if_attachment_needs_update(2) is True
 
 
 def test_attachment_needs_update_when_stored_chunk_counts_mismatch():

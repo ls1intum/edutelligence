@@ -52,7 +52,8 @@ def _transcription_pipeline(rows) -> TranscriptionIngestionPipeline:
     )
     pipeline.collection = SimpleNamespace(
         query=SimpleNamespace(
-            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows))
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows)),
+            fetch_object_by_id=MagicMock(return_value=SimpleNamespace()),
         )
     )
     return pipeline
@@ -60,11 +61,12 @@ def _transcription_pipeline(rows) -> TranscriptionIngestionPipeline:
 
 def _transcript_row(page: int, fingerprint=_FINGERPRINT, run_id=_RUN_ID):
     return SimpleNamespace(
+        uuid=f"{_ROW_UUID}-{page}",
         properties={
             LectureTranscriptionSchema.PAGE_NUMBER.value: page,
             LectureTranscriptionSchema.CONTENT_FINGERPRINT.value: fingerprint,
             LectureTranscriptionSchema.INGESTION_RUN_ID.value: run_id,
-        }
+        },
     )
 
 
@@ -104,6 +106,17 @@ def test_transcription_needs_update_on_mixed_generations():
 def test_transcription_needs_update_without_request_fingerprint():
     pipeline = _transcription_pipeline([_transcript_row(1), _transcript_row(2)])
     pipeline.dto.lecture_unit.content_fingerprint = None
+    assert pipeline.check_if_transcription_needs_update() is True
+
+
+def test_transcription_needs_update_when_all_rows_are_ghosts():
+    # A structurally complete scan can still be all ghosts (scan-visible,
+    # object-store-missing). Trusting the raw scan here would skip re-ingestion
+    # forever while the manifest-based audit fails on every retry, since nothing
+    # about an all-ghost result self-heals.
+    pipeline = _transcription_pipeline([_transcript_row(1), _transcript_row(2)])
+    pipeline.collection.query.fetch_object_by_id = MagicMock(return_value=None)
+
     assert pipeline.check_if_transcription_needs_update() is True
 
 

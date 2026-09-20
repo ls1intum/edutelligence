@@ -50,6 +50,7 @@ from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
 from ..vector_database.batch_verify import (
     confirmed_generations,
+    confirmed_rows,
     delete_many_with_retry,
     fetch_with_retry,
     purge_other_rows,
@@ -487,6 +488,13 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
         expected_counts = self._stored_expected_chunk_counts()
         if expected_counts is not None and expected_counts != counts_by_page:
+            return True
+
+        # A structurally complete scan can still be all ghosts (scan-visible,
+        # object-store-missing): the final audit confirms every row, so trusting
+        # the raw scan here would skip re-ingestion forever while the audit fails
+        # on every retry, with nothing able to break the loop.
+        if len(confirmed_rows(self.collection, chunks)) != len(chunks):
             return True
         return False
 
