@@ -49,6 +49,21 @@ class TestSanitizeCitationMarkers:
         assert answer == "A.[1] B.[1]"
         assert cited == {0}
 
+    def test_bracketed_index_in_prose_is_preserved(self):
+        # "array[0]" is ordinary programming prose, not a citation: nothing
+        # precedes the bracket but the array name, not claim punctuation.
+        answer, cited = sanitize_citation_markers("Use array[0] as the pivot.[1]", 2)
+        assert answer == "Use array[0] as the pivot.[1]"
+        assert cited == {0}
+
+    def test_bracketed_index_in_prose_is_not_collected_as_a_citation(self):
+        # "element[1]" happens to fall in-range (1..num_sources) but is not in
+        # the marker position the prompt defines, so it must not be read as
+        # citing source 1.
+        answer, cited = sanitize_citation_markers("Access element[1] directly.", 3)
+        assert answer == "Access element[1] directly."
+        assert cited == set()
+
     def test_answer_without_markers_passes_through(self):
         answer, cited = sanitize_citation_markers("Plain answer.", 3)
         assert answer == "Plain answer."
@@ -73,6 +88,11 @@ class TestRenumberCitationMarkers:
 
     def test_none_answer_passes_through(self):
         assert renumber_citation_markers(None, {1: 1}) is None
+
+    def test_bracketed_index_in_prose_is_left_alone(self):
+        assert (
+            renumber_citation_markers("Use array[0].[2]", {2: 1}) == "Use array[0].[1]"
+        )
 
 
 class TestParseIntegration:

@@ -113,7 +113,15 @@ def _location_label(source: LectureSearchResultDTO) -> str:
     return f"Slide {page}"
 
 
-_CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+# The answer prompt (global_search_prompts.py) defines a citation marker as
+# appearing DIRECTLY after the claim's punctuation ("worth 10 points.[3]"), with
+# a chain of several stacking directly adjacent ("[1][2][3]"). Matching every
+# `[n]` regardless of position corrupts ordinary bracketed content in the
+# answer's own prose, e.g. a programming answer's "array[0]" — and, worse,
+# silently mis-attributes a source when that bracketed number happens to fall
+# in 1..num_sources ("element[1]" read as citing source 1). The lookbehind
+# restricts matches to the two positions the prompt actually produces.
+_CITATION_MARKER_RE = re.compile(r"(?<=[.!?\]])\[(\d+)\]")
 
 # Literal the model outputs INSTEAD of an answer when the sources cannot answer
 # the question (plain-text contract; measured 8/8 discipline on nano).
