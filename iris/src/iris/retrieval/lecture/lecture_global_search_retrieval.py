@@ -65,14 +65,17 @@ _DEFAULT_ALPHA = 0.75
 
 # Content-quality filter applied to every hit's snippet at query time, regardless
 # of collection: placeholder summaries written during ingestion ("There is no
-# content...", "no spoken content") and micro-content carry no information for
-# either the results list or the answer context. This runs unconditionally
-# BEFORE reranking rather than relying on the reranker's floor to demote junk:
-# _rerank_and_gate skips the floor entirely whenever rerank_result is None
-# (reranker unset, timeout/API failure, or the results-list path with reranking
-# turned off), so a placeholder that reached this far would otherwise sail
-# through those paths unfiltered straight into the UI or answer context.
-_LOW_INFO_MIN_CHARS = 25
+# content...", "no spoken content") carry no information for either the results
+# list or the answer context. This runs unconditionally BEFORE reranking rather
+# than relying on the reranker's floor to demote junk: _rerank_and_gate skips
+# the floor entirely whenever rerank_result is None (reranker unset,
+# timeout/API failure, or the results-list path with reranking turned off), so
+# a placeholder that reached this far would otherwise sail through those paths
+# unfiltered straight into the UI or answer context.
+#
+# Deliberately pattern-based rather than a length cutoff: a genuinely short but
+# complete summary ("A stack is LIFO.") is valid content, not junk, and a raw
+# character-count floor cannot tell the two apart.
 _LOW_INFO_PATTERNS = re.compile(
     r"^there is no content"  # ingestion placeholder (empty slide)
     r"|no spoken content"  # transcription placeholder (silent/music video)
@@ -141,10 +144,7 @@ def resolve_reranker_model(local: bool = False) -> str | None:
 
 
 def _is_low_information(snippet: str) -> bool:
-    stripped = snippet.strip()
-    if len(stripped) < _LOW_INFO_MIN_CHARS:
-        return True
-    return bool(_LOW_INFO_PATTERNS.search(stripped))
+    return bool(_LOW_INFO_PATTERNS.search(snippet.strip()))
 
 
 @dataclass

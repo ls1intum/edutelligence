@@ -57,13 +57,18 @@ class TestLowInformationFilter:
     def test_silent_video_placeholder_is_dropped(self):
         assert _is_low_information("no spoken content in this segment")
 
-    def test_micro_content_is_dropped(self):
-        assert _is_low_information("Meow.")
+    def test_single_word_slide_is_dropped(self):
+        assert _is_low_information("The slide contains a single word: 'Loading'.")
 
     def test_real_summary_is_kept(self):
         assert not _is_low_information(
             "The slide summarizes PETS, an MBRL method using bootstrapped ensembles."
         )
+
+    def test_short_but_complete_summary_is_kept(self):
+        # A concise, correct summary is valid content, not junk; a character-count
+        # floor previously dropped it purely for being short.
+        assert not _is_low_information("A stack is LIFO.")
 
 
 class TestSegmentToDto:
