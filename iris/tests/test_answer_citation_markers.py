@@ -64,6 +64,16 @@ class TestSanitizeCitationMarkers:
         assert answer == "Access element[1] directly."
         assert cited == set()
 
+    def test_marker_directly_after_display_math_is_kept_and_collected(self):
+        # The MATH section of the prompt wraps every equation in $$...$$, and
+        # rule 2 still puts the marker "directly after the claim" — an equation
+        # ending a claim has no sentence punctuation before the marker at all.
+        answer, cited = sanitize_citation_markers(
+            "The equation is $$\\hat{y}_i = \\theta x$$[1]", 2
+        )
+        assert answer == "The equation is $$\\hat{y}_i = \\theta x$$[1]"
+        assert cited == {0}
+
     def test_answer_without_markers_passes_through(self):
         answer, cited = sanitize_citation_markers("Plain answer.", 3)
         assert answer == "Plain answer."
