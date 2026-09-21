@@ -298,7 +298,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                     doc.close()
                 cleanup_temporary_file(pdf_path)
             self._record_chunk_manifest_and_quality(chunks)
-            if force_reingest and self._previous_generation_scores_better():
+            if force_reingest and self._previous_generation_scores_better(
+                requested_language
+            ):
                 # A quality re-run must never replace good content with worse:
                 # keep the stored generation and let the unit row record that
                 # this pipeline version was attempted, so the reconciler does
@@ -384,9 +386,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         ).objects
         return units[0].properties if units else {}
 
-    def _previous_generation_scores_better(self) -> bool:
-        """True when the stored generation's quality beats this run's result."""
+    def _previous_generation_scores_better(self, requested_language: str) -> bool:
+        """True when the stored generation's quality beats this run's result.
+
+        Only permitted when the stored generation was itself written in the
+        currently requested language: retaining an old-language generation while
+        stamping the newly resolved language onto the unit row would create the
+        same mismatch the structural skip check guards against, and the audit
+        does not compare chunk language to catch it.
+        """
         stored = self._fetch_stored_unit_row_properties()
+        stored_language = stored.get(LectureUnitSchema.COURSE_LANGUAGE.value)
+        if stored_language != requested_language:
+            return False
         stored_score = stored.get(LectureUnitSchema.QUALITY_SCORE.value)
         new_score = self.dto.lecture_unit.quality_score
         if stored_score is None or new_score is None:

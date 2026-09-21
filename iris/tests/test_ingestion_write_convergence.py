@@ -633,6 +633,7 @@ def test_quality_reingest_keeps_the_better_stored_generation(monkeypatch):
             LectureUnitSchema.QUALITY_SCORE.value: 0.9,
             LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
             LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+            LectureUnitSchema.COURSE_LANGUAGE.value: "en",
         }
     )
     pipeline.lecture_unit_collection = SimpleNamespace(
@@ -655,6 +656,45 @@ def test_quality_reingest_keeps_the_better_stored_generation(monkeypatch):
     # The kept generation's ledger travels on the DTO into the unit row rewrite.
     assert pipeline.dto.lecture_unit.quality_score == 0.9
     assert pipeline.dto.lecture_unit.chunk_counts_by_page == {1: 3}
+
+
+def test_quality_reingest_replaces_a_better_stored_generation_in_the_wrong_language(
+    monkeypatch,
+):
+    # A higher-scoring stored generation must not be kept if it was written in a
+    # different language than currently requested: retention would stamp the new
+    # language on the unit row while leaving chunks whose text and embeddings are
+    # still in the old one, a mismatch the audit does not check for.
+    events: list = []
+    pipeline = _page_pipeline(events)
+    pipeline.dto.lecture_unit.force_reingest = True
+    stored_unit_row = SimpleNamespace(
+        properties={
+            LectureUnitSchema.QUALITY_SCORE.value: 0.9,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
+            LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+            LectureUnitSchema.COURSE_LANGUAGE.value: "de",
+        }
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(objects=[stored_unit_row])
+            )
+        )
+    )
+    # The re-run scores lower, but the stored generation is in "de" while the
+    # request (via _page_pipeline's course_language="en") wants "en".
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    # Replacement proceeds despite the lower score, because the stored
+    # generation's language no longer matches what was requested.
+    assert "insert" in events
+    assert "embed" in events
+    assert pipeline.kept_previous_generation is False
 
 
 def test_purge_other_rows_deletes_everything_except_kept_ids():

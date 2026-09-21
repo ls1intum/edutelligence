@@ -582,7 +582,17 @@ class LectureIngestionUpdatePipeline(Pipeline):
         )
         callback.update()
         stage_started_at = time.monotonic()
-        lecture_unit_dto = self._build_lecture_unit_dto(language, content_unchanged)
+        # The declared course language is authoritative and must win over whatever a
+        # content sub-pipeline happens to report: transcription returns the transcript's
+        # own language (its metadata, or Whisper's detection), unrelated to the course's
+        # declared language, and would otherwise silently overwrite it on the unit row --
+        # stamping a language the stored chunk text was never generated in and making
+        # reconciliation repeatedly detect a false mismatch on an otherwise healthy unit.
+        declared_language = (self.dto.lecture_unit.course_language or "").strip()
+        unit_row_language = declared_language or language
+        lecture_unit_dto = self._build_lecture_unit_dto(
+            unit_row_language, content_unchanged
+        )
 
         tokens += LectureUnitPipeline(
             local=is_local,
