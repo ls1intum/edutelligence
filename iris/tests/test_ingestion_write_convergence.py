@@ -70,7 +70,11 @@ def _sample_chunk(page_number: int = 1, text: str = "text") -> dict:
 
 
 def _page_pipeline(
-    events: list, stale_rows=None, ghost_uuids=None, stored_chunk_languages=None
+    events: list,
+    stale_rows=None,
+    ghost_uuids=None,
+    stored_chunk_languages=None,
+    stored_chunk_run_ids=None,
 ) -> LectureUnitPageIngestionPipeline:
     pipeline = object.__new__(LectureUnitPageIngestionPipeline)
     lecture_unit = SimpleNamespace(
@@ -122,14 +126,34 @@ def _page_pipeline(
         ]:
             return SimpleNamespace(objects=list(stale_rows or []))
         if kwargs.get("return_properties") == [
-            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+            LectureUnitPageChunkSchema.PAGE_VERSION.value,
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value,
         ]:
+            # check_if_attachment_needs_update's structural scan, reused by the
+            # quality-retention gate: every synthetic row is otherwise
+            # structurally complete (single generation, current version, a
+            # real display number, all on page 1) so a test's chosen language
+            # per row is the only varying signal, unless the test also passes
+            # ghost_uuids (isolates object-store confirmation) or
+            # stored_chunk_run_ids (isolates single-generation grouping)
+            # instead.
+            run_ids = stored_chunk_run_ids or []
             return SimpleNamespace(
                 objects=[
                     SimpleNamespace(
                         uuid=f"lang-chunk-{index}",
                         properties={
-                            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: language
+                            LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
+                            LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit.attachment_version,
+                            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: (
+                                run_ids[index] if index < len(run_ids) else "stored-run"
+                            ),
+                            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: index
+                            + 1,
+                            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: language,
                         },
                     )
                     for index, language in enumerate(stored_chunk_languages or [])
@@ -632,15 +656,20 @@ def test_force_reingest_bypasses_the_structural_skip(monkeypatch):
 
     pipeline()
 
-    # The skip check is not even consulted: unchanged content is re-processed.
-    pipeline.check_if_attachment_needs_update.assert_not_called()
+    # The initial structural skip check at the top of __call__ is bypassed by
+    # the `not force_reingest` short-circuit -- unchanged content is
+    # re-processed rather than skipped. check_if_attachment_needs_update is
+    # still consulted exactly once, from the quality-retention gate below, to
+    # judge whether this forced run's result should be kept over the stored
+    # generation.
+    pipeline.check_if_attachment_needs_update.assert_called_once_with(1, "en")
     assert "chunk" in events
     assert "insert" in events
 
 
 def test_quality_reingest_keeps_the_better_stored_generation(monkeypatch):
     events: list = []
-    pipeline = _page_pipeline(events, stored_chunk_languages=["en", "en"])
+    pipeline = _page_pipeline(events, stored_chunk_languages=["en", "en", "en"])
     pipeline.dto.lecture_unit.force_reingest = True
     stored_unit_row = SimpleNamespace(
         properties={
@@ -682,7 +711,7 @@ def test_quality_reingest_replaces_a_better_stored_generation_in_the_wrong_langu
     # independently-resolved language, so only the chunks themselves are
     # trustworthy here.
     events: list = []
-    pipeline = _page_pipeline(events, stored_chunk_languages=["de", "de"])
+    pipeline = _page_pipeline(events, stored_chunk_languages=["de", "de", "de"])
     pipeline.dto.lecture_unit.force_reingest = True
     stored_unit_row = SimpleNamespace(
         properties={
@@ -716,6 +745,9 @@ def test_quality_reingest_replaces_when_stored_chunks_are_ghosts(monkeypatch):
     # A capped, empty, or ghost-only stored chunk scan must fail closed to
     # "replace", the same safe default as every other structural check here.
     events: list = []
+    # Every other structural fact (version, run, display number, page
+    # coverage, manifest count) is made to match, so only the ghost signal
+    # can be what forces replacement here.
     pipeline = _page_pipeline(
         events, stored_chunk_languages=["en"], ghost_uuids={"lang-chunk-0"}
     )
@@ -723,7 +755,7 @@ def test_quality_reingest_replaces_when_stored_chunks_are_ghosts(monkeypatch):
     stored_unit_row = SimpleNamespace(
         properties={
             LectureUnitSchema.QUALITY_SCORE.value: 0.9,
-            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 1}',
             LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
         }
     )
@@ -740,6 +772,50 @@ def test_quality_reingest_replaces_when_stored_chunks_are_ghosts(monkeypatch):
     pipeline()
 
     assert "insert" in events
+    assert pipeline.kept_previous_generation is False
+
+
+def test_quality_reingest_replaces_a_crash_mixed_generation_even_with_a_higher_score(
+    monkeypatch,
+):
+    # Simulates a crash landing between writing a new generation and purging
+    # the old one: two confirmed, same-language, otherwise-valid generations
+    # now coexist. A language-only check would see all rows match and keep
+    # this mix because its ledger score is higher; that mix is not one
+    # complete generation and would fail the post-write audit on every
+    # subsequent retry, with nothing able to break the loop. Requiring the
+    # same single-generation grouping as the normal skip path must force
+    # replacement here instead.
+    events: list = []
+    pipeline = _page_pipeline(
+        events,
+        stored_chunk_languages=["en", "en", "en"],
+        stored_chunk_run_ids=["run-old-crash", "run-old-crash", "run-new-crash"],
+    )
+    pipeline.dto.lecture_unit.force_reingest = True
+    stored_unit_row = SimpleNamespace(
+        properties={
+            LectureUnitSchema.QUALITY_SCORE.value: 0.9,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
+            LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+        }
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(objects=[stored_unit_row])
+            )
+        )
+    )
+    # The re-run scores lower than the stored ledger (0.9), which is exactly
+    # why a language-only check would have kept the crash-damaged mix.
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    assert "insert" in events
+    assert "embed" in events
     assert pipeline.kept_previous_generation is False
 
 
