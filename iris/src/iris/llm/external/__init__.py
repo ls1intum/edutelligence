@@ -13,6 +13,7 @@ from ...llm.external.openai_embeddings import (
     AzureOpenAIEmbeddingModel,
     DirectOpenAIEmbeddingModel,
 )
+from ...llm.external.passthrough_reranker import PassthroughReranker
 from ...llm.external.whisper import AzureWhisperModel, OpenAIWhisperModel
 from .cohere_client import CohereAzureClient
 from .vllm_rerank import VllmRerankModel
@@ -29,4 +30,5 @@ AnyLlm = Union[
     OllamaModel,
     CohereAzureClient,
     VllmRerankModel,
+    PassthroughReranker,
 ]
