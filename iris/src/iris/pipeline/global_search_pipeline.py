@@ -281,11 +281,19 @@ def _first_appearance_order(answer: str | None, indices: set[int]) -> list[int]:
     seen: list[int] = []
     seen_set: set[int] = set()
     if answer:
-        for match in _SINGLE_MARKER_RE.finditer(answer):
-            old = int(match.group(1)) - 1
-            if old in indices and old not in seen_set:
-                seen.append(old)
-                seen_set.add(old)
+        # Only markers inside a chain _CITATION_MARKER_RE recognizes as a real citation
+        # position (after sentence-ending punctuation or "$$") count as an appearance —
+        # scanning _SINGLE_MARKER_RE against the whole answer directly would also match
+        # incidental bracket-number text with no citation meaning at all (e.g. "array[2]"
+        # in prose about indexing), which can reverse the real citations' order if that
+        # index is coincidentally cited for real later on. Same chain-then-marker scoping
+        # sanitize_citation_markers and renumber_citation_markers already use above.
+        for chain in _CITATION_MARKER_RE.finditer(answer):
+            for match in _SINGLE_MARKER_RE.finditer(chain.group(0)):
+                old = int(match.group(1)) - 1
+                if old in indices and old not in seen_set:
+                    seen.append(old)
+                    seen_set.add(old)
     remaining = sorted(indices - seen_set)
     return seen + remaining
 

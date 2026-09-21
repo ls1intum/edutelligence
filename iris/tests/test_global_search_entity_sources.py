@@ -659,6 +659,58 @@ class TestSemesterTwinDedup:
             response.answer == "About the course.[1] About the slide.[2]"
         ), "the entity cited first must become [1], not be pushed past every lecture source"
 
+    def test_an_ordinary_numeric_bracket_does_not_get_mistaken_for_a_citation_appearance(
+        self,
+    ):
+        # "Use array[2] as input." has no sentence-ending punctuation before "[2]", so
+        # _CITATION_MARKER_RE never matches it as a real citation chain — but it still
+        # matches the bare [\d+] pattern _SINGLE_MARKER_RE looks for. Scanning that pattern
+        # against the whole answer directly (rather than only within real citation chains)
+        # would record source 2 as "cited first" from this incidental text alone, reversing
+        # the two REAL citations that follow it.
+        source_1 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Course"),
+            lecture=LectureInfo(id=1, name="Lecture"),
+            lectureUnit=LectureUnitInfo(
+                id=1,
+                name="Slides 1",
+                link="/l1",
+                pageNumber=1,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="First source content.",
+        )
+        source_2 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Course"),
+            lecture=LectureInfo(id=1, name="Lecture"),
+            lectureUnit=LectureUnitInfo(
+                id=2,
+                name="Slides 2",
+                link="/l2",
+                pageNumber=2,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Second source content.",
+        )
+        grounded_sources = [source_1, source_2]
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "Use array[2] as input. First claim.[1] Second claim.[2]"
+        )
+
+        response = pipeline(
+            query="explain array indexing", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert response.sources == [source_1, source_2]
+        assert (
+            response.answer == "Use array[2] as input. First claim.[1] Second claim.[2]"
+        ), "the incidental 'array[2]' text must not be treated as an earlier citation and reverse the real ones"
+
     def test_navigate_prompt_is_internally_consistent_about_the_no_answer_sentinel(
         self,
     ):
