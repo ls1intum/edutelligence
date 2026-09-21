@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "atlasml"
-version = "2.7"
+version = "3.0"
 description = ""
 authors = ["Maximilian Anzinger <anzinger@cit.tum.de>"]
 readme = "README.md"
