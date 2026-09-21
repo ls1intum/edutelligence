@@ -123,11 +123,18 @@ def _location_label(source: LectureSearchResultDTO) -> str:
 # `[n]` regardless of position corrupts ordinary bracketed content in the
 # answer's own prose, e.g. a programming answer's "array[0]" — and, worse,
 # silently mis-attributes a source when that bracketed number happens to fall
-# in 1..num_sources ("element[1]" read as citing source 1). The lookbehind
-# restricts matches to the positions the prompt actually produces: the two
-# punctuation positions, split into their own alternative from the `$$` one
-# since Python's re requires each lookbehind branch to be a fixed width.
-_CITATION_MARKER_RE = re.compile(r"(?:(?<=[.!?\]])|(?<=\$\$))\[(\d+)\]")
+# in 1..num_sources ("element[1]" read as citing source 1).
+#
+# The lookbehind therefore anchors on the WHOLE adjacent chain, not each marker
+# individually: it requires only the chain's first `[` to sit directly after
+# claim punctuation or a closing `$$`, then `(?:\[\d+\])+` greedily consumes any
+# further markers stacked with zero characters in between. Anchoring per-marker
+# instead (allowing a bare preceding `]` to start a new match on its own) would
+# also match plain chained indexing like `matrix[0][1]`: `[0]` is never itself a
+# valid start position, but `[1]` immediately follows its closing `]` and would
+# wrongly read as a continuation, recording an uncited answer as citing source 1.
+_CITATION_MARKER_RE = re.compile(r"(?:(?<=[.!?])|(?<=\$\$))(?:\[\d+\])+")
+_SINGLE_MARKER_RE = re.compile(r"\[(\d+)\]")
 
 # Literal the model outputs INSTEAD of an answer when the sources cannot answer
 # the question (plain-text contract; measured 8/8 discipline on nano).
@@ -183,26 +190,26 @@ def sanitize_citation_markers(
     if not answer:
         return answer, set()
     cited: set[int] = set()
-    # (last kept index, end offset of the current marker run) in original
-    # string coordinates; a removed marker extends the run so [1][9][1]
-    # still collapses to [1] once [9] is gone.
-    run: list = [None, -1]
 
-    def _replace(match: re.Match) -> str:
-        index = int(match.group(1))
-        contiguous = match.start() == run[1]
-        run[1] = match.end()
-        if not contiguous:
-            run[0] = None
-        if not 1 <= index <= num_sources:
-            return ""
-        if run[0] == index:
-            return ""
-        run[0] = index
-        cited.add(index - 1)
-        return match.group(0)
+    def _replace_chain(chain: re.Match) -> str:
+        # Everything in one regex match is already one physically-adjacent chain,
+        # so "last kept index" only needs to track position within THIS chain —
+        # an invalid marker is dropped without breaking that adjacency, so
+        # [1][9][1] still collapses to [1] once [9] (out of range) is gone.
+        last_kept: int | None = None
+        kept: list[int] = []
+        for marker in _SINGLE_MARKER_RE.finditer(chain.group(0)):
+            index = int(marker.group(1))
+            if not 1 <= index <= num_sources:
+                continue
+            if index == last_kept:
+                continue
+            kept.append(index)
+            last_kept = index
+        cited.update(index - 1 for index in kept)
+        return "".join(f"[{index}]" for index in kept)
 
-    sanitized = _CITATION_MARKER_RE.sub(_replace, answer)
+    sanitized = _CITATION_MARKER_RE.sub(_replace_chain, answer)
     return sanitized, cited
 
 
@@ -219,11 +226,15 @@ def renumber_citation_markers(
     if not answer:
         return answer
 
-    def _replace(match: re.Match) -> str:
-        new = old_to_new.get(int(match.group(1)))
-        return f"[{new}]" if new is not None else ""
+    def _replace_chain(chain: re.Match) -> str:
+        parts = []
+        for marker in _SINGLE_MARKER_RE.finditer(chain.group(0)):
+            new = old_to_new.get(int(marker.group(1)))
+            if new is not None:
+                parts.append(f"[{new}]")
+        return "".join(parts)
 
-    return _CITATION_MARKER_RE.sub(_replace, answer)
+    return _CITATION_MARKER_RE.sub(_replace_chain, answer)
 
 
 def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[int]]:

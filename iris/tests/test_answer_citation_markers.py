@@ -64,6 +64,18 @@ class TestSanitizeCitationMarkers:
         assert answer == "Access element[1] directly."
         assert cited == set()
 
+    def test_chained_indexing_is_not_read_as_a_citation_chain_continuation(self):
+        # "matrix[0][1]" is ordinary chained indexing, not a citation followed by
+        # a chain continuation: [0] is never itself a valid start position (not
+        # preceded by claim punctuation or $$), so the [1] immediately after its
+        # closing ] must not be swept in as a "continuation" either — anchoring
+        # per-marker on a bare preceding ] would do exactly that, recording an
+        # uncited sentence as citing source 1 and letting renumbering mangle the
+        # array index.
+        answer, cited = sanitize_citation_markers("Use matrix[0][1] as the pivot.", 3)
+        assert answer == "Use matrix[0][1] as the pivot."
+        assert cited == set()
+
     def test_marker_directly_after_display_math_is_kept_and_collected(self):
         # The MATH section of the prompt wraps every equation in $$...$$, and
         # rule 2 still puts the marker "directly after the claim" — an equation
