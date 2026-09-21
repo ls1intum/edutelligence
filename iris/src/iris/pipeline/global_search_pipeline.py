@@ -250,8 +250,15 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     trailing "Used_sources: [..]" line (recovering attribution), raw text
     with all sources as the last resort."""
     cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-    # Plain-text contract: the sentinel is the honest "cannot answer" state.
-    if cleaned.rstrip(".").strip().casefold() == _NO_ANSWER_SENTINEL:
+    # Plain-text contract: the sentinel is the honest "cannot answer" state. Checked with
+    # endswith rather than equality: the model is instructed to write the sentinel ALONE
+    # ("Do NOT write any message explaining why"), but sometimes appends it after an
+    # explanation instead of obeying that — observed live as prose ending in " !none!". The
+    # trailing sentinel still means the model judged the sources insufficient; treating that
+    # explanation as a real, sourced answer would be worse than suppressing it, since nothing
+    # here or downstream distinguishes a genuine claim from what the model itself flagged as
+    # not actually answerable.
+    if cleaned.rstrip(".").strip().casefold().endswith(_NO_ANSWER_SENTINEL):
         return None, set()
     parsed = _try_parse_json(cleaned)
     if parsed is None:

@@ -32,6 +32,22 @@ class TestSentinelParsing:
         assert answer is None
         assert used == set()
 
+    def test_sentinel_appended_after_an_explanation_is_still_no_answer(self):
+        # The prompt says write the sentinel ALONE ("Do NOT write any message explaining
+        # why"), but the model sometimes violates that and appends it after prose instead —
+        # observed live. The trailing sentinel still means the model judged the sources
+        # insufficient; without this, the explanation was treated as a real answer and fell
+        # through to the markerless "attach all sources" fallback, showing the model's own
+        # explanation of why it COULDN'T answer as if it had, with the literal "!none!" text
+        # left visible and unrelated sources attached.
+        raw = (
+            "The course materials discuss image classification and linear "
+            "classification, but they do not define or cover sorting. !none!"
+        )
+        answer, used = parse_answer_response(raw, 3)
+        assert answer is None
+        assert used == set()
+
     def test_plain_text_with_markers_uses_marker_attribution(self):
         answer, used = parse_answer_response("The quiz is worth 4 points.[2]", 3)
         assert answer == "The quiz is worth 4 points.[2]"
