@@ -126,6 +126,22 @@ class TestParseIntegration:
         assert answer == "A.[1] B.[3]"
         assert used == {0, 2}
 
+    def test_used_sources_over_reporting_does_not_attach_uncited_sources(self):
+        # Observed live: the model's JSON used_sources listed far more sources than it
+        # actually cited inline — an unconditional union attached all of them to the
+        # response, showing 13 source chips for an answer that only ever cites [1] and [5].
+        # Inline markers are the ground truth of what the rendered text references; a
+        # bloated used_sources self-report must not override that once real markers exist.
+        raw = json.dumps(
+            {
+                "answer": "AI is the broadest category.[1] CV focuses on images.[5]",
+                "used_sources": list(range(1, 14)),
+            }
+        )
+        answer, used = parse_answer_response(raw, 13)
+        assert answer == "AI is the broadest category.[1] CV focuses on images.[5]"
+        assert used == {0, 4}
+
     def test_marker_only_attribution_is_not_suppressed_as_ungrounded(self):
         # The model cited inline but forgot used_sources: the ungrounded
         # guard must treat the markers as grounding.

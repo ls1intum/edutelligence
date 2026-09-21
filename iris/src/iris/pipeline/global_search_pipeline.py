@@ -248,9 +248,16 @@ def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[i
     if answer:
         answer = _HEADER_ECHO_RE.sub("", answer)
     answer, cited_indices = sanitize_citation_markers(answer, num_sources)
-    # A cited source is a used source even when the model forgot to list it —
-    # and inline markers count as grounding for the suppression guard below.
-    used_indices = used_indices | cited_indices
+    # cited_indices is the ground truth of what the rendered text actually cites, scanned from
+    # its own [n] markers; used_indices is only the model's separate JSON self-report, which can
+    # be wrong in both directions. Prefer cited_indices whenever the model wrote any inline
+    # markers at all: it already covers a source cited inline but left off the JSON list (the
+    # prior union's actual intent), while also NOT attaching every source the JSON over-reports
+    # beyond what the text actually references — a union unconditionally did, once observed
+    # live attaching 13 sources to an answer that inline-cited only 2 of them. Only when the
+    # model wrote no inline markers at all — relying solely on the JSON field for attribution —
+    # does used_indices still apply.
+    used_indices = cited_indices if cited_indices else used_indices
     answer = _sanitize_and_suppress(answer, used_indices)
     return answer, used_indices
 
