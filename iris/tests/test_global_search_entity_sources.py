@@ -76,6 +76,7 @@ def _content(snippet="A slide summary long enough to keep."):
 def _retrieval() -> LectureGlobalSearchRetrieval:
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
     retrieval.reranker_model_id = "reranker"
+    retrieval._reranker_floor_calibrated = True
     return retrieval
 
 
@@ -326,6 +327,19 @@ class TestEntityRerankGate:
         kept, telemetry = self._gate(retrieval, deduped, [], [0.05])
         assert kept == []
         assert not telemetry.pointer_tier
+
+    def test_uncalibrated_reranker_does_not_apply_the_qwen3_floor(self):
+        # global_search_rerank_floor is calibrated against Qwen3-Reranker-8B's score
+        # distribution specifically. A fallback to a different provider (e.g. Cohere,
+        # the checked-in example config's lecture_retrieval_pipeline.reranker) must
+        # not gate on that same absolute cutoff — its scores are not on that scale,
+        # so a well-below-floor score here must still be trusted and kept.
+        retrieval = _retrieval()
+        retrieval._reranker_floor_calibrated = False
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        kept, telemetry = self._gate(retrieval, deduped, [], [0.01])
+        assert len(kept) == 1
+        assert telemetry.drop_counts["below_rerank_floor"] == 0
 
     def test_fused_fallback_keeps_capped_entities(self):
         # A rerank timeout must not erase the entity ladder: entities join the

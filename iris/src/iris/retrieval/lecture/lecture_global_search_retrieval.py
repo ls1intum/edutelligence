@@ -19,6 +19,7 @@ from iris.domain.search.global_search_dto import (
     LectureUnitInfo,
 )
 from iris.llm import LlmRequestHandler
+from iris.llm.external.vllm_rerank import VllmRerankModel
 from iris.llm.llm_configuration import LlmConfigurationError, resolve_model
 from iris.llm.llm_manager import LlmManager
 from iris.retrieval.lecture.lecture_visibility import (
@@ -445,6 +446,16 @@ class LectureGlobalSearchRetrieval:
         self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
         self.reranker_model_id = resolve_reranker_model(local)
+        # global_search_rerank_floor is empirically calibrated against ONE model
+        # (Qwen3-Reranker-8B, served through VllmRerankModel — see the field's own
+        # description). A deployment without a global_search_pipeline.reranker role
+        # configured falls back to lecture_retrieval_pipeline's, which the checked-in
+        # example config points at Cohere: a different provider with an uncalibrated
+        # score distribution the same absolute cutoff cannot safely gate on. Only
+        # apply the floor when the resolved reranker is actually the calibrated kind.
+        self._reranker_floor_calibrated = isinstance(
+            LlmManager().get_llm_by_id(self.reranker_model_id), VllmRerankModel
+        )
 
     def embed_retrieval_query(self, query: str) -> list[float]:
         """Embed a USER QUERY, folding in the configured model's retrieval
@@ -819,7 +830,11 @@ class LectureGlobalSearchRetrieval:
         state. Deliberately NOT tuned to admit only strong matches - a cutoff
         placed inside the relevant band both deletes real answers and lands
         within the reranker's run-to-run noise, so identical requests would
-        return different results. On any rerank
+        return different results. The floor only applies when the resolved
+        reranker is the specific model it was calibrated against (see
+        _reranker_floor_calibrated in __init__): an uncalibrated reranker's
+        scores are ordered but not absolutely gated, same as the no-reranker
+        fallback below. On any rerank
         failure the search falls back to the fused ordering. Generation
         contexts (auto_cut=True) are always reranked; the instant results list
         only when configured. The list also gets a tighter rerank budget: a
@@ -866,11 +881,14 @@ class LectureGlobalSearchRetrieval:
             key=lambda c: c.score,
             reverse=True,
         )
-        floor = settings.global_search_rerank_floor
-        above = [c for c in reranked if c.score >= floor]
-        below = len(reranked) - len(above)
-        if below:
-            telemetry.drop_counts["below_rerank_floor"] += below
+        if getattr(self, "_reranker_floor_calibrated", False):
+            floor = settings.global_search_rerank_floor
+            above = [c for c in reranked if c.score >= floor]
+            below = len(reranked) - len(above)
+            if below:
+                telemetry.drop_counts["below_rerank_floor"] += below
+        else:
+            above = reranked
         kept = above[:limit]
 
         # Representation pass: ranking decides ORDER, but whether a proven
