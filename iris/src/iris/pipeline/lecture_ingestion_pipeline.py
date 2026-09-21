@@ -389,22 +389,51 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
     def _previous_generation_scores_better(self, requested_language: str) -> bool:
         """True when the stored generation's quality beats this run's result.
 
-        Only permitted when the stored generation was itself written in the
-        currently requested language: retaining an old-language generation while
-        stamping the newly resolved language onto the unit row would create the
-        same mismatch the structural skip check guards against, and the audit
-        does not compare chunk language to catch it.
+        Only permitted when the stored *chunks* -- the content retention would
+        actually keep -- are themselves in the currently requested language.
+        The unit row's own course_language stamp is not a trustworthy proxy for
+        this: a run before this check existed could have stamped the unit row
+        with the transcript's language while the page chunks kept their own,
+        independently-resolved language, so a ledger-only comparison can find a
+        coincidental match and retain chunks that don't actually agree with it.
         """
-        stored = self._fetch_stored_unit_row_properties()
-        stored_language = stored.get(LectureUnitSchema.COURSE_LANGUAGE.value)
-        if stored_language != requested_language:
+        if not self._stored_chunks_match_language(requested_language):
             return False
+        stored = self._fetch_stored_unit_row_properties()
         stored_score = stored.get(LectureUnitSchema.QUALITY_SCORE.value)
         new_score = self.dto.lecture_unit.quality_score
         if stored_score is None or new_score is None:
             return False
         self._stored_unit_row_properties = stored
         return float(stored_score) > float(new_score)
+
+    def _stored_chunks_match_language(self, requested_language: str) -> bool:
+        """True only when every object-store-confirmed stored page chunk is in
+        the requested language.
+
+        A capped or empty scan, an unconfirmed (ghost) chunk, or any chunk with
+        a null (legacy) or mismatched language all fail closed to False: the
+        safe default here is to force replacement, the same as this pipeline's
+        other structural checks.
+        """
+        limit = settings.lecture_ingestion.skip_check_fetch_limit
+        rows = fetch_with_retry(
+            lambda: self.collection.query.fetch_objects(
+                filters=self._get_page_chunk_filter(),
+                limit=limit,
+                return_properties=[LectureUnitPageChunkSchema.COURSE_LANGUAGE.value],
+            )
+        ).objects
+        if not rows or len(rows) >= limit:
+            return False
+        confirmed = confirmed_rows(self.collection, rows)
+        if len(confirmed) != len(rows):
+            return False
+        return all(
+            row.properties.get(LectureUnitPageChunkSchema.COURSE_LANGUAGE.value)
+            == requested_language
+            for row in confirmed
+        )
 
     def _restore_stored_quality_expectations(self) -> None:
         """Carry the kept generation's manifest and verdict onto this run's DTO."""

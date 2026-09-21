@@ -70,7 +70,7 @@ def _sample_chunk(page_number: int = 1, text: str = "text") -> dict:
 
 
 def _page_pipeline(
-    events: list, stale_rows=None, ghost_uuids=None
+    events: list, stale_rows=None, ghost_uuids=None, stored_chunk_languages=None
 ) -> LectureUnitPageIngestionPipeline:
     pipeline = object.__new__(LectureUnitPageIngestionPipeline)
     lecture_unit = SimpleNamespace(
@@ -121,6 +121,20 @@ def _page_pipeline(
             LectureUnitPageChunkSchema.INGESTION_RUN_ID.value
         ]:
             return SimpleNamespace(objects=list(stale_rows or []))
+        if kwargs.get("return_properties") == [
+            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
+        ]:
+            return SimpleNamespace(
+                objects=[
+                    SimpleNamespace(
+                        uuid=f"lang-chunk-{index}",
+                        properties={
+                            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: language
+                        },
+                    )
+                    for index, language in enumerate(stored_chunk_languages or [])
+                ]
+            )
         return SimpleNamespace(objects=[])
 
     ghosts = set(ghost_uuids or [])
@@ -626,14 +640,13 @@ def test_force_reingest_bypasses_the_structural_skip(monkeypatch):
 
 def test_quality_reingest_keeps_the_better_stored_generation(monkeypatch):
     events: list = []
-    pipeline = _page_pipeline(events)
+    pipeline = _page_pipeline(events, stored_chunk_languages=["en", "en"])
     pipeline.dto.lecture_unit.force_reingest = True
     stored_unit_row = SimpleNamespace(
         properties={
             LectureUnitSchema.QUALITY_SCORE.value: 0.9,
             LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
             LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
-            LectureUnitSchema.COURSE_LANGUAGE.value: "en",
         }
     )
     pipeline.lecture_unit_collection = SimpleNamespace(
@@ -661,19 +674,21 @@ def test_quality_reingest_keeps_the_better_stored_generation(monkeypatch):
 def test_quality_reingest_replaces_a_better_stored_generation_in_the_wrong_language(
     monkeypatch,
 ):
-    # A higher-scoring stored generation must not be kept if it was written in a
-    # different language than currently requested: retention would stamp the new
-    # language on the unit row while leaving chunks whose text and embeddings are
-    # still in the old one, a mismatch the audit does not check for.
+    # A higher-scoring stored generation must not be kept if its actual stored
+    # chunks are in a different language than currently requested, even when
+    # the unit row's own course_language ledger coincidentally (or stalely)
+    # agrees with the request: a pre-fix run could have stamped that ledger
+    # from the transcript's language while the chunks kept their own,
+    # independently-resolved language, so only the chunks themselves are
+    # trustworthy here.
     events: list = []
-    pipeline = _page_pipeline(events)
+    pipeline = _page_pipeline(events, stored_chunk_languages=["de", "de"])
     pipeline.dto.lecture_unit.force_reingest = True
     stored_unit_row = SimpleNamespace(
         properties={
             LectureUnitSchema.QUALITY_SCORE.value: 0.9,
             LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
             LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
-            LectureUnitSchema.COURSE_LANGUAGE.value: "de",
         }
     )
     pipeline.lecture_unit_collection = SimpleNamespace(
@@ -683,17 +698,48 @@ def test_quality_reingest_replaces_a_better_stored_generation_in_the_wrong_langu
             )
         )
     )
-    # The re-run scores lower, but the stored generation is in "de" while the
+    # The re-run scores lower, but the stored chunks are in "de" while the
     # request (via _page_pipeline's course_language="en") wants "en".
     pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
     _patch_pdf(monkeypatch)
 
     pipeline()
 
-    # Replacement proceeds despite the lower score, because the stored
-    # generation's language no longer matches what was requested.
+    # Replacement proceeds despite the lower score, because the stored chunks'
+    # language no longer matches what was requested.
     assert "insert" in events
     assert "embed" in events
+    assert pipeline.kept_previous_generation is False
+
+
+def test_quality_reingest_replaces_when_stored_chunks_are_ghosts(monkeypatch):
+    # A capped, empty, or ghost-only stored chunk scan must fail closed to
+    # "replace", the same safe default as every other structural check here.
+    events: list = []
+    pipeline = _page_pipeline(
+        events, stored_chunk_languages=["en"], ghost_uuids={"lang-chunk-0"}
+    )
+    pipeline.dto.lecture_unit.force_reingest = True
+    stored_unit_row = SimpleNamespace(
+        properties={
+            LectureUnitSchema.QUALITY_SCORE.value: 0.9,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
+            LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+        }
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(objects=[stored_unit_row])
+            )
+        )
+    )
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    assert "insert" in events
     assert pipeline.kept_previous_generation is False
 
 
