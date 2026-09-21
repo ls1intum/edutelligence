@@ -18,4 +18,4 @@ __all__ = [
     "RequestMetrics",
 ]
 
-__version__ = "2.7"
+__version__ = "3.0"
