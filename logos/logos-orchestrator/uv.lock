@@ -1642,7 +1642,7 @@ wheels = [
 
 [[package]]
 name = "logos"
-version = "2.7"
+version = "3.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -3497,7 +3497,7 @@ wheels = [
 
 [[package]]
 name = "shared"
-version = "2.7"
+version = "3.0"
 source = { directory = "../../shared" }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },

@@ -2830,7 +2830,7 @@ files = [
 
 [[package]]
 name = "memiris"
-version = "2.7"
+version = "3.0"
 description = ""
 optional = false
 python-versions = ">=3.13,<4.0.0"
