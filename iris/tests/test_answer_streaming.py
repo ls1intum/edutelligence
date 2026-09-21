@@ -442,7 +442,7 @@ class TestRetrieveSourcesWiresStageHandlerIntoRetrieverOnPhase:
             entity_type="exercise", snippet="Some exercise info", via_pointer_tier=False
         )
 
-        def fake_search(*args, **kwargs):
+        def fake_search(**kwargs):
             on_phase = kwargs.get("on_phase")
             if on_phase is not None and on_phase_fires:
                 on_phase("ranking")
@@ -482,7 +482,7 @@ class TestRetrieveSourcesWiresStageHandlerIntoRetrieverOnPhase:
         )
         captured = {}
 
-        def fake_search(*args, **kwargs):
+        def fake_search(**kwargs):
             captured["on_phase"] = kwargs.get("on_phase")
             return [source]
 
