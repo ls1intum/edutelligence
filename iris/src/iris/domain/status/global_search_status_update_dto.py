@@ -38,3 +38,12 @@ class GlobalSearchStatusUpdateDTO(StatusUpdateDTO):
     # populated once the "generating" stage fires, so the client can say what it actually
     # found ("Course A, Course B +2 others") instead of a generic "generating" message.
     stage_sources: List[str] = Field(default_factory=list, alias="stageSources")
+    # For marker 1..N (in the citation numbering the terminal answer actually uses), which
+    # of `sources`/`entity_sources` that marker resolves into — the two arrays are only
+    # ordered relative to their OWN type, so a client cannot otherwise tell which array a
+    # given marker number belongs to whenever citations interleave between the two types.
+    # Additive (wire freeze rules): old Artemis ignores the unknown field, and old Pyris
+    # never populates it, so a client seeing it empty just keeps its own prior assumption.
+    citation_source_types: List[str] = Field(
+        default_factory=list, alias="citationSourceTypes"
+    )

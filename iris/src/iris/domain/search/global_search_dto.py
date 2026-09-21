@@ -230,10 +230,25 @@ class GlobalSearchRequestDTO(BaseModel):
 
 
 class GlobalSearchResponseDTO(BaseModel):
+    """Terminal result of the asynchronous global search answer pipeline."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     answer: str | None
     sources: list[LectureSearchResultDTO]
     entity_sources: list[EntitySourceDTO] = Field(
         default_factory=list, alias="entitySources"
+    )
+    # Citation numbers in `answer` are assigned in the TRUE order each source is first
+    # cited, regardless of type — but `sources`/`entitySources` still have to ship as two
+    # separate arrays (their own items are internally ordered to match their subsequence
+    # of that citation order). This tells the client, for marker 1..N in order, which of
+    # the two arrays that marker resolves into: a client walking this list with one
+    # running counter per type can recover "sources[i]" or "entitySources[j]" for any
+    # marker number, something the two arrays' lengths alone cannot reconstruct whenever
+    # citations interleave between types (observed live: an entity cited before any
+    # lecture source, but the client's own resolution always reads every lecture marker
+    # before any entity marker, so the entity's real "[1]" rendered as "[5]" instead).
+    citation_source_types: list[str] = Field(
+        default_factory=list, alias="citationSourceTypes"
     )

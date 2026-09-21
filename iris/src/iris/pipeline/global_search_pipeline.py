@@ -714,36 +714,46 @@ class GlobalSearchPipeline(SubPipeline):
         # fallback — renumbering before it left a fallback answer's markers
         # pointing at the wrong (or out-of-range) position in the final list.
         #
-        # Renumbering must match the ORDER THE RESPONSE ACTUALLY SERIALIZES, not
-        # the ranked order the LLM saw: the client resolves marker N against
-        # `sources` (lecture) then `entitySources` (entity) as two separate,
-        # concatenated arrays, so an entity ranked between two lecture sources
-        # would otherwise get a marker number that lands on the wrong array
-        # once the two types are split onto the wire. WITHIN each of those two arrays,
-        # sources are ordered by where they are first CITED IN THE TEXT, not by retrieval
-        # rank — observed live: the model discussed its 2nd-ranked source before its
-        # 1st-ranked one, and rank-based numbering then showed the reader "[2]" before "[1]"
-        # ever appeared, reading as out of order even though nothing was actually wrong.
+        # Citation numbers are assigned in the TRUE order each source is first cited in
+        # the text, regardless of type — a reader must never see "[2]" before "[1]" ever
+        # appears, whether the two citations are both lecture sources, both entities, or
+        # one of each. `sources`/`entitySources` still ship as two separate arrays (the
+        # wire format's own split, which the client's marker resolution depends on), so
+        # citation_source_types tells the client which of the two arrays marker N
+        # resolves into; the two arrays themselves stay internally ordered to match their
+        # own subsequence of the reading order below, which is all a client walking
+        # citation_source_types with one running counter per type needs to resolve any
+        # marker to the right entry — observed live: without this, the client's own
+        # fixed "every lecture marker, then every entity marker" resolution rendered an
+        # entity cited FIRST in the text as "[5]" while a lecture source cited second
+        # rendered as "[1]", even though the server had already numbered them correctly
+        # relative to other sources of their OWN type.
         by_old_index = dict(zip(sorted(used_indices), used_sources))
         ordered_used = _first_appearance_order(answer, used_indices)
         indexed_used_sources = [(old, by_old_index[old]) for old in ordered_used]
-        used_lecture_indexed = [
-            (old, s)
-            for old, s in indexed_used_sources
-            if isinstance(s, LectureSearchResultDTO)
+        old_to_new = {
+            old + 1: new + 1 for new, (old, _) in enumerate(indexed_used_sources)
+        }
+        citation_source_types = [
+            "entity" if isinstance(s, EntitySourceDTO) else "lecture"
+            for _, s in indexed_used_sources
         ]
-        used_entities_indexed = [
-            (old, s)
-            for old, s in indexed_used_sources
-            if isinstance(s, EntitySourceDTO)
-        ]
-        old_to_new = {}
-        for new, (old, _) in enumerate(used_lecture_indexed + used_entities_indexed):
-            old_to_new[old + 1] = new + 1
+        if used_indices:
+            logger.info(
+                "[global-search] citation_renumbering reading_order=%s "
+                "citation_source_types=%s old_to_new=%s",
+                ordered_used,
+                citation_source_types,
+                old_to_new,
+            )
         answer = renumber_citation_markers(answer, old_to_new)
 
-        used_lecture = [s for _, s in used_lecture_indexed]
-        used_entities = [s for _, s in used_entities_indexed]
+        used_lecture = [
+            s for _, s in indexed_used_sources if isinstance(s, LectureSearchResultDTO)
+        ]
+        used_entities = [
+            s for _, s in indexed_used_sources if isinstance(s, EntitySourceDTO)
+        ]
         if answer:
             logger.info(
                 "[global-search] outcome=answered answer_len=%d "
@@ -754,7 +764,10 @@ class GlobalSearchPipeline(SubPipeline):
                 len(used_entities),
             )
         return GlobalSearchResponseDTO(
-            answer=answer, sources=used_lecture, entity_sources=used_entities
+            answer=answer,
+            sources=used_lecture,
+            entity_sources=used_entities,
+            citation_source_types=citation_source_types,
         )
 
     @staticmethod

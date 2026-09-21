@@ -512,13 +512,13 @@ class TestSemesterTwinDedup:
     def test_citation_numbers_survive_an_entity_ranked_between_two_lecture_sources(
         self,
     ):
-        # Regression: the client resolves marker N against `sources` (lecture)
-        # then `entitySources` (entity) as two separate, concatenated arrays.
-        # Renumbering by raw ranked position (rather than by the actual
-        # lecture-then-entity split order) would leave a citation pointing at
-        # the wrong array whenever an entity is ranked between two lecture
-        # sources, which is expected whenever both types compete on one
-        # shared relevance score.
+        # Regression: the client resolves marker N against `sources` (lecture) then
+        # `entitySources` (entity) as two separate arrays, using citation_source_types
+        # to know which array each marker number resolves into. An entity ranked (and
+        # cited) between two lecture sources must keep its own place in the reading
+        # order — [1][2][3] here already matches reading order, so no renumbering is
+        # needed at all; citation_source_types is what lets the client still resolve
+        # marker 2 to the entity despite it sitting between two lecture markers.
         lecture_a = LectureSearchResultDTO(
             course=CourseInfo(id=1, name="Patterns"),
             lecture=LectureInfo(id=2, name="Intro"),
@@ -560,10 +560,8 @@ class TestSemesterTwinDedup:
 
         assert response.sources == [lecture_a, lecture_b]
         assert response.entity_sources == [entity]
-        # [1] (lecture_a) keeps its number; [2] (the entity, ranked 2nd) must
-        # renumber past both lecture sources to [3]; [3] (lecture_b) becomes
-        # [2] since it is the second lecture source once split onto the wire.
-        assert response.answer == "First point.[1] Second point.[3] Third point.[2]"
+        assert response.answer == "First point.[1] Second point.[2] Third point.[3]"
+        assert response.citation_source_types == ["lecture", "entity", "lecture"]
 
     def test_citation_numbers_follow_reading_order_not_retrieval_rank(self):
         # Observed live ("what is deep learning?"): the model discussed its RANK-2 source
@@ -617,6 +615,49 @@ class TestSemesterTwinDedup:
             response.answer
             == "Effective for image recognition.[1] Also a culture of practice.[2]"
         )
+
+    def test_an_entity_cited_before_any_lecture_source_still_becomes_source_1(self):
+        # Observed live ("explain some git basics"), captured via citation_renumbering:
+        # reading_order=[3, 4, 6, 5, 7] citation_source_types=[...] old_to_new={5: 1, ...,
+        # 4: 5} -- the entity cited FIRST in the text (old index 3) was renumbered to [5],
+        # last, because the old scheme always numbered every lecture source before any
+        # entity regardless of citation order. citation_source_types is what lets the
+        # client resolve marker 1 to the entity even though marker 1 comes before any
+        # lecture marker in the numbering.
+        lecture_a = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Patterns"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=3,
+                name="Slides",
+                link="/l",
+                pageNumber=1,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Lecture content A.",
+        )
+        entity = _entity_source(title="02 - Git Basics")
+        grounded_sources = [lecture_a, entity]  # entity ranked BELOW the lecture source
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        # Cites the LOWER-RANKED entity ([2]) before the higher-ranked lecture source ([1]).
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "About the course.[2] About the slide.[1]"
+        )
+
+        response = pipeline(
+            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert response.sources == [lecture_a]
+        assert response.entity_sources == [entity]
+        assert response.citation_source_types == ["entity", "lecture"]
+        assert (
+            response.answer == "About the course.[1] About the slide.[2]"
+        ), "the entity cited first must become [1], not be pushed past every lecture source"
 
     def test_navigate_prompt_is_internally_consistent_about_the_no_answer_sentinel(
         self,

@@ -483,6 +483,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             answer=result.answer,
             sources=result.sources,
             entity_sources=result.entity_sources,
+            citation_source_types=result.citation_source_types,
             tokens=pipeline.tokens,
         )
     except Exception as e:
