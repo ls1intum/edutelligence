@@ -181,9 +181,9 @@ class Settings(BaseModel):
         "not by this value. A query whose candidates ALL fall below the floor "
         "returns no sources - the honest empty state, skipping the answer LLM. "
         "Set to 0.0 for log-only calibration. Only applied when the resolved "
-        "reranker is actually Qwen3-Reranker-8B (LectureGlobalSearchRetrieval."
-        "_reranker_floor_calibrated) - a different provider's scores are not on "
-        "this scale, so this value would gate them arbitrarily.",
+        "reranker's config entry declares rerank_floor_calibrated=true "
+        "(RerankModel.rerank_floor_calibrated) - a different model's scores "
+        "are not on this scale, so this value would gate them arbitrarily.",
     )
     global_search_expand_units: bool = Field(
         default=True,

@@ -104,6 +104,14 @@ class RerankModel(LanguageModel, metaclass=ABCMeta):
     """Abstract class for the llm reranker wrappers"""
 
     cost_per_1k_requests: float = 0
+    # Whether THIS configured model's score distribution matches
+    # settings.global_search_rerank_floor's calibration (Qwen3-Reranker-8B; see
+    # that field's own description). Defaults to False: a transport wrapper
+    # like VllmRerankModel can serve ANY vLLM-hosted cross-encoder, so
+    # calibration is a property of the specific model behind a config entry,
+    # not of the client class, and must be declared explicitly per entry
+    # rather than inferred from isinstance.
+    rerank_floor_calibrated: bool = False
 
     @classmethod
     def __subclasshook__(cls, subclass) -> bool:

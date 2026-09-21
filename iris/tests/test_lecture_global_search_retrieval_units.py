@@ -14,12 +14,14 @@ from weaviate.classes.query import Filter
 
 from iris.config import settings
 from iris.domain.search.global_search_dto import AccessContext, EntitySourceDTO
+from iris.llm.external.vllm_rerank import VllmRerankModel
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     QWEN3_RETRIEVAL_INSTRUCTION,
     LectureGlobalSearchRetrieval,
     _Candidate,
     _course_scope_filter,
     _is_low_information,
+    _resolve_reranker_floor_calibrated,
     _SearchTelemetry,
     _VisibilityPolicy,
 )
@@ -85,6 +87,51 @@ class TestLowInformationFilter:
         # A concise, correct summary is valid content, not junk; a character-count
         # floor previously dropped it purely for being short.
         assert not _is_low_information("A stack is LIFO.")
+
+
+def _vllm_reranker(model_id: str, **overrides) -> VllmRerankModel:
+    return VllmRerankModel(
+        type="vllm_rerank",
+        id=model_id,
+        model=model_id,
+        base_url="https://logos.example/v1",
+        api_key="dummy",  # pragma: allowlist secret
+        **overrides,
+    )
+
+
+class TestRerankerFloorCalibration:
+    """The rerank floor is empirically calibrated against ONE model
+    (Qwen3-Reranker-8B), not against the vLLM transport wrapper any
+    cross-encoder can be served through."""
+
+    def test_a_different_vllm_model_is_not_treated_as_calibrated(self):
+        # VllmRerankModel is a generic transport wrapper: a deployment could point
+        # it at any cross-encoder, and isinstance alone cannot tell Qwen3 apart
+        # from one that has never been measured against this floor.
+        other_model = _vllm_reranker("cloud-other-reranker")
+        with patch(
+            "iris.retrieval.lecture.lecture_global_search_retrieval.LlmManager"
+        ) as mock_manager_cls:
+            mock_manager_cls.return_value.get_llm_by_id.return_value = other_model
+            assert _resolve_reranker_floor_calibrated("cloud-other-reranker") is False
+
+    def test_a_vllm_model_that_declares_calibration_is_trusted(self):
+        qwen_model = _vllm_reranker(
+            "cloud-qwen3-reranker-8b", rerank_floor_calibrated=True
+        )
+        with patch(
+            "iris.retrieval.lecture.lecture_global_search_retrieval.LlmManager"
+        ) as mock_manager_cls:
+            mock_manager_cls.return_value.get_llm_by_id.return_value = qwen_model
+            assert _resolve_reranker_floor_calibrated("cloud-qwen3-reranker-8b") is True
+
+    def test_an_unresolved_reranker_is_not_treated_as_calibrated(self):
+        with patch(
+            "iris.retrieval.lecture.lecture_global_search_retrieval.LlmManager"
+        ) as mock_manager_cls:
+            mock_manager_cls.return_value.get_llm_by_id.return_value = None
+            assert _resolve_reranker_floor_calibrated(None) is False
 
 
 class TestSegmentToDto:

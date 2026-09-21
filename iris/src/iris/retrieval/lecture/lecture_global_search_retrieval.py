@@ -19,7 +19,6 @@ from iris.domain.search.global_search_dto import (
     LectureUnitInfo,
 )
 from iris.llm import LlmRequestHandler
-from iris.llm.external.vllm_rerank import VllmRerankModel
 from iris.llm.llm_configuration import LlmConfigurationError, resolve_model
 from iris.llm.llm_manager import LlmManager
 from iris.retrieval.lecture.lecture_visibility import (
@@ -153,6 +152,24 @@ def resolve_reranker_model(local: bool = False) -> str | None:
             continue
     logger.info("[LectureSearch] no reranker configured — using fused ordering")
     return None
+
+
+def _resolve_reranker_floor_calibrated(reranker_model_id: str | None) -> bool:
+    """Whether settings.global_search_rerank_floor's calibration (against
+    Qwen3-Reranker-8B specifically) applies to the resolved reranker.
+
+    A transport wrapper like VllmRerankModel can serve ANY vLLM-hosted
+    cross-encoder, so which specific model is calibrated cannot be inferred
+    from the client class; it is an explicit, per-config-entry capability
+    instead (RerankModel.rerank_floor_calibrated). getattr, not direct
+    attribute access: PassthroughReranker (and any future non-RerankModel
+    reranker) has no such field and must default to uncalibrated, not raise.
+    """
+    return getattr(
+        LlmManager().get_llm_by_id(reranker_model_id),
+        "rerank_floor_calibrated",
+        False,
+    )
 
 
 def _is_low_information(snippet: str) -> bool:
@@ -446,15 +463,8 @@ class LectureGlobalSearchRetrieval:
         self.page_chunk_collection = init_lecture_unit_page_chunk_schema(client)
         self.transcription_collection = init_lecture_transcription_schema(client)
         self.reranker_model_id = resolve_reranker_model(local)
-        # global_search_rerank_floor is empirically calibrated against ONE model
-        # (Qwen3-Reranker-8B, served through VllmRerankModel — see the field's own
-        # description). A deployment without a global_search_pipeline.reranker role
-        # configured falls back to lecture_retrieval_pipeline's, which the checked-in
-        # example config points at Cohere: a different provider with an uncalibrated
-        # score distribution the same absolute cutoff cannot safely gate on. Only
-        # apply the floor when the resolved reranker is actually the calibrated kind.
-        self._reranker_floor_calibrated = isinstance(
-            LlmManager().get_llm_by_id(self.reranker_model_id), VllmRerankModel
+        self._reranker_floor_calibrated = _resolve_reranker_floor_calibrated(
+            self.reranker_model_id
         )
 
     def embed_retrieval_query(self, query: str) -> list[float]:
@@ -831,7 +841,8 @@ class LectureGlobalSearchRetrieval:
         placed inside the relevant band both deletes real answers and lands
         within the reranker's run-to-run noise, so identical requests would
         return different results. The floor only applies when the resolved
-        reranker is the specific model it was calibrated against (see
+        reranker's config entry declares itself calibrated against it (see
+        RerankModel.rerank_floor_calibrated, read into
         _reranker_floor_calibrated in __init__): an uncalibrated reranker's
         scores are ordered but not absolutely gated, same as the no-reranker
         fallback below. On any rerank
