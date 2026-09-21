@@ -565,6 +565,59 @@ class TestSemesterTwinDedup:
         # [2] since it is the second lecture source once split onto the wire.
         assert response.answer == "First point.[1] Second point.[3] Third point.[2]"
 
+    def test_citation_numbers_follow_reading_order_not_retrieval_rank(self):
+        # Observed live ("what is deep learning?"): the model discussed its RANK-2 source
+        # first and its RANK-1 source second. Renumbering by rank alone kept them as [1]
+        # then [2] in that same rank order regardless of where each was actually cited, so
+        # the reader saw "[2]" appear in the text before "[1]" ever did — footnote numbers
+        # are supposed to climb in the order a reader actually encounters them.
+        rank_1 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Deep Learning"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=3,
+                name="1. intro",
+                link="/l1",
+                pageNumber=51,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Culture of practice content.",
+        )
+        rank_2 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Deep Learning"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=4,
+                name="2.linear",
+                link="/l2",
+                pageNumber=2,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="AI/ML/DL hierarchy content.",
+        )
+        grounded_sources = [rank_1, rank_2]  # retrieval-ranked order
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        # Cites the RANK-2 source ([2]) before the RANK-1 source ([1]).
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "Effective for image recognition.[2] Also a culture of practice.[1]"
+        )
+
+        response = pipeline(
+            query="what is deep learning", intent=SearchIntent.TRIGGER_AI
+        )
+
+        # rank_2 was cited FIRST in the text, so it becomes source 1 — the returned list
+        # and the chip numbering the client renders both follow reading order too.
+        assert response.sources == [rank_2, rank_1]
+        assert (
+            response.answer
+            == "Effective for image recognition.[1] Also a culture of practice.[2]"
+        )
+
     def test_navigate_prompt_is_internally_consistent_about_the_no_answer_sentinel(
         self,
     ):

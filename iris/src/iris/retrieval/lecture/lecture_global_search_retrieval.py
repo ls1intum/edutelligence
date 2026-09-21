@@ -1,6 +1,7 @@
 import re
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -492,6 +493,7 @@ class LectureGlobalSearchRetrieval:
         auto_cut: bool = False,
         access_context: AccessContext | None = None,
         entity_sources: list[EntitySourceDTO] | None = None,
+        on_phase: Callable[[str], None] | None = None,
     ) -> list[LectureSearchResultDTO | EntitySourceDTO]:
         """
         Search for lecture content based on a query.
@@ -508,6 +510,11 @@ class LectureGlobalSearchRetrieval:
                          generation contexts, not for the UI results list).
         :param access_context: Optional permissions filter resolved by Artemis. Intersected
                                with course_ids; an empty accessible scope skips the search.
+        :param on_phase: Optional callback fired when retrieval crosses into a real internal
+                         phase worth surfacing to a caller with a status UI — currently just
+                         "ranking", right before the reranker call, which is typically the
+                         single slowest part of retrieval. Best-effort: a caller that omits it
+                         just does not get the signal, same as before this parameter existed.
         :return: Segments sorted by relevance.
         """
         effective_course_ids = resolve_effective_course_ids(course_ids, access_context)
@@ -539,6 +546,7 @@ class LectureGlobalSearchRetrieval:
             policy=_VisibilityPolicy.from_context(access_context),
             entity_sources=entity_sources,
             skip_content_lanes=no_accessible_courses,
+            on_phase=on_phase,
         )
 
     def _run_hybrid_search(
@@ -553,6 +561,7 @@ class LectureGlobalSearchRetrieval:
         policy: "_VisibilityPolicy | None" = None,
         entity_sources: list[EntitySourceDTO] | None = None,
         skip_content_lanes: bool = False,
+        on_phase: Callable[[str], None] | None = None,
     ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
         """Run the recall lanes, rerank the candidate pool, map to DTOs.
 
@@ -586,6 +595,11 @@ class LectureGlobalSearchRetrieval:
             for dto in (entity_sources or [])[:_MAX_ENTITY_CANDIDATES]
         ]
         telemetry.entity_candidates = len(entity_pool)
+        if on_phase is not None:
+            # The raw recall lanes above are typically ~5-40ms (flat Weaviate query cost);
+            # the reranker call about to start is typically the single slowest part of the
+            # whole search, so this is the one real internal boundary worth surfacing.
+            on_phase("ranking")
         top = self._rerank_and_gate(
             query, deduped, limit, auto_cut, telemetry, entity_pool
         )

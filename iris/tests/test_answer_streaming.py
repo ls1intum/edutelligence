@@ -5,7 +5,7 @@ sentinel-gating stream handler, and the parameterized partial-result sender."""
 
 from types import SimpleNamespace
 
-from iris.domain.search.global_search_dto import EntitySourceDTO
+from iris.domain.search.global_search_dto import CourseInfo, EntitySourceDTO
 from iris.domain.status.global_search_status_update_dto import (
     GlobalSearchStatusUpdateDTO,
 )
@@ -53,10 +53,16 @@ class TestSentinelParsing:
         assert answer == "The quiz is worth 4 points.[2]"
         assert used == {1}
 
-    def test_plain_text_without_markers_attaches_all_sources(self):
+    def test_plain_text_without_markers_is_suppressed_as_ungrounded(self):
+        # Rule 2 requires a marker after every real claim; plain text with none is either a
+        # genuine answer that dropped the required markers, or a refusal explained in prose
+        # instead of the bare !none! sentinel (observed live, in several different phrasings).
+        # Defensively attaching every retrieved source used to paper over that distinction —
+        # this instead lets the existing ungrounded guard suppress it like any other
+        # unattributed answer, regardless of which of those two it actually was.
         answer, used = parse_answer_response("A markerless plain answer.", 3)
-        assert answer == "A markerless plain answer."
-        assert used == {0, 1, 2}
+        assert answer is None
+        assert used == set()
 
 
 class TestUsedSourcesRangeCheck:
@@ -188,7 +194,10 @@ class TestNavigateFallbackClearsTheStream:
         return pipeline
 
     def test_stream_handler_is_reset_before_the_fallback_call_runs(self):
-        pipeline = self._pipeline_with("!none!", "Yes, see the exercise.")
+        # Marker-less, non-sentinel text: null via the ungrounded guard, not a deliberate
+        # !none! — the fallback must still fire for THIS kind of null (see
+        # TestDeliberateRefusalSkipsTheFallback for the one kind it must not).
+        pipeline = self._pipeline_with("No matching content.", "Yes, see the exercise.")
         deltas: list = []
         original_generate_answer = pipeline._generate_answer
 
@@ -229,7 +238,7 @@ class TestNavigateFallbackClearsTheStream:
         # every real invocation (see IrisLangchainChatModel._generate); a mock that
         # does the same distinguishes "recorded once, from whichever call happened
         # to run last" from "recorded from both calls".
-        pipeline = self._pipeline_with("!none!", "Yes, see the exercise.")
+        pipeline = self._pipeline_with("No matching content.", "Yes, see the exercise.")
         pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace(call="none"))
         original_generate_answer = pipeline._generate_answer
         call_count = 0
@@ -249,3 +258,239 @@ class TestNavigateFallbackClearsTheStream:
             "both the discarded first call and the fallback call must be "
             "recorded, not just whichever one happened to run last"
         )
+
+
+class TestDeliberateRefusalSkipsTheFallback:
+    """A bare !none! is the model directly exercising its documented way to decline — not
+    a flaky or over-cautious null this pipeline's own guards produced. The navigate prompt
+    is deliberately more lenient (its own rule: "a student prefers a pointer to silence"),
+    so retrying a deliberate refusal through it relitigates a judgment the model already
+    made on purpose. Observed live: an incomplete question ("explain the difference
+    between", never naming what to compare) correctly got !none! from the grounded prompt
+    every single time it was tried, then just as reliably got overridden by the navigate
+    fallback pointing at the same course, in the wrong language for the question asked.
+    """
+
+    def _pipeline_with(self, *raw_answers):
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        entity_grounded_source = EntitySourceDTO(
+            entity_type="exercise", snippet="Some exercise info", via_pointer_tier=False
+        )
+        pipeline._retrieve_sources = lambda *args, **kwargs: [entity_grounded_source]
+        answers = iter(raw_answers)
+        pipeline._generate_answer = lambda *args, **kwargs: next(answers)
+        return pipeline
+
+    def test_a_deliberate_none_sentinel_does_not_trigger_the_fallback(self):
+        # Only one raw answer is queued: if the fallback ran anyway, the second
+        # _generate_answer call would raise StopIteration instead of quietly passing.
+        pipeline = self._pipeline_with("!none!")
+        call_count = 0
+        original_generate_answer = pipeline._generate_answer
+
+        def count_calls(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return original_generate_answer(*args, **kwargs)
+
+        pipeline._generate_answer = count_calls
+
+        result = pipeline(
+            query="explain the difference between", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert call_count == 1
+        assert result.answer is None
+
+    def test_none_sentinel_with_trailing_punctuation_still_skips_the_fallback(self):
+        pipeline = self._pipeline_with("!none!.")
+
+        result = pipeline(
+            query="explain the difference between", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert result.answer is None
+
+    def test_none_sentinel_appended_after_an_explanation_still_skips_the_fallback(self):
+        # The prompt says write the sentinel ALONE, but the model sometimes appends it
+        # after prose instead — that trailing sentinel is still the model's own deliberate
+        # decision, not a parsing accident, so the fallback must not override it either.
+        pipeline = self._pipeline_with(
+            "The materials touch on related ideas but do not cover this directly. !none!"
+        )
+
+        result = pipeline(
+            query="explain the difference between", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert result.answer is None
+
+
+class TestStageHandler:
+    """stage_handler fires at the pipeline's real phase boundaries, so the client can show
+    what is actually happening instead of one static message for the whole wait."""
+
+    def _pipeline_with(self, raw_answer, sources=None):
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        if sources is None:
+            sources = [
+                EntitySourceDTO(
+                    entity_type="exercise",
+                    snippet="Some exercise info",
+                    via_pointer_tier=False,
+                )
+            ]
+        pipeline._retrieve_sources = lambda *args, **kwargs: sources
+        pipeline._generate_answer = lambda *args, **kwargs: raw_answer
+        return pipeline
+
+    def test_fires_searching_then_found_then_generating_in_order(self):
+        pipeline = self._pipeline_with("Yes, see the exercise.[1]")
+        calls: list = []
+
+        pipeline(
+            query="how many points is the exam worth",
+            intent=SearchIntent.TRIGGER_AI,
+            stage_handler=lambda stage, sources: calls.append((stage, sources)),
+        )
+
+        assert [stage for stage, _ in calls] == ["searching", "found", "generating"]
+
+    def test_searching_fires_before_anything_is_found(self):
+        pipeline = self._pipeline_with("Yes, see the exercise.[1]")
+        calls: list = []
+
+        pipeline(
+            query="how many points is the exam worth",
+            intent=SearchIntent.TRIGGER_AI,
+            stage_handler=lambda stage, sources: calls.append((stage, sources)),
+        )
+
+        searching_sources = next(
+            sources for stage, sources in calls if stage == "searching"
+        )
+        assert searching_sources == []
+
+    def test_found_carries_distinct_course_names_in_ranked_order(self):
+        # Two sources from "Advanced Algorithms" (ranked first and third) plus one from
+        # "Software Engineering" (ranked second): the duplicate must collapse to one entry,
+        # keeping each course's FIRST-seen (highest-ranked) position, not a later repeat.
+        algorithms = CourseInfo(id=1, name="Advanced Algorithms")
+        software_eng = CourseInfo(id=2, name="Software Engineering")
+        sources = [
+            EntitySourceDTO(entity_type="exercise", snippet="a", course=algorithms),
+            EntitySourceDTO(entity_type="exercise", snippet="b", course=software_eng),
+            EntitySourceDTO(entity_type="exercise", snippet="c", course=algorithms),
+        ]
+        pipeline = self._pipeline_with("Yes, see the exercise.[1]", sources=sources)
+        calls: list = []
+
+        pipeline(
+            query="how many points is the exam worth",
+            intent=SearchIntent.TRIGGER_AI,
+            stage_handler=lambda stage, sources: calls.append((stage, sources)),
+        )
+
+        found_sources = next(sources for stage, sources in calls if stage == "found")
+        assert found_sources == ["Advanced Algorithms", "Software Engineering"]
+
+    def test_generating_carries_no_course_names_since_found_already_reported_them(
+        self,
+    ):
+        algorithms = CourseInfo(id=1, name="Advanced Algorithms")
+        sources = [
+            EntitySourceDTO(entity_type="exercise", snippet="a", course=algorithms)
+        ]
+        pipeline = self._pipeline_with("Yes, see the exercise.[1]", sources=sources)
+        calls: list = []
+
+        pipeline(
+            query="how many points is the exam worth",
+            intent=SearchIntent.TRIGGER_AI,
+            stage_handler=lambda stage, sources: calls.append((stage, sources)),
+        )
+
+        generating_sources = next(
+            sources for stage, sources in calls if stage == "generating"
+        )
+        assert generating_sources == []
+
+    def test_stage_handler_is_optional(self):
+        # A caller that omits it (every caller before this parameter existed) must not
+        # break — only a caller that opts in is affected.
+        pipeline = self._pipeline_with("Yes, see the exercise.[1]")
+
+        pipeline(
+            query="how many points is the exam worth", intent=SearchIntent.TRIGGER_AI
+        )
+
+
+class TestRetrieveSourcesWiresStageHandlerIntoRetrieverOnPhase:
+    """_retrieve_sources (unstubbed here, unlike TestStageHandler above) must translate its
+    stage_handler into the on_phase callback the real retriever calls, so a "ranking" phase
+    fired deep inside retrieval actually reaches the client as a stage update."""
+
+    def _pipeline_with(self, on_phase_fires):
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        source = EntitySourceDTO(
+            entity_type="exercise", snippet="Some exercise info", via_pointer_tier=False
+        )
+
+        def fake_search(*args, **kwargs):
+            on_phase = kwargs.get("on_phase")
+            if on_phase is not None and on_phase_fires:
+                on_phase("ranking")
+            return [source]
+
+        pipeline.retriever = SimpleNamespace(search=fake_search)
+        pipeline._generate_answer = lambda *args, **kwargs: "Yes, see the exercise.[1]"
+        return pipeline
+
+    def test_a_ranking_phase_from_the_retriever_reaches_stage_handler(self):
+        pipeline = self._pipeline_with(on_phase_fires=True)
+        calls: list = []
+
+        pipeline(
+            query="how many points is the exam worth",
+            intent=SearchIntent.TRIGGER_AI,
+            stage_handler=lambda stage, sources: calls.append((stage, sources)),
+        )
+
+        assert [stage for stage, _ in calls] == [
+            "searching",
+            "ranking",
+            "found",
+            "generating",
+        ]
+        ranking_sources = next(
+            sources for stage, sources in calls if stage == "ranking"
+        )
+        assert ranking_sources == []
+
+    def test_no_stage_handler_means_no_on_phase_is_passed_to_the_retriever(self):
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        source = EntitySourceDTO(
+            entity_type="exercise", snippet="Some exercise info", via_pointer_tier=False
+        )
+        captured = {}
+
+        def fake_search(*args, **kwargs):
+            captured["on_phase"] = kwargs.get("on_phase")
+            return [source]
+
+        pipeline.retriever = SimpleNamespace(search=fake_search)
+        pipeline._generate_answer = lambda *args, **kwargs: "Yes, see the exercise.[1]"
+
+        pipeline(
+            query="how many points is the exam worth", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert captured["on_phase"] is None

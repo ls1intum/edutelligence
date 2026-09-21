@@ -60,14 +60,19 @@ def test_null_json_yields_no_answer():
     assert used == set()
 
 
-def test_plain_text_without_schema_line_keeps_all_sources():
+def test_plain_text_without_a_single_marker_is_suppressed_as_ungrounded():
+    # Rule 2 requires a marker after every real claim, so text with none — even long,
+    # non-refusal-shaped prose — carries no real evidence of which sources (if any) it
+    # actually used. Defensively attaching every retrieved source here used to let this kind
+    # of answer bypass the ungrounded guard entirely; it is now suppressed like any other
+    # unattributed answer instead.
     answer, used = parse_answer_response(
         "Just some text answer without any structure at all, long enough not "
         "to look like a refusal and containing no schema imitation.",
         5,
     )
-    assert answer is not None
-    assert used == {0, 1, 2, 3, 4}
+    assert answer is None
+    assert used == set()
 
 
 def test_latex_backslashes_are_repaired():
@@ -127,6 +132,26 @@ def test_short_refusal_is_suppressed():
     answer, _ = parse_answer_response(
         '{"answer": "This topic is not covered in the course.",'
         ' "used_sources": [1]}',
+        5,
+    )
+    assert answer is None
+
+
+def test_short_refusal_written_as_a_contraction_is_suppressed():
+    # Observed live: the model wrote "I can't answer this." — the regex only matched
+    # "cannot", so this refusal reached the student unsuppressed, attributed to every
+    # retrieved source since the plain-text refusal carried no citation markers either.
+    answer, _ = parse_answer_response(
+        '{"answer": "I can\'t answer this.", "used_sources": [1]}',
+        5,
+    )
+    assert answer is None
+
+
+def test_short_refusal_with_a_curly_apostrophe_is_suppressed():
+    # The model's own raw output used a curly apostrophe (’), not the straight one.
+    answer, _ = parse_answer_response(
+        '{"answer": "I can’t answer this.", "used_sources": [1]}',
         5,
     )
     assert answer is None

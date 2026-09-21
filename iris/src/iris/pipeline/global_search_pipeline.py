@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from langchain_core.output_parsers import StrOutputParser
@@ -133,12 +134,40 @@ def _location_label(source: LectureSearchResultDTO) -> str:
 # also match plain chained indexing like `matrix[0][1]`: `[0]` is never itself a
 # valid start position, but `[1]` immediately follows its closing `]` and would
 # wrongly read as a continuation, recording an uncited answer as citing source 1.
-_CITATION_MARKER_RE = re.compile(r"(?:(?<=[.!?])|(?<=\$\$))(?:\[\d+\])+")
+#
+# Also tolerates exactly one space before the chain. The prompt (rule 2) now says
+# explicitly not to write that space, but a live capture still showed the model
+# doing it anyway in an otherwise well-formed answer: "...just an association).
+# [1][2][3][4][5]" — a genuine claim, correctly grounded, that the strict no-space
+# lookbehind matched NOWHERE AT ALL in the whole answer (not just at that one
+# marker), which read as "the model wrote no citations whatsoever" and fell back
+# to attaching every retrieved source instead of the ones actually cited. A nano
+# model's formatting will not be made 100% reliable by a prompt rule alone, so the
+# parser has to tolerate the one variation actually observed rather than let a
+# single stray space discard every citation in the response.
+# Each lookbehind alternative below is individually fixed-width, which Python's
+# re module allows even though the alternatives differ in width from each other.
+_CITATION_MARKER_RE = re.compile(
+    r"(?:(?<=[.!?])|(?<=[.!?] )|(?<=\$\$)|(?<=\$\$ ))(?:\[\d+\])+"
+)
 _SINGLE_MARKER_RE = re.compile(r"\[(\d+)\]")
 
 # Literal the model outputs INSTEAD of an answer when the sources cannot answer
 # the question (plain-text contract; measured 8/8 discipline on nano).
 _NO_ANSWER_SENTINEL = "!none!"
+
+
+def _is_deliberate_refusal(raw: str) -> bool:
+    """Whether the raw output IS the explicit !none! sentinel, alone or trailing prose.
+
+    Distinguishes a confident, on-purpose "I choose not to answer" from every other way
+    parse_answer_response can end up returning None (a suppressed refusal-in-prose, an
+    ungrounded answer, a malformed/flaky JSON null, ...). Only this one is the model
+    directly exercising the contract the prompt gives it for declining — the others are
+    this pipeline's OWN guards second-guessing an answer the model did not itself refuse.
+    """
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+    return cleaned.rstrip(".").strip().casefold().endswith(_NO_ANSWER_SENTINEL)
 
 
 class _SentinelGateStreamHandler:
@@ -237,6 +266,30 @@ def renumber_citation_markers(
     return _CITATION_MARKER_RE.sub(_replace_chain, answer)
 
 
+def _first_appearance_order(answer: str | None, indices: set[int]) -> list[int]:
+    """0-based ``indices`` ordered by where their (1-based) marker first appears in
+    ``answer``, so renumbering can assign 1, 2, 3... in READING order rather than in
+    retrieval-rank order.
+
+    Without this, a source the model happens to cite third in its own ranked context but
+    FIRST in the sentences it actually writes gets the higher final number anyway — a reader
+    sees "[2]" before "[1]" ever appears, which reads as out of order even though nothing is
+    actually wrong. Any index with no marker in the text at all (defensive; should not happen
+    once sanitize_citation_markers has already run) is appended at the end, ascending, so
+    nothing is silently dropped.
+    """
+    seen: list[int] = []
+    seen_set: set[int] = set()
+    if answer:
+        for match in _SINGLE_MARKER_RE.finditer(answer):
+            old = int(match.group(1)) - 1
+            if old in indices and old not in seen_set:
+                seen.append(old)
+                seen_set.add(old)
+    remaining = sorted(indices - seen_set)
+    return seen + remaining
+
+
 def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     """Parse the answer LLM's raw output into (answer, used 0-based indices).
 
@@ -247,17 +300,27 @@ def parse_answer_response(raw: str, num_sources: int) -> tuple[str | None, set[i
     answer, used_indices = _extract_answer(raw, num_sources)
     if answer:
         answer = _HEADER_ECHO_RE.sub("", answer)
+    # Checked on the raw text BEFORE sanitize_citation_markers strips anything: an empty
+    # cited_indices is ambiguous on its own between "wrote no markers at all" and "wrote a
+    # marker chain that turned out entirely invalid" (e.g. every index out of range) —
+    # markers_present resolves that ambiguity by recording whether a chain was attempted
+    # at all, regardless of whether any of it survived sanitation.
+    markers_present = bool(answer and _CITATION_MARKER_RE.search(answer))
     answer, cited_indices = sanitize_citation_markers(answer, num_sources)
     # cited_indices is the ground truth of what the rendered text actually cites, scanned from
     # its own [n] markers; used_indices is only the model's separate JSON self-report, which can
     # be wrong in both directions. Prefer cited_indices whenever the model wrote any inline
-    # markers at all: it already covers a source cited inline but left off the JSON list (the
-    # prior union's actual intent), while also NOT attaching every source the JSON over-reports
-    # beyond what the text actually references — a union unconditionally did, once observed
-    # live attaching 13 sources to an answer that inline-cited only 2 of them. Only when the
-    # model wrote no inline markers at all — relying solely on the JSON field for attribution —
-    # does used_indices still apply.
-    used_indices = cited_indices if cited_indices else used_indices
+    # markers at all — even where every one of them turned out invalid and cited_indices is
+    # therefore empty, since trusting used_indices there would let a JSON self-report re-ground
+    # an answer the inline markers themselves failed to support (observed live: an invalid [99]
+    # marker stripped to nothing, then silently re-grounded via a non-empty used_sources list).
+    # A non-empty cited_indices already covers a source cited inline but left off the JSON list
+    # (the prior union's actual intent), while also not attaching every source the JSON
+    # over-reports beyond what the text actually references — a union unconditionally did, once
+    # observed live attaching 13 sources to an answer that inline-cited only 2 of them. Only
+    # when the model wrote no inline markers at all — relying solely on the JSON field for
+    # attribution — does used_indices still apply.
+    used_indices = cited_indices if markers_present else used_indices
     answer = _sanitize_and_suppress(answer, used_indices)
     return answer, used_indices
 
@@ -268,15 +331,14 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     trailing "Used_sources: [..]" line (recovering attribution), raw text
     with all sources as the last resort."""
     cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-    # Plain-text contract: the sentinel is the honest "cannot answer" state. Checked with
-    # endswith rather than equality: the model is instructed to write the sentinel ALONE
-    # ("Do NOT write any message explaining why"), but sometimes appends it after an
-    # explanation instead of obeying that — observed live as prose ending in " !none!". The
-    # trailing sentinel still means the model judged the sources insufficient; treating that
-    # explanation as a real, sourced answer would be worse than suppressing it, since nothing
-    # here or downstream distinguishes a genuine claim from what the model itself flagged as
-    # not actually answerable.
-    if cleaned.rstrip(".").strip().casefold().endswith(_NO_ANSWER_SENTINEL):
+    # Plain-text contract: the sentinel is the honest "cannot answer" state. The model is
+    # instructed to write it ALONE ("Do NOT write any message explaining why"), but sometimes
+    # appends it after an explanation instead of obeying that — observed live as prose ending
+    # in " !none!". The trailing sentinel still means the model judged the sources
+    # insufficient; treating that explanation as a real, sourced answer would be worse than
+    # suppressing it, since nothing here or downstream distinguishes a genuine claim from what
+    # the model itself flagged as not actually answerable.
+    if _is_deliberate_refusal(raw):
         return None, set()
     parsed = _try_parse_json(cleaned)
     if parsed is None:
@@ -305,8 +367,7 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
 
     # Plain-text output (the model dropped the JSON envelope). If it ends
     # with a schema-imitating "Used_sources: [..]" line, recover the
-    # attribution from it and strip the line; otherwise attach all sources —
-    # there is no way to tell which were used.
+    # attribution from it and strip the line.
     match = _TRAILING_USED_SOURCES_RE.search(cleaned)
     if match:
         used_indices = {
@@ -329,12 +390,22 @@ def _extract_answer(raw: str, num_sources: int) -> tuple[str | None, set[int]]:
     if _CITATION_MARKER_RE.search(cleaned):
         return cleaned or None, set()
 
+    # No inline markers and no other attribution signal at all. Rule 2 requires a marker
+    # after every real claim, so plain text that reaches here without a single one is either
+    # a genuine answer that dropped the required markers, or — observed live, repeatedly, in
+    # several different phrasings — the model explaining a refusal in prose instead of the
+    # bare !none! sentinel it was told to use alone. Returning an empty used_indices here,
+    # rather than defensively attaching every retrieved source, lets the existing ungrounded
+    # guard below (_sanitize_and_suppress) treat this exactly like any other unattributed
+    # answer: suppressed, instead of shown to the student dressed up with sources that never
+    # actually supported it. This does not try to recognize which specific refusal phrasing
+    # the model used — it reacts to the one structural fact any of them share: no markers.
     logger.info(
-        "[global-search] outcome=plain_text_no_markers raw_len=%d — "
-        "returning text with all sources attached",
+        "[global-search] outcome=plain_text_no_markers raw_len=%d raw=%r",
         len(raw),
+        raw[:400],
     )
-    return cleaned or None, set(range(num_sources))
+    return cleaned or None, set()
 
 
 _REFUSAL_RE = re.compile(
@@ -342,7 +413,10 @@ _REFUSAL_RE = re.compile(
     r"|not (in|part of) the (course|lecture|material|content|slides)"
     r"|no (mention|reference|explanation|definition|description|information)"
     r"|does not (cover|mention|discuss|provide|include|contain|address)"
-    r"|cannot (answer|find|provide|address)",
+    # can(?:not|['’]t): the model sometimes writes the contraction — including with a
+    # curly apostrophe (’, U+2019) — instead of "cannot" (observed live: "I can't answer
+    # this." slipped past a "cannot"-only pattern and reached the student unsuppressed).
+    r"|can(?:not|['’]t) (answer|find|provide|address)",
     re.IGNORECASE,
 )
 
@@ -385,6 +459,21 @@ def _sanitize_and_suppress(answer: str | None, used_indices: set[int]) -> str | 
         answer = None
 
     return answer
+
+
+def _distinct_course_names(sources) -> list[str]:
+    """Distinct course names across retrieved sources, in first-seen (ranked) order.
+
+    Both LectureSearchResultDTO (always) and EntitySourceDTO (optionally) carry a
+    ``course`` field; a source with none (should not happen for a grounded source, but not
+    guaranteed by the type checker) is skipped rather than raising.
+    """
+    seen: dict[str, None] = {}
+    for source in sources:
+        course = getattr(source, "course", None)
+        if course is not None and course.name not in seen:
+            seen[course.name] = None
+    return list(seen)
 
 
 class GlobalSearchPipeline(SubPipeline):
@@ -476,6 +565,7 @@ class GlobalSearchPipeline(SubPipeline):
         course_ids: list[int] | None = None,
         exclude_course_ids: list[int] | None = None,
         stream_handler=None,
+        stage_handler: Callable[[str, list[str]], None] | None = None,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
@@ -494,6 +584,18 @@ class GlobalSearchPipeline(SubPipeline):
         :param exclude_course_ids: Courses to hide regardless of course_ids/access
                                    context — only needed for an unrestricted caller
                                    with no course ceiling to narrow locally.
+        :param stage_handler: Optional callback fired with a short stage name
+                              ("searching", "ranking", "found", "generating") and the
+                              distinct course names found so far (empty until "found"
+                              fires) as the pipeline crosses into each real phase, so
+                              the client can show what is actually happening instead
+                              of one static "thinking" message for the whole wait —
+                              "ranking" in particular covers the reranker call, which
+                              is typically the single slowest part of retrieval, and
+                              "found" gives a checkpoint right after it with nothing
+                              else to show for that stretch otherwise. Best-effort: a
+                              caller that omits it just does not get the intermediate
+                              signal, same as before this parameter existed.
         :return: An answer with source references.
         """
         # Guard: skip the full LLM pipeline for navigation queries
@@ -510,9 +612,17 @@ class GlobalSearchPipeline(SubPipeline):
             )
             return GlobalSearchResponseDTO(answer=None, sources=sources)
 
+        if stage_handler is not None:
+            stage_handler("searching", [])
         entity_sources = self._render_entity_sources(entity_candidates)
         sources = self._retrieve_sources(
-            query, limit, access_context, entity_sources, course_ids, exclude_course_ids
+            query,
+            limit,
+            access_context,
+            entity_sources,
+            course_ids,
+            exclude_course_ids,
+            stage_handler,
         )
         if not sources:
             logger.info("[global-search] outcome=no_sources query=%r", query[:120])
@@ -527,6 +637,12 @@ class GlobalSearchPipeline(SubPipeline):
             )
             return GlobalSearchResponseDTO(answer=None, sources=[])
 
+        if stage_handler is not None:
+            # Fires the moment retrieval actually has something to show, rather than leaving
+            # "searching" as the only signal for the whole (often the slowest) retrieval +
+            # grounding stretch, with generating as the next thing the reader sees.
+            stage_handler("found", _distinct_course_names(grounded_sources))
+
         # Retrieval outcome decides the task: pointer-tier sources were
         # admitted from below the floor because nothing answers the question,
         # so there is nothing to answer FROM, only material to direct the
@@ -536,6 +652,8 @@ class GlobalSearchPipeline(SubPipeline):
             isinstance(s, EntitySourceDTO) and s.via_pointer_tier
             for s in grounded_sources
         )
+        if stage_handler is not None:
+            stage_handler("generating", [])
         raw = self._generate_answer(
             query,
             grounded_sources,
@@ -556,8 +674,15 @@ class GlobalSearchPipeline(SubPipeline):
         # entity sources exist — retry once as navigation over just those.
         # A genuine negative has no surviving entity sources, so the fallback
         # cannot fire there. Covers where-do-I-find questions and null
-        # flakiness of small answer models.
-        if answer is None and not all_pointers:
+        # flakiness of small answer models. Excludes a DELIBERATE !none! specifically: that is
+        # the model directly exercising its documented way to decline, not a flaky or
+        # over-cautious null this pipeline's own guards produced — retrying it via the
+        # navigate prompt, which is deliberately more lenient (rule: "a student prefers a
+        # pointer over silence"), relitigates a judgment the model already made on purpose.
+        # Observed live: an incomplete question correctly got !none! from the grounded
+        # prompt every time, then just as reliably got overridden by the navigate retry
+        # pointing at the same course, in the wrong language for the question asked.
+        if answer is None and not all_pointers and not _is_deliberate_refusal(raw):
             entity_grounded = [
                 s for s in grounded_sources if isinstance(s, EntitySourceDTO)
             ]
@@ -594,9 +719,14 @@ class GlobalSearchPipeline(SubPipeline):
         # `sources` (lecture) then `entitySources` (entity) as two separate,
         # concatenated arrays, so an entity ranked between two lecture sources
         # would otherwise get a marker number that lands on the wrong array
-        # once the two types are split onto the wire.
-        ordered_used = sorted(used_indices)
-        indexed_used_sources = list(zip(ordered_used, used_sources))
+        # once the two types are split onto the wire. WITHIN each of those two arrays,
+        # sources are ordered by where they are first CITED IN THE TEXT, not by retrieval
+        # rank — observed live: the model discussed its 2nd-ranked source before its
+        # 1st-ranked one, and rank-based numbering then showed the reader "[2]" before "[1]"
+        # ever appeared, reading as out of order even though nothing was actually wrong.
+        by_old_index = dict(zip(sorted(used_indices), used_sources))
+        ordered_used = _first_appearance_order(answer, used_indices)
+        indexed_used_sources = [(old, by_old_index[old]) for old in ordered_used]
         used_lecture_indexed = [
             (old, s)
             for old, s in indexed_used_sources
@@ -687,6 +817,7 @@ class GlobalSearchPipeline(SubPipeline):
         entity_sources: list[EntitySourceDTO] | None = None,
         course_ids: list[int] | None = None,
         exclude_course_ids: list[int] | None = None,
+        stage_handler: Callable[[str, list[str]], None] | None = None,
     ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
         """Candidate retrieval with the instruct query embedding.
 
@@ -696,6 +827,15 @@ class GlobalSearchPipeline(SubPipeline):
         pool can also mean the semantic lane missed named entities (thin or
         exotic tokens), so a keyword-heavy retry runs once before giving up.
         """
+        # The retriever's own "ranking" phase carries no course names of its own (that is
+        # what the "found" stage right after this method returns is for) — it exists purely
+        # to keep the reader from staring at "Searching course material…" through the
+        # slowest part of retrieval with nothing else to show for it.
+        on_phase = (
+            (lambda phase: stage_handler(phase, []))
+            if stage_handler is not None
+            else None
+        )
         t_retrieval = time.perf_counter()
         sources = self.retriever.search(
             query=query,
@@ -706,6 +846,7 @@ class GlobalSearchPipeline(SubPipeline):
             auto_cut=True,
             access_context=access_context,
             entity_sources=entity_sources,
+            on_phase=on_phase,
         )
         if not sources:
             logger.info(
@@ -720,6 +861,7 @@ class GlobalSearchPipeline(SubPipeline):
                 auto_cut=True,
                 access_context=access_context,
                 entity_sources=entity_sources,
+                on_phase=on_phase,
             )
         logger.info(
             "[global-search] retrieval_ms=%.0f sources=%d",

@@ -457,6 +457,9 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 course_ids=dto.course_ids,
                 exclude_course_ids=dto.exclude_course_ids,
                 stream_handler=sender.on_delta if sender else None,
+                stage_handler=lambda stage, sources: callback.update(
+                    stage=stage, stage_sources=sources
+                ),
             )
         finally:
             if sender is not None:

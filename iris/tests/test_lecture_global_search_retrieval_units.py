@@ -465,6 +465,54 @@ def test_safe_rerank_scores_a_single_candidate_instead_of_skipping_it():
     assert relevance == [0.01]
 
 
+class TestOnPhaseCallback:
+    """on_phase lets a caller with a status UI show what retrieval is actually doing,
+    rather than one static message for the whole (often slow) call."""
+
+    def test_ranking_fires_right_before_the_reranker_call(self):
+        retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+        calls: list[str] = []
+        retrieval._search_lanes_until_visible = lambda *a, **k: (
+            calls.append("search_lanes"),
+            [],
+        )[1]
+        retrieval._rerank_and_gate = lambda *a, **k: (
+            calls.append("rerank_and_gate"),
+            [],
+        )[1]
+
+        retrieval._run_hybrid_search(
+            query="test",
+            vector=[],
+            alpha=0.5,
+            limit=5,
+            on_phase=lambda phase: calls.append(f"on_phase:{phase}"),
+        )
+
+        assert calls == ["search_lanes", "on_phase:ranking", "rerank_and_gate"]
+
+    def test_omitting_on_phase_does_not_break_the_search(self):
+        retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+        retrieval._search_lanes_until_visible = lambda *a, **k: []
+        retrieval._rerank_and_gate = lambda *a, **k: []
+
+        result = retrieval._run_hybrid_search(
+            query="test", vector=[], alpha=0.5, limit=5
+        )
+
+        assert not result
+
+    def test_search_forwards_on_phase_through_to_run_hybrid_search(self):
+        retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+        retrieval.embed_retrieval_query = Mock(return_value=[0.1])
+        retrieval._run_hybrid_search = Mock(return_value=[])
+        on_phase = Mock()
+
+        retrieval.search(query="q", limit=5, on_phase=on_phase)
+
+        assert retrieval._run_hybrid_search.call_args.kwargs["on_phase"] is on_phase
+
+
 def test_empty_course_scope_still_returns_pre_authorized_entity_sources():
     # A user with entity-level access (e.g. a public channel or catalog entry)
     # but no role-based course access gets effective_course_ids == [] — the

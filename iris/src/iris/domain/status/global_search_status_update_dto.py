@@ -29,3 +29,12 @@ class GlobalSearchStatusUpdateDTO(StatusUpdateDTO):
     entity_sources: List[EntitySourceDTO] = Field(
         default_factory=list, alias="entitySources"
     )
+    # Short stage name ("searching", "generating") sent alongside a thinking update with no
+    # partial_result yet, so the client can show what is actually happening instead of one
+    # static "thinking" message for the whole wait. Additive (wire freeze rules): old Artemis
+    # ignores the unknown field and falls back to its own generic message.
+    stage: Optional[str] = None
+    # Distinct course names found so far, in ranked order — empty before retrieval finishes,
+    # populated once the "generating" stage fires, so the client can say what it actually
+    # found ("Course A, Course B +2 others") instead of a generic "generating" message.
+    stage_sources: List[str] = Field(default_factory=list, alias="stageSources")
