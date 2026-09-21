@@ -20,7 +20,7 @@ Iris publishes container images to the GitHub Container Registry:
 ghcr.io/ls1intum/edutelligence/iris:latest
 ```
 
-The image is based on `python:3.12.3-slim` and runs a uvicorn server on port **8000**.
+The image is based on `python:3.13.3-slim` and runs a uvicorn server on port **8000**.
 
 ## Docker Compose Files
 
