@@ -244,6 +244,33 @@ class TestHeartbeat:
         for call in post.call_args_list:
             assert call.kwargs["json"]["activeJobTokens"] == []
 
+    def test_revoked_token_signals_the_run_s_cancel_event(self):
+        # A revoked lease means Artemis reassigned the unit elsewhere; the
+        # local thread can't be killed, but signaling its cancel_event stops
+        # it at the pipeline's own existing checkpoints instead of letting it
+        # run to completion and possibly clobber the newer run's writes.
+        worker = IngestionWorker()
+        worker.register_upstream("http://a:8080", "key-a")
+        _run(worker, "revoked", "http://a:8080")
+        run = worker._active["revoked"]  # pylint: disable=protected-access
+        with patch(
+            "iris.ingestion.worker.http_requests.post",
+            return_value=_response(body={"revokedJobTokens": ["revoked"]}),
+        ):
+            worker._heartbeat_once()  # pylint: disable=protected-access
+        run.cancel_event.set.assert_called_once()
+
+    def test_revoked_token_with_no_matching_active_run_does_not_crash(self):
+        # A revocation can arrive after the run already finished and was
+        # pruned; there is nothing local left to signal.
+        worker = IngestionWorker()
+        worker.register_upstream("http://a:8080", "key-a")
+        with patch(
+            "iris.ingestion.worker.http_requests.post",
+            return_value=_response(body={"revokedJobTokens": ["unknown-token"]}),
+        ):
+            worker._heartbeat_once()  # pylint: disable=protected-access
+
     def test_heartbeat_failure_streak_recovers(self):
         worker = IngestionWorker()
         worker.register_upstream("http://a:8080", "key-a")

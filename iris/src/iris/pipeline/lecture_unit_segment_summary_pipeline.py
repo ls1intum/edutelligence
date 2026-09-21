@@ -247,18 +247,35 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
         ).equal(slide_number)
-        return self.lecture_transcription_collection.query.fetch_objects(
+        rows = self.lecture_transcription_collection.query.fetch_objects(
             filters=transcription_filter
         ).objects
+        # An object-store-confirmed row for this slide, not a raw scan hit: a
+        # ghost row (scan-visible but object-store-missing) sitting alongside a
+        # real one would otherwise be concatenated into the regenerated
+        # summary, and the final audit would then confirm the newly written
+        # segment row and certify content derived from stale, non-retrievable
+        # data.
+        return confirmed_rows(
+            self.lecture_transcription_collection,
+            rows,
+            retry=getattr(self, "_retry", None),
+        )
 
     def _get_slides(self, slide_number: int):
         slide_filter = self._get_lecture_slide_filter()
         slide_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.PAGE_NUMBER.value
         ).equal(slide_number)
-        return self.lecture_unit_page_chunk_collection.query.fetch_objects(
+        rows = self.lecture_unit_page_chunk_collection.query.fetch_objects(
             filters=slide_filter
         ).objects
+        # Same ghost-filtering reasoning as _get_transcriptions above.
+        return confirmed_rows(
+            self.lecture_unit_page_chunk_collection,
+            rows,
+            retry=getattr(self, "_retry", None),
+        )
 
     def _get_slide_range(self) -> Tuple[int, int]:
         """Full page-number span of the unit, over every ghost-free chunk of every generation.

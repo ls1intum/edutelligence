@@ -165,9 +165,31 @@ class IngestionWorkerSettings(BaseModel):
     """
 
     enabled: bool = Field(default=True)
-    capacity: int = Field(default=2)
-    poll_interval_seconds: float = Field(default=2.0)
-    heartbeat_interval_seconds: float = Field(default=5.0)
+    capacity: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Max concurrent ingestion jobs this worker executes. Zero would leave "
+            "the worker polling and heartbeating forever without ever claiming work."
+        ),
+    )
+    poll_interval_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description=(
+            "How often the worker polls upstreams to claim jobs. A non-positive "
+            "value makes the wait between polls return immediately, turning the "
+            "poll loop into a tight request loop."
+        ),
+    )
+    heartbeat_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description=(
+            "How often the worker renews the lease of every run it executes. Same "
+            "non-positive-wait hazard as poll_interval_seconds."
+        ),
+    )
     # Hostnames (case-insensitive, port ignored) an announced upstream must match to be
     # registered. Empty (the default) accepts any http(s) URL, matching today's zero-config
     # discovery for local and single-tenant deployments. Set this where Iris is reachable by

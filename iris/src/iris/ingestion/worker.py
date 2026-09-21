@@ -66,6 +66,11 @@ class _ActiveRun:
     thread: threading.Thread
     upstream_url: str
     lecture_unit_id: int
+    # The same event the pipeline checks at its existing cancellation
+    # checkpoints (current_job_guard / raise_if_cancelled). Retained here so a
+    # revocation from Artemis can signal it, the same way a same-worker
+    # re-claim already does via add_job's supersession.
+    cancel_event: threading.Event
 
 
 class IngestionWorker:
@@ -301,7 +306,10 @@ class IngestionWorker:
                 cancel_event=cancel_event,
             )
             self._active[token] = _ActiveRun(
-                thread=thread, upstream_url=upstream.url, lecture_unit_id=unit_id
+                thread=thread,
+                upstream_url=upstream.url,
+                lecture_unit_id=unit_id,
+                cancel_event=cancel_event,
             )
         logger.info(
             "Claimed ingestion job for unit %d from %s",
@@ -350,14 +358,21 @@ class IngestionWorker:
         upstream.heartbeat_failures = 0
         revoked = (response.json() or {}).get("revokedJobTokens") or []
         for token in revoked:
-            # The pipeline thread cannot be killed safely; it is left to finish,
-            # and stays harmless: its status callbacks are rejected by the token
-            # check and its vector writes are superseded by the run-id sweep of
-            # whichever run owns the unit next.
+            # The pipeline thread cannot be killed safely, so it is signaled
+            # through the same cancellation event add_job already uses to
+            # supersede a same-worker re-claim: the pipeline's existing
+            # checkpoints (current_job_guard / raise_if_cancelled) then stop it
+            # at the next one, before it writes further. The run stays in
+            # _active (occupying capacity) until its thread actually exits, so
+            # a prune can't drop a still-live run; its status callbacks are
+            # also rejected by the token check regardless of how quickly it
+            # stops.
             run = self._active.get(token)
             unit_id = run.lecture_unit_id if run is not None else "unknown"
+            if run is not None:
+                run.cancel_event.set()
             logger.warning(
-                "%s revoked the run for unit %s — it was reclaimed, letting the local thread drain",
+                "%s revoked the run for unit %s — it was reclaimed, signaling the local thread to stop",
                 upstream.url,
                 unit_id,
             )
