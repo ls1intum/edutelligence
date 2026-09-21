@@ -1,0 +1,30 @@
+from iris.domain.status.run_state_dto import RunStateEnum
+from iris.domain.status.struggle_intervention_status_update_dto import (
+    StruggleInterventionStatusUpdateDTO,
+)
+
+
+def test_status_dto_serializes_action_fields_camelcase():
+    dto = StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
+    dto.action = "active"
+    dto.confidence = 0.8
+    dto.result = "Have you checked the empty-list case?"
+    dto.rationale = "FM boundary, feedback-viewing dominant."
+    dumped = dto.model_dump(by_alias=True)
+    assert dumped["action"] == "active"
+    assert dumped["confidence"] == 0.8
+    assert dumped["result"] == "Have you checked the empty-list case?"
+    assert dumped["rationale"] == "FM boundary, feedback-viewing dominant."
+
+
+def test_status_update_serializes_confirm_close_fields_snake_case():
+    dto = StruggleInterventionStatusUpdateDTO(
+        run_state=RunStateEnum.FINISHED,
+        resolved=True,
+        closing_sentence="Nice, that was the wrong index.",
+        episode_label="Wrong index",
+    )
+    dumped = dto.model_dump(by_alias=True)
+    assert dumped["resolved"] is True
+    assert dumped["closing_sentence"] == "Nice, that was the wrong index."
+    assert dumped["episode_label"] == "Wrong index"
