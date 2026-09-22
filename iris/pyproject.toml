@@ -42,6 +42,7 @@ scikit-learn = "1.9.1"
 ffmpeg-python = "^0.2.0"
 opencv-python-headless = "^5.0.0"
 yt-dlp = "^2026.8.19"
+langdetect = "^1.0.9"
 
 # Security floors for packages that are otherwise transitive only. Without
 # these, regenerating poetry.lock can resolve back onto a vulnerable release.

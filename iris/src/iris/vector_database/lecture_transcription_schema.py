@@ -9,6 +9,8 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
+from iris.vector_database.lecture_unit_schema import _add_property_if_missing
+
 
 class LectureTranscriptionSchema(Enum):
     """
@@ -26,11 +28,41 @@ class LectureTranscriptionSchema(Enum):
     SEGMENT_TEXT = "segment_text"
     SEGMENT_SUMMARY = "segment_summary"
     BASE_URL = "base_url"
+    CONTENT_FINGERPRINT = "content_fingerprint"
+    INGESTION_RUN_ID = "ingestion_run_id"
+
+
+def _stamp_properties() -> list[Property]:
+    return [
+        Property(
+            name=LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
+            description=(
+                "Fingerprint of the source content this row was derived "
+                "from, stamped verbatim as sent by Artemis"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+            description=(
+                "Id of the ingestion run that wrote this row; rows of "
+                "other runs are swept after a successful write"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+    ]
 
 
 def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureTranscriptionSchema.COLLECTION_NAME.value):
-        return client.collections.get(LectureTranscriptionSchema.COLLECTION_NAME.value)
+        collection = client.collections.get(
+            LectureTranscriptionSchema.COLLECTION_NAME.value
+        )
+        for stamp_property in _stamp_properties():
+            _add_property_if_missing(collection, stamp_property)
+        return collection
 
     return client.collections.create(
         name=LectureTranscriptionSchema.COLLECTION_NAME.value,
@@ -100,5 +132,6 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            *_stamp_properties(),
         ],
     )
