@@ -54,6 +54,14 @@ transcription:
   extract_audio_timeout_seconds: 600 # Audio extraction timeout
   no_speech_filter_threshold: 0.8 # Filter silent segments (0.0-1.0)
 
+lecture_ingestion:
+  vision_max_attempts: 3 # Max attempts to interpret a slide via the vision LLM before failing the run
+  skip_check_fetch_limit: 10000 # Max rows read for the skip-check and generation-count reads before treating the sample as truncated
+  convergence_max_escalations: 2 # Max full delete-and-rewrite escalations if a stale generation survives the id-scoped purge
+  language_detection_min_chars: 200 # Below this much aggregated deck text, fall back to default_language instead of detecting
+  language_detection_max_chars: 10000 # Max characters of deck text fed to the language detector per run
+  default_language: "en" # Fallback language (ISO 639-1) when detection is skipped or fails
+
 env_vars:
   SOME: "value"
 
@@ -255,9 +263,6 @@ llm_configuration:
 
   global_search_pipeline:
     default:
-      hyde:
-        local: gpt-oss
-        cloud: oai-gpt-5-nano-minimal
       answer:
         local: gpt-oss
         cloud: oai-gpt-5-mini-minimal

@@ -151,6 +151,111 @@ class TranscriptionSettings(BaseModel):
     )
 
 
+class IngestionWorkerSettings(BaseModel):
+    """Configuration of the pull-based ingestion worker.
+
+    The worker discovers its Artemis upstreams from their authenticated health
+    checks (each announces its own base URL in a header), so there is no
+    upstream configuration here and Iris keeps no standing knowledge of its
+    callers. It claims lecture ingestion jobs from every discovered upstream
+    when it has free capacity and renews a lease for every run it executes on
+    the fixed heartbeat interval. capacity is shared across all upstreams and
+    replaces Artemis's global max-concurrent-jobs as the effective
+    parallelism: in pull mode this process only ever takes what it can run.
+    """
+
+    enabled: bool = Field(default=True)
+    capacity: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Max concurrent ingestion jobs this worker executes. Zero would leave "
+            "the worker polling and heartbeating forever without ever claiming work."
+        ),
+    )
+    poll_interval_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description=(
+            "How often the worker polls upstreams to claim jobs. A non-positive "
+            "value makes the wait between polls return immediately, turning the "
+            "poll loop into a tight request loop."
+        ),
+    )
+    heartbeat_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description=(
+            "How often the worker renews the lease of every run it executes. Same "
+            "non-positive-wait hazard as poll_interval_seconds."
+        ),
+    )
+    # Hostnames (case-insensitive, port ignored) an announced upstream must match to be
+    # registered. Empty (the default) accepts any http(s) URL, matching today's zero-config
+    # discovery for local and single-tenant deployments. Set this where Iris is reachable by
+    # parties other than its own Artemis installations, so a valid API key cannot point the
+    # worker's authenticated outbound requests at an arbitrary internal or external address.
+    allowed_upstream_hosts: list[str] = Field(default_factory=list)
+
+
+class LectureIngestionSettings(BaseModel):
+    """Tunables for the lecture-ingestion pipeline: vision retries, read-completeness
+    guards, and language detection. Defaults match the pipeline's original
+    hardcoded values.
+    """
+
+    vision_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description="Max attempts to interpret a slide via the vision LLM before failing the run.",
+    )
+    skip_check_fetch_limit: int = Field(
+        default=10_000,
+        ge=1,
+        description=(
+            "Max rows read when checking whether a unit's stored chunks are already "
+            "current and complete, and when counting a unit's distinct ingestion "
+            "generations. A read that hits this cap is treated as possibly "
+            "truncated/incomplete rather than trusted as a full sample."
+        ),
+    )
+    convergence_max_escalations: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            "After write-then-purge, how many times to escalate to a full "
+            "delete-and-rewrite if a stale generation the id-scoped purge missed is "
+            "still visible, before failing the run so the reconciler retries."
+        ),
+    )
+    language_detection_min_chars: int = Field(
+        default=200,
+        ge=1,
+        description=(
+            "Below this much aggregated deck text, language detection is unreliable "
+            "and default_language is used instead of guessing."
+        ),
+    )
+    language_detection_max_chars: int = Field(
+        default=10_000,
+        ge=1,
+        description="Max characters of deck text fed to the language detector per run.",
+    )
+    default_language: str = Field(
+        default="en",
+        description="Fallback language (ISO 639-1) when detection is skipped or fails.",
+    )
+
+    @model_validator(mode="after")
+    def validate_language_detection_bounds(self):
+        """Ensure the detector sample window is at least the gating threshold."""
+        if self.language_detection_max_chars < self.language_detection_min_chars:
+            raise ValueError(
+                "language_detection_max_chars must be >= language_detection_min_chars"
+            )
+        return self
+
+
 class Settings(BaseModel):
     """Settings represents application configuration settings loaded from a YAML file."""
 
@@ -162,6 +267,93 @@ class Settings(BaseModel):
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    global_search_rerank_floor: float = Field(
+        default=0.10,
+        description="Junk floor for global-search candidates: the score below "
+        "which a reranked candidate is treated as garbage rather than as a "
+        "weak answer. Calibrated against the NEGATIVE distribution, not the "
+        "relevant one, because junk scores in a tight, stable band while "
+        "relevance does not: across three runs on Qwen3-Reranker-8B, "
+        "deliberately irrelevant candidates peaked at 0.065 while genuinely "
+        "relevant lecture content sat at 0.24-0.62 and entity records "
+        "(30-char titles) at 0.08-0.35. 0.10 sits 0.035 above the junk "
+        "ceiling, 3.5x the reranker's measured run-to-run noise (+/-0.01), so "
+        "borderline candidates are not decided by serving nondeterminism. It "
+        "does clip the very bottom of the entity band: 0.08 would keep ~28 "
+        "percent more entity candidates but leaves only 1.5x noise margin over "
+        "junk. Revisit once entity search_text enrichment lifts that band. "
+        "Volume is capped by `limit`, "
+        "not by this value. A query whose candidates ALL fall below the floor "
+        "returns no sources - the honest empty state, skipping the answer LLM. "
+        "Set to 0.0 for log-only calibration. Only applied when the resolved "
+        "reranker's config entry declares rerank_floor_calibrated=true "
+        "(RerankModel.rerank_floor_calibrated) - a different model's scores "
+        "are not on this scale, so this value would gate them arbitrarily.",
+    )
+    global_search_expand_units: bool = Field(
+        default=True,
+        description="Graph expansion for the ANSWER path: once a candidate "
+        "survives the floor, fetch the rest of its lecture unit's material by "
+        "structural join instead of making each sibling win its own ranking "
+        "slot. Measured on the scattered-scenario harness: at least one "
+        "relevant item is returned for 93 percent of queries, but every "
+        "collection holding relevant material is represented for only 16 "
+        "percent - the anchor is found, the rest loses the ranking contest. A "
+        "join has 100 percent recall by construction, which turns a "
+        "multi-collection conjunction into the single question of whether the "
+        "anchor was right. Not applied to the instant results list, which is a "
+        "ranked list by contract and has a ~400ms budget.",
+    )
+    global_search_expand_max_units: int = Field(
+        default=4,
+        description="How many distinct lecture units to expand, taken in rank "
+        "order. Bounds both the fetch and the context handed to the answer LLM.",
+    )
+    global_search_expand_per_unit: int = Field(
+        default=3,
+        description="Extra passages pulled per expanded unit. Siblings are "
+        "appended after the ranked anchors and inherit their anchor's score, so "
+        "ordering is unchanged for everything that earned its place.",
+    )
+    global_search_expand_fetch_limit: int = Field(
+        default=200,
+        description="Per-collection cap on the expansion join. Deliberately "
+        "larger than max_units * per_unit: numeric unit ids collide across "
+        "Artemis instances sharing one Weaviate, so over-fetching and filtering "
+        "on the full (base_url, course_id, lecture_unit_id) key is what keeps "
+        "another instance's unit out of the results.",
+    )
+    global_search_rerank_results_list: bool = Field(
+        default=True,
+        description="Also rerank the instant results list (SKIP_AI / REST "
+        "search). The AI answer path is always reranked. The list adds the "
+        "reranker's latency to an otherwise ~400ms response — disable if list "
+        "latency matters more than mid-list ranking quality.",
+    )
+    global_search_rerank_list_timeout_s: float = Field(
+        default=2.0,
+        description="Rerank wall-clock budget for the instant results list, in "
+        "seconds. A slow rerank call degrades to the fused ordering at this "
+        "budget instead of pinning the list at the answer path's longer "
+        "timeout (which can exceed the caller's own timeout and surface as a "
+        "failed search in the UI).",
+    )
+    global_search_lane_depth_max: int = Field(
+        default=10_000,
+        description="Upper bound on the per-lane candidate depth while "
+        "retrying for enough visible results. Release-date and slide-"
+        "visibility filtering happens AFTER retrieval, so a fixed-depth fetch "
+        "can be entirely consumed by unreleased or hidden rows while a "
+        "visible, relevant result sits just beyond that depth; the search "
+        "doubles the depth and retries until enough visible candidates "
+        "survive filtering, a lane is exhausted, or this cap is hit.",
+    )
+    ingestion_worker: IngestionWorkerSettings = Field(
+        default_factory=IngestionWorkerSettings
+    )
+    lecture_ingestion: LectureIngestionSettings = Field(
+        default_factory=LectureIngestionSettings
+    )
 
     @classmethod
     def get_settings(cls):

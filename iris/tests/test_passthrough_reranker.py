@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.llm.external.model import RerankResponse
 from iris.llm.external.passthrough_reranker import PassthroughReranker
 from iris.llm.llm_manager import LlmList
 from iris.llm.request_handler.rerank_request_handler import RerankRequestHandler
@@ -67,10 +68,11 @@ def test_existing_provider_reranker_path_is_unchanged():
     first = SimpleNamespace(content="first")
     second = SimpleNamespace(content="second")
     provider = MagicMock()
-    provider.rerank.return_value = (
-        ("id", "request-id"),
-        ("results", [SimpleNamespace(index=1), SimpleNamespace(index=0)]),
-        ("meta", None),
+    provider.rerank.return_value = RerankResponse(
+        results=[
+            {"index": 1, "relevance_score": 0.9},
+            {"index": 0, "relevance_score": 0.5},
+        ]
     )
     manager = MagicMock()
     manager.get_llm_by_id.return_value = provider

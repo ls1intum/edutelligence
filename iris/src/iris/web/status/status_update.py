@@ -56,10 +56,21 @@ class StatusCallback:
     # Result-like payload fields that describe a single RUNNING update and must
     # NOT leak into later heartbeats or the terminal send. ``result`` carries
     # e.g. transcription checkpoint JSON; ``display_page_numbers`` is attached
-    # only to the send that produced it. Persistent fields (run_state, error,
-    # tokens, activities, and identity fields such as the lecture-unit id) are
-    # intentionally excluded so they keep accumulating across updates.
-    _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = ("result", "display_page_numbers")
+    # only to the send that produced it. ``stage``/``stage_sources`` (global
+    # search) name the pipeline phase THIS update crossed into — without
+    # clearing them, the terminal finish()/fail() send (which does not pass
+    # its own stage) still carries the last RUNNING update's stage name (e.g.
+    # "generating"), contradicting the FINISHED/FAILED run state it is sent
+    # with. Persistent fields (run_state, error, tokens, activities, and
+    # identity fields such as the lecture-unit id) are intentionally excluded
+    # so they keep accumulating across updates. A name absent from a given
+    # status DTO subtype is a harmless no-op (see _clear_transient_result_fields).
+    _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = (
+        "result",
+        "display_page_numbers",
+        "stage",
+        "stage_sources",
+    )
 
     # Backoff between retries of a delivery-critical frame, in seconds.
     _RETRY_BACKOFF_S: tuple[int, ...] = (1, 2, 4)

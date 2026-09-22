@@ -1,10 +1,16 @@
 import json
+import time
+import uuid
 from pathlib import Path
 from threading import Event
 from typing import Optional
 
+from weaviate.classes.query import Filter
+
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.custom_exceptions import IngestionCancelledException
+from iris.common.ingestion_errors import IngestionStageError
+from iris.common.ingestion_version import INGESTION_PIPELINE_VERSION
 from iris.common.logging_config import get_logger
 from iris.config import settings
 from iris.domain.data.metrics.transcription_dto import (
@@ -20,6 +26,7 @@ from iris.domain.variant.abstract_variant import find_variant
 from iris.domain.variant.variant import Dep
 from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.pipeline import Pipeline
+from iris.pipeline.ingestion_audit import IngestionAudit, segments_are_complete
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
 from iris.pipeline.lecture_update_lock import lecture_update_lock
@@ -27,7 +34,16 @@ from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
 from iris.tracing import observe
-from iris.vector_database.database import VectorDatabase
+from iris.vector_database.batch_verify import delete_many_with_retry
+from iris.vector_database.database import VectorDatabase, batch_update_lock
+from iris.vector_database.lecture_transcription_schema import (
+    LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 logger = get_logger(__name__)
@@ -147,7 +163,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
         self._run()
 
     def _run(self):
-        """Run preprocessing, then perform guarded final mutations."""
+        """Run preprocessing, then serialize the guarded Weaviate mutation phase."""
+        # One id per run: every row this run writes carries it, and the write
+        # paths sweep rows of other runs after a verified insert.
+        self.dto.lecture_unit.ingestion_run_id = str(uuid.uuid4())
+        self._stage_durations: dict[str, float] = {}
+        self._run_started_at = time.monotonic()
         needs_generation = _needs_transcription_generation(self.dto)
         needs_slides = _needs_slide_detection(self.dto)
         cancel_event = self.cancel_event
@@ -184,10 +205,17 @@ class LectureIngestionUpdatePipeline(Pipeline):
             # TRANSCRIPTION_FAILED) so Artemis can render user-actionable
             # messages.
             try:
+                phase_started_at = time.monotonic()
                 if needs_generation:
                     self._run_full_transcription(callback)
+                    self._stage_durations["transcription-generation"] = (
+                        time.monotonic() - phase_started_at
+                    )
                 elif needs_slides:
                     self._run_slide_detection_only(callback)
+                    self._stage_durations["slide-detection"] = (
+                        time.monotonic() - phase_started_at
+                    )
             except IngestionCancelledException:
                 raise
             except Exception as e:
@@ -211,6 +239,15 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
             self._run_ingestion(callback, initial_properties)
 
+        except IngestionStageError as e:
+            logger.error(
+                "[Lecture %d] Pipeline failed with code %s: %s",
+                self.dto.lecture_unit.lecture_unit_id,
+                e.error_code,
+                e,
+                exc_info=True,
+            )
+            callback.fail(str(e), exception=e, code=e.error_code, tokens=e.tokens)
         except IngestionCancelledException as e:
             logger.info(
                 "[Lecture %d] Pipeline cancelled: %s",
@@ -416,7 +453,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
 
             self._update_dto_with_transcript(aligned_segments, existing.language)
 
-    def _build_lecture_unit_dto(self, language: str = "") -> LectureUnitDTO:
+    def _build_lecture_unit_dto(
+        self, language: str = "", content_unchanged: bool = False
+    ) -> LectureUnitDTO:
+        chunk_counts = self.dto.lecture_unit.chunk_counts_by_page
+        quality_flags = self.dto.lecture_unit.quality_flags
         return LectureUnitDTO(
             course_id=self.dto.lecture_unit.course_id,
             course_name=self.dto.lecture_unit.course_name,
@@ -429,12 +470,36 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit_link=self.dto.lecture_unit.lecture_unit_link,
             video_link=self.dto.lecture_unit.video_link,
             base_url=self.dto.settings.artemis_base_url,
+            content_fingerprint=self.dto.lecture_unit.content_fingerprint,
+            ingestion_run_id=self.dto.lecture_unit.ingestion_run_id,
+            expected_chunk_counts_json=(
+                json.dumps(chunk_counts) if chunk_counts is not None else None
+            ),
+            # Stamp the pipeline version only when the content pipeline actually ran this
+            # generation (the same signal as expected_chunk_counts/quality_score). A pure
+            # skip or the zero-LLM summary-reuse path leaves it None so ledger_value keeps
+            # the stored version; otherwise a metadata-only re-dispatch would bump the
+            # version without reprocessing and permanently disarm the once-per-version
+            # quality requeue (the row would read as already on the current version while
+            # its quality_score correctly stayed at the old, low value).
+            pipeline_version=(
+                INGESTION_PIPELINE_VERSION if chunk_counts is not None else None
+            ),
+            quality_score=self.dto.lecture_unit.quality_score,
+            quality_flags_json=(
+                json.dumps(quality_flags) if quality_flags is not None else None
+            ),
+            content_unchanged=content_unchanged,
         )
 
     def _run_ingestion(
         self, callback: IngestionStatusCallback, initial_properties: dict
     ) -> None:
         """Run the existing ingestion logic (PDF + transcription + summary)."""
+        # _run initializes these; guard for callers that enter here directly.
+        if not hasattr(self, "_stage_durations"):
+            self._stage_durations = {}
+            self._run_started_at = time.monotonic()
         db = VectorDatabase()
         client = db.get_client()
         language = ""
@@ -445,10 +510,11 @@ class LectureIngestionUpdatePipeline(Pipeline):
         cancel_event = self.cancel_event
 
         # PDF page ingestion
-        if (
-            self.dto.lecture_unit.pdf_file_base64 is not None
-            and self.dto.lecture_unit.pdf_file_base64 != ""
-        ):
+        has_pdf = bool(self.dto.lecture_unit.pdf_file_base64)
+        pdf_skipped = False
+        pdf_kept_previous = False
+        if has_pdf:
+            stage_started_at = time.monotonic()
             variant = find_variant(
                 LectureUnitPageIngestionPipeline.get_variants(), variant_id
             )
@@ -462,14 +528,23 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
             language, tokens_page_content_pipeline = page_content_pipeline()
             tokens += tokens_page_content_pipeline
+            pdf_skipped = page_content_pipeline.skipped
+            pdf_kept_previous = page_content_pipeline.kept_previous_generation
+            self._stage_durations["page-ingestion"] = (
+                time.monotonic() - stage_started_at
+            )
         else:
             self._send_heartbeats(callback, 6, "missing PDF page ingestion")
+            self._purge_stale_page_chunks(client)
 
         # Transcription ingestion
-        if (
+        has_transcript = (
             self.dto.lecture_unit.transcription is not None
             and self.dto.lecture_unit.transcription.segments is not None
-        ):
+        )
+        transcript_skipped = False
+        if has_transcript:
+            stage_started_at = time.monotonic()
             transcription_pipeline = TranscriptionIngestionPipeline(
                 client=client,
                 dto=self.dto,
@@ -479,12 +554,45 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
             language, tokens_transcription_pipeline = transcription_pipeline()
             tokens += tokens_transcription_pipeline
+            transcript_skipped = transcription_pipeline.skipped
+            self._stage_durations["transcript-ingestion"] = (
+                time.monotonic() - stage_started_at
+            )
         else:
             self._send_heartbeats(callback, 8, "missing transcription ingestion")
+            self._purge_stale_transcription(client)
 
-        # Lecture unit summary
+        # Lecture unit summary. When every content sub-pipeline structurally
+        # skipped (or kept its previous generation), the stored unit summary
+        # provably still fits the content and may be reused — but only if the
+        # unit's segments are also already complete. A prior run can have
+        # committed its unit-row fingerprint stamp and then failed the audit on
+        # incomplete segments (the unit row write happens before the audit; see
+        # the audit call below), and skipping structurally, on its own, does not
+        # prove those segments were ever finished: without this check, such a
+        # retry would reuse the same incomplete segments and fail the identical
+        # audit check again, forever, instead of recomputing them once.
+        structurally_unchanged = (not has_pdf or pdf_skipped or pdf_kept_previous) and (
+            not has_transcript or transcript_skipped
+        )
+        # `and` short-circuits: the extra read only happens when every content
+        # sub-pipeline already skipped, not on every ordinary run.
+        content_unchanged = structurally_unchanged and segments_are_complete(
+            client, self.dto
+        )
         callback.update()
-        lecture_unit_dto = self._build_lecture_unit_dto(language)
+        stage_started_at = time.monotonic()
+        # The declared course language is authoritative and must win over whatever a
+        # content sub-pipeline happens to report: transcription returns the transcript's
+        # own language (its metadata, or Whisper's detection), unrelated to the course's
+        # declared language, and would otherwise silently overwrite it on the unit row --
+        # stamping a language the stored chunk text was never generated in and making
+        # reconciliation repeatedly detect a false mismatch on an otherwise healthy unit.
+        declared_language = (self.dto.lecture_unit.course_language or "").strip()
+        unit_row_language = declared_language or language
+        lecture_unit_dto = self._build_lecture_unit_dto(
+            unit_row_language, content_unchanged
+        )
 
         tokens += LectureUnitPipeline(
             local=is_local,
@@ -494,6 +602,34 @@ class LectureIngestionUpdatePipeline(Pipeline):
             lecture_unit=lecture_unit_dto,
             initial_properties=initial_properties,
         )
+        self._stage_durations["unit-summary"] = time.monotonic() - stage_started_at
+
+        # FINISHED is a verified claim: read back the index and compare it
+        # against the request inputs before certifying the run. Report the audit
+        # as its own stage so the client can show "Verifying" rather than staying
+        # on "Indexing" through the final read-back.
+        callback.update(stage_name="audit")
+        stage_started_at = time.monotonic()
+        IngestionAudit.for_client(client).verify(self.dto)
+        self._stage_durations["audit"] = time.monotonic() - stage_started_at
+
+        stage_summary = " ".join(
+            f"{stage}={duration:.1f}s"
+            for stage, duration in self._stage_durations.items()
+        )
+        logger.info(
+            "run-summary unit=%d run=%s total=%.1fs pdf_skipped=%s "
+            "transcript_skipped=%s kept_previous=%s quality=%s | %s",
+            self.dto.lecture_unit.lecture_unit_id,
+            self.dto.lecture_unit.ingestion_run_id,
+            time.monotonic() - self._run_started_at,
+            pdf_skipped,
+            transcript_skipped,
+            pdf_kept_previous,
+            self.dto.lecture_unit.quality_score,
+            stage_summary,
+        )
+
         raise_if_cancelled(
             cancel_event,
             self.dto.lecture_unit.lecture_unit_id,
@@ -511,6 +647,92 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 display_page_numbers=self.dto.lecture_unit.display_page_numbers,
                 tokens=tokens,
             )
+
+    def _purge_stale_page_chunks(self, client) -> None:
+        """Clear any page chunks stored for this unit when this dispatch has no PDF.
+
+        Artemis rebuilds the full attachment/transcript payload from its current
+        DB state on every dispatch (fresh, retry, or worker-claimed), so a
+        PDF-less dispatch means the attachment is not currently associated with
+        the unit -- removed, or never present. Any chunks still stored from an
+        earlier generation are therefore stale, and nothing else ever removes
+        them: the manifest-based audit expects zero chunks in this case and
+        would otherwise fail on every retry forever. Mirrors
+        TranscriptionIngestionPipeline._replace_prepared_chunks's "genuinely
+        empty -> clear what's stored" handling one level up. delete_many is
+        idempotent, so this is safe to call unconditionally, including when
+        nothing is stored.
+        """
+        lecture_unit = self.dto.lecture_unit
+        collection = init_lecture_unit_page_chunk_schema(client)
+        unit_filter = (
+            Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
+                self.dto.settings.artemis_base_url
+            )
+            & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
+                lecture_unit.course_id
+            )
+            & Filter.by_property(LectureUnitPageChunkSchema.LECTURE_ID.value).equal(
+                lecture_unit.lecture_id
+            )
+            & Filter.by_property(
+                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit.lecture_unit_id)
+        )
+        with batch_update_lock:
+            with ingestion_job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
+                lecture_unit.lecture_unit_id,
+                self.cancel_event,
+                "PDF removal purge",
+            ):
+                delete_many_with_retry(
+                    collection,
+                    unit_filter,
+                    "stale page chunks (no PDF in this dispatch)",
+                )
+
+    def _purge_stale_transcription(self, client) -> None:
+        """Clear any transcription rows stored for this unit when this dispatch
+        has no transcript.
+
+        Mirrors _purge_stale_page_chunks: an absent transcript in the request
+        means Artemis currently associates none with the unit (removed, video
+        source changed, or never present), so any surviving rows are stale and
+        would otherwise fail the manifest-based audit on every retry forever.
+        """
+        lecture_unit = self.dto.lecture_unit
+        collection = init_lecture_transcription_schema(client)
+        unit_filter = (
+            Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
+                self.dto.settings.artemis_base_url
+            )
+            & Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
+                lecture_unit.course_id
+            )
+            & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
+                lecture_unit.lecture_id
+            )
+            & Filter.by_property(
+                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+            ).equal(lecture_unit.lecture_unit_id)
+        )
+        with batch_update_lock:
+            with ingestion_job_handler.current_job_guard(
+                self.dto.settings.artemis_base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
+                lecture_unit.lecture_unit_id,
+                self.cancel_event,
+                "transcription removal purge",
+            ):
+                delete_many_with_retry(
+                    collection,
+                    unit_filter,
+                    "stale transcription rows (no transcript in this dispatch)",
+                )
 
     # ── Checkpoint helpers ───────────────────────────────────────────────
 
