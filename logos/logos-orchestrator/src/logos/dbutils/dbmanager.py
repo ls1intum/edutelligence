@@ -4100,10 +4100,13 @@ class DBManager:
                 timeout_s=timeout_s,
             )
             return int(result["log-id"]) if status == 200 else None
-        except sqlalchemy.exc.IntegrityError:
-            # Another writer won the unique request_id race.
+        except sqlalchemy.exc.IntegrityError as exc:
+            # Only the unique request_id race is recoverable here. FK failures
+            # (stale team/user after a concurrent delete) must surface so the
+            # caller does not treat a failed insert as a successful duplicate.
             self.session.rollback()
-            if request_id:
+            constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if request_id and constraint_name == "idx_log_entry_request_id_unique":
                 return self.get_log_id_by_request_id(request_id)
             raise
 
