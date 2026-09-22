@@ -94,6 +94,11 @@ class _IntentClassifier:
             max_length=128,
         )
         ort_inputs = {k: v for k, v in enc.items() if k in self._input_names}
+        if "token_type_ids" in self._input_names and "token_type_ids" not in ort_inputs:
+            # The exported ONNX graph is frozen and still declares this input, but
+            # newer tokenizer versions stopped producing it for this single-sentence
+            # classifier (there is only ever one segment, so it's always all zeros).
+            ort_inputs["token_type_ids"] = np.zeros_like(enc["input_ids"])
         outputs = self._session.run(self._output_names, ort_inputs)
         token_embeddings = outputs[0]
 
