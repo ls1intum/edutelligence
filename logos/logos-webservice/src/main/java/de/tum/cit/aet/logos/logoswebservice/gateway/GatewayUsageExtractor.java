@@ -16,9 +16,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * here — a name that does not match is priced at the base rate instead of its
  * own (cheaper) cache or reasoning rate.
  *
- * <p>Only the OpenAI-shaped surfaces are covered: {@link GatewayRouteResolver}
- * sends Anthropic-dialect deployments to the orchestrator, so Messages /
- * Bedrock Converse spellings cannot reach this class.
+ * <p>The OpenAI-shaped surfaces are what reach this class today —
+ * {@link GatewayRouteResolver} sends Anthropic-dialect deployments to the
+ * orchestrator. The native cache and reasoning spellings are still normalised,
+ * because a half-mapped name is worse than an unmapped one: it stores a count
+ * under a name pricing never reads, or an inclusive shape pricing decomposes as
+ * if it were disjoint.
  */
 final class GatewayUsageExtractor {
 
@@ -38,10 +41,29 @@ final class GatewayUsageExtractor {
         Map.entry("promptCacheHitTokens", "prompt_cached_tokens"),
         Map.entry("promptCacheMissTokens", "prompt_cache_miss_tokens"),
         Map.entry("cache_read_input_tokens", "prompt_cached_tokens"),
+        Map.entry("cacheReadInputTokens", "prompt_cached_tokens"),
         Map.entry("cache_creation_input_tokens", "prompt_cache_write_tokens"),
+        Map.entry("cacheCreationInputTokens", "prompt_cache_write_tokens"),
+        Map.entry("cacheWriteInputTokens", "prompt_cache_write_tokens"),
         Map.entry("cachedContentTokenCount", "prompt_cached_tokens"),
         Map.entry("thoughtsTokenCount", "completion_reasoning_tokens")
     );
+
+    /**
+     * Spellings no OpenAI-compatible surface emits. Their presence proves the
+     * payload reports cache reads and writes <em>alongside</em> the uncached
+     * input rather than inside it, which is the one thing
+     * {@code logos_price_usage} cannot infer from the counts alone on a
+     * cache-read-only turn.
+     */
+    private static final java.util.Set<String> NATIVE_DISJOINT_KEYS = java.util.Set.of(
+        "cache_read_input_tokens", "cacheReadInputTokens",
+        "cache_creation_input_tokens", "cacheCreationInputTokens",
+        "cacheWriteInputTokens"
+    );
+
+    /** Signals the disjoint shape to pricing. A marker, not a quantity: priced by nothing. */
+    private static final String DISJOINT_MARKER = "usage_shape_disjoint";
 
     /** Nested {@code *_tokens_details} objects, flattened onto canonical names. */
     private static final Map<String, String> DETAILS_PREFIXES = Map.of(
@@ -107,7 +129,28 @@ final class GatewayUsageExtractor {
             });
         });
 
+        // Native Gemini reports visible and thinking output as siblings, but
+        // pricing expects completion_tokens to be the inclusive total it then
+        // subtracts the reasoning subset from — otherwise the visible output is
+        // billed short by every reasoning token.
+        long candidates = nonNegative(usage.get("candidatesTokenCount"));
+        long thoughts = nonNegative(usage.get("thoughtsTokenCount"));
+        if (candidates > 0 && thoughts > 0) {
+            out.put("completion_tokens", candidates + thoughts);
+        }
+
+        for (String name : NATIVE_DISJOINT_KEYS) {
+            if (usage.has(name)) {
+                out.put(DISJOINT_MARKER, 1L);
+                break;
+            }
+        }
+
         return out;
+    }
+
+    private static long nonNegative(JsonNode value) {
+        return value != null && value.isIntegralNumber() && value.asLong() > 0 ? value.asLong() : 0;
     }
 
     private static void put(Map<String, Long> out, String key, JsonNode value) {

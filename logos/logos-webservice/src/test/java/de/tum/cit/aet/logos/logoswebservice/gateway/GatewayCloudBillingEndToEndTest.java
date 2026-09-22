@@ -237,6 +237,43 @@ class GatewayCloudBillingEndToEndTest {
         assertThat(cost(logId)).isEqualTo(64L * 20_000 / 1000 + 12L * 120_000 / 1000);
     }
 
+    @Test
+    void imageAndAudioSurfaces_doNotGetStreamOptions() throws Exception {
+        // stream_options belongs to Chat Completions; other direct-cloud
+        // surfaces may reject it as unknown.
+        responseBody = "{\"data\":[]}";
+        Fixture f = seedPricedDeployment();
+        admit(f, requestBody(true));
+
+        runForward(f, requestBody(true), "/v1/images/generations");
+
+        assertThat(MAPPER.readTree(seenRequestBody.get()).has("stream_options")).isFalse();
+    }
+
+    @Test
+    void surfaceCompatibilityIsDecidedPositively() {
+        assertThat(GatewayCloudForwarder.acceptsStreamOptions(
+            "https://x/v1/chat/completions")).isTrue();
+        assertThat(GatewayCloudForwarder.acceptsStreamOptions(
+            "https://x/openai/deployments/d/chat/completions?api-version=2025-01-01")).isTrue();
+        assertThat(GatewayCloudForwarder.acceptsStreamOptions("https://x/v1/responses")).isFalse();
+        assertThat(GatewayCloudForwarder.acceptsStreamOptions("https://x/v1/embeddings")).isFalse();
+        assertThat(GatewayCloudForwarder.acceptsStreamOptions("https://x/v1/images/generations")).isFalse();
+        assertThat(GatewayCloudForwarder.acceptsStreamOptions("https://x/v1/audio/speech")).isFalse();
+    }
+
+    @Test
+    void deploymentWithoutPrices_keepsTheReservationRatherThanBillingNothing() throws Exception {
+        responseBody = "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":300}}";
+        Fixture f = seedUnpricedDeployment();
+        int logId = admit(f);
+
+        runForward(f, requestBody(false));
+
+        assertThat(cost(logId)).isEqualTo(RESERVATION);
+        assertThat(usageTokens(logId)).containsEntry("prompt_tokens", 1000);
+    }
+
     // ------------------------------------------------------- fallback paths
 
     @Test
@@ -296,6 +333,69 @@ class GatewayCloudBillingEndToEndTest {
         assertThat(status(logId)).isEqualTo("error");
     }
 
+    // ------------------------------------------------------- payload logging
+
+    @Test
+    void fullLoggingKey_storesBothPayloadsAtItsOwnLevel() throws Exception {
+        // The key's configured level decides this, not the gateway: a key set to
+        // FULL is logged with its payloads exactly as on the orchestrator path.
+        responseBody = "{\"id\":\"chatcmpl-1\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}";
+        Fixture f = seedPricedDeployment("FULL");
+        int logId = admit(f);
+
+        runForward(f, requestBody(false));
+
+        assertThat(privacyLevel(logId)).isEqualTo("FULL");
+        assertThat(MAPPER.readTree(inputPayload(logId)).path("model").asText()).isEqualTo("m");
+        assertThat(MAPPER.readTree(responsePayload(logId)).path("usage").path("prompt_tokens").asInt())
+            .isEqualTo(10);
+    }
+
+    @Test
+    void billingLevelKey_storesNoPayloads() throws Exception {
+        responseBody = "{\"usage\":{\"prompt_tokens\":10}}";
+        Fixture f = seedPricedDeployment("BILLING");
+        int logId = admit(f);
+
+        runForward(f, requestBody(false));
+
+        assertThat(privacyLevel(logId)).isEqualTo("BILLING");
+        assertThat(inputPayload(logId)).isNull();
+        assertThat(responsePayload(logId)).isNull();
+    }
+
+    @Test
+    void fullLoggingKey_streamHasNoSingleResponseBodyToStore() throws Exception {
+        // A stream is still logged at its level with its request payload; only
+        // the response body has no one document to store.
+        responseContentType = "text/event-stream";
+        responseBody = "data: {\"usage\":{\"prompt_tokens\":9}}\n\ndata: [DONE]\n\n";
+        Fixture f = seedPricedDeployment("FULL");
+        int logId = admit(f, requestBody(true));
+
+        runForward(f, requestBody(true));
+
+        assertThat(privacyLevel(logId)).isEqualTo("FULL");
+        assertThat(MAPPER.readTree(inputPayload(logId)).path("stream").asBoolean()).isTrue();
+        assertThat(responsePayload(logId)).isNull();
+        // Billing is unaffected either way.
+        assertThat(usageTokens(logId)).containsEntry("prompt_tokens", 9);
+    }
+
+    @Test
+    void fullLoggingKey_nonJsonResponseIsNotStoredAndDoesNotFailTheRequest() throws Exception {
+        responseContentType = "text/plain";
+        responseBody = "not json at all";
+        Fixture f = seedPricedDeployment("FULL");
+        int logId = admit(f);
+
+        String delivered = runForward(f, requestBody(false));
+
+        assertThat(delivered).isEqualTo(responseBody);
+        assertThat(responsePayload(logId)).isNull();
+        assertThat(status(logId)).isEqualTo("success");
+    }
+
     // --------------------------------------------------------------- helpers
 
     private record Fixture(int modelId, int providerId, GatewayKey key, GatewayDeployment deployment) {
@@ -307,7 +407,11 @@ class GatewayCloudBillingEndToEndTest {
     }
 
     private int admit(Fixture f) {
-        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), null);
+        return admit(f, requestBody(false));
+    }
+
+    private int admit(Fixture f, byte[] body) {
+        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), null, body);
         assertThat(id).isNotNull();
         assertThat(settledCost(id)).isEqualTo(RESERVATION);
         return id;
@@ -330,7 +434,8 @@ class GatewayCloudBillingEndToEndTest {
         return forwarder.forward(
             f.deployment(), path, null, "POST", body,
             Map.of("content-type", List.of("application/json")),
-            usage -> accounting.settleSuccess(logId, usage),
+            f.key().logsFullPayloads(),
+            result -> accounting.settleSuccess(logId, result.usage(), result.responseBody()),
             err -> accounting.settleFailure(logId, err));
     }
 
@@ -342,6 +447,19 @@ class GatewayCloudBillingEndToEndTest {
     }
 
     private Fixture seedPricedDeployment() {
+        return seedPricedDeployment("BILLING");
+    }
+
+    /** Same shape, but no price rows — the deployment nothing can be charged for. */
+    private Fixture seedUnpricedDeployment() {
+        return seedDeployment("BILLING", false);
+    }
+
+    private Fixture seedPricedDeployment(String logLevel) {
+        return seedDeployment(logLevel, true);
+    }
+
+    private Fixture seedDeployment(String logLevel, boolean priced) {
         int modelId = jdbc.queryForObject(
             "INSERT INTO models (name) VALUES (?) RETURNING id",
             Integer.class, "m-" + SEQ.getAndIncrement());
@@ -350,18 +468,21 @@ class GatewayCloudBillingEndToEndTest {
             + "VALUES (?, ?, 'cloud', 'openai'::cloud_provider_type_enum, 'Authorization', 'Bearer %s') "
             + "RETURNING id",
             Integer.class, "p-" + SEQ.getAndIncrement(), upstreamBaseUrl());
-        seedPrice(modelId, providerId, "billed_input_uncached", 20000);
-        seedPrice(modelId, providerId, "billed_output_text", 120000);
+        if (priced) {
+            seedPrice(modelId, providerId, "billed_input_uncached", 20000);
+            seedPrice(modelId, providerId, "billed_output_text", 120000);
+        }
 
         int teamId = jdbc.queryForObject(
             "INSERT INTO teams (name) VALUES (?) RETURNING id",
             Integer.class, "t-" + SEQ.getAndIncrement());
         int apiKeyId = jdbc.queryForObject(
-            "INSERT INTO api_keys (key_value, name, team_id) VALUES (?, ?, ?) RETURNING id",
-            Integer.class, "lg-" + SEQ.getAndIncrement(), "k-" + SEQ.get(), teamId);
+            "INSERT INTO api_keys (key_value, name, team_id, log) "
+            + "VALUES (?, ?, ?, ?::logging_enum) RETURNING id",
+            Integer.class, "lg-" + SEQ.getAndIncrement(), "k-" + SEQ.get(), teamId, logLevel);
 
         GatewayKey key = new GatewayKey(apiKeyId, "lg-x", "k", ApiKeyType.developer,
-            teamId, null, "test", false, null, 0);
+            teamId, null, "test", false, null, 0, logLevel);
         GatewayDeployment deployment = new GatewayDeployment(modelId, "m", providerId, "p",
             "cloud", "openai", upstreamBaseUrl(), null,
             "Authorization", "Bearer %s", "sk-x", "BILLING", null);
@@ -395,6 +516,21 @@ class GatewayCloudBillingEndToEndTest {
     private String status(int logEntryId) {
         return jdbc.queryForObject(
             "SELECT result_status::text FROM log_entry WHERE id = ?", String.class, logEntryId);
+    }
+
+    private String privacyLevel(int logEntryId) {
+        return jdbc.queryForObject(
+            "SELECT privacy_level::text FROM log_entry WHERE id = ?", String.class, logEntryId);
+    }
+
+    private String inputPayload(int logEntryId) {
+        return jdbc.queryForObject(
+            "SELECT input_payload::text FROM log_entry WHERE id = ?", String.class, logEntryId);
+    }
+
+    private String responsePayload(int logEntryId) {
+        return jdbc.queryForObject(
+            "SELECT response_payload::text FROM log_entry WHERE id = ?", String.class, logEntryId);
     }
 
     private Map<String, Integer> usageTokens(int logEntryId) {

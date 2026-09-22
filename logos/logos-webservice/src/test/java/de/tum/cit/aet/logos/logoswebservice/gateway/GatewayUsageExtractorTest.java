@@ -117,6 +117,69 @@ class GatewayUsageExtractorTest {
     }
 
     @Test
+    void geminiReasoning_foldsIntoTheInclusiveCompletionTotal() {
+        // Pricing subtracts the reasoning subset from completion_tokens, so a
+        // visible-only total bills the output short by every thinking token.
+        Map<String, Long> usage = fromJson("""
+            {"usage":{"promptTokenCount":100,"candidatesTokenCount":40,
+                      "thoughtsTokenCount":60,"totalTokenCount":200}}
+            """);
+
+        assertThat(usage)
+            .containsEntry("prompt_tokens", 100L)
+            .containsEntry("completion_tokens", 100L)
+            .containsEntry("completion_reasoning_tokens", 60L);
+    }
+
+    @Test
+    void geminiWithoutReasoning_leavesTheCandidateTotalAlone() {
+        assertThat(fromJson("{\"usage\":{\"candidatesTokenCount\":40}}"))
+            .containsEntry("completion_tokens", 40L)
+            .doesNotContainKey("completion_reasoning_tokens");
+    }
+
+    @Test
+    void nativeCacheSpellings_areMappedAndMarkedDisjoint() {
+        // These names prove cache reads sit beside the uncached input rather
+        // than inside it — the one thing pricing cannot infer from counts.
+        Map<String, Long> usage = fromJson("""
+            {"usage":{"input_tokens":200,"output_tokens":50,
+                      "cache_read_input_tokens":800,"cache_creation_input_tokens":100}}
+            """);
+
+        assertThat(usage)
+            .containsEntry("prompt_tokens", 200L)
+            .containsEntry("prompt_cached_tokens", 800L)
+            .containsEntry("prompt_cache_write_tokens", 100L)
+            .containsEntry("usage_shape_disjoint", 1L);
+    }
+
+    @Test
+    void bedrockCamelCaseCacheSpellings_areMappedAndMarkedDisjoint() {
+        Map<String, Long> usage = fromJson("""
+            {"usage":{"inputTokens":200,"outputTokens":50,
+                      "cacheReadInputTokens":800,"cacheWriteInputTokens":100}}
+            """);
+
+        assertThat(usage)
+            .containsEntry("prompt_tokens", 200L)
+            .containsEntry("prompt_cached_tokens", 800L)
+            .containsEntry("prompt_cache_write_tokens", 100L)
+            .containsEntry("usage_shape_disjoint", 1L);
+    }
+
+    @Test
+    void openAiCacheShapeIsNotMarkedDisjoint() {
+        // OpenAI reports cached tokens inside prompt_tokens; marking it disjoint
+        // would decompose the prompt twice.
+        assertThat(fromJson("""
+            {"usage":{"prompt_tokens":1000,"completion_tokens":100,
+                      "prompt_tokens_details":{"cached_tokens":800}}}
+            """))
+            .doesNotContainKey("usage_shape_disjoint");
+    }
+
+    @Test
     void sseDataLine_readsTerminalUsageChunk() {
         Map<String, Long> usage = GatewayUsageExtractor.fromSseDataLine(mapper,
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":8}}");

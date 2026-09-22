@@ -25,6 +25,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *       parsed once the stream closes. A body past the cap yields no usage
  *       rather than a truncated parse.</li>
  * </ul>
+ *
+ * <p>With {@code retainBody} the JSON buffer is kept after parsing so a key
+ * configured for full request logging can store the response. It stays off
+ * otherwise, so a body no one will read is dropped as soon as its usage is out.
  */
 final class GatewayUsageCapture extends OutputStream {
 
@@ -41,15 +45,23 @@ final class GatewayUsageCapture extends OutputStream {
     private final OutputStream delegate;
     private final ObjectMapper objectMapper;
     private final boolean sse;
+    private final boolean retainBody;
 
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private boolean bufferOverflowed;
     private Map<String, Long> usage = Map.of();
+    private byte[] capturedBody;
 
     GatewayUsageCapture(OutputStream delegate, ObjectMapper objectMapper, String upstreamContentType) {
+        this(delegate, objectMapper, upstreamContentType, false);
+    }
+
+    GatewayUsageCapture(OutputStream delegate, ObjectMapper objectMapper,
+                        String upstreamContentType, boolean retainBody) {
         this.delegate = delegate;
         this.objectMapper = objectMapper;
         this.sse = isEventStream(upstreamContentType);
+        this.retainBody = retainBody;
     }
 
     static boolean isEventStream(String contentType) {
@@ -60,6 +72,14 @@ final class GatewayUsageCapture extends OutputStream {
     /** The usage seen so far; empty when the response carried none. */
     Map<String, Long> usage() {
         return usage;
+    }
+
+    /**
+     * The response body, when it was retained and fits the cap. Null for a
+     * stream, which has no single body, and whenever retention is off.
+     */
+    byte[] capturedBody() {
+        return capturedBody;
     }
 
     @Override
@@ -159,10 +179,14 @@ final class GatewayUsageCapture extends OutputStream {
         if (bufferOverflowed || buffer.size() == 0) {
             return;
         }
-        Map<String, Long> found = GatewayUsageExtractor.fromJsonBody(objectMapper, buffer.toByteArray());
+        byte[] body = buffer.toByteArray();
         buffer.reset();
+        Map<String, Long> found = GatewayUsageExtractor.fromJsonBody(objectMapper, body);
         if (!found.isEmpty()) {
             usage = found;
+        }
+        if (retainBody) {
+            capturedBody = body;
         }
     }
 }

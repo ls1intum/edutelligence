@@ -54,9 +54,11 @@ public class GatewayCloudForwarder {
      * @param method        HTTP method
      * @param body          request body bytes (may be empty)
      * @param inboundHeaders inbound request headers to selectively copy (Content-Type)
-     * @param onSuccess     invoked with the response's canonical token usage once
-     *                      the body has been fully streamed; empty when the
-     *                      response reported none
+     * @param retainResponseBody keep the (non-streamed) response body for payload
+     *                      logging; only set for a key that logs payloads
+     * @param onSuccess     invoked once the body has been fully streamed, with the
+     *                      response's canonical token usage and, when retained,
+     *                      its body
      * @param onFailure     invoked when the upstream call or stream fails
      */
     public ResponseEntity<StreamingResponseBody> forward(
@@ -66,7 +68,8 @@ public class GatewayCloudForwarder {
             String method,
             byte[] body,
             Map<String, List<String>> inboundHeaders,
-            java.util.function.Consumer<Map<String, Long>> onSuccess,
+            boolean retainResponseBody,
+            java.util.function.Consumer<GatewayForwardResult> onSuccess,
             java.util.function.Consumer<String> onFailure) throws IOException {
 
         String forwardUrl = CloudForwardUrlBuilder.build(
@@ -153,8 +156,8 @@ public class GatewayCloudForwarder {
             // The capture sits between the upstream and the client so the
             // reported token counts can be billed; it never delays or alters
             // the bytes the client receives.
-            GatewayUsageCapture capture =
-                new GatewayUsageCapture(outputStream, objectMapper, upstreamContentType);
+            GatewayUsageCapture capture = new GatewayUsageCapture(
+                outputStream, objectMapper, upstreamContentType, retainResponseBody);
             try (upstreamBody; OutputStream out = capture) {
                 upstreamBody.transferTo(out);
                 out.flush();
@@ -169,7 +172,7 @@ public class GatewayCloudForwarder {
             }
             if (upstreamOk) {
                 if (onSuccess != null) {
-                    onSuccess.accept(capture.usage());
+                    onSuccess.accept(new GatewayForwardResult(capture.usage(), capture.capturedBody()));
                 }
             } else if (onFailure != null) {
                 onFailure.accept("Upstream HTTP " + status);
@@ -186,12 +189,13 @@ public class GatewayCloudForwarder {
      * unbillable. This mirrors what the orchestrator sends on its own streaming
      * path, including passing the terminal usage chunk through to the client.
      *
-     * <p>The Responses API reports usage in its terminal
-     * {@code response.completed} event and rejects {@code stream_options} as
-     * unknown, so that surface is left alone.
+     * <p>Only the Chat Completions surfaces take the parameter. Everything else
+     * the direct-cloud path allows — the Responses API, images, audio,
+     * embeddings — either reports usage by itself or rejects the parameter as
+     * unknown, so those are named out rather than assumed compatible.
      */
     private byte[] requestUsageOnStream(byte[] body, String forwardUrl) throws IOException {
-        if (body == null || body.length == 0 || !takesStreamOptions(forwardUrl)) {
+        if (body == null || body.length == 0 || !acceptsStreamOptions(forwardUrl)) {
             return body;
         }
         JsonNode root;
@@ -210,12 +214,12 @@ public class GatewayCloudForwarder {
     }
 
     /** Whether this upstream surface accepts {@code stream_options}. */
-    private static boolean takesStreamOptions(String forwardUrl) {
+    static boolean acceptsStreamOptions(String forwardUrl) {
         String path = (forwardUrl == null ? "" : forwardUrl).split("\\?", 2)[0];
         while (path.endsWith("/")) {
             path = path.substring(0, path.length() - 1);
         }
-        return !(path.endsWith("/responses") || path.endsWith("/messages"));
+        return path.endsWith("/chat/completions") || path.endsWith("/completions");
     }
 
     private byte[] rewriteModelField(byte[] body, String deploymentId) throws IOException {

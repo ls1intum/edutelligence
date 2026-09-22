@@ -77,6 +77,9 @@ class GatewayBudgetAccountingTest {
     private static final Map<String, Long> USAGE =
         Map.of("prompt_tokens", 1000L, "completion_tokens", 300L);
 
+    private static final byte[] REQUEST_BODY =
+        "{\"model\":\"m\",\"messages\":[]}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
     /** No TTL: every check reads the database, so a test never asserts a stale snapshot. */
     private GatewayBudgetService uncachedBudgetService() {
         return new GatewayBudgetService(namedJdbc, 0, Clock.systemUTC());
@@ -88,7 +91,7 @@ class GatewayBudgetAccountingTest {
     void settledCloudRequest_countsWhatItCostNotTheReservation() {
         Fixture f = seedFixture(ApiKeyType.application);
         setKeyBudget(f.apiKeyId(), 500_000L);
-        accounting.settleSuccess(admit(f), USAGE);
+        accounting.settleSuccess(admit(f), USAGE, null);
 
         // 56_000 spent against a 500_000 limit leaves room; had the flat
         // reservation been counted, 1_000_000 would already be over it.
@@ -99,7 +102,7 @@ class GatewayBudgetAccountingTest {
     @Test
     void settledCloudRequest_isCountedExactlyOnce() {
         Fixture f = seedFixture(ApiKeyType.application);
-        accounting.settleSuccess(admit(f), USAGE);
+        accounting.settleSuccess(admit(f), USAGE, null);
 
         // A limit just above one charge admits; just below it rejects. Double
         // counting would reject at both.
@@ -113,8 +116,8 @@ class GatewayBudgetAccountingTest {
     @Test
     void spendAccumulatesAcrossSettledRequests() {
         Fixture f = seedFixture(ApiKeyType.application);
-        accounting.settleSuccess(admit(f), USAGE);
-        accounting.settleSuccess(admit(f), USAGE);
+        accounting.settleSuccess(admit(f), USAGE, null);
+        accounting.settleSuccess(admit(f), USAGE, null);
 
         setKeyBudget(f.apiKeyId(), 2 * REAL_COST + 1);
         assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key()))
@@ -135,7 +138,7 @@ class GatewayBudgetAccountingTest {
         // between a concurrent request and an overspend.
         assertBudgetRejects(f);
 
-        accounting.settleSuccess(logId, USAGE);
+        accounting.settleSuccess(logId, USAGE, null);
         assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key()))
             .doesNotThrowAnyException();
     }
@@ -158,7 +161,7 @@ class GatewayBudgetAccountingTest {
         Fixture f = seedFixture(ApiKeyType.application);
         setKeyBudget(f.apiKeyId(), RESERVATION);
 
-        accounting.settleSuccess(admit(f), Map.of());
+        accounting.settleSuccess(admit(f), Map.of(), null);
 
         assertBudgetRejects(f);
     }
@@ -181,7 +184,7 @@ class GatewayBudgetAccountingTest {
     @Test
     void teamBudgetCountsSettledCloudSpendOfItsDeveloperKeys() {
         Fixture f = seedFixture(ApiKeyType.developer);
-        accounting.settleSuccess(admit(f), USAGE);
+        accounting.settleSuccess(admit(f), USAGE, null);
 
         setTeamBudget(f.teamId(), REAL_COST + 1);
         assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key()))
@@ -220,7 +223,7 @@ class GatewayBudgetAccountingTest {
     }
 
     private int admit(Fixture f) {
-        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), null);
+        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY);
         assertThat(id).isNotNull();
         return id;
     }
@@ -242,6 +245,10 @@ class GatewayBudgetAccountingTest {
     }
 
     private Fixture seedFixture(ApiKeyType keyType) {
+        return seedFixture(keyType, "BILLING");
+    }
+
+    private Fixture seedFixture(ApiKeyType keyType, String logLevel) {
         int modelId = jdbc.queryForObject(
             "INSERT INTO models (name) VALUES (?) RETURNING id",
             Integer.class, "m-" + SEQ.getAndIncrement());
@@ -260,12 +267,13 @@ class GatewayBudgetAccountingTest {
             + "VALUES (?, 1000000000, 1000000000) RETURNING id",
             Integer.class, "t-" + SEQ.getAndIncrement());
         int apiKeyId = jdbc.queryForObject(
-            "INSERT INTO api_keys (key_value, name, team_id, key_type) "
-            + "VALUES (?, ?, ?, ?::api_key_type_enum) RETURNING id",
-            Integer.class, "lg-" + SEQ.getAndIncrement(), "k-" + SEQ.get(), teamId, keyType.name());
+            "INSERT INTO api_keys (key_value, name, team_id, key_type, log) "
+            + "VALUES (?, ?, ?, ?::api_key_type_enum, ?::logging_enum) RETURNING id",
+            Integer.class, "lg-" + SEQ.getAndIncrement(), "k-" + SEQ.get(), teamId,
+            keyType.name(), logLevel);
 
         GatewayKey key = new GatewayKey(apiKeyId, "lg-x", "k", keyType,
-            teamId, null, "test", false, null, 0);
+            teamId, null, "test", false, null, 0, logLevel);
         GatewayDeployment deployment = new GatewayDeployment(modelId, "m", providerId, "p",
             "cloud", "openai", "http://x", "/v1/chat/completions",
             "Authorization", "Bearer %s", "sk-x", "BILLING", null);
