@@ -64,7 +64,7 @@ jobs:
 
       - name: Upload simulator artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gpu-sim-failure
           path: |
@@ -128,7 +128,7 @@ jobs:
 
       - name: Upload stack logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-stack-logs
           path: /tmp/e2e-logs/
@@ -206,7 +206,7 @@ jobs:
       # diagnosable at all — a bare assertion message rarely is.
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |

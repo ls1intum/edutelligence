@@ -149,7 +149,7 @@ jobs:
         # needed; ignore: if the benchmark itself crashed, no report exists
         # and that failure is already the red step.
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: logos-overhead-benchmark
           path: logos/benchmarks/per_request_overhead/reports/ci
