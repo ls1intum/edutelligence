@@ -126,7 +126,7 @@ public class InferenceGatewayController {
                     request.getMethod(),
                     body,
                     copyHeaders(request),
-                    () -> cloudAccounting.settleSuccess(logId),
+                    usage -> cloudAccounting.settleSuccess(logId, usage),
                     err -> cloudAccounting.settleFailure(logId, err));
             }
             log.debug("Orchestrator proxy {} {} reason={}",

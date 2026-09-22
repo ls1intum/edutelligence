@@ -54,7 +54,9 @@ public class GatewayCloudForwarder {
      * @param method        HTTP method
      * @param body          request body bytes (may be empty)
      * @param inboundHeaders inbound request headers to selectively copy (Content-Type)
-     * @param onSuccess     invoked after the response body has been fully streamed
+     * @param onSuccess     invoked with the response's canonical token usage once
+     *                      the body has been fully streamed; empty when the
+     *                      response reported none
      * @param onFailure     invoked when the upstream call or stream fails
      */
     public ResponseEntity<StreamingResponseBody> forward(
@@ -64,7 +66,7 @@ public class GatewayCloudForwarder {
             String method,
             byte[] body,
             Map<String, List<String>> inboundHeaders,
-            Runnable onSuccess,
+            java.util.function.Consumer<Map<String, Long>> onSuccess,
             java.util.function.Consumer<String> onFailure) throws IOException {
 
         String forwardUrl = CloudForwardUrlBuilder.build(
@@ -80,9 +82,9 @@ public class GatewayCloudForwarder {
 
         forwardUrl = GatewayQueryMerge.merge(forwardUrl, queryString);
 
-        byte[] outboundBody = body;
-        if (azureDeploymentId != null && body != null && body.length > 0) {
-            outboundBody = rewriteModelField(body, azureDeploymentId);
+        byte[] outboundBody = requestUsageOnStream(body, forwardUrl);
+        if (azureDeploymentId != null && outboundBody != null && outboundBody.length > 0) {
+            outboundBody = rewriteModelField(outboundBody, azureDeploymentId);
         }
 
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(forwardUrl))
@@ -145,9 +147,15 @@ public class GatewayCloudForwarder {
         });
 
         InputStream upstreamBody = upstream.body();
+        String upstreamContentType = upstream.headers().firstValue("content-type").orElse(null);
         StreamingResponseBody stream = outputStream -> {
             IOException streamError = null;
-            try (upstreamBody; OutputStream out = outputStream) {
+            // The capture sits between the upstream and the client so the
+            // reported token counts can be billed; it never delays or alters
+            // the bytes the client receives.
+            GatewayUsageCapture capture =
+                new GatewayUsageCapture(outputStream, objectMapper, upstreamContentType);
+            try (upstreamBody; OutputStream out = capture) {
                 upstreamBody.transferTo(out);
                 out.flush();
             } catch (IOException e) {
@@ -161,7 +169,7 @@ public class GatewayCloudForwarder {
             }
             if (upstreamOk) {
                 if (onSuccess != null) {
-                    onSuccess.run();
+                    onSuccess.accept(capture.usage());
                 }
             } else if (onFailure != null) {
                 onFailure.accept("Upstream HTTP " + status);
@@ -169,6 +177,45 @@ public class GatewayCloudForwarder {
         };
 
         return ResponseEntity.status(status).headers(responseHeaders).body(stream);
+    }
+
+    /**
+     * Ask a streaming Chat Completions upstream to report usage.
+     *
+     * <p>A stream otherwise ends without any token counts, leaving the request
+     * unbillable. This mirrors what the orchestrator sends on its own streaming
+     * path, including passing the terminal usage chunk through to the client.
+     *
+     * <p>The Responses API reports usage in its terminal
+     * {@code response.completed} event and rejects {@code stream_options} as
+     * unknown, so that surface is left alone.
+     */
+    private byte[] requestUsageOnStream(byte[] body, String forwardUrl) throws IOException {
+        if (body == null || body.length == 0 || !takesStreamOptions(forwardUrl)) {
+            return body;
+        }
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(body);
+        } catch (IOException e) {
+            // Not JSON (or not parseable): forward it untouched.
+            return body;
+        }
+        if (!(root instanceof ObjectNode obj) || !obj.path("stream").asBoolean(false)) {
+            return body;
+        }
+        ObjectNode streamOptions = obj.withObject("/stream_options");
+        streamOptions.put("include_usage", true);
+        return objectMapper.writeValueAsBytes(obj);
+    }
+
+    /** Whether this upstream surface accepts {@code stream_options}. */
+    private static boolean takesStreamOptions(String forwardUrl) {
+        String path = (forwardUrl == null ? "" : forwardUrl).split("\\?", 2)[0];
+        while (path.endsWith("/")) {
+            path = path.substring(0, path.length() - 1);
+        }
+        return !(path.endsWith("/responses") || path.endsWith("/messages"));
     }
 
     private byte[] rewriteModelField(byte[] body, String deploymentId) throws IOException {
