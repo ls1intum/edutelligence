@@ -1,5 +1,10 @@
-# docker-compose.yaml — Production (pulls pre-built images from Harbor)
+# docker-compose.yaml — Production (pulls pre-built images)
 # For local development, use: docker compose -f docker-compose.dev.yaml up --build
+#
+# REGISTRY defaults to the public GHCR mirror the build workflow publishes to,
+# so a self-hosted install pulls with no registry configuration and no login.
+# Deployments override it: the deploy workflows write Harbor into each node's
+# .env, and a self-built stack points it at wherever those images were pushed.
 services:
   traefik:
     image: traefik:v3.7.10

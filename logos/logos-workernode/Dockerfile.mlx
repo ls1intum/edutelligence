@@ -26,8 +26,10 @@
 #                                runs install-macos.sh and (re)starts launchd.
 #
 # Registry: ghcr.io (public), NOT Harbor. The Mac must be able to pull without
-# holding Harbor credentials. Note that a GHCR package is private on first
-# push — flip it to public once under Package settings → Change visibility.
+# holding Harbor credentials, so this is the one image Harbor never sees; it
+# shares the public GHCR namespace with the mirrors of the others. Check the
+# package's visibility the first time it appears: a private one cannot be
+# pulled by a bootstrapping Mac (Package settings → Change visibility).
 #
 # Platform: linux/arm64. The payload is pure Python and shell, so the
 # architecture is almost irrelevant, but matching the Mac avoids Docker Desktop

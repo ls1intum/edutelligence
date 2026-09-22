@@ -10,7 +10,7 @@
 #   ~/logos-workernode-mlx                                 code, config, logs,
 #                                                          .env, data, cache
 #   ~/.venv-vllm-metal                                     the vllm-metal venv
-#   ghcr.io/ls1intum/logos-workernode-mlx                  the pulled image
+#   ghcr.io/ls1intum/edutelligence/logos-workernode-mlx                  the pulled image
 #
 # It deliberately does NOT touch:
 #
@@ -28,7 +28,7 @@ set -euo pipefail
 
 INSTALL_ROOT="${LOGOS_MLX_HOME:-$HOME/logos-workernode-mlx}"
 METAL_VENV="${LOGOS_METAL_VENV:-$HOME/.venv-vllm-metal}"
-IMAGE="${LOGOS_MLX_IMAGE:-ghcr.io/ls1intum/logos-workernode-mlx}"
+IMAGE="${LOGOS_MLX_IMAGE:-ghcr.io/ls1intum/edutelligence/logos-workernode-mlx}"
 LAUNCH_AGENT_LABEL="de.tum.logos.workernode"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
 # Written by bootstrap-macos.sh before it changes the power settings, and

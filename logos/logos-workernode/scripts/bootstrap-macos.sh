@@ -4,7 +4,7 @@
 #
 #   ./bootstrap-macos.sh [image-ref] [--no-deps] [--no-power-settings]
 #
-# Default image: ghcr.io/ls1intum/logos-workernode-mlx:latest
+# Default image: ghcr.io/ls1intum/edutelligence/logos-workernode-mlx:latest
 #
 # This default must stay literally identical to the `images:` line for this
 # image in .github/workflows/logos_build-and-push-docker.yml — that workflow
@@ -30,13 +30,14 @@
 # dialog on first launch — off a machine that is meant to run headless in a
 # server room.
 #
-# Registry note: this image lives on ghcr.io (public), unlike every other Logos
-# image, which is on Harbor. That is deliberate — a Mac worker should not need
-# Harbor credentials just to bootstrap.
+# Registry note: ghcr.io, public, and never Harbor — a Mac worker should not
+# need Harbor credentials just to bootstrap. The other Logos images are on
+# Harbor and mirrored to the same public GHCR namespace; this one is published
+# there alone.
 # =============================================================================
 set -euo pipefail
 
-IMAGE="${LOGOS_MLX_IMAGE:-ghcr.io/ls1intum/logos-workernode-mlx:latest}"
+IMAGE="${LOGOS_MLX_IMAGE:-ghcr.io/ls1intum/edutelligence/logos-workernode-mlx:latest}"
 INSTALL_DEPS=1
 POWER_SETTINGS=1
 for arg in "$@"; do
@@ -123,7 +124,7 @@ cleanup() { rm -rf "$STAGING" "$UNPACK"; }
 trap cleanup EXIT
 
 registry_ref() {
-    # ghcr.io/ls1intum/logos-workernode-mlx:latest → registry, repo, reference
+    # ghcr.io/ls1intum/edutelligence/logos-workernode-mlx:latest → registry, repo, reference
     local ref="$1" rest
     REGISTRY="${ref%%/*}"
     rest="${ref#*/}"
