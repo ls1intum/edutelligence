@@ -218,3 +218,41 @@ def test_enqueue_writes_requested_model_for_queued_rows(monkeypatch):
     )
 
     assert calls == [{"request_id": "req-queued", "model_id": 27, "provider_id": 12}]
+
+
+def test_live_writes_ride_the_write_behind_queue(monkeypatch):
+    """Enqueue/schedule identity UPDATEs must not open a DB session on the
+    async request thread — they enqueue onto the write-behind worker."""
+    from logos import write_queue
+
+    recorder, calls = _make_recorder(monkeypatch, {27: "m"}, {12: "p"})
+    _patch_prom(monkeypatch)
+
+    enqueued = []
+    real_enqueue = write_queue.get_write_queue().enqueue
+
+    def spy(fn, *args, **kwargs):
+        enqueued.append((fn, args, kwargs))
+        return real_enqueue(fn, *args, **kwargs)
+
+    monkeypatch.setattr(write_queue.get_write_queue(), "enqueue", spy)
+
+    recorder.record_enqueue(
+        request_id="req-wq",
+        model_id=27,
+        provider_id=12,
+        initial_priority="normal",
+        queue_depth=0,
+    )
+    recorder.record_scheduled(
+        request_id="req-wq",
+        model_id=27,
+        provider_id=12,
+        priority_when_scheduled="normal",
+        queue_depth_at_schedule=0,
+    )
+
+    assert len(enqueued) == 2
+    assert all(fn == recorder._write for fn, _a, _k in enqueued)
+    # Sync-mode queue still applied the writes (tests assert on DB side effects).
+    assert len(calls) == 2

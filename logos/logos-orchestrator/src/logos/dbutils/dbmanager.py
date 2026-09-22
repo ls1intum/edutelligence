@@ -4009,6 +4009,16 @@ class DBManager:
             return False
         return result.log
 
+    def get_log_id_by_request_id(self, request_id: str) -> Optional[int]:
+        """The log_entry id for a request_id, or None when no row exists yet."""
+        if not request_id:
+            return None
+        row = self.session.execute(
+            text("SELECT id FROM log_entry WHERE request_id = :rid"),
+            {"rid": request_id},
+        ).first()
+        return int(row.id) if row is not None else None
+
     def log_usage(
         self,
         api_key_id: Optional[int],
@@ -4051,6 +4061,51 @@ class DBManager:
         ).fetchone()
         self.session.commit()
         return {"result": "Created log entry.", "log-id": row.id}, 200
+
+    def ensure_log_usage(
+        self,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+        environment: Optional[str],
+        log_level: str,
+        client_ip: Optional[str] = None,
+        input_payload=None,
+        headers=None,
+        request_id: Optional[str] = None,
+        timeout_s: Optional[float] = None,
+    ) -> Optional[int]:
+        """Insert a log row, or return the id of an existing one for ``request_id``.
+
+        The live-feed path may insert a deferred PendingLog ahead of
+        completion so queued stats rows already exist; the terminal
+        materialize must then find that row rather than colliding on the
+        unique ``request_id`` index.
+        """
+        if request_id:
+            existing = self.get_log_id_by_request_id(request_id)
+            if existing is not None:
+                return existing
+        try:
+            result, status = self.log_usage(
+                api_key_id=api_key_id,
+                team_id=team_id,
+                user_id=user_id,
+                environment=environment,
+                log_level=log_level,
+                client_ip=client_ip,
+                input_payload=input_payload,
+                headers=headers,
+                request_id=request_id,
+                timeout_s=timeout_s,
+            )
+            return int(result["log-id"]) if status == 200 else None
+        except sqlalchemy.exc.IntegrityError:
+            # Another writer won the unique request_id race.
+            self.session.rollback()
+            if request_id:
+                return self.get_log_id_by_request_id(request_id)
+            raise
 
     def set_time_at_first_token(self, log_id: int):
         sql = text("""

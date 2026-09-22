@@ -13,6 +13,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, Optional
 
+from logos import write_queue
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import ResultStatus
 from logos.monitoring import prometheus_metrics as prom
@@ -434,10 +435,15 @@ class MonitoringRecorder:
         Most lifecycle fields still ride the completion UPDATE so the hot
         path stays cheap; model / provider / scheduled_ts must land earlier
         or in-flight rows look blank and forever Queued.
+
+        The write rides the write-behind queue so the async request path
+        never opens a synchronous DB session here. Callers that also insert
+        a deferred log row must enqueue that INSERT on the same queue first
+        (FIFO) so this UPDATE finds a matching ``request_id``.
         """
         live = {k: v for k, v in fields.items() if v is not None}
         if live:
-            self._write(request_id, **live)
+            write_queue.get_write_queue().enqueue(self._write, request_id, **live)
 
     def _write(self, request_id: str, **fields: object) -> None:
         try:
