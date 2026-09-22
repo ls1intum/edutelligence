@@ -746,6 +746,32 @@ class TestCourseScopeFilter:
         sub_operators = {f.operator.value for f in result.filters}
         assert sub_operators == {"ContainsAny", "ContainsNone"}
 
+    def test_base_url_alone_scopes_the_lane_to_the_calling_installation(self):
+        # An administrator sends no course ids at all. Without the base_url clause the
+        # lane would carry no filter whatsoever and match every installation's rows in
+        # the shared cluster, which is how another server's lecture content reached an
+        # answer on this one.
+        result = _course_scope_filter(
+            "course_id", None, None, "https://artemis-test3.example", "base_url"
+        )
+        assert result.operator.value == "Equal"
+        assert result.value == "https://artemis-test3.example"
+
+    def test_base_url_combines_with_the_course_constraints(self):
+        result = _course_scope_filter(
+            "course_id", [9], [5], "https://artemis-test3.example", "base_url"
+        )
+        assert result.operator.value == "And"
+        sub_operators = {f.operator.value for f in result.filters}
+        assert sub_operators == {"ContainsAny", "ContainsNone", "Equal"}
+
+    def test_base_url_is_ignored_when_the_caller_could_not_supply_one(self):
+        # An older Artemis sends no base_url; it keeps its existing behaviour rather
+        # than having every lane filtered down to nothing.
+        assert _course_scope_filter("course_id", None, None, None, "base_url") is None
+        result = _course_scope_filter("course_id", [9], None, None, "base_url")
+        assert result.operator.value == "ContainsAny"
+
 
 def test_search_segments_applies_the_exclusion_filter_with_no_course_ids():
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)

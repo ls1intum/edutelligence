@@ -416,7 +416,9 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         client = VectorDatabase().get_client()
         if intent == SearchIntent.SKIP_AI:
             retriever = LectureGlobalSearchRetrieval(
-                client, local=dto.settings.is_local()
+                client,
+                local=dto.settings.is_local(),
+                base_url=dto.settings.artemis_base_url,
             )
             sources = retriever.search(
                 query=dto.query,
@@ -434,7 +436,11 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             return
 
         callback.update()
-        pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
+        pipeline = GlobalSearchPipeline(
+            client,
+            local=dto.settings.is_local(),
+            base_url=dto.settings.artemis_base_url,
+        )
         sender = None
         if getattr(dto.settings, "stream_response", False):
             sender = PartialResultSender(

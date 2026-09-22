@@ -50,6 +50,15 @@ class LectureSearchRequestDTO(BaseModel):
         default_factory=list, alias="excludeCourseIds"
     )
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
+    # The calling Artemis installation's own base URL, scoping retrieval to the rows it
+    # wrote. Several installations share one Weaviate cluster and their course ids
+    # collide, so without this a course-id filter also matches another installation's
+    # content — and an unrestricted caller, which sends no course ids at all, matches
+    # every row in the collection. The answer pipeline takes the same value from
+    # settings.artemisBaseUrl, which it already receives; this endpoint has no settings
+    # object, so it is carried here. Optional so an older Artemis still gets results
+    # rather than none, at that caller's existing (unscoped) risk.
+    base_url: str | None = Field(default=None, alias="baseUrl")
 
     @field_validator("query")
     @classmethod

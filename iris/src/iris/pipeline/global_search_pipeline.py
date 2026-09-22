@@ -499,10 +499,19 @@ class GlobalSearchPipeline(SubPipeline):
     answer_llm: IrisLangchainChatModel
     answer_pipeline: Runnable
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    def __init__(
+        self,
+        client: WeaviateClient,
+        local: bool = False,
+        base_url: str | None = None,
+    ):
         super().__init__(implementation_id="global_search_pipeline")
         self.tokens = []
-        self.retriever = LectureGlobalSearchRetrieval(client, local=local)
+        # base_url scopes retrieval to the Artemis installation that asked; several
+        # installations share one Weaviate and their course ids collide.
+        self.retriever = LectureGlobalSearchRetrieval(
+            client, local=local, base_url=base_url
+        )
 
         pipeline_id = "global_search_pipeline"
         answer_model = resolve_model(pipeline_id, "default", "answer", local=local)

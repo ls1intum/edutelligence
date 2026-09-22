@@ -42,7 +42,7 @@ def _traced_lecture_search(
     dto: LectureSearchRequestDTO,
 ) -> list[LectureSearchResultDTO]:
     client = VectorDatabase().get_client()
-    return LectureGlobalSearchRetrieval(client).search(
+    return LectureGlobalSearchRetrieval(client, base_url=dto.base_url).search(
         dto.query,
         dto.limit,
         course_ids=dto.course_ids,

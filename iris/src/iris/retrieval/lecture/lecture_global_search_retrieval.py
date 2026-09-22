@@ -350,6 +350,8 @@ def _course_scope_filter(
     course_id_property: str,
     course_ids: list[int] | None,
     exclude_course_ids: list[int] | None,
+    base_url: str | None = None,
+    base_url_property: str | None = None,
 ) -> Filter | None:
     """Build the course-scope filter for a Weaviate lane query.
 
@@ -358,6 +360,16 @@ def _course_scope_filter(
     own precisely for the caller with no course_ids ceiling to narrow
     locally (an unrestricted caller), so both may be present, either alone,
     or neither.
+
+    ``base_url`` scopes the lane to the Artemis installation that asked.
+    Several installations share one Weaviate cluster and course ids collide
+    freely across them, so a course-id-only filter matches another
+    installation's rows for the same number — and for a caller with no
+    course_ids ceiling at all (an administrator) it matches every row in the
+    collection. The ingestion pipelines already stamp ``base_url`` on every
+    row they write; this is the read side finally using it. Omitted only
+    when the caller could not supply one, which keeps an older Artemis
+    working rather than returning nothing at all for it.
     """
     clauses = []
     if course_ids:
@@ -366,6 +378,8 @@ def _course_scope_filter(
         clauses.append(
             Filter.by_property(course_id_property).contains_none(exclude_course_ids)
         )
+    if base_url and base_url_property:
+        clauses.append(Filter.by_property(base_url_property).equal(base_url))
     if not clauses:
         return None
     return clauses[0] if len(clauses) == 1 else Filter.all_of(clauses)
@@ -447,7 +461,22 @@ class LectureGlobalSearchRetrieval:
     no associated slide). Both searches run in parallel and results are merged by score.
     """
 
-    def __init__(self, client: WeaviateClient, local: bool = False):
+    #: The Artemis installation whose rows this retriever may read, or None to read every
+    #: installation's (the pre-existing behaviour, kept for a caller that cannot supply one).
+    #: Declared on the class, not only assigned in __init__, so an instance built through
+    #: __new__ - as the unit tests do to skip model loading - still has it.
+    base_url: str | None = None
+
+    def __init__(
+        self,
+        client: WeaviateClient,
+        local: bool = False,
+        base_url: str | None = None,
+    ):
+        # Held on the retriever rather than passed per search() call: every lane query
+        # must carry it, and a per-call parameter is one that a new call site can
+        # forget — which is exactly how the unscoped reads this fixes came about.
+        self.base_url = base_url
         embedding_model = resolve_model(
             "global_search_pipeline", "default", "embedding", local=local
         )
@@ -1234,7 +1263,11 @@ class LectureGlobalSearchRetrieval:
         auto_limit: int | None = None,
     ) -> list[Any]:
         filters = _course_scope_filter(
-            LectureUnitSegmentSchema.COURSE_ID.value, course_ids, exclude_course_ids
+            LectureUnitSegmentSchema.COURSE_ID.value,
+            course_ids,
+            exclude_course_ids,
+            self.base_url,
+            LectureUnitSegmentSchema.BASE_URL.value,
         )
         return self.collection.query.hybrid(
             query=query,
@@ -1263,7 +1296,11 @@ class LectureGlobalSearchRetrieval:
             LectureTranscriptionSchema.PAGE_NUMBER.value
         ).equal(-1)
         course_filter = _course_scope_filter(
-            LectureTranscriptionSchema.COURSE_ID.value, course_ids, exclude_course_ids
+            LectureTranscriptionSchema.COURSE_ID.value,
+            course_ids,
+            exclude_course_ids,
+            self.base_url,
+            LectureTranscriptionSchema.BASE_URL.value,
         )
         filters = (
             Filter.all_of([page_filter, course_filter])
