@@ -91,14 +91,17 @@ class LightTranscriptionPipeline:
             ]
 
         # Stage: Detect slide changes
-        self.callback.update()
+        self.callback.update(stage_name="slide-detection")
 
         def on_slide_detection_progress(labeled: int, total: int) -> None:
-            del labeled, total
             raise_if_cancelled(
                 self.cancel_event, lecture_unit_id, "during slide detection"
             )
-            self.callback.update()
+            self.callback.update(
+                stage_name="slide-detection",
+                stage_progress=labeled,
+                stage_total=total,
+            )
 
         slide_timestamps = detect_slide_timestamps(
             video_path=self.video_path,
@@ -121,7 +124,7 @@ class LightTranscriptionPipeline:
         # Note: the orchestrator sends a checkpoint update for this stage so it can
         # attach the checkpoint data atomically in the same HTTP call.
         raise_if_cancelled(self.cancel_event, lecture_unit_id, "before alignment")
-        self.callback.update()
+        self.callback.update(stage_name="alignment")
         aligned_segments = align_slides_with_segments(
             segments,
             slide_timestamps,
