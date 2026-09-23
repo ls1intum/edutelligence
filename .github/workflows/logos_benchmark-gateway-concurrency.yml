@@ -1,0 +1,129 @@
+---
+name: Logos - Gateway Concurrency Benchmark
+
+# Benchmarks the inference gateway's own path (webservice -> cloud provider),
+# not the local path per_request_overhead.yml covers: how many streaming
+# requests it holds open concurrently, added latency vs. a direct call to a
+# fake upstream, behaviour at the concurrency limit, and (2 replicas) whether
+# killing one is visible to clients under real load. Informational only —
+# posts a PR comment, does not gate the PR. No baseline exists yet to set a
+# blocking threshold against; see the PR description that introduced this
+# workflow.
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - "logos/logos-webservice/**"
+      - "logos/docker-compose.dev.yaml"
+      - "logos/benchmarks/gateway_concurrency/**"
+      - ".github/workflows/logos_benchmark-gateway-concurrency.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LOGOS_BENCH_GW_URL: http://localhost:18081
+      LOGOS_BENCH_GW_OUTPUT: ${{ github.workspace }}/logos/benchmarks/gateway_concurrency/reports/ci
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Disable the fixed webservice host port (conflicts with --scale)
+        # docker-compose.dev.yaml publishes 127.0.0.1:18082:8081 for direct
+        # webservice access; a fixed host port cannot be shared across scaled
+        # replicas (see the comment above it). Editing the runner's checked-out
+        # copy only — same fix the deployment docs ask a human to do by hand.
+        run: sed -i '/127\.0\.0\.1:18082:8081/d' docker-compose.dev.yaml
+        working-directory: logos
+
+      - name: Bring up the webservice stack (2 replicas)
+        # Only the services the gateway path needs, plus their own
+        # dependencies (Traefik, Postgres, Keycloak) — not the full dev
+        # stack (UI, agent runner, orchestrator, rate gateway). Liquibase
+        # runs on webservice startup (spring.liquibase.change-log), no
+        # separate migration step needed.
+        run: |
+          docker compose -f docker-compose.dev.yaml up -d --build \
+            --scale logos-webservice=2 \
+            traefik logos-db keycloak logos-webservice
+        working-directory: logos
+
+      - name: Wait for the gateway
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:18081/v1/models || echo 000)
+            # 401/403 also means "reachable, just unauthenticated" — fine before seeding.
+            if [ "$code" != "000" ] && [ "$code" != "502" ] && [ "$code" != "503" ]; then
+              echo "gateway up (HTTP $code)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "gateway did not come up" >&2
+          docker compose -f docker-compose.dev.yaml logs logos-webservice logos-db keycloak traefik
+          exit 1
+        working-directory: logos
+
+      - name: Seed benchmark data
+        run: |
+          docker exec -i logos-db psql -U postgres -d logosdb \
+            < benchmarks/gateway_concurrency/seed.sql
+        working-directory: logos
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python fastapi "uvicorn[standard]" httpx
+        working-directory: logos/benchmarks/gateway_concurrency
+
+      - name: Run benchmark
+        run: .venv/bin/python run_benchmark.py
+        working-directory: logos/benchmarks/gateway_concurrency
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: logos-gateway-concurrency-benchmark
+          path: logos/benchmarks/gateway_concurrency/reports/ci
+          if-no-files-found: ignore
+
+      - name: Comment on PR
+        # continue-on-error: fork PRs run with a read-only token — the
+        # artifact above still carries the numbers.
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .venv/bin/python pr_comment.py
+        working-directory: logos/benchmarks/gateway_concurrency
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose -f docker-compose.dev.yaml down -v
+        working-directory: logos
