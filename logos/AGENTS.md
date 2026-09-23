@@ -19,6 +19,7 @@
 | `db/` | — | Plain `postgres:17` + pg_cron Dockerfile — **no schema here**. |
 | `docs/` | Docusaurus | User/admin/developer documentation site. Role-guide screenshot refresh + demo seed: see `docs/AGENTS.md`. |
 | `benchmarks/` | Python | Scheduler/throughput benchmarking scripts. |
+| `scripts/` | bash | Core-node ops scripts, e.g. `gateway-failover-demo.sh` (see [deployment](docs/deployment.md#failover-verification)). |
 
 ## Cross-Cutting Rules (Not Inferable From the Code)
 

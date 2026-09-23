@@ -323,9 +323,11 @@ services:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-webservice:${IMAGE_TAG:-latest}
     # No fixed container_name: Traefik load-balances across replicas.
     # Production/dev/test deploy workflows scale from the node's .env:
-    #   LOGOS_WEBSERVICE_REPLICAS=<N>   # default 1
+    #   LOGOS_WEBSERVICE_REPLICAS=<N>   # default 2
     # via `docker compose up -d --remove-orphans --scale logos-webservice=$N`
-    # on docker-compose.yaml only (worker compose files skip --scale).
+    # on docker-compose.yaml only (worker compose files skip --scale). See
+    # docs/deployment.md#inference-gateway-replicas for the per-key cloud TPM
+    # caveat that comes with running more than one replica.
     # Liquibase serialises schema apply via its database changelog lock.
     restart: unless-stopped
     depends_on:
