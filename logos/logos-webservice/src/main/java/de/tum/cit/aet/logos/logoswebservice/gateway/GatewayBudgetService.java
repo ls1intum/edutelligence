@@ -38,6 +38,9 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * {@code log_entry} (counted by this service alongside {@code log_entry_cost})
  * before the upstream call and invalidates this cache,
  * so concurrent admissions on the same instance see the reservation immediately.
+ * A reservation counts only while the request is in flight: once settled, the
+ * row is priced from its token usage and reaches this service through
+ * {@code log_entry_cost} like any other request.
  * Cross-instance lag remains bounded by {@code T} until the other instances'
  * caches expire. Example: TTL 15s → overshoot ≲ concurrent spend in any 15s
  * window after the true breach (plus one reservation per in-flight direct-cloud
@@ -135,6 +138,11 @@ public class GatewayBudgetService {
         });
     }
 
+    /**
+     * Month-to-date spend for one key: priced requests from
+     * {@code log_entry_cost} plus the direct-cloud reservations still in flight,
+     * which no price exists for yet.
+     */
     private long apiKeyBudgetUsage(int apiKeyId, String monthStart) {
         Long v = cached("usage:key:" + apiKeyId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
@@ -144,9 +152,7 @@ public class GatewayBudgetService {
                 SELECT COALESCE((
                     SELECT SUM(lec.cost_micro_cents)
                     FROM log_entry_cost lec
-                    JOIN log_entry le ON le.id = lec.log_entry_id
                     WHERE lec.api_key_id = :aki
-                      AND (le.request_id IS NULL OR le.request_id NOT LIKE 'gw-%%')
                       AND lec.timestamp_request >= CAST(:month AS DATE)
                       AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0) + COALESCE((
@@ -154,10 +160,9 @@ public class GatewayBudgetService {
                     FROM log_entry le
                     WHERE le.api_key_id = :aki
                       AND le.request_id LIKE 'gw-%%'
-                      AND le.cost_finalized = TRUE
+                      AND le.result_status IS NULL
                       AND le.settled_cost_micro_cents IS NOT NULL
                       AND le.settled_cost_micro_cents > 0
-                      AND (le.result_status IS NULL OR le.result_status = 'success')
                       AND le.timestamp_request >= CAST(:month AS DATE)
                       AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0)
@@ -183,6 +188,7 @@ public class GatewayBudgetService {
         });
     }
 
+    /** Month-to-date developer-key spend for one team; same two parts as {@link #apiKeyBudgetUsage}. */
     private long teamBudgetUsage(int teamId, String monthStart) {
         Long v = cached("usage:team:" + teamId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
@@ -192,11 +198,9 @@ public class GatewayBudgetService {
                 SELECT COALESCE((
                     SELECT SUM(lec.cost_micro_cents)
                     FROM log_entry_cost lec
-                    JOIN log_entry le ON le.id = lec.log_entry_id
                     WHERE lec.api_key_id = ANY(
                             ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
                           )
-                      AND (le.request_id IS NULL OR le.request_id NOT LIKE 'gw-%%')
                       AND lec.timestamp_request >= CAST(:month AS DATE)
                       AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0) + COALESCE((
@@ -206,10 +210,9 @@ public class GatewayBudgetService {
                             ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
                           )
                       AND le.request_id LIKE 'gw-%%'
-                      AND le.cost_finalized = TRUE
+                      AND le.result_status IS NULL
                       AND le.settled_cost_micro_cents IS NOT NULL
                       AND le.settled_cost_micro_cents > 0
-                      AND (le.result_status IS NULL OR le.result_status = 'success')
                       AND le.timestamp_request >= CAST(:month AS DATE)
                       AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0)
