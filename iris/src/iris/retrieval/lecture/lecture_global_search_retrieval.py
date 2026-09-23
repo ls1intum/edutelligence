@@ -92,6 +92,48 @@ def resolve_effective_course_ids(
     return [course_id for course_id in course_ids if course_id in allowed]
 
 
+def _course_exclusion_clauses(
+    course_id_property: str, exclude_course_ids: list[int] | None
+) -> list[Any]:
+    """One not-equal clause per excluded course.
+
+    Expressed as not-equal clauses rather than a negated contains_any, because that form is
+    understood by every Weaviate version the deployments run. The list is short: Artemis bounds
+    the ids it forwards.
+    """
+    return [
+        Filter.by_property(course_id_property).not_equal(course_id)
+        for course_id in exclude_course_ids or []
+    ]
+
+
+def _combine(clauses: list[Any]) -> Any:
+    """Combine filter clauses, keeping a single clause unwrapped and no clause as no filter."""
+    if not clauses:
+        return None
+    if len(clauses) == 1:
+        return clauses[0]
+    return Filter.all_of(clauses)
+
+
+def apply_course_exclusions(
+    course_ids: list[int] | None, exclude_course_ids: list[int] | None
+) -> tuple[list[int] | None, list[int]]:
+    """Remove the excluded courses from an effective scope, or keep them for a query filter.
+
+    A caller with a course ceiling (anything but an admin) can have the exclusions applied by
+    subtracting them here, which keeps the query a plain positive filter. An unrestricted
+    caller has no list to subtract from, so the exclusions travel on as a filter instead.
+
+    Returns the remaining scope and the exclusions the query still has to apply.
+    """
+    excluded = list(exclude_course_ids or [])
+    if not excluded or course_ids is None:
+        return course_ids, excluded
+    excluded_set = set(excluded)
+    return [course_id for course_id in course_ids if course_id not in excluded_set], []
+
+
 class LectureGlobalSearchRetrieval:
     """Retrieves lecture content from Weaviate using hybrid search across two collections:
     LectureUnitSegments (slide-based) and LectureTranscriptions (video-only segments with
@@ -115,6 +157,7 @@ class LectureGlobalSearchRetrieval:
         alpha: float = 0.5,
         course_ids: list[int] | None = None,
         access_context: AccessContext | None = None,
+        exclude_course_ids: list[int] | None = None,
     ) -> list[LectureSearchResultDTO]:
         """
         Search for lecture content based on a query.
@@ -126,9 +169,13 @@ class LectureGlobalSearchRetrieval:
                            When None, searches all ingested courses (global search).
         :param access_context: Optional permissions filter resolved by Artemis. Intersected
                                with course_ids; an empty accessible scope skips the search.
+        :param exclude_course_ids: Optional list of course IDs to hide from the results.
         :return: Segments sorted by relevance.
         """
         effective_course_ids = resolve_effective_course_ids(course_ids, access_context)
+        effective_course_ids, remaining_exclusions = apply_course_exclusions(
+            effective_course_ids, exclude_course_ids
+        )
         if effective_course_ids is not None and not effective_course_ids:
             logger.debug(
                 "Access context yields no accessible courses; skipping search."
@@ -142,6 +189,7 @@ class LectureGlobalSearchRetrieval:
             limit=limit,
             course_ids=effective_course_ids,
             policy=_VisibilityPolicy.from_context(access_context),
+            exclude_course_ids=remaining_exclusions,
         )
 
     def search_with_vector_override(
@@ -152,6 +200,7 @@ class LectureGlobalSearchRetrieval:
         limit: int,
         course_ids: list[int] | None = None,
         access_context: AccessContext | None = None,
+        exclude_course_ids: list[int] | None = None,
     ) -> list[LectureSearchResultDTO]:
         """
         Search using a custom text to generate the search vector, while keeping the
@@ -165,9 +214,13 @@ class LectureGlobalSearchRetrieval:
         :param course_ids: Optional list of course IDs to restrict the search scope.
         :param access_context: Optional permissions filter resolved by Artemis. Intersected
                                with course_ids; an empty accessible scope skips the search.
+        :param exclude_course_ids: Optional list of course IDs to hide from the results.
         :return: Segments sorted by relevance.
         """
         effective_course_ids = resolve_effective_course_ids(course_ids, access_context)
+        effective_course_ids, remaining_exclusions = apply_course_exclusions(
+            effective_course_ids, exclude_course_ids
+        )
         if effective_course_ids is not None and not effective_course_ids:
             logger.debug(
                 "Access context yields no accessible courses; skipping search."
@@ -181,6 +234,7 @@ class LectureGlobalSearchRetrieval:
             limit=limit,
             course_ids=effective_course_ids,
             policy=_VisibilityPolicy.from_context(access_context),
+            exclude_course_ids=remaining_exclusions,
         )
 
     def _run_hybrid_search(
@@ -191,6 +245,7 @@ class LectureGlobalSearchRetrieval:
         limit: int,
         course_ids: list[int] | None = None,
         policy: "_VisibilityPolicy | None" = None,
+        exclude_course_ids: list[int] | None = None,
     ) -> list[LectureSearchResultDTO]:
         """Run hybrid searches, expanding candidates until visible results are filled."""
         if policy is None:
@@ -205,6 +260,7 @@ class LectureGlobalSearchRetrieval:
                     alpha,
                     candidate_limit,
                     course_ids,
+                    exclude_course_ids,
                 )
                 trans_future = executor.submit(
                     self._search_video_transcriptions,
@@ -213,6 +269,7 @@ class LectureGlobalSearchRetrieval:
                     alpha,
                     candidate_limit,
                     course_ids,
+                    exclude_course_ids,
                 )
             seg_objects = seg_future.result()
             trans_objects = trans_future.result()
@@ -330,14 +387,21 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
     ) -> list[Any]:
-        filters = (
-            Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).contains_any(
-                course_ids
+        clauses = []
+        if course_ids:
+            clauses.append(
+                Filter.by_property(
+                    LectureUnitSegmentSchema.COURSE_ID.value
+                ).contains_any(course_ids)
             )
-            if course_ids
-            else None
+        clauses.extend(
+            _course_exclusion_clauses(
+                LectureUnitSegmentSchema.COURSE_ID.value, exclude_course_ids
+            )
         )
+        filters = _combine(clauses)
         return self.collection.query.hybrid(
             query=query,
             alpha=alpha,
@@ -354,20 +418,26 @@ class LectureGlobalSearchRetrieval:
         alpha: float,
         limit: int,
         course_ids: list[int] | None = None,
+        exclude_course_ids: list[int] | None = None,
     ) -> list[Any]:
         """Search LectureTranscriptions restricted to segments with no associated slide
         (page_number == -1). These are video-only moments not captured in any segment.
         """
-        page_filter = Filter.by_property(
-            LectureTranscriptionSchema.PAGE_NUMBER.value
-        ).equal(-1)
+        clauses = [
+            Filter.by_property(LectureTranscriptionSchema.PAGE_NUMBER.value).equal(-1)
+        ]
         if course_ids:
-            course_filter = Filter.by_property(
-                LectureTranscriptionSchema.COURSE_ID.value
-            ).contains_any(course_ids)
-            filters = Filter.all_of([page_filter, course_filter])
-        else:
-            filters = page_filter
+            clauses.append(
+                Filter.by_property(
+                    LectureTranscriptionSchema.COURSE_ID.value
+                ).contains_any(course_ids)
+            )
+        clauses.extend(
+            _course_exclusion_clauses(
+                LectureTranscriptionSchema.COURSE_ID.value, exclude_course_ids
+            )
+        )
+        filters = _combine(clauses)
         return self.transcription_collection.query.hybrid(
             query=query,
             alpha=alpha,
