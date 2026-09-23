@@ -123,6 +123,11 @@ jobs:
         run: .venv/bin/python run_benchmark.py
         working-directory: logos/benchmarks/gateway_concurrency
 
+      - name: Dump stack logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.dev.yaml logs logos-webservice traefik logos-rate-gateway
+        working-directory: logos
+
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v6

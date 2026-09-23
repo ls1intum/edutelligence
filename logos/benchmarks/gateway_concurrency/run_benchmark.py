@@ -63,28 +63,46 @@ def _wait_http(url: str, what: str, timeout_s: float = 60.0) -> None:
     raise RuntimeError(f"{what} did not come up within {timeout_s:.0f}s (last: {last_err})")
 
 
-def _check_gateway_reachable() -> None:
+def _check_gateway_reachable(*, attempts: int = 15, delay_s: float = 2.0) -> None:
     """Allowlist, not a denylist: Traefik answers its own 404 as soon as the
     router exists but before any webservice replica is ready to take traffic
     (labels register at container start, well before the JVM finishes
     booting + migrating) — a "< 500" check would mistake that transient 404
     for a real webservice response.
+
+    Retries rather than failing on the first bad response: a 502 shortly
+    after startup (two JVM replicas plus Postgres and Keycloak all warming up
+    on the same runner) has been observed even seconds after the CI wait
+    loop already saw a clean 401 — a load-balanced replica that briefly
+    stalls, not a structural problem the CI wait step didn't already rule
+    out.
     """
     url = f"{gw.gateway_url()}/v1/models"
-    try:
-        with httpx.Client() as probe:
-            resp = probe.get(url, headers=gw.gateway_headers(), timeout=10.0)
-    except Exception as exc:  # noqa: BLE001
+    last_status: Optional[int] = None
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with httpx.Client() as probe:
+                resp = probe.get(url, headers=gw.gateway_headers(), timeout=10.0)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+        else:
+            last_status = resp.status_code
+            if resp.status_code in (200, 401, 403):
+                print(f"  [gateway] reachable at {gw.gateway_url()} (HTTP {resp.status_code})")
+                return
+        if attempt < attempts:
+            time.sleep(delay_s)
+    if last_exc is not None and last_status is None:
         raise RuntimeError(
-            f"gateway not reachable at {gw.gateway_url()} ({exc}). Bring up the stack first, e.g.:\n"
+            f"gateway not reachable at {gw.gateway_url()} after {attempts} attempts ({last_exc}). "
+            f"Bring up the stack first, e.g.:\n"
             f"  docker compose -f docker-compose.dev.yaml up -d --build --scale logos-webservice=2"
-        ) from exc
-    if resp.status_code not in (200, 401, 403):
-        raise RuntimeError(
-            f"gateway at {gw.gateway_url()} answered HTTP {resp.status_code}, not a webservice response "
-            f"(200/401/403) — is the stack fully up and seeded?"
-        )
-    print(f"  [gateway] reachable at {gw.gateway_url()} (HTTP {resp.status_code})")
+        ) from last_exc
+    raise RuntimeError(
+        f"gateway at {gw.gateway_url()} answered HTTP {last_status} after {attempts} attempts, not a "
+        f"webservice response (200/401/403) — is the stack fully up and seeded?"
+    )
 
 
 def run() -> int:
