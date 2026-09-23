@@ -71,14 +71,22 @@ jobs:
         working-directory: logos
 
       - name: Wait for the gateway
+        # An allowlist, not a denylist: Traefik answers its own 404 as soon
+        # as the router exists but before any webservice replica is ready to
+        # receive traffic (labels register at container start, well before
+        # the JVM finishes booting + migrating) — that 404 is easy to mistake
+        # for "up" if you only reject the codes you expect from a *down*
+        # backend (000/502/503). Only a response the webservice itself would
+        # send counts: 200 (seeded) or 401/403 (reachable, not yet seeded).
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:18081/v1/models || echo 000)
-            # 401/403 also means "reachable, just unauthenticated" — fine before seeding.
-            if [ "$code" != "000" ] && [ "$code" != "502" ] && [ "$code" != "503" ]; then
-              echo "gateway up (HTTP $code)"
-              exit 0
-            fi
+            case "$code" in
+              200|401|403)
+                echo "gateway up (HTTP $code)"
+                exit 0
+                ;;
+            esac
             sleep 2
           done
           echo "gateway did not come up" >&2

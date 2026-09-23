@@ -64,6 +64,12 @@ def _wait_http(url: str, what: str, timeout_s: float = 60.0) -> None:
 
 
 def _check_gateway_reachable() -> None:
+    """Allowlist, not a denylist: Traefik answers its own 404 as soon as the
+    router exists but before any webservice replica is ready to take traffic
+    (labels register at container start, well before the JVM finishes
+    booting + migrating) — a "< 500" check would mistake that transient 404
+    for a real webservice response.
+    """
     url = f"{gw.gateway_url()}/v1/models"
     try:
         with httpx.Client() as probe:
@@ -73,8 +79,11 @@ def _check_gateway_reachable() -> None:
             f"gateway not reachable at {gw.gateway_url()} ({exc}). Bring up the stack first, e.g.:\n"
             f"  docker compose -f docker-compose.dev.yaml up -d --build --scale logos-webservice=2"
         ) from exc
-    if resp.status_code >= 500:
-        raise RuntimeError(f"gateway at {gw.gateway_url()} answered HTTP {resp.status_code} — is it seeded?")
+    if resp.status_code not in (200, 401, 403):
+        raise RuntimeError(
+            f"gateway at {gw.gateway_url()} answered HTTP {resp.status_code}, not a webservice response "
+            f"(200/401/403) — is the stack fully up and seeded?"
+        )
     print(f"  [gateway] reachable at {gw.gateway_url()} (HTTP {resp.status_code})")
 
 
