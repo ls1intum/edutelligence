@@ -18,9 +18,8 @@ import asyncio
 import os
 from typing import Any, Dict, List
 
-import httpx
-
 import gateway_client as gw
+import httpx
 from stats import overhead_ms, summarize
 
 

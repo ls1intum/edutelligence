@@ -41,8 +41,8 @@ import httpx
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-import gateway_client as gw  # noqa: E402
 import failover_under_load  # noqa: E402
+import gateway_client as gw  # noqa: E402
 import latency_diff  # noqa: E402
 import load_generator  # noqa: E402
 from report import write_reports  # noqa: E402
@@ -106,9 +106,19 @@ def run() -> int:
 
         upstream_proc = subprocess.Popen(
             [
-                sys.executable, "-m", "uvicorn", "fake_cloud_upstream:app",
-                "--app-dir", str(_HERE), "--host", "0.0.0.0", "--port", str(upstream_port),
-                "--no-access-log", "--log-level", "warning",
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "fake_cloud_upstream:app",
+                "--app-dir",
+                str(_HERE),
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(upstream_port),
+                "--no-access-log",
+                "--log-level",
+                "warning",
             ],
             env=env,
             cwd=str(_HERE),

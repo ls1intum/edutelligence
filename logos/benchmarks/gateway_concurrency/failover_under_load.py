@@ -32,9 +32,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-import httpx
-
 import gateway_client as gw
+import httpx
 
 _HERE = Path(__file__).resolve().parent
 _REPO_LOGOS = _HERE.parents[1]  # .../logos
@@ -98,7 +97,10 @@ async def run() -> Dict[str, Any]:
     headers = gw.gateway_headers()
     results: List[gw.RequestResult] = []
 
-    print(f"  [failover] {concurrency} concurrent streams for {duration_s}s; killing {kill_target[:12]} at t={kill_after_s}s")
+    print(
+        f"  [failover] {concurrency} concurrent streams for {duration_s}s; "
+        f"killing {kill_target[:12]} at t={kill_after_s}s"
+    )
 
     limits = httpx.Limits(max_connections=concurrency + 10, max_keepalive_connections=concurrency + 10)
     timeout = httpx.Timeout(60.0, connect=10.0)

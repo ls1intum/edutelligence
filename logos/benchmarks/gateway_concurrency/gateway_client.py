@@ -90,7 +90,10 @@ async def post_chat_completion(client: httpx.AsyncClient, url: str, headers: Dic
         total_ms = (time.perf_counter() - t0) * 1000.0
         ok = resp.status_code == 200
         return RequestResult(
-            ok=ok, status_code=resp.status_code, ttfb_ms=total_ms, total_ms=total_ms,
+            ok=ok,
+            status_code=resp.status_code,
+            ttfb_ms=total_ms,
+            total_ms=total_ms,
             error=None if ok else f"HTTP {resp.status_code}: {resp.text[:200]}",
         )
     except Exception as exc:  # noqa: BLE001

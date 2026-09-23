@@ -61,13 +61,18 @@ jobs:
       - name: Bring up the webservice stack (2 replicas)
         # Only the services the gateway path needs, plus their own
         # dependencies (Traefik, Postgres, Keycloak) — not the full dev
-        # stack (UI, agent runner, orchestrator, rate gateway). Liquibase
+        # stack (UI, agent runner, orchestrator). logos-rate-gateway IS
+        # required despite the name: the published port (18081) is Traefik's
+        # web8080 entrypoint, whose only router forwards to
+        # logos-rate-gateway, which then reaches Traefik's internal8090
+        # entrypoint where /v1 actually lives — without it 18081 has no path
+        # to the gateway at all, no matter how ready webservice is. Liquibase
         # runs on webservice startup (spring.liquibase.change-log), no
         # separate migration step needed.
         run: |
           docker compose -f docker-compose.dev.yaml up -d --build \
             --scale logos-webservice=2 \
-            traefik logos-db keycloak logos-webservice
+            traefik logos-rate-gateway logos-db keycloak logos-webservice
         working-directory: logos
 
       - name: Wait for the gateway
