@@ -135,6 +135,9 @@ class Settings:
 
     # --- container execution ---------------------------------------------
     docker_socket: str = os.getenv("LOGOS_AGENT_DOCKER_SOCKET", "/var/run/docker.sock")
+    # Compose passes ${REGISTRY}/logos-agent-workspace:${IMAGE_TAG}; the
+    # fallback matches the compose default, the public GHCR mirror, so a
+    # runner started outside compose reaches the same image.
     workspace_image: str = os.getenv(
         "LOGOS_AGENT_WORKSPACE_IMAGE",
         "ghcr.io/ls1intum/edutelligence/logos-agent-workspace:latest",

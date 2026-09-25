@@ -1,3 +1,27 @@
+# Logos – CI – Image builds
+#
+# Every image is published twice:
+#   - the project's Harbor registry, which the deploy workflows pull from;
+#   - ghcr.io/ls1intum/edutelligence/<image>, public, which is what a
+#     self-hosted install pulls (logos/docker-compose.yaml defaults to it, so
+#     the installation guide needs no registry configuration at all).
+#
+# The GHCR mirror is fed by pushes to main only, so it carries exactly one
+# moving tag, `latest`. A pull request builds to Harbor alone, where the
+# cleanup workflow prunes its pr-<number> tag when the PR closes — nothing
+# prunes a public package, so PR builds must not land there. Release events
+# stay on Harbor too: the public mirror tracks main, and a version tag is
+# published to the deployment registry.
+#
+# The MLX worker is the exception on both counts: it is a distribution
+# artifact for Macs, never deployed, so GHCR is its only registry and it
+# keeps its own pr-<number> and version tags there.
+#
+# NOTE: check the visibility of a package the first time it appears — a new
+# image, or one whose package was deleted. A package that comes out private
+# serves a 403 to the self-hosted installs the guide tells to pull without a
+# login; Package settings → Change visibility → Public fixes it.
+
 name: Logos - Build
 
 on:
@@ -140,6 +164,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -166,7 +191,9 @@ jobs:
       cache-scope: logos-orchestrator
       cache-mode: max
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -178,6 +205,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-webservice:
     name: Build Logos Webservice
@@ -186,6 +216,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -200,7 +231,9 @@ jobs:
       cache-scope: logos-webservice
       cache-mode: max
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-webservice
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-webservice
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-webservice' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -212,6 +245,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-ui:
     name: Build Logos UI
@@ -220,6 +256,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -234,7 +271,9 @@ jobs:
       cache-scope: logos-ui
       cache-mode: max
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-ui
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-ui
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-ui' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -246,6 +285,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-db:
     name: Build Logos DB
@@ -254,6 +296,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -266,7 +309,9 @@ jobs:
       cache: true
       cache-scope: logos-db
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-db
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-db
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-db' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -278,6 +323,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-workernode-vllm:
     name: Build Logos Worker Node (vLLM)
@@ -287,6 +335,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -304,7 +353,9 @@ jobs:
       sign: false
       build-args: |
         BASE_IMAGE=ubuntu:24.04
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-workernode-vllm' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -316,6 +367,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   # ── Apple Silicon / MLX worker node ────────────────────────────────────────
   # Pushed to ghcr.io, NOT Harbor, and deliberately so: this image is pulled by
@@ -350,13 +404,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Publish target for the MLX distribution image. Resolves to
-          # ghcr.io/ls1intum/logos-workernode-mlx and must stay literally
-          # identical to the default IMAGE ref in
+          # Publish target for the MLX distribution image, in the same GHCR
+          # namespace as every other Logos image. Written literally because it
+          # must stay identical to the default IMAGE ref in
           # logos/logos-workernode/scripts/bootstrap-macos.sh — that script is
           # the consumer, and nothing in CI catches a publish/consumer
           # mismatch.
-          images: ghcr.io/${{ github.repository_owner }}/logos-workernode-mlx
+          images: ghcr.io/ls1intum/edutelligence/logos-workernode-mlx
           tags: |
             type=ref,event=pr
             type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -392,6 +446,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -402,7 +457,9 @@ jobs:
       platforms: linux/amd64
       runner: ubuntu-latest
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-agent' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -414,6 +471,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-agent-gateway:
     name: Build Logos Agent Gateway
@@ -422,6 +482,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -433,7 +494,9 @@ jobs:
       platforms: linux/amd64
       runner: ubuntu-latest
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-gateway
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-gateway
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-agent-gateway' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -445,6 +508,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-rate-gateway:
     name: Build Logos Rate Gateway
@@ -453,6 +519,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -464,7 +531,9 @@ jobs:
       platforms: linux/amd64
       runner: ubuntu-latest
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-rate-gateway
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-rate-gateway
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-rate-gateway' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -476,6 +545,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-agent-workspace:
     name: Build Logos Agent Workspace
@@ -484,6 +556,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -492,7 +565,9 @@ jobs:
       platforms: linux/amd64
       runner: ubuntu-latest
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-workspace
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-workspace
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-agent-workspace' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -504,3 +579,6 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
