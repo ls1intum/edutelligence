@@ -252,6 +252,13 @@ services:
     # No fixed container_name so `docker compose ... up --scale logos-webservice=2`
     # works locally (Traefik load-balances logos-webservice-svc).
     restart: unless-stopped
+    # Lets a cloud-provider base_url of host.docker.internal:<port> reach a
+    # host-side process (e.g. benchmarks/gateway_concurrency/fake_cloud_upstream.py)
+    # from inside the container on Linux — Docker Desktop resolves this name on
+    # its own, but plain Docker Engine (the CI runner, and PROD/staging hosts)
+    # does not without this entry.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       logos-db:
         condition: service_healthy
