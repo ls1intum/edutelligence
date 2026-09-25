@@ -154,21 +154,26 @@ jobs:
             # Scale logos-webservice from the node's .env without sourcing it
             # (sourcing would evaluate $(...) / backticks in values).
             ENV_FILE="${{ matrix.base-path }}/.env"
-            REPLICAS=1
+            # Default 2: a single webservice replica means killing it during a
+            # deploy or a crash is user-visible on the inference gateway. See
+            # docs/deployment.md#inference-gateway-replicas for the per-key
+            # cloud TPM caveat this trades off (opt back to 1 there if tight
+            # per-key TPM limits matter more than replica failover).
+            REPLICAS=2
             if [ -f "$ENV_FILE" ]; then
               RAW="$(grep -E '^[[:space:]]*LOGOS_WEBSERVICE_REPLICAS=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '\\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
               if [ -n "$RAW" ]; then
                 case "$RAW" in
                   ''|*[!0-9]*)
-                    echo "Invalid LOGOS_WEBSERVICE_REPLICAS='$RAW' (want positive integer); using 1" >&2
-                    REPLICAS=1
+                    echo "Invalid LOGOS_WEBSERVICE_REPLICAS='$RAW' (want positive integer); using 2" >&2
+                    REPLICAS=2
                     ;;
                   *)
                     if [ "$RAW" -ge 1 ]; then
                       REPLICAS="$RAW"
                     else
-                      echo "LOGOS_WEBSERVICE_REPLICAS=$RAW must be >= 1; using 1" >&2
-                      REPLICAS=1
+                      echo "LOGOS_WEBSERVICE_REPLICAS=$RAW must be >= 1; using 2" >&2
+                      REPLICAS=2
                     fi
                     ;;
                 esac
