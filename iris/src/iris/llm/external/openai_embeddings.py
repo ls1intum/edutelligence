@@ -23,6 +23,13 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     """
 
     api_key: str
+    # Optional instruction folded into a retrieval QUERY before embedding (never into
+    # document text — that would cancel the asymmetric-retrieval benefit). Only a
+    # deployment actually serving an instruction-tuned embedding model (e.g. a
+    # Qwen3-Embedding endpoint via base_url) should set this; it is model-specific
+    # calibration, not something a generic OpenAI-compatible embedding call should
+    # ever apply on its own. Left unset (the default), callers embed the raw query.
+    retrieval_instruction: str | None = None
     _client: OpenAIEmbeddings
 
     @observe(name="OpenAI Embedding", as_type="embedding")
