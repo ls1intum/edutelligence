@@ -16,7 +16,7 @@ npm run e2e            # Playwright suite — needs the full stack up via ../e2e
 ## Conventions
 
 - **Screenshots are MANDATORY for every UI PR** (desktop + mobile, full page, hosted in a gist, embedded in the PR description, never committed). Follow the `ui-screenshots` skill (`../.agents/skills/ui-screenshots/SKILL.md`) exactly.
-- UI components come from the **vendored** `@tumaet/ui-angular` (TUM UI design system): the compiled `ng-packagr` output of `packages/tum-ui` in `ls1intum/Artemis`, checked in under `vendor/tumaet-ui-angular/` and consumed via a `file:` dependency because the package is not published to a registry yet. Never edit it by hand, and keep its peer dependency versions (`@angular/*`, `@fortawesome/*`, `rxjs`) matched in `package.json`. The manual refresh procedure is in `vendor/tumaet-ui-angular/VENDORED.md`. Once the package is published, this is replaced by an ordinary npm dependency.
+- UI components come from `@tumaet/ui-angular` (TUM UI design system), an ordinary npm dependency published from `packages/tum-ui` in `ls1intum/Artemis`. Keep its peer dependency versions (`@angular/*`, `@fortawesome/*`, `rxjs`) matched in `package.json` when bumping it.
 - The shared data tables drop their header below 768px and fall back to per-cell `data-label`s — verify tables at a 375px viewport.
 - The app scrolls inside an inner container, not the document — the `ui-screenshots` skill has the unlock procedure for a true full-page screenshot.
 - Login during local dev goes through Keycloak; seeded users (all password `password`) are listed in `../README.md` (`tobias.wasner` = logos admin).
