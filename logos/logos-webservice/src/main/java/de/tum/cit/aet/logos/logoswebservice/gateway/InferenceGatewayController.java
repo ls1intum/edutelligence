@@ -115,7 +115,7 @@ public class InferenceGatewayController {
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
                 cloudRateLimiter.enforceTpm(ctx.key(), body);
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), cloudRateLimiter.cloudRpmLimit(ctx.key()));
+                    ctx.key(), decision.deployment(), cloudRateLimiter.cloudRpmLimit(ctx.key()), body);
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
@@ -126,7 +126,8 @@ public class InferenceGatewayController {
                     request.getMethod(),
                     body,
                     copyHeaders(request),
-                    () -> cloudAccounting.settleSuccess(logId),
+                    ctx.key().logsFullPayloads(),
+                    result -> cloudAccounting.settleSuccess(logId, result.usage(), result.responseBody()),
                     err -> cloudAccounting.settleFailure(logId, err));
             }
             log.debug("Orchestrator proxy {} {} reason={}",

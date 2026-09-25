@@ -78,9 +78,22 @@ class RerankRequestHandler(RequestHandler):
         )
 
         reranker = self.llm_manager.get_llm_by_id(self.model_id)
+        if reranker is None:
+            # A missing config entry (typo'd id, or the entry commented out) is permanent,
+            # not the transient failure _rerank_available exists to back off from — conflating
+            # the two hides a config error behind a generic "reranking failed" for the rest of
+            # the process, with no lead pointing at the actual model_id that isn't configured.
+            logger.warning(
+                "No LLM entry configured for reranker model_id '%s'; returning top %d unranked documents.",
+                self.model_id,
+                top_n,
+            )
+            return valid_documents[:top_n]
 
         try:
             if isinstance(reranker, PassthroughReranker):
+                # Its own, simpler contract (no network request): a plain list of indices,
+                # not the RerankResponse every RerankModel provider normalizes to below.
                 ranked_indices = reranker.rerank(
                     query=query,
                     documents=document_contents,
@@ -88,13 +101,12 @@ class RerankRequestHandler(RequestHandler):
                 )
                 return [valid_documents[index] for index in ranked_indices]
 
-            _, reranked_results, _ = reranker.rerank(
-                query=query, documents=document_contents, top_n=top_n
+            response = reranker.rerank(
+                query=query,
+                documents=document_contents,
+                top_n=top_n,
             )
-            ranked_documents = []
-            for result in reranked_results[1]:
-                ranked_documents.append(valid_documents[result.index])
-            return ranked_documents
+            return [valid_documents[item.index] for item in response.results]
         except Exception as e:
             logger.warning(
                 "Reranking failed, disabling for subsequent calls. "

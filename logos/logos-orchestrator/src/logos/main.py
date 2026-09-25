@@ -416,9 +416,33 @@ class _PendingLog:
 
 def _materialize_log_id(db, log_ref) -> Optional[int]:
     if isinstance(log_ref, _PendingLog):
-        result, status = db.log_usage(**log_ref.fields)
-        return int(result["log-id"]) if status == 200 else None
+        # Idempotent: the live-feed path may already have inserted this row
+        # on the write-behind queue before enqueue metrics landed.
+        return db.ensure_log_usage(**log_ref.fields)
     return int(log_ref) if log_ref else None
+
+
+def _insert_pending_log_row(fields: Dict[str, Any]) -> None:
+    """Write-behind worker: create the deferred log row for the live feed."""
+    try:
+        with DBManager() as db:
+            db.ensure_log_usage(**fields)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.exception("Failed to materialize deferred log for live feed")
+
+
+def _enqueue_pending_log_for_live_feed(log_ref) -> None:
+    """Queue a deferred log INSERT ahead of live identity UPDATEs (FIFO).
+
+    Warm non-streaming requests keep their log as ``_PendingLog`` until
+    completion for overhead reasons. The stats recent-requests feed still
+    needs a row while the request queues, so the insert rides the same
+    write-behind worker that the enqueue/schedule identity UPDATEs use —
+    ordered before them so those UPDATEs find a matching ``request_id``.
+    """
+    if not isinstance(log_ref, _PendingLog):
+        return
+    write_queue.get_write_queue().enqueue(_insert_pending_log_row, dict(log_ref.fields))
 
 
 def _response_with_cost(
@@ -2847,6 +2871,10 @@ async def _execute_resource_mode(
         role_rank=queue_role_rank(auth.key_type, auth.user_role),
         api_key_id=auth.api_key_id,
     )
+
+    # Deferred logs must exist before the pipeline's enqueue identity UPDATE
+    # (FIFO on the write-behind worker). Already-materialized rows are a no-op.
+    _enqueue_pending_log_for_live_feed(log_id)
 
     # Process through classification and scheduling
     result = await _pipeline.process(pipeline_req)

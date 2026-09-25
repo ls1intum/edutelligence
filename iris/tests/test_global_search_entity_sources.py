@@ -1,0 +1,786 @@
+"""Unit tests for entity candidates in the global-search answer path:
+card rendering, wire shapes, the shared rerank pool, representation slots,
+the pointer tier, and the pipeline's context labeling."""
+
+# pylint: disable=protected-access
+
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+from iris.domain.search.global_search_dto import (
+    AccessContext,
+    CourseInfo,
+    EntityCandidateDTO,
+    EntitySourceDTO,
+    GlobalSearchRequestDTO,
+    GlobalSearchResponseDTO,
+    LectureInfo,
+    LectureSearchRequestDTO,
+    LectureSearchResultDTO,
+    LectureUnitInfo,
+)
+from iris.domain.status.global_search_status_update_dto import (
+    GlobalSearchStatusUpdateDTO,
+)
+from iris.domain.status.run_state_dto import RunStateEnum
+from iris.pipeline.global_search_pipeline import (
+    GlobalSearchPipeline,
+    SearchIntent,
+    _source_label,
+    _today_line,
+    parse_answer_response,
+    renumber_citation_markers,
+)
+from iris.pipeline.prompts.global_search_prompts import navigate_system_prompt
+from iris.pipeline.shared.entity_card_renderer import (
+    is_pointer_candidate,
+    render_entity_card,
+)
+from iris.retrieval.lecture.lecture_global_search_retrieval import (
+    LectureGlobalSearchRetrieval,
+    _Candidate,
+    _is_entity,
+    _SearchTelemetry,
+    dedupe_semester_twins,
+)
+from iris.web.routers import search as search_router
+
+_SETTINGS_JSON = {
+    "authenticationToken": "t",
+    "artemisBaseUrl": "http://a",
+    "variant": "default",
+}
+
+
+def _candidate_dto(**overrides) -> EntityCandidateDTO:
+    payload = {"entityType": "exercise", "title": "RNN and LSTM Fundamentals"}
+    payload.update(overrides)
+    return EntityCandidateDTO(**payload)
+
+
+def _entity_source(title="RNN quiz", etype="exercise"):
+    return EntitySourceDTO(
+        entity_type=etype,
+        entity_id=1,
+        course=CourseInfo(id=11, name="Test course"),
+        title=title,
+        snippet=f"{etype.capitalize()}: '{title}' in course 'Test course'.",
+    )
+
+
+def _content(snippet="A slide summary long enough to keep."):
+    return SimpleNamespace(snippet=snippet)
+
+
+def _retrieval() -> LectureGlobalSearchRetrieval:
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval.reranker_model_id = "reranker"
+    retrieval._reranker_floor_calibrated = True
+    return retrieval
+
+
+# ---------------------------------------------------------------- card renderer
+
+
+class TestEntityCardRenderer:
+    """Verbalization of entity rows into reranker/LLM-readable cards."""
+
+    def test_verbalizes_dates_points_and_duration(self):
+        card = render_entity_card(
+            _candidate_dto(
+                exerciseType="quiz",
+                courseName="Test course",
+                dueDate=datetime(2026, 5, 17, 18, 24, tzinfo=timezone.utc),
+                maxPoints=4,
+                quizDurationSeconds=600,
+            )
+        )
+        assert "Quiz exercise: 'RNN and LSTM Fundamentals'" in card
+        assert "in course 'Test course'" in card
+        assert "due Sunday, 17 May 2026 at 18:24 UTC" in card
+        assert "worth 4 points" in card
+        assert "quiz duration 10 minutes" in card
+
+    def test_pointer_card_states_coverage_relation(self):
+        card = render_entity_card(
+            _candidate_dto(entityType="lecture_unit", title="W02U04 Mediator pattern")
+        )
+        assert "cover the topic named in its title" in card
+
+    def test_description_replaces_the_coverage_line(self):
+        card = render_entity_card(_candidate_dto(description="Implement sorting."))
+        assert "Implement sorting." in card
+        assert "cover the topic named in its title" not in card
+
+    def test_channel_card_names_visibility_and_purpose(self):
+        card = render_entity_card(
+            _candidate_dto(
+                entityType="channel", title="tech-support", channelIsPublic=True
+            )
+        )
+        assert "public discussion channel" in card
+
+    def test_channel_card_omits_visibility_when_unknown(self):
+        # channelIsPublic is optional; treating a missing value as False would
+        # inject a false "private" fact into reranking and the answer context.
+        card = render_entity_card(
+            _candidate_dto(entityType="channel", title="tech-support")
+        )
+        assert "discussion channel" not in card
+
+    def test_card_is_never_empty(self):
+        assert render_entity_card(EntityCandidateDTO(entityType="exam"))
+
+    def test_pointer_detection(self):
+        assert is_pointer_candidate(_candidate_dto())
+        assert not is_pointer_candidate(_candidate_dto(description="text"))
+        assert not is_pointer_candidate(_candidate_dto(entityType="channel"))
+
+    def test_renders_a_naive_date_as_utc_not_the_server_local_zone(self):
+        # model_construct() bypasses validation (and alias resolution, hence the
+        # snake_case kwargs here) so it also bypasses the DTO's own UTC-normalizing
+        # validator. This exercises _format_date's independent, second-layer defense
+        # against exactly the naive input .astimezone() would otherwise misinterpret.
+        candidate = EntityCandidateDTO.model_construct(
+            entity_type="exercise",
+            title="RNN and LSTM Fundamentals",
+            due_date=datetime(2026, 5, 17, 18, 24),
+        )
+        assert "due Sunday, 17 May 2026 at 18:24 UTC" in render_entity_card(candidate)
+
+
+# ------------------------------------------------------------------ wire shapes
+
+
+class TestWireShapes:
+    """Additive wire compatibility for requests, responses and status DTOs."""
+
+    def test_request_without_entity_candidates_is_a_no_op(self):
+        dto = GlobalSearchRequestDTO(
+            query="q", settings=_SETTINGS_JSON  # old-Artemis request shape
+        )
+        assert dto.entity_candidates == []
+
+    def test_searches_nothing_normalizes_course_ids_to_an_empty_list(self):
+        # Artemis's own NON_EMPTY JSON policy drops an empty courseIds list from the wire,
+        # which would otherwise be indistinguishable here from "no scope requested" (None).
+        # searchesNothing carries that distinction instead, since a boolean always survives.
+        dto = GlobalSearchRequestDTO(
+            query="q", settings=_SETTINGS_JSON, searchesNothing=True
+        )
+        assert dto.course_ids is not None
+        assert not dto.course_ids
+
+    def test_unscoped_request_without_searches_nothing_leaves_course_ids_as_none(self):
+        dto = GlobalSearchRequestDTO(query="q", settings=_SETTINGS_JSON)
+        assert dto.course_ids is None
+        assert dto.searches_nothing is False
+
+    def test_exclude_course_ids_parses_camel_case_and_defaults_to_empty(self):
+        dto = GlobalSearchRequestDTO(query="q", settings=_SETTINGS_JSON)
+        assert dto.exclude_course_ids == []
+
+        dto = GlobalSearchRequestDTO(
+            query="q", settings=_SETTINGS_JSON, excludeCourseIds=[5]
+        )
+        assert dto.exclude_course_ids == [5]
+
+    def test_lecture_search_request_parses_exclude_course_ids(self):
+        dto = LectureSearchRequestDTO(query="q", excludeCourseIds=[5])
+        assert dto.exclude_course_ids == [5]
+
+        dto = LectureSearchRequestDTO(query="q")
+        assert dto.exclude_course_ids == []
+
+    def test_request_parses_camel_case_entity_candidates(self):
+        dto = GlobalSearchRequestDTO(
+            query="q",
+            settings=_SETTINGS_JSON,
+            entityCandidates=[
+                {
+                    "entityType": "exercise",
+                    "courseId": 11,
+                    "courseName": "Test course",
+                    "dueDate": "2026-05-17T18:24:00Z",
+                    "maxPoints": 4,
+                }
+            ],
+        )
+        candidate = dto.entity_candidates[0]
+        assert candidate.course_id == 11
+        assert candidate.due_date.year == 2026
+        assert candidate.max_points == 4
+
+    def test_response_never_serializes_the_pointer_tier_flag(self):
+        source = _entity_source()
+        source.via_pointer_tier = True
+        response = GlobalSearchResponseDTO(
+            answer="a", sources=[], entity_sources=[source]
+        )
+        data = response.model_dump(by_alias=True)
+        assert data["entitySources"][0]["entityType"] == "exercise"
+        assert "via_pointer_tier" not in data["entitySources"][0]
+        assert "viaPointerTier" not in data["entitySources"][0]
+
+    def test_status_update_carries_entity_sources_by_alias(self):
+        status = GlobalSearchStatusUpdateDTO(
+            run_state=RunStateEnum.FINISHED, entity_sources=[_entity_source()]
+        )
+        data = status.model_dump(by_alias=True)
+        assert len(data["entitySources"]) == 1
+
+    def test_candidate_date_without_an_offset_is_assumed_utc_not_local(self):
+        # Artemis already normalizes these (WeaviateDateUtil), but the DTO must not
+        # depend on that: a naive datetime must never be reinterpreted through
+        # .astimezone(), which would silently assume the SERVER's local timezone.
+        candidate = _candidate_dto(dueDate=datetime(2026, 5, 17, 18, 24))
+        assert candidate.due_date == datetime(2026, 5, 17, 18, 24, tzinfo=timezone.utc)
+
+    def test_candidate_date_with_a_non_utc_offset_is_converted_to_utc(self):
+        munich = timezone(timedelta(hours=2))
+        candidate = _candidate_dto(dueDate=datetime(2026, 5, 17, 20, 24, tzinfo=munich))
+        assert candidate.due_date == datetime(2026, 5, 17, 18, 24, tzinfo=timezone.utc)
+
+    def test_candidate_date_none_stays_none(self):
+        assert _candidate_dto(dueDate=None).due_date is None
+
+
+# ------------------------------------------------------- rerank pool and gating
+
+
+class TestEntityRerankGate:
+    """Entity cards in the shared rerank pool: floor, slots, pointer tier."""
+
+    def _gate(self, retrieval, deduped, entity_pool, relevance, limit=5):
+        retrieval._safe_rerank = Mock(return_value=(1.0, relevance))
+        telemetry = _SearchTelemetry()
+        kept = retrieval._rerank_and_gate(
+            "q", deduped, limit, True, telemetry, entity_pool
+        )
+        return kept, telemetry
+
+    def test_entities_rank_on_the_shared_scale(self):
+        retrieval = _retrieval()
+        deduped = [_Candidate(0.9, _content("c1"), (None, 1, 1))]
+        entity_pool = [_Candidate(0.0, _entity_source(), (None, None, None))]
+        kept, telemetry = self._gate(retrieval, deduped, entity_pool, [0.2, 0.6])
+        assert _is_entity(kept[0]) and kept[0].score == 0.6
+        assert kept[1].score == 0.2
+        assert telemetry.entity_kept == 1
+
+    def test_representation_appends_crowded_out_entity(self):
+        retrieval = _retrieval()
+        deduped = [
+            _Candidate(0.0, _content(f"content {i}"), (None, 1, i)) for i in range(7)
+        ]
+        entity_pool = [_Candidate(0.0, _entity_source(), (None, None, None))]
+        # 7 content candidates outscore the entity; limit 5 would crowd it out
+        relevance = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.35, 0.3]
+        kept, _ = self._gate(retrieval, deduped, entity_pool, relevance)
+        assert len(kept) == 6
+        assert _is_entity(kept[-1])
+
+    def test_pointer_tier_offers_top_entities_when_floor_empties(self):
+        # The numeric floor judges "answers the question"; whether material is
+        # ABOUT the topic is judged downstream by the navigate prompt, so even
+        # low-scoring entity cards are offered (capped) instead of silence.
+        retrieval = _retrieval()
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        entity_pool = [_Candidate(0.0, _entity_source(), (None, None, None))]
+        kept, telemetry = self._gate(retrieval, deduped, entity_pool, [0.05, 0.035])
+        assert len(kept) == 1 and _is_entity(kept[0])
+        assert telemetry.pointer_tier
+        assert kept[0].dto.via_pointer_tier
+
+    def test_pointer_tier_joins_surviving_content_when_no_entity_clears_the_floor(self):
+        # Weak-but-topical content above the floor must not suppress the
+        # pointer tier: the student's real target may be a below-floor card,
+        # since a unit that NAMES the topic never "answers" a what-is question.
+        retrieval = _retrieval()
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        entity_pool = [
+            _Candidate(0.0, _entity_source(title=f"e{i}"), (None, None, None))
+            for i in range(4)
+        ]
+        relevance = [0.5, 0.01, 0.04, 0.02, 0.03]
+        kept, telemetry = self._gate(retrieval, deduped, entity_pool, relevance)
+        assert not _is_entity(kept[0]) and kept[0].score == 0.5
+        assert [c.dto.title for c in kept[1:]] == ["e1", "e3", "e2"]
+        assert all(c.dto.via_pointer_tier for c in kept[1:])
+        assert telemetry.pointer_tier and telemetry.entity_kept == 3
+
+    def test_pointer_tier_caps_the_offered_entities_and_keeps_rank_order(self):
+        retrieval = _retrieval()
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        entity_pool = [
+            _Candidate(0.0, _entity_source(title=f"e{i}"), (None, None, None))
+            for i in range(5)
+        ]
+        relevance = [0.05, 0.01, 0.04, 0.02, 0.03, 0.05]
+        kept, _ = self._gate(retrieval, deduped, entity_pool, relevance)
+        assert [c.dto.title for c in kept] == ["e4", "e1", "e3"]  # top 3 by score
+
+    def test_pointer_tier_stays_silent_without_entities(self):
+        retrieval = _retrieval()
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        kept, telemetry = self._gate(retrieval, deduped, [], [0.05])
+        assert kept == []
+        assert not telemetry.pointer_tier
+
+    def test_uncalibrated_reranker_does_not_apply_the_qwen3_floor(self):
+        # global_search_rerank_floor is calibrated against Qwen3-Reranker-8B's score
+        # distribution specifically. A fallback to a different provider (e.g. Cohere,
+        # the checked-in example config's lecture_retrieval_pipeline.reranker) must
+        # not gate on that same absolute cutoff — its scores are not on that scale,
+        # so a well-below-floor score here must still be trusted and kept.
+        retrieval = _retrieval()
+        retrieval._reranker_floor_calibrated = False
+        deduped = [_Candidate(0.0, _content(), (None, 1, 1))]
+        kept, telemetry = self._gate(retrieval, deduped, [], [0.01])
+        assert len(kept) == 1
+        assert telemetry.drop_counts["below_rerank_floor"] == 0
+
+    def test_fused_fallback_keeps_capped_entities(self):
+        # A rerank timeout must not erase the entity ladder: entities join the
+        # context in prefetch order (capped) and the answer model judges them.
+        retrieval = _retrieval()
+        retrieval._safe_rerank = Mock(return_value=None)
+        deduped = [_Candidate(0.9, _content(), (None, 1, 1))]
+        entity_pool = [
+            _Candidate(0.0, _entity_source(title=f"e{i}"), (None, None, None))
+            for i in range(4)
+        ]
+        telemetry = _SearchTelemetry()
+        kept = retrieval._rerank_and_gate("q", deduped, 5, True, telemetry, entity_pool)
+        assert kept[0] is deduped[0]
+        assert [c.dto.title for c in kept[1:]] == ["e0", "e1", "e2"]  # capped at 3
+        assert telemetry.entity_kept == 3
+
+
+# ------------------------------------------------------- semester twin dedup
+
+
+class TestSemesterTwinDedup:
+    """Twins of a repeated course collapse to the current instance."""
+
+    NOW = datetime(2026, 9, 8, tzinfo=timezone.utc)
+
+    def _source(
+        self, title, course="Patterns", ref=None, etype="lecture_unit", course_id=1
+    ):
+        source = _entity_source(title=title, etype=etype)
+        source.course = CourseInfo(id=course_id, name=course)
+        source.reference_date = ref
+        return source
+
+    def _at(self, year, month):
+        return datetime(year, month, 1, tzinfo=timezone.utc)
+
+    def test_released_twins_collapse_to_most_recent(self):
+        # Twins are DIFFERENT courses (repeated semester offerings), so each
+        # instance carries its own real course_id — never the same one.
+        old = self._source(
+            "Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9), course_id=1
+        )
+        cur = self._source("Mediator", "PSE", self._at(2026, 3), course_id=2)
+        kept = dedupe_semester_twins([old, cur], "what is the mediator", now=self.NOW)
+        assert kept == [cur]
+
+    def test_future_twins_collapse_to_soonest(self):
+        near = self._source("Mediator", "PSE", self._at(2027, 3), course_id=1)
+        far = self._source(
+            "Mediator (WS27/28)", "PSE (WS27/28)", self._at(2028, 3), course_id=2
+        )
+        kept = dedupe_semester_twins([far, near], "mediator pattern", now=self.NOW)
+        assert kept == [near]
+
+    def test_released_beats_future(self):
+        future = self._source("Mediator", "PSE", self._at(2027, 3), course_id=1)
+        released = self._source("Mediator", "PSE", self._at(2026, 3), course_id=2)
+        kept = dedupe_semester_twins([future, released], "mediator", now=self.NOW)
+        assert kept == [released]
+
+    def test_dated_query_keeps_all_twins(self):
+        old = self._source(
+            "Mediator (WS23/24)", "PSE (WS23/24)", self._at(2024, 9), course_id=1
+        )
+        cur = self._source("Mediator", "PSE", self._at(2026, 3), course_id=2)
+        kept = dedupe_semester_twins([old, cur], "mediator in WS23/24", now=self.NOW)
+        assert kept == [old, cur]
+
+    def test_distinct_courses_are_not_merged(self):
+        a = self._source(
+            "W01 Introduction", "Deep Learning", self._at(2026, 3), course_id=1
+        )
+        b = self._source("W01 Introduction", "Patterns", self._at(2026, 3), course_id=2)
+        assert len(dedupe_semester_twins([a, b], "introduction", now=self.NOW)) == 2
+
+    def test_undatable_twins_keep_first_seen_order(self):
+        first = self._source("Mediator", "PSE", course_id=1)
+        second = self._source("Mediator", "PSE", course_id=2)
+        kept = dedupe_semester_twins([first, second], "mediator", now=self.NOW)
+        assert kept == [first]
+
+    def test_same_course_same_title_entities_are_both_kept(self):
+        # Regression: two GENUINELY DISTINCT entities that happen to share a
+        # title within ONE course (e.g. two exercises both called "Quiz")
+        # are not semester twins and must never be merged into one.
+        quiz1 = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        quiz2 = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        kept = dedupe_semester_twins([quiz1, quiz2], "is there a quiz", now=self.NOW)
+        assert kept == [quiz1, quiz2]
+
+    def test_multiple_distinct_entities_in_the_losing_course_all_survive(self):
+        # Regression: course_id=2 shares a title with course_id=1 by coincidence
+        # (a generic module name reused across unrelated courses), not because
+        # it is a repeated offering of course 1 — evidenced by it contributing
+        # TWO distinct entities under this key, not one. Even though course 1
+        # is picked as the "current instance" (most recent), course 2's two
+        # entities are not interchangeable with a single winner and must not
+        # be discarded as a group.
+        winner = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        other_a = self._source(
+            "Quiz", "Patterns", self._at(2025, 3), etype="exercise", course_id=2
+        )
+        other_b = self._source(
+            "Quiz", "Patterns", self._at(2025, 9), etype="exercise", course_id=2
+        )
+        kept = dedupe_semester_twins(
+            [winner, other_a, other_b], "is there a quiz", now=self.NOW
+        )
+        assert kept == [winner, other_a, other_b]
+
+    def test_singleton_losing_course_survives_when_the_selected_course_has_several(
+        self,
+    ):
+        # The reverse of the case above: course_id=1 (the more recent, "selected" course)
+        # itself contributes two distinct entities under this key, which is exactly the
+        # same evidence of coincidence rather than lineage — a singleton losing course
+        # (course_id=2) must not be discarded just because it lost the one-vs-one
+        # tie-break the OTHER side never actually offered.
+        selected_a = self._source(
+            "Quiz", "Patterns", self._at(2026, 3), etype="exercise", course_id=1
+        )
+        selected_b = self._source(
+            "Quiz", "Patterns", self._at(2026, 6), etype="exercise", course_id=1
+        )
+        singleton_loser = self._source(
+            "Quiz", "Patterns", self._at(2025, 3), etype="exercise", course_id=2
+        )
+        kept = dedupe_semester_twins(
+            [selected_a, selected_b, singleton_loser], "is there a quiz", now=self.NOW
+        )
+        assert kept == [selected_a, selected_b, singleton_loser]
+
+    def test_render_parses_reference_date_as_utc(self):
+        source = GlobalSearchPipeline._render_entity_sources(
+            [_candidate_dto(startDate="2026-03-01T10:00:00")]
+        )[0]
+        assert source.reference_date == datetime(2026, 3, 1, 10, 0, tzinfo=timezone.utc)
+
+    def test_fallback_answer_markers_renumber_onto_the_fallback_source_list(self):
+        # Encodes the exact mechanism __call__ must apply after the null-to-navigate
+        # fallback: the fallback's raw answer numbers markers against ITS OWN context
+        # (entity_grounded), not the original grounded_sources, so renumbering must run
+        # against the fallback's used_indices, not be skipped because it already ran once.
+        entity_grounded = ["entity_A_course_info", "entity_B_the_actual_exercise"]
+        raw_navigate_answer = (
+            '{"answer": "Yes, see the exercise.[2]", "used_sources": [2]}'
+        )
+
+        answer, used_indices = parse_answer_response(
+            raw_navigate_answer, len(entity_grounded)
+        )
+        ordered_used = sorted(used_indices)
+        answer = renumber_citation_markers(
+            answer, {old + 1: new + 1 for new, old in enumerate(ordered_used)}
+        )
+        used_sources = [s for i, s in enumerate(entity_grounded) if i in used_indices]
+
+        assert used_sources == ["entity_B_the_actual_exercise"]
+        # [2] referenced entity_grounded's context position; renumbered onto the
+        # 1-item final list it must become [1], not stay out of range.
+        assert answer == "Yes, see the exercise.[1]"
+
+    def test_citation_numbers_survive_an_entity_ranked_between_two_lecture_sources(
+        self,
+    ):
+        # Regression: the client resolves marker N against `sources` (lecture) then
+        # `entitySources` (entity) as two separate arrays, using citation_source_types
+        # to know which array each marker number resolves into. An entity ranked (and
+        # cited) between two lecture sources must keep its own place in the reading
+        # order — [1][2][3] here already matches reading order, so no renumbering is
+        # needed at all; citation_source_types is what lets the client still resolve
+        # marker 2 to the entity despite it sitting between two lecture markers.
+        lecture_a = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Patterns"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=3,
+                name="Slides",
+                link="/l",
+                pageNumber=1,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Lecture content A.",
+        )
+        entity = _entity_source(title="Flyweight quiz")
+        lecture_b = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Patterns"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=4,
+                name="Slides 2",
+                link="/l2",
+                pageNumber=2,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Lecture content B.",
+        )
+        grounded_sources = [lecture_a, entity, lecture_b]  # ranked order
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "First point.[1] Second point.[2] Third point.[3]"
+        )
+
+        response = pipeline(
+            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert response.sources == [lecture_a, lecture_b]
+        assert response.entity_sources == [entity]
+        assert response.answer == "First point.[1] Second point.[2] Third point.[3]"
+        assert response.citation_source_types == ["lecture", "entity", "lecture"]
+
+    def test_citation_numbers_follow_reading_order_not_retrieval_rank(self):
+        # Observed live ("what is deep learning?"): the model discussed its RANK-2 source
+        # first and its RANK-1 source second. Renumbering by rank alone kept them as [1]
+        # then [2] in that same rank order regardless of where each was actually cited, so
+        # the reader saw "[2]" appear in the text before "[1]" ever did — footnote numbers
+        # are supposed to climb in the order a reader actually encounters them.
+        rank_1 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Deep Learning"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=3,
+                name="1. intro",
+                link="/l1",
+                pageNumber=51,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Culture of practice content.",
+        )
+        rank_2 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Deep Learning"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=4,
+                name="2.linear",
+                link="/l2",
+                pageNumber=2,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="AI/ML/DL hierarchy content.",
+        )
+        grounded_sources = [rank_1, rank_2]  # retrieval-ranked order
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        # Cites the RANK-2 source ([2]) before the RANK-1 source ([1]).
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "Effective for image recognition.[2] Also a culture of practice.[1]"
+        )
+
+        response = pipeline(
+            query="what is deep learning", intent=SearchIntent.TRIGGER_AI
+        )
+
+        # rank_2 was cited FIRST in the text, so it becomes source 1 — the returned list
+        # and the chip numbering the client renders both follow reading order too.
+        assert response.sources == [rank_2, rank_1]
+        assert (
+            response.answer
+            == "Effective for image recognition.[1] Also a culture of practice.[2]"
+        )
+
+    def test_an_entity_cited_before_any_lecture_source_still_becomes_source_1(self):
+        # Observed live ("explain some git basics"), captured via citation_renumbering:
+        # reading_order=[3, 4, 6, 5, 7] citation_source_types=[...] old_to_new={5: 1, ...,
+        # 4: 5} -- the entity cited FIRST in the text (old index 3) was renumbered to [5],
+        # last, because the old scheme always numbered every lecture source before any
+        # entity regardless of citation order. citation_source_types is what lets the
+        # client resolve marker 1 to the entity even though marker 1 comes before any
+        # lecture marker in the numbering.
+        lecture_a = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Patterns"),
+            lecture=LectureInfo(id=2, name="Intro"),
+            lectureUnit=LectureUnitInfo(
+                id=3,
+                name="Slides",
+                link="/l",
+                pageNumber=1,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Lecture content A.",
+        )
+        entity = _entity_source(title="02 - Git Basics")
+        grounded_sources = [lecture_a, entity]  # entity ranked BELOW the lecture source
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        # Cites the LOWER-RANKED entity ([2]) before the higher-ranked lecture source ([1]).
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "About the course.[2] About the slide.[1]"
+        )
+
+        response = pipeline(
+            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert response.sources == [lecture_a]
+        assert response.entity_sources == [entity]
+        assert response.citation_source_types == ["entity", "lecture"]
+        assert (
+            response.answer == "About the course.[1] About the slide.[2]"
+        ), "the entity cited first must become [1], not be pushed past every lecture source"
+
+    def test_an_ordinary_numeric_bracket_does_not_get_mistaken_for_a_citation_appearance(
+        self,
+    ):
+        # "Use array[2] as input." has no sentence-ending punctuation before "[2]", so
+        # _CITATION_MARKER_RE never matches it as a real citation chain — but it still
+        # matches the bare [\d+] pattern _SINGLE_MARKER_RE looks for. Scanning that pattern
+        # against the whole answer directly (rather than only within real citation chains)
+        # would record source 2 as "cited first" from this incidental text alone, reversing
+        # the two REAL citations that follow it.
+        source_1 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Course"),
+            lecture=LectureInfo(id=1, name="Lecture"),
+            lectureUnit=LectureUnitInfo(
+                id=1,
+                name="Slides 1",
+                link="/l1",
+                pageNumber=1,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="First source content.",
+        )
+        source_2 = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="Course"),
+            lecture=LectureInfo(id=1, name="Lecture"),
+            lectureUnit=LectureUnitInfo(
+                id=2,
+                name="Slides 2",
+                link="/l2",
+                pageNumber=2,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="Second source content.",
+        )
+        grounded_sources = [source_1, source_2]
+
+        pipeline = object.__new__(GlobalSearchPipeline)
+        pipeline.tokens = []
+        pipeline.answer_llm = SimpleNamespace(tokens=SimpleNamespace())
+        pipeline._retrieve_sources = lambda *args, **kwargs: grounded_sources
+        pipeline._generate_answer = (
+            lambda *args, **kwargs: "Use array[2] as input. First claim.[1] Second claim.[2]"
+        )
+
+        response = pipeline(
+            query="explain array indexing", intent=SearchIntent.TRIGGER_AI
+        )
+
+        assert response.sources == [source_1, source_2]
+        assert (
+            response.answer == "Use array[2] as input. First claim.[1] Second claim.[2]"
+        ), "the incidental 'array[2]' text must not be treated as an earlier citation and reverse the real ones"
+
+    def test_navigate_prompt_is_internally_consistent_about_the_no_answer_sentinel(
+        self,
+    ):
+        # A model that read an internal rule saying "return null" (JSON-style) instead
+        # of the actual !none! contract would output the literal word "null" as its
+        # answer text; the parser only recognizes "!none!", so that word would be shown
+        # to a student as a real one-word answer with every source falsely attached.
+        assert "null" not in navigate_system_prompt.lower()
+        assert navigate_system_prompt.count("!none!") >= 2
+
+
+# --------------------------------------------------------------- pipeline logic
+
+
+class TestPipelineHelpers:
+    """Pure pipeline helpers: labels, the Artemis clock line, rendering."""
+
+    def test_source_label_for_entity_and_content(self):
+        assert _source_label(_entity_source()) == "[Test course — Course information]"
+        content = LectureSearchResultDTO(
+            course=CourseInfo(id=1, name="C"),
+            lecture=LectureInfo(id=2, name="L"),
+            lectureUnit=LectureUnitInfo(
+                id=3,
+                name="U",
+                link="/l",
+                pageNumber=4,
+                sourceType="lecture_unit_slide",
+            ),
+            snippet="s",
+        )
+        assert _source_label(content) == "[C — L, Slide 4]"
+
+    def test_today_line_uses_the_artemis_clock(self):
+        context = AccessContext(
+            courseIds=[1], now=datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+        )
+        line = _today_line(context)
+        assert "Sunday, 06 September 2026" in line
+        assert "semesters or course copies" in line
+
+    def test_render_entity_sources_builds_cards(self):
+        sources = GlobalSearchPipeline._render_entity_sources(
+            [
+                _candidate_dto(courseId=11, courseName="Test course"),
+                _candidate_dto(description="Full problem statement."),
+            ]
+        )
+        assert not sources[0].via_pointer_tier and not sources[1].via_pointer_tier
+        assert sources[0].course == CourseInfo(id=11, name="Test course")
+        assert "RNN and LSTM Fundamentals" in sources[0].snippet
+        assert sources[1].course is None
+
+
+class TestLectureSearchRoute:
+    """The synchronous /api/v1/search/lectures route forwards course exclusions,
+    which an unrestricted caller relies on since it has no course_ids ceiling
+    for the access context to narrow itself."""
+
+    def test_forwards_exclude_course_ids_to_the_retriever(self):
+        dto = LectureSearchRequestDTO(query="q", courseIds=[9], excludeCourseIds=[5])
+        with (
+            patch.object(search_router, "VectorDatabase"),
+            patch.object(search_router, "LectureGlobalSearchRetrieval") as mock_cls,
+        ):
+            mock_retrieval = mock_cls.return_value
+            mock_retrieval.search.return_value = []
+
+            search_router._traced_lecture_search(dto)
+
+        mock_retrieval.search.assert_called_once()
+        assert mock_retrieval.search.call_args.kwargs["exclude_course_ids"] == [5]
+        assert mock_retrieval.search.call_args.kwargs["course_ids"] == [9]

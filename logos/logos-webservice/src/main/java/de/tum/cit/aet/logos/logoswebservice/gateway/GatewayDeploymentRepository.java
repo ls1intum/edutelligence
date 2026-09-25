@@ -36,7 +36,8 @@ public class GatewayDeploymentRepository {
                    ak.environment,
                    ak.use_custom_permissions AS custom,
                    ak.settings::text AS settings_text,
-                   ak.default_priority
+                   ak.default_priority,
+                   ak.log::text AS log_level
             FROM api_keys ak
             WHERE ak.key_value = :key_value
               AND ak.is_active = true
@@ -90,6 +91,7 @@ public class GatewayDeploymentRepository {
                ki.custom AS use_custom_permissions,
                ki.settings_text,
                ki.default_priority,
+               ki.log_level,
                d.model_id,
                d.model_name,
                d.aliases_csv,
@@ -118,7 +120,8 @@ public class GatewayDeploymentRepository {
                ak.environment,
                ak.use_custom_permissions,
                ak.settings::text AS settings_text,
-               ak.default_priority
+               ak.default_priority,
+               ak.log::text AS log_level
         FROM api_keys ak
         WHERE ak.key_value = :key_value
           AND ak.is_active = true
@@ -281,7 +284,8 @@ public class GatewayDeploymentRepository {
             rs.getString("environment"),
             rs.getBoolean("use_custom_permissions"),
             rs.getString("settings_text"),
-            rs.getInt("default_priority")
+            rs.getInt("default_priority"),
+            rs.getString("log_level")
         );
     }
 

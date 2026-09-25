@@ -94,9 +94,9 @@ def _patch_prom(monkeypatch):
     return fake
 
 
-def test_recorder_buffers_lifecycle_fields_until_completion(monkeypatch):
-    """: enqueue/scheduled/provider events no longer pay a DB write each;
-    the single completion UPDATE carries the union of their fields."""
+def test_recorder_writes_live_identity_then_buffers_the_rest_until_completion(monkeypatch):
+    """Enqueue/schedule publish model + stage columns immediately for the live
+    stats feed; other lifecycle fields still ride the single completion UPDATE."""
     recorder, calls = _make_recorder(monkeypatch, {27: "test-model"}, {12: "test-provider"})
     _patch_prom(monkeypatch)
 
@@ -117,7 +117,16 @@ def test_recorder_buffers_lifecycle_fields_until_completion(monkeypatch):
         provider_metrics={"available_vram_mb": 1024},
     )
     recorder.record_provider("req-1", 12)
-    assert calls == [], "lifecycle events must not touch the DB before completion"
+
+    assert len(calls) == 2, "only live identity fields may hit the DB mid-flight"
+    assert calls[0] == {"request_id": "req-1", "model_id": 27, "provider_id": 12}
+    assert calls[1]["request_id"] == "req-1"
+    assert calls[1]["model_id"] == 27
+    assert calls[1]["provider_id"] == 12
+    assert "scheduled_ts" in calls[1]
+    # Priority / queue depth / VRAM still wait for completion.
+    assert "initial_priority" not in calls[0]
+    assert "available_vram_mb" not in calls[1]
 
     recorder.record_complete(
         request_id="req-1",
@@ -125,8 +134,8 @@ def test_recorder_buffers_lifecycle_fields_until_completion(monkeypatch):
         cold_start=False,
     )
 
-    assert len(calls) == 1
-    call = calls[0]
+    assert len(calls) == 3
+    call = calls[2]
     assert call["request_id"] == "req-1"
     # Enqueue fields
     assert call["model_id"] == 27
