@@ -407,6 +407,18 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
     domain: DOMAIN_SERVER_START,
     needle: 'Address already in use',
   },
+  'metal-oom': {
+    label: 'Metal out of memory (observed)',
+    description:
+      'The process ran out of unified memory on the last failing ' +
+      'probe (SIGKILL, or a Metal allocation-failure marker in the ' +
+      'log). Unlike CUDA there is no single stable log line for this ' +
+      '— a SIGKILL-only crash can leave nothing to highlight below.',
+    // Deliberately no `needle`: unlike CUDA's one fixed string, Metal
+    // has several possible markers (or none, for a bare SIGKILL) — see
+    // _METAL_MEMORY_MARKERS in calibration_metal.py. A guessed needle
+    // would highlight the wrong line as often as the right one.
+  },
 };
 
 function lookupReason(

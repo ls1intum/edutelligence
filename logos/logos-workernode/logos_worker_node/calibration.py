@@ -1801,12 +1801,9 @@ class CalibrationResult:
     # things (see deioma 2026-06-04).
     node_unhealthy_reason: str | None = None
     # Set when the last failing probe matched an
-    # ``_OBSERVED_TRANSIENT_PATTERNS`` entry (CUDA OOM, HF network blip,
-    # NCCL handshake failure, port conflict, …). Purely informational —
-    # unlike ``unsupported_reason``/``node_unhealthy_reason`` this NEVER
-    # gates blacklisting or node-health state; it only gives the
-    # error-report UI something more specific to show than a generic
-    # regex-grepped error line.
+    # ``_OBSERVED_TRANSIENT_PATTERNS`` entry, or "metal-oom" (see
+    # calibration_metal.py). Informational only — never gates
+    # blacklisting or node-health state.
     observed_reason: str | None = None
     # Stage-by-stage checklist (see _classify_calibration_stages) for the
     # last-evaluated failing probe — None on success (the frontend still
