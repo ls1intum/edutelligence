@@ -360,6 +360,12 @@ def test_pooling_warmup_failure_fails_calibration():
     assert "pooling" in result.error
     mocks["warmup"].assert_called_once()
     assert mocks["warmup"].call_args.kwargs.get("model_kind") == "pooling"
+    assert result.observed_reason == "functional-probe-failed"
+
+    # vLLM's own log never raises this — appended so the Model Error
+    # Report has a real line to show and highlight instead of nothing.
+    log_path = Path("/tmp/test-metal-calibration-logs/org__embedding-model.log")
+    assert "did not answer one request on its own serving endpoint" in log_path.read_text()
 
 
 def test_generative_crash_during_warmup_is_not_recorded_as_success():

@@ -3520,6 +3520,12 @@ def test_calibrate_pooling_model_fails_fast_when_embeddings_probe_fails():
     assert any(u.endswith("/v1/embeddings") for u in urls)
     # Never reached Phase 3 — no /v1/completions was ever sent for it.
     assert not any(u.endswith("/v1/completions") for u in urls)
+    assert result.observed_reason == "functional-probe-failed"
+
+    # vLLM's own log never raises this — appended so the Model Error
+    # Report has a real line to show and highlight instead of nothing.
+    log_text = Path("/tmp/test-calibration-logs/org__test-model.log").read_text()
+    assert "did not answer one request on its own serving endpoint" in log_text
 
 
 def test_calibrate_pooling_model_succeeds_via_the_right_endpoint():

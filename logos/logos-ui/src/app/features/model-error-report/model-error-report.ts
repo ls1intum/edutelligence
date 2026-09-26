@@ -429,6 +429,15 @@ const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
     domain: DOMAIN_MODEL_RESOLUTION,
     needle: 'Too Many Requests',
   },
+  'functional-probe-failed': {
+    label: "Model didn't answer its own endpoint (observed)",
+    description:
+      'A classified pooling/reranking/transcription model started ' +
+      'cleanly but did not answer one request on its own declared ' +
+      'endpoint on the last failing probe.',
+    domain: DOMAIN_SERVER_START,
+    needle: 'did not answer one request on its own serving endpoint',
+  },
   'nccl-handshake-failure': {
     label: 'NCCL handshake failure (observed)',
     description:

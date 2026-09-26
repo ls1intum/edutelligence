@@ -20,6 +20,7 @@ from logos_worker_node.calibration import (
     CalibrationResult,
     _classify_observed_transient_error,
     _read_log_since,
+    _record_functional_probe_failure,
     _reset_calibration_log,
     _resolve_probed_model_kind,
     stop_vllm,
@@ -415,11 +416,7 @@ def calibrate_model_metal(
                 # missed /v1/completions mismatch. Must not persist a
                 # footprint measured before the real request's lazy
                 # allocations (e.g. an embedding model's pooling layer).
-                result.error = (
-                    f"functional probe failed ({model_kind}): {model} did not answer "
-                    "one request on its own serving endpoint"
-                )
-                logger.warning("  ERROR: %s", result.error)
+                _record_functional_probe_failure(result, log_path, model, model_kind)
                 return result
             if proc is not None and proc.poll() is not None:
                 # The warmup didn't just time out or answer non-200 — the

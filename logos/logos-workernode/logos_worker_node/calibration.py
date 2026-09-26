@@ -1603,6 +1603,28 @@ _ENDPOINT_BY_MODEL_KIND: dict[str, str] = {
     "transcription": "/v1/audio/transcriptions",
 }
 
+# Stable across model/model_kind — safe as the model-error-report UI's
+# literal highlight needle (see OBSERVED_REASON_DESCRIPTIONS in
+# model-error-report.ts).
+_FUNCTIONAL_PROBE_FAILURE_NEEDLE = "did not answer one request on its own serving endpoint"
+
+
+def _record_functional_probe_failure(result: Any, log_path: Path, model: str, model_kind: str) -> None:
+    """Stamp a fatal functional-probe failure and make it visible in the
+    Model Error Report — vLLM's own log looks fully successful here (we
+    detected the failure, vLLM never raised it), so the message is
+    appended, or the checklist would show "Unknown calibration error".
+    """
+    message = f"functional probe failed ({model_kind}): {model} {_FUNCTIONAL_PROBE_FAILURE_NEEDLE}"
+    result.error = message
+    result.observed_reason = "functional-probe-failed"
+    logger.warning("  ERROR: %s", message)
+    try:
+        with log_path.open("a") as f:
+            f.write(f"\n[LOGOS] {message}\n")
+    except OSError:
+        logger.debug("Failed to append functional-probe-failure note to %s", log_path, exc_info=True)
+
 
 def _endpoint_registered(base_url: str, path: str, timeout_s: float) -> bool | None:
     """Whether vLLM actually registered *path* for the loaded checkpoint,
@@ -3396,11 +3418,7 @@ def _calibrate_model_probe(
             # model has a real, working probe — a failure here is the model
             # itself not serving one request on its own endpoint, not a
             # missed /v1/completions mismatch. Must not reach [CALIBRATED].
-            partial.error = (
-                f"functional probe failed ({model_kind}): {model} did not answer "
-                "one request on its own serving endpoint"
-            )
-            logger.warning("  ERROR: %s", partial.error)
+            _record_functional_probe_failure(partial, log_path, model, model_kind)
             return partial
         else:
             logger.warning(
