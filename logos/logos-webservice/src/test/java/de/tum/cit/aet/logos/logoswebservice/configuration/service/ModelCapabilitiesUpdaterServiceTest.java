@@ -3,7 +3,6 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.service;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
@@ -73,11 +72,13 @@ class ModelCapabilitiesUpdaterServiceTest {
 
         service.updateAllModelCapabilities();
 
-        verify(persistenceService).updateModelCapabilities(7, true, false, false, 1000000);
+        verify(persistenceService).applyCatalogCapabilities(7, "gpt-5.6-luna", true, true, false, false, 1000000);
     }
 
     @Test
-    void modelUnknownToTheCatalogIsNotTouched() {
+    void modelUnknownToTheCatalogDeletesStoredRow() {
+        // A renamed model the catalog no longer knows keeps no stale flags:
+        // the sync reports found=false and the stored row is dropped.
         Map<String, Object> catalog = Map.of(
             "some-other-model", Map.of("max_input_tokens", 131072));
         Model m = model(7, "never-listed-model");
@@ -86,7 +87,7 @@ class ModelCapabilitiesUpdaterServiceTest {
 
         service.updateAllModelCapabilities();
 
-        verifyNoInteractions(persistenceService);
+        verify(persistenceService).applyCatalogCapabilities(7, "never-listed-model", false, false, false, false, null);
     }
 
     @Test
@@ -101,6 +102,6 @@ class ModelCapabilitiesUpdaterServiceTest {
 
         service.updateAllModelCapabilities();
 
-        verify(persistenceService).updateModelCapabilities(3, false, true, false, null);
+        verify(persistenceService).applyCatalogCapabilities(3, "windowless-model", true, false, true, false, null);
     }
 }

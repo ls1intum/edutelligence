@@ -35,6 +35,8 @@ public class ModelCapabilities {
      */
     @Column(name = "max_input_tokens")
     private Integer maxInputTokens;
+    @Column(name = "manual_override", nullable = false)
+    private boolean manualOverride;
 
     public ModelCapabilities() {}
 
@@ -52,10 +54,12 @@ public class ModelCapabilities {
     public boolean getSupportsVision() { return supportsVision; }
     public boolean getSupportsReasoning() { return supportsReasoning; }
     public Integer getMaxInputTokens() { return maxInputTokens; }
+    public boolean getManualOverride() { return manualOverride; }
 
     public void setModelId(Integer modelId) { this.modelId = modelId; }
     public void setSupportsFunctionCalling(boolean supportsFunctionCalling) { this.supportsFunctionCalling = supportsFunctionCalling; }
     public void setSupportsVision(boolean supportsVision) { this.supportsVision = supportsVision; }
     public void setSupportsReasoning(boolean supportsReasoning) { this.supportsReasoning = supportsReasoning; }
     public void setMaxInputTokens(Integer maxInputTokens) { this.maxInputTokens = maxInputTokens; }
+    public void setManualOverride(boolean manualOverride) { this.manualOverride = manualOverride; }
 }
