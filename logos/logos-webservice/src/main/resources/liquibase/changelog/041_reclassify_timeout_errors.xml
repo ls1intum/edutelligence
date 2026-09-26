@@ -14,7 +14,7 @@
          Correct the source rows. The hourly rollup is incremental and keyed
          off log_entry.updated_at (stamped by trigger on this UPDATE), so the
          next pass re-aggregates the hours these rows belong to. -->
-    <changeSet id="040-reclassify-timeout-errors" author="logos">
+    <changeSet id="041-reclassify-timeout-errors" author="logos">
         <sql>
             UPDATE log_entry
                SET result_status = 'timeout'

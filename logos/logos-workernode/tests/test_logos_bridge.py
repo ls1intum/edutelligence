@@ -1410,6 +1410,89 @@ async def test_stop_calibration_session_idempotent_when_no_session(tmp_path):
     assert response["was_active"] is False
 
 
+def test_record_calibration_probe_log_forwards_metal_capacity_floor(tmp_path):
+    """A failed Metal probe's capacity-floor evidence must ride the
+    calibration_probe_log event, or it can never reach calibration_probe_logs
+    and the model-error-report UI."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="",
+        kv_cache_sent_mb=0.0,
+        success=False,
+        base_residency_mb=0.0,
+        metal_capacity_floor_mb=18_432.3,
+    )
+
+    client._record_calibration_probe_log("org/model", result, "log tail")  # noqa: SLF001
+
+    event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert event.event == "calibration_probe_log"
+    details = json.loads(event.details)
+    assert details["metal_capacity_floor_mb"] == pytest.approx(18_432.3)
+
+
+def test_record_calibration_probe_log_omits_metal_capacity_floor_on_cuda(tmp_path):
+    """CUDA results never set metal_capacity_floor_mb — the event must carry
+    an explicit null, not a missing key, so the DB column is cleared on a
+    later success (see upsert_calibration_probe_log's full-row overwrite)."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="0",
+        kv_cache_sent_mb=0.0,
+        success=True,
+        base_residency_mb=0.0,
+    )
+
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+
+    event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    details = json.loads(event.details)
+    assert details["metal_capacity_floor_mb"] is None
+
+
+def test_record_calibration_probe_log_reports_backend(tmp_path, monkeypatch):
+    """The event must say which backend produced it, so the UI can hide
+    CUDA-only fields (GPU devices, sleep timing) on Metal rows instead
+    of just showing them blank."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="",
+        kv_cache_sent_mb=0.0,
+        success=True,
+        base_residency_mb=0.0,
+    )
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+    metal_event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert json.loads(metal_event.details)["backend"] == "metal"
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+    cuda_event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert json.loads(cuda_event.details)["backend"] == "cuda"
+
+
 def test_list_uncalibrated_skips_calibration_unsupported(tmp_path):
     """Models classified as permanently unsupported on this worker must not
     appear in the session's work list — every probe would fail the same
@@ -1689,6 +1772,10 @@ async def test_hf_precheck_skips_model_whose_weights_dont_fit(tmp_path, monkeypa
     assert profile is not None
     assert profile.calibration_unsupported is True
     assert profile.calibration_unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+
+    probe_log_events = [json.loads(d) for e, _m, d in events if e == "calibration_probe_log"]
+    assert probe_log_events[-1]["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+    assert probe_log_events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
 
 
 @pytest.mark.asyncio
@@ -2054,6 +2141,15 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
     log_dir = tmp_path / "calibration_logs"
     assert is_model_unsupported(log_dir, "org/does-not-exist") is None
 
+    # Still visible in the Model Error Report as its own precheck row —
+    # not silently invisible just because it's not a permanent verdict.
+    events = [
+        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
+    ]  # noqa: SLF001
+    assert events[-1]["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
+    assert events[-1]["log_text"] is None
+
 
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_path, monkeypatch, caplog):
@@ -2121,6 +2217,12 @@ async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path
     profile = app.state.model_profiles.get_profile("org/gated-model")
     assert profile is None or profile.calibration_unsupported is not True
     assert client._list_uncalibrated_models() == ["org/gated-model"]  # noqa: SLF001
+
+    events = [
+        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
+    ]  # noqa: SLF001
+    assert events[-1]["unsupported_reason"] == REASON_MODEL_GATED
+    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
 
 
 @pytest.mark.asyncio

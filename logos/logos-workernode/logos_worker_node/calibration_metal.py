@@ -18,7 +18,9 @@ from typing import Any, Callable
 from logos_worker_node.calibration import (
     _FATAL_PROBE_MODEL_KINDS,
     CalibrationResult,
+    _classify_observed_transient_error,
     _read_log_since,
+    _record_functional_probe_failure,
     _reset_calibration_log,
     _resolve_probed_model_kind,
     stop_vllm,
@@ -71,14 +73,26 @@ def _record_capacity_floor_if_applicable(
     working_set_mb: float | None,
     model: str,
 ) -> None:
-    """Stamp ``result`` with this node's capacity floor when a crashed
-    probe looks like a memory-capacity failure. Shared by every path that
-    treats a dead vLLM process as a calibration failure, so a crash
-    during warmup is classified exactly like one during spawn/wait_ready.
+    """Stamp ``result``'s capacity floor and observed_reason from a
+    crashed probe's log. Shared by every path that treats a dead vLLM
+    process as a failure, so warmup and spawn/wait_ready crashes are
+    classified identically.
     """
     returncode = proc.poll() if proc is not None else None
     log_tail = _read_log_since(log_path, 0) if log_path.exists() else ""
-    if working_set_mb and _is_metal_capacity_failure(returncode, log_tail):
+    is_capacity_failure = bool(working_set_mb) and _is_metal_capacity_failure(returncode, log_tail)
+
+    # Backend-agnostic patterns (HF timeout/rate-limit, port conflict)
+    # apply on Metal exactly as on CUDA. Only an unmatched crash falls
+    # back to the Metal-only marker check below (no single stable
+    # needle exists for it — see _METAL_MEMORY_MARKERS).
+    observed_pattern = _classify_observed_transient_error(log_tail)
+    if observed_pattern is not None:
+        result.observed_reason = observed_pattern.reason_code
+    elif is_capacity_failure:
+        result.observed_reason = "metal-oom"
+
+    if is_capacity_failure:
         result.capacity_oom = True
         result.metal_capacity_floor_mb = working_set_mb
         logger.warning(
@@ -402,11 +416,7 @@ def calibrate_model_metal(
                 # missed /v1/completions mismatch. Must not persist a
                 # footprint measured before the real request's lazy
                 # allocations (e.g. an embedding model's pooling layer).
-                result.error = (
-                    f"functional probe failed ({model_kind}): {model} did not answer "
-                    "one request on its own serving endpoint"
-                )
-                logger.warning("  ERROR: %s", result.error)
+                _record_functional_probe_failure(result, log_path, model, model_kind)
                 return result
             if proc is not None and proc.poll() is not None:
                 # The warmup didn't just time out or answer non-200 — the

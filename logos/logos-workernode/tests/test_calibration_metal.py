@@ -360,6 +360,12 @@ def test_pooling_warmup_failure_fails_calibration():
     assert "pooling" in result.error
     mocks["warmup"].assert_called_once()
     assert mocks["warmup"].call_args.kwargs.get("model_kind") == "pooling"
+    assert result.observed_reason == "functional-probe-failed"
+
+    # vLLM's own log never raises this — appended so the Model Error
+    # Report has a real line to show and highlight instead of nothing.
+    log_path = Path("/tmp/test-metal-calibration-logs/org__embedding-model.log")
+    assert "did not answer one request on its own serving endpoint" in log_path.read_text()
 
 
 def test_generative_crash_during_warmup_is_not_recorded_as_success():
@@ -480,6 +486,7 @@ def test_capacity_failure_via_signal_exit_code_sets_floor():
     assert not result.success
     assert result.capacity_oom is True
     assert result.metal_capacity_floor_mb == pytest.approx(20_000.0)
+    assert result.observed_reason == "metal-oom"
 
 
 def test_capacity_failure_via_log_marker_sets_floor():
@@ -501,6 +508,32 @@ def test_capacity_failure_via_log_marker_sets_floor():
     assert not result.success
     assert result.capacity_oom is True
     assert result.metal_capacity_floor_mb == pytest.approx(18_000.0)
+    assert result.observed_reason == "metal-oom"
+
+
+def test_generic_observed_pattern_takes_priority_over_metal_oom():
+    """A crash log matching a shared, backend-agnostic pattern (here:
+    HF network timeout) must report THAT reason, not metal-oom, even
+    when the crash also looks signal-shaped like a capacity failure."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=-9)"),
+    )
+    mock_proc.poll.return_value = -9
+    info = {"max_recommended_working_set_size": 20_000 * 1024 * 1024}
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=info)
+    patches["log_tail"] = patch(
+        "logos_worker_node.calibration_metal._read_log_since",
+        return_value="requests.exceptions.ReadTimeout: Read timed out.",
+    )
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.observed_reason == "hf-network-timeout"
+    # Capacity evidence is independent of which reason wins display —
+    # both the SIGKILL exit code and the (coincidental) memory marker
+    # absence still leave this a signal-shaped crash.
+    assert result.metal_capacity_floor_mb == pytest.approx(20_000.0)
 
 
 def test_non_capacity_failure_leaves_floor_unset():
@@ -522,6 +555,7 @@ def test_non_capacity_failure_leaves_floor_unset():
     assert not result.success
     assert result.capacity_oom is False
     assert result.metal_capacity_floor_mb is None
+    assert result.observed_reason is None
 
 
 @pytest.mark.parametrize("signal_returncode", [-11, -15])
@@ -541,6 +575,7 @@ def test_unrelated_signal_crash_is_not_mistaken_for_capacity(signal_returncode):
     assert not result.success
     assert result.capacity_oom is False
     assert result.metal_capacity_floor_mb is None
+    assert result.observed_reason is None
 
 
 def test_falls_back_to_generic_resolution_when_metal_specific_lookup_fails():
