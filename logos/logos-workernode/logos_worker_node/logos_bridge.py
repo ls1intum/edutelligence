@@ -1581,6 +1581,9 @@ class LogosBridgeClient:
                     "unsupported_reason": result.unsupported_reason,
                     "node_unhealthy_reason": result.node_unhealthy_reason,
                     "observed_reason": result.observed_reason,
+                    "metal_capacity_floor_mb": (
+                        round(result.metal_capacity_floor_mb, 1) if result.metal_capacity_floor_mb is not None else None
+                    ),
                     "stages": result.stages,
                     "tensor_parallel_size": result.tensor_parallel_size,
                     "gpu_devices": result.gpu_devices,

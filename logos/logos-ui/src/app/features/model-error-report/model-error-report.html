@@ -226,7 +226,7 @@
                                 <button
                                   type="button"
                                   class="scope-node-button"
-                                  (click)="openNodeLog(node, item.logAnchor ?? item.errorMessage)"
+                                  (click)="openNodeLog(node, item.nodeAnchors?.get(node) ?? item.logAnchor ?? item.errorMessage)"
                                 >
                                   {{ node }}
                                 </button>
@@ -264,6 +264,36 @@
                 </div>
 
               </div>
+
+              @if (metalCapacityFloorMb() != null) {
+
+                <div class="checklist-box capacity-box">
+
+                  <header class="expanded-header">
+                    <span class="expanded-title">
+                      Metal Capacity Requirement
+                    </span>
+                  </header>
+
+                  <div class="check-row">
+
+                    <span class="check-icon check-icon--info">
+                      i
+                    </span>
+
+                    <span class="check-name">
+                      Minimum unified memory
+                    </span>
+
+                    <span class="check-value">
+                      &gt; {{ formatMb(metalCapacityFloorMb()) }}
+                    </span>
+
+                  </div>
+
+                </div>
+
+              }
 
             }
 

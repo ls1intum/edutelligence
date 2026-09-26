@@ -316,6 +316,10 @@
   border-radius: 10px;
 }
 
+.capacity-box {
+  margin-top: 1rem;
+}
+
 .expanded-header {
   display: flex;
   align-items: center;
@@ -409,6 +413,32 @@
       var(--color-error)
       / var(--opacity-strong)
     );
+}
+
+// A model-level fact (e.g. a Metal capacity floor), not a pass/fail
+// deployment phase — kept visually distinct from check-icon--success/
+// --failed so it doesn't read as another checklist condition.
+.check-icon--info {
+  color: rgb(var(--color-typography-300));
+  background:
+    rgb(
+      var(--color-typography-300)
+      / var(--opacity-soft)
+    );
+  border:
+    1px solid
+    rgb(
+      var(--color-typography-300)
+      / var(--opacity-strong)
+    );
+  font-style: italic;
+}
+
+.check-value {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-700));
 }
 
 // ==========================================================================

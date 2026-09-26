@@ -29,7 +29,6 @@ import {
 import { priceProviderCards } from './model-prices';
 import { ModelPricesTab } from './model-prices-tab';
 
-import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { ModelAccess } from '../model-access/model-access';
 import {
@@ -71,6 +70,16 @@ interface ChecklistItem {
   // won't itself appear verbatim in the log. Falls back to errorMessage
   // only when no better anchor exists (see openNodeLog call site).
   readonly logAnchor?: string;
+  // Per-node override of logAnchor: a node whose failure text differs
+  // from the error box's displayed (first-group) message still needs
+  // its own literal log substring, or clicking it searches the wrong
+  // text in its log and highlights nothing.
+  readonly nodeAnchors?: ReadonlyMap<string, string | undefined>;
+  // Largest metal_capacity_floor_mb among this domain's failed nodes —
+  // independent of errorMessage, since a SIGKILL-only crash often has
+  // no matching log line to grep (see CalibrationProbeSummary.
+  // metal_capacity_floor_mb).
+  readonly metalCapacityFloorMb?: number;
 }
 
 
@@ -143,6 +152,11 @@ interface CalibrationProbeSummary {
   readonly cold_load_time_s: number | null;
   readonly wake_from_sleep_time_s: number | null;
   readonly probe_command: string | null;
+  // Set only by a failed Metal probe that looks like a memory-capacity
+  // issue (mirrors CalibrationResult.metal_capacity_floor_mb). Value is
+  // this node's own working-set budget (MB) — evidence the model needs
+  // more than that here. None on CUDA results and on success.
+  readonly metal_capacity_floor_mb: number | null;
 }
 
 interface BackendStageResult {
@@ -538,7 +552,6 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     NgClass,
     ScrollingModule,
     ErrorMessageComponent,
-    DataTableComponent,
     ModelAccess,
     ModelPricesTab,
   ],
@@ -781,7 +794,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       timingRows.push({ label: 'Wake from sleep', value: this.formatDuration(summary.wake_from_sleep_time_s * 1000) });
     }
 
-    return [
+    const tiles: { title: string; rows: { label: string; value: string }[] }[] = [
       {
         title: 'Placement',
         rows: [
@@ -800,6 +813,23 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       },
       { title: 'Timing', rows: timingRows },
     ];
+
+    // Only a failed Metal probe that looks like a memory-capacity issue
+    // ever sets this (see CalibrationProbeSummary.metal_capacity_floor_mb)
+    // — absent for CUDA nodes and for any successful probe.
+    if (summary.metal_capacity_floor_mb != null) {
+      tiles.push({
+        title: 'Capacity',
+        rows: [
+          {
+            label: "Node's Metal memory budget",
+            value: this.formatMb(summary.metal_capacity_floor_mb),
+          },
+        ],
+      });
+    }
+
+    return tiles;
   });
 
   readonly summaryProbeCommand = computed(() => this.selectedSummary()?.probe_command || null);
@@ -875,6 +905,19 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       }
 
       return this.getCalibrationChecklistItems();
+    });
+
+  // Largest metal_capacity_floor_mb across every checklist row — its own
+  // field below the checklist (not nested inside any one row's error
+  // box), since it's evidence about the MODEL's requirement, not a
+  // pass/fail condition tied to a single deployment phase.
+  readonly metalCapacityFloorMb =
+    computed<number | null>(() => {
+      const floors = this.checklistItems()
+        .map(item => item.metalCapacityFloorMb)
+        .filter((value): value is number => value != null);
+
+      return floors.length > 0 ? Math.max(...floors) : null;
     });
 
 
@@ -2044,6 +2087,25 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         const [firstError, firstEntry] =
           [...failures.entries()][0] ?? [];
 
+        // The error box only shows the FIRST group's text, but
+        // scope.nodes lists every failed node — a node in a later
+        // group still needs its own anchor here (see nodeAnchors'
+        // doc comment above).
+        const nodeAnchors = new Map<string, string | undefined>();
+        for (const entry of failures.values()) {
+          for (const node of entry.nodes) {
+            nodeAnchors.set(node, entry.logAnchor ?? undefined);
+          }
+        }
+
+        // Independent of which error-message group a node fell into
+        // above — a capacity-shaped crash may not even produce a
+        // groupable message (see the metalCapacityFloorMb doc comment).
+        const capacityFloors = results
+          .filter(result => uniqueFailedNodes.includes(result.node))
+          .map(result => this.summaryByProviderId().get(result.providerId)?.metal_capacity_floor_mb)
+          .filter((value): value is number => value != null);
+
         items.push({
           name: stage.label,
           status: 'failure',
@@ -2055,6 +2117,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           reasonKind: firstEntry?.reasonKind,
           reasonCode: firstEntry?.reasonCode,
           logAnchor: firstEntry?.logAnchor,
+          nodeAnchors,
+          metalCapacityFloorMb:
+            capacityFloors.length > 0 ? Math.max(...capacityFloors) : undefined,
         });
 
         continue;

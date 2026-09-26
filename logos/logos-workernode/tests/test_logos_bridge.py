@@ -1410,6 +1410,60 @@ async def test_stop_calibration_session_idempotent_when_no_session(tmp_path):
     assert response["was_active"] is False
 
 
+def test_record_calibration_probe_log_forwards_metal_capacity_floor(tmp_path):
+    """A failed Metal probe's capacity-floor evidence must ride the
+    calibration_probe_log event, or it can never reach calibration_probe_logs
+    and the model-error-report UI."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="",
+        kv_cache_sent_mb=0.0,
+        success=False,
+        base_residency_mb=0.0,
+        metal_capacity_floor_mb=18_432.3,
+    )
+
+    client._record_calibration_probe_log("org/model", result, "log tail")  # noqa: SLF001
+
+    event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert event.event == "calibration_probe_log"
+    details = json.loads(event.details)
+    assert details["metal_capacity_floor_mb"] == pytest.approx(18_432.3)
+
+
+def test_record_calibration_probe_log_omits_metal_capacity_floor_on_cuda(tmp_path):
+    """CUDA results never set metal_capacity_floor_mb — the event must carry
+    an explicit null, not a missing key, so the DB column is cleared on a
+    later success (see upsert_calibration_probe_log's full-row overwrite)."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="0",
+        kv_cache_sent_mb=0.0,
+        success=True,
+        base_residency_mb=0.0,
+    )
+
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+
+    event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    details = json.loads(event.details)
+    assert details["metal_capacity_floor_mb"] is None
+
+
 def test_list_uncalibrated_skips_calibration_unsupported(tmp_path):
     """Models classified as permanently unsupported on this worker must not
     appear in the session's work list — every probe would fail the same
