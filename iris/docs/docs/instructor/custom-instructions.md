@@ -82,5 +82,6 @@ Here is an example of a well-crafted custom instruction for an introductory Java
 
 ## Next Steps
 
+- [Instructional Support Level](./support-level) — set how much Iris gives away, independently of these instructions
 - [Variants](./variants) — choose the model configuration for your course
 - [Pedagogical Approach](./pedagogical-approach) — understand the scaffolding philosophy behind Iris

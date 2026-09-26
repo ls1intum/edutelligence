@@ -56,6 +56,7 @@ For more on the pedagogical philosophy, see [Pedagogical Approach](./pedagogical
 
 ## Next Steps
 
+- [Instructional Support Level](./support-level) — choose how much Iris gives away when helping students
 - [Custom Instructions](./custom-instructions) — tailor Iris's behavior to your course
 - [Variants](./variants) — choose between different model configurations
 - [Rate Limits](./rate-limits) — manage how many messages students can send

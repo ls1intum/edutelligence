@@ -30,6 +30,11 @@ const sidebars: SidebarsConfig = {
     { type: "doc", id: "instructor/enabling-iris", label: "Enabling Iris" },
     {
       type: "doc",
+      id: "instructor/support-level",
+      label: "Instructional Support Level",
+    },
+    {
+      type: "doc",
       id: "instructor/custom-instructions",
       label: "Custom Instructions",
     },
