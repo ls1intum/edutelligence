@@ -22,6 +22,8 @@ import yaml
 
 import logos_worker_node.main as worker_main
 from logos_worker_node.calibration import (
+    _CALIBRATION_DOMAINS,
+    _DOMAIN_KV_CACHE_FIT,
     _FATAL_LOAD_ERROR_PATTERNS,
     _KV_CACHE_MIN_STEP_MB,
     _NODE_LEVEL_TRANSIENT_PATTERNS,
@@ -2397,6 +2399,16 @@ def test_calibrate_model_skips_when_on_unsupported_list(tmp_path: Path):
     assert result.unsupported_reason == "invalid-repo-id"
     # No vLLM should have been spawned: the check fires before Phase 0.
     assert managers["spawn"].call_count == 0
+
+
+def test_kv_cache_fit_domain_matches_real_vllm_log_line():
+    """Verified against vllm-project/vllm v0.29.0/v0.30.0/main — the old
+    "reserved .* memory for KV Cache" text never matched anything vLLM
+    actually prints (gpu_worker.py logs "Available KV cache memory")."""
+    domain = next(d for d in _CALIBRATION_DOMAINS if d.id == _DOMAIN_KV_CACHE_FIT)
+    (pattern,) = domain.completion_patterns
+    assert pattern.search("Available KV cache memory: 12.34 GiB")
+    assert not pattern.search("reserved 4096 MB memory for KV Cache")
 
 
 def test_node_transient_classifier_matches_eio():
