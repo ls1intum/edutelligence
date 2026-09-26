@@ -207,6 +207,7 @@ interface BenchmarkGroup {
 // Mirrors calibration.py's _DOMAIN_* ids — the deployment failure domains
 // that ARE the stage checklist now (see CALIBRATION_DOMAINS below). Keep
 // in sync by hand; no shared codegen between Python and TS.
+const DOMAIN_HF_PRECHECK = 'hf_precheck';
 const DOMAIN_NODE_PREFLIGHT = 'node_preflight';
 const DOMAIN_MODEL_RESOLUTION = 'model_resolution';
 const DOMAIN_ENGINE_INIT = 'engine_init';
@@ -282,6 +283,43 @@ const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'quantization method on this hardware.',
     domain: DOMAIN_ENGINE_INIT,
     needle: 'is not supported for quantization method',
+  },
+  // The four below come from the HF precheck (metadata only, no vLLM
+  // spawned) — no log to highlight, and worded distinctly from the
+  // real-load-attempt reasons above so the two are never confused.
+  'model-not-found-or-unauthorized': {
+    label: 'Repository not found or unauthorized (precheck)',
+    description:
+      'The Hugging Face Hub reports this repository as missing or ' +
+      'not accessible with the worker\'s token — indistinguishable ' +
+      'from a private repo an added token could unlock, so this ' +
+      'model stays a candidate and is rechecked every session.',
+    domain: DOMAIN_HF_PRECHECK,
+  },
+  'model-gated': {
+    label: 'Gated repository (precheck)',
+    description:
+      'Hugging Face flags this repository as gated and the worker\'s ' +
+      'token can\'t access it yet. Temporary — stays a candidate and ' +
+      'is rechecked every session.',
+    domain: DOMAIN_HF_PRECHECK,
+  },
+  'insufficient-vram-for-weights': {
+    label: 'Model too large for this node (precheck)',
+    description:
+      'Based on the model\'s reported weight size alone, it would ' +
+      'not fit in this node\'s VRAM at any tensor-parallel size — ' +
+      'no vLLM process was started to confirm this.',
+    domain: DOMAIN_HF_PRECHECK,
+  },
+  'insufficient-vram-for-min-kv-cache': {
+    label: 'No room for a minimal KV cache (precheck)',
+    description:
+      'The model\'s weights alone would fit, but leave no VRAM for ' +
+      'even a minimal KV cache at any tensor-parallel size — ' +
+      'estimated from Hugging Face metadata, no vLLM process was ' +
+      'started to confirm this.',
+    domain: DOMAIN_HF_PRECHECK,
   },
 };
 
@@ -481,6 +519,15 @@ interface CalibrationDomainDef {
 
 const CALIBRATION_DOMAINS: readonly CalibrationDomainDef[] = [
   {
+    // No completion signal of its own (mirrors NODE_PREFLIGHT/MULTI_GPU
+    // below) — only ever populated by a worker-supplied stage (a real
+    // precheck rejection); inferred success elsewhere is a harmless
+    // overstatement, same tradeoff already accepted for those two.
+    id: DOMAIN_HF_PRECHECK,
+    label: 'HF Compatibility Precheck',
+    completionPatterns: [],
+  },
+  {
     id: DOMAIN_NODE_PREFLIGHT,
     label: 'Node Preflight',
     completionPatterns: [],
@@ -508,7 +555,9 @@ const CALIBRATION_DOMAINS: readonly CalibrationDomainDef[] = [
   {
     id: DOMAIN_KV_CACHE_FIT,
     label: 'KV-Cache Memory Fit',
-    completionPatterns: [/reserved .* memory for KV Cache/],
+    // Verified against vllm-project/vllm v0.29.0/v0.30.0/main (2026-09-26)
+    // — matches calibration.py's own fix, see that file for the source.
+    completionPatterns: [/Available KV cache memory/],
   },
   {
     id: DOMAIN_SERVER_START,

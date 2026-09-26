@@ -1149,6 +1149,13 @@ class LogosBridgeClient:
         # this attempt only, stays a candidate, rechecked every session.
         if hf_meta is not None and hf_meta.source == "error:model-not-found-or-unauthorized":
             result["unsupported_reason"] = REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+            if persist:
+                self._record_precheck_rejection(
+                    model_name,
+                    REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
+                    tensor_parallel_size=tensor_parallel_size,
+                    gpu_devices=gpu_devices,
+                )
             return result
 
         # Gating is temporary (a token can be added later), so this is
@@ -1157,6 +1164,10 @@ class LogosBridgeClient:
         # Skip this attempt only; stays a candidate, rechecked every session.
         if hf_meta is not None and hf_meta.source == "error:model-gated":
             result["unsupported_reason"] = REASON_MODEL_GATED
+            if persist:
+                self._record_precheck_rejection(
+                    model_name, REASON_MODEL_GATED, tensor_parallel_size=tensor_parallel_size, gpu_devices=gpu_devices
+                )
             return result
 
         # Informational only — never blocks or persists. A registry miss
@@ -1307,6 +1318,9 @@ class LogosBridgeClient:
                 else:
                     description = "HF compatibility precheck: no VRAM left for a min KV cache at every TP size."
                 await self._persist_permanent_unsupported(model_name, unsupported_reason, description)
+                self._record_precheck_rejection(
+                    model_name, unsupported_reason, tensor_parallel_size=tensor_parallel_size, gpu_devices=gpu_devices
+                )
 
         return result
 
@@ -1608,6 +1622,37 @@ class LogosBridgeClient:
             ),
         )
 
+    def _record_precheck_rejection(
+        self, model_name: str, reason_code: str, *, tensor_parallel_size: int, gpu_devices: str
+    ) -> None:
+        """Report an HF-precheck rejection into calibration_probe_logs, as
+        its own single-stage checklist row — no real vLLM attempt ever ran,
+        so there's no log_text and every other domain must stay absent
+        rather than implying Node Preflight etc. were reached.
+        """
+        from logos_worker_node.calibration import CalibrationResult  # noqa: PLC0415
+
+        result = CalibrationResult(
+            model=model_name,
+            tensor_parallel_size=tensor_parallel_size,
+            gpu_devices=gpu_devices,
+            kv_cache_sent_mb=0.0,
+            success=False,
+            unsupported_reason=reason_code,
+            stages=[
+                {
+                    "name": "HF Compatibility Precheck",
+                    "status": "failure",
+                    "reason_kind": "unsupported",
+                    "reason_code": reason_code,
+                    "generic_error_message": None,
+                    "generic_error_detail": None,
+                    "log_anchor": None,
+                }
+            ],
+        )
+        self._record_calibration_probe_log(model_name, result, None)
+
     def _list_uncalibrated_models(self) -> list[str]:
         """Pick configured models that still need calibration.
 
@@ -1717,7 +1762,6 @@ class LogosBridgeClient:
                 _CALIBRATION_PORT,
                 _DEFAULT_VLLM,
                 _READY_TIMEOUT_S,
-                CalibrationResult,
                 ProfileStoreUnreadableError,
                 _plan_needs_gpu_pin,
                 calibrate_with_tp_escalation,
@@ -1827,19 +1871,13 @@ class LogosBridgeClient:
                     )
                     # No probe ran, but the reason is worth keeping queryable
                     # in calibration_probe_logs (not just the live event feed)
-                    # — see calibration_probe_log's own DB writer for why a
-                    # pre-flight skip previously left no row there at all.
-                    self._record_calibration_probe_log(
+                    # — see _record_precheck_rejection for why this gets its
+                    # own checklist row instead of no row at all.
+                    self._record_precheck_rejection(
                         model_name,
-                        CalibrationResult(
-                            model=model_name,
-                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
-                            gpu_devices=str(plan.get("gpu_devices") or ""),
-                            kv_cache_sent_mb=0.0,
-                            success=False,
-                            unsupported_reason=_unsupported.reason_code,
-                        ),
-                        None,
+                        _unsupported.reason_code,
+                        tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+                        gpu_devices=str(plan.get("gpu_devices") or ""),
                     )
                     continue
 
@@ -1888,22 +1926,10 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"unsupported reason={precheck['unsupported_reason']}",
                     )
-                    # Same reasoning as the unsupported-list skip above: no
-                    # probe ran, but the HF precheck's verdict (e.g. weights
-                    # too large for this node's VRAM) is exactly what an
-                    # operator looking at calibration_probe_logs wants to see.
-                    self._record_calibration_probe_log(
-                        model_name,
-                        CalibrationResult(
-                            model=model_name,
-                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
-                            gpu_devices=str(plan.get("gpu_devices") or ""),
-                            kv_cache_sent_mb=0.0,
-                            success=False,
-                            unsupported_reason=precheck["unsupported_reason"],
-                        ),
-                        None,
-                    )
+                    # _run_hf_compatibility_precheck itself already recorded
+                    # this rejection (see _record_precheck_rejection) — no
+                    # second write here, or it would clobber that one's
+                    # stages with a plain, domain-less unsupported_reason.
                     continue
                 # Auto-classification — routes the functional probe to
                 # the model's real serving endpoint. An operator override

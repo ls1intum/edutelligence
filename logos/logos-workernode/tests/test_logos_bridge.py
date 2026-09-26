@@ -1773,6 +1773,10 @@ async def test_hf_precheck_skips_model_whose_weights_dont_fit(tmp_path, monkeypa
     assert profile.calibration_unsupported is True
     assert profile.calibration_unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
 
+    probe_log_events = [json.loads(d) for e, _m, d in events if e == "calibration_probe_log"]
+    assert probe_log_events[-1]["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+    assert probe_log_events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
+
 
 @pytest.mark.asyncio
 async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatch):
@@ -2137,6 +2141,15 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
     log_dir = tmp_path / "calibration_logs"
     assert is_model_unsupported(log_dir, "org/does-not-exist") is None
 
+    # Still visible in the Model Error Report as its own precheck row —
+    # not silently invisible just because it's not a permanent verdict.
+    events = [
+        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
+    ]  # noqa: SLF001
+    assert events[-1]["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
+    assert events[-1]["log_text"] is None
+
 
 @pytest.mark.asyncio
 async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_path, monkeypatch, caplog):
@@ -2204,6 +2217,12 @@ async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path
     profile = app.state.model_profiles.get_profile("org/gated-model")
     assert profile is None or profile.calibration_unsupported is not True
     assert client._list_uncalibrated_models() == ["org/gated-model"]  # noqa: SLF001
+
+    events = [
+        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
+    ]  # noqa: SLF001
+    assert events[-1]["unsupported_reason"] == REASON_MODEL_GATED
+    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
 
 
 @pytest.mark.asyncio
