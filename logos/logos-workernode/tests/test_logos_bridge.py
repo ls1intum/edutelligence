@@ -1464,6 +1464,35 @@ def test_record_calibration_probe_log_omits_metal_capacity_floor_on_cuda(tmp_pat
     assert details["metal_capacity_floor_mb"] is None
 
 
+def test_record_calibration_probe_log_reports_backend(tmp_path, monkeypatch):
+    """The event must say which backend produced it, so the UI can hide
+    CUDA-only fields (GPU devices, sleep timing) on Metal rows instead
+    of just showing them blank."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="",
+        kv_cache_sent_mb=0.0,
+        success=True,
+        base_residency_mb=0.0,
+    )
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+    metal_event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert json.loads(metal_event.details)["backend"] == "metal"
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+    cuda_event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert json.loads(cuda_event.details)["backend"] == "cuda"
+
+
 def test_list_uncalibrated_skips_calibration_unsupported(tmp_path):
     """Models classified as permanently unsupported on this worker must not
     appear in the session's work list — every probe would fail the same

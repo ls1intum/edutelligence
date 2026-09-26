@@ -157,6 +157,9 @@ interface CalibrationProbeSummary {
   // this node's own working-set budget (MB) — evidence the model needs
   // more than that here. None on CUDA results and on success.
   readonly metal_capacity_floor_mb: number | null;
+  // Which backend produced this probe — lets the UI hide CUDA-only
+  // fields (GPU devices, sleep timing) instead of showing them blank.
+  readonly backend: 'metal' | 'cuda' | null;
 }
 
 interface BackendStageResult {
@@ -779,30 +782,35 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       return [];
     }
 
+    // Metal has no discrete GPU device indices and no CuMemAllocator
+    // sleep support — hiding those fields beats showing them blank.
+    const isMetal = summary.backend === 'metal';
+
     const vramRows: { label: string; value: string }[] = [
       { label: 'Base residency', value: this.formatMb(summary.base_residency_mb) },
-      { label: 'Loaded VRAM', value: this.formatMb(summary.loaded_vram_mb) },
+      { label: isMetal ? 'Loaded memory' : 'Loaded VRAM', value: this.formatMb(summary.loaded_vram_mb) },
     ];
-    if (summary.sleeping_residual_mb != null) {
+    if (!isMetal && summary.sleeping_residual_mb != null) {
       vramRows.push({ label: 'Sleeping residual', value: this.formatMb(summary.sleeping_residual_mb) });
     }
 
     const timingRows: { label: string; value: string }[] = [
       { label: 'Cold load', value: this.formatDuration(summary.cold_load_time_s != null ? summary.cold_load_time_s * 1000 : null) },
     ];
-    if (summary.wake_from_sleep_time_s != null) {
+    if (!isMetal && summary.wake_from_sleep_time_s != null) {
       timingRows.push({ label: 'Wake from sleep', value: this.formatDuration(summary.wake_from_sleep_time_s * 1000) });
     }
 
+    const placementRows: { label: string; value: string }[] = [
+      { label: 'Tensor parallel size', value: this.formatNumber(summary.tensor_parallel_size) },
+    ];
+    if (!isMetal) {
+      placementRows.push({ label: 'GPU devices', value: summary.gpu_devices || '—' });
+    }
+
     const tiles: { title: string; rows: { label: string; value: string }[] }[] = [
-      {
-        title: 'Placement',
-        rows: [
-          { label: 'Tensor parallel size', value: this.formatNumber(summary.tensor_parallel_size) },
-          { label: 'GPU devices', value: summary.gpu_devices || '—' },
-        ],
-      },
-      { title: 'VRAM', rows: vramRows },
+      { title: 'Placement', rows: placementRows },
+      { title: isMetal ? 'Unified Memory' : 'VRAM', rows: vramRows },
       {
         title: 'KV cache',
         rows: [
@@ -817,7 +825,11 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     // Only a failed Metal probe that looks like a memory-capacity issue
     // ever sets this (see CalibrationProbeSummary.metal_capacity_floor_mb)
     // — absent for CUDA nodes and for any successful probe.
-    if (summary.metal_capacity_floor_mb != null) {
+    // Defensive: the field's own invariant is "None on success" (see
+    // CalibrationProbeSummary.metal_capacity_floor_mb) — a stale value
+    // on a green run would otherwise contradict "Calibration succeeded"
+    // right above it.
+    if (this.selectedLog()?.success === false && summary.metal_capacity_floor_mb != null) {
       tiles.push({
         title: 'Capacity',
         rows: [

@@ -1576,6 +1576,7 @@ class LogosBridgeClient:
             details=json.dumps(
                 {
                     "success": result.success,
+                    "backend": "metal" if is_metal_backend() else "cuda",
                     "probe_command": result.probe_command,
                     "error": result.error,
                     "unsupported_reason": result.unsupported_reason,
