@@ -368,7 +368,7 @@ jobs:
       # Python and shell, so this only spares Docker Desktop from emulating a
       # foreign image while copying files out of it.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
