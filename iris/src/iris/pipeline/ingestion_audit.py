@@ -1,0 +1,469 @@
+"""Read-back audit that makes FINISHED a verified claim.
+
+Before the terminal callback, the ingestion run re-reads what Weaviate
+actually holds for the lecture unit and compares it against a manifest
+derived purely from the request inputs: the PDF's page count, the
+transcript's slide numbers, and the attachment version. Any deviation, such
+as a missing page, a chunk from an older attachment version, a transcript
+that should or should not exist, a segment gap, or a duplicated unit row,
+fails the run instead of certifying a partial unit. The audit reads only
+identity properties, never content, so it costs a handful of queries and no
+LLM calls.
+"""
+
+import base64
+from dataclasses import dataclass
+from typing import Optional
+
+import fitz
+from weaviate import WeaviateClient
+from weaviate.classes.query import Filter
+
+from iris.common.ingestion_errors import (
+    INGESTION_AUDIT_FAILED,
+    IngestionStageError,
+)
+from iris.common.logging_config import get_logger
+from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
+    IngestionPipelineExecutionDto,
+)
+from iris.vector_database.batch_verify import (
+    confirmed_generations,
+    confirmed_rows,
+    fetch_with_retry,
+)
+from iris.vector_database.lecture_transcription_schema import (
+    LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
+from iris.vector_database.lecture_unit_schema import (
+    LectureUnitSchema,
+    init_lecture_unit_schema,
+)
+from iris.vector_database.lecture_unit_segment_schema import (
+    LectureUnitSegmentSchema,
+    init_lecture_unit_segment_schema,
+)
+from iris.vector_database.write_retry import WeaviateWriteRetry
+
+logger = get_logger(__name__)
+
+_FETCH_LIMIT = 10_000
+
+
+@dataclass(frozen=True)
+class IngestionManifest:
+    """What the index must hold for a unit, derived from the request inputs."""
+
+    page_count: int
+    attachment_version: Optional[int]
+    transcript_slide_numbers: frozenset[int]
+
+    @property
+    def expects_pdf_content(self) -> bool:
+        return self.page_count > 0
+
+    @property
+    def expects_transcript(self) -> bool:
+        return bool(self.transcript_slide_numbers)
+
+    @property
+    def expected_pages(self) -> set[int]:
+        return set(range(1, self.page_count + 1))
+
+    @property
+    def expected_segment_pages(self) -> set[int]:
+        """Mirror the segment pipeline: a continuous range over the content."""
+        if self.expects_pdf_content:
+            return self.expected_pages
+        if self.expects_transcript:
+            return set(
+                range(
+                    min(self.transcript_slide_numbers),
+                    max(self.transcript_slide_numbers) + 1,
+                )
+            )
+        return set()
+
+
+def build_manifest(dto: IngestionPipelineExecutionDto) -> IngestionManifest:
+    """Derive the manifest from the request inputs alone."""
+    page_count = 0
+    pdf_base64 = dto.lecture_unit.pdf_file_base64
+    if pdf_base64:
+        with fitz.open(stream=base64.b64decode(pdf_base64), filetype="pdf") as doc:
+            page_count = doc.page_count
+
+    transcription = dto.lecture_unit.transcription
+    slide_numbers: frozenset[int] = frozenset()
+    if transcription is not None and transcription.segments:
+        slide_numbers = frozenset(
+            segment.slide_number for segment in transcription.segments
+        )
+
+    return IngestionManifest(
+        page_count=page_count,
+        attachment_version=dto.lecture_unit.attachment_version,
+        transcript_slide_numbers=slide_numbers,
+    )
+
+
+def segments_are_complete(client, dto: IngestionPipelineExecutionDto) -> bool:
+    """Whether the unit's stored segment rows already cover what its manifest expects.
+
+    Reuses the audit's own segment check (same manifest, same ghost-aware
+    confirmation) as a cheap pre-check for the summary-reuse decision: a run
+    that provably skipped every content sub-pipeline is only safe to reuse when
+    its segments are also already complete, not merely when its fingerprint
+    stamp matches. A prior run whose unit row committed before an audit failure
+    left it (see the terminal-write ordering in ``_run_ingestion``) would
+    otherwise be reused with the same incomplete segments, failing the same
+    audit check again on every subsequent retry.
+    """
+    manifest = build_manifest(dto)
+    if not manifest.expected_segment_pages:
+        return True
+    audit = IngestionAudit.for_client(client)
+    audit._retry = WeaviateWriteRetry.for_request()  # pylint: disable=protected-access
+    return not audit._verify_segments(dto, manifest)  # pylint: disable=protected-access
+
+
+class IngestionAudit:
+    """Compare a unit's stored state against its manifest and fail on any gap."""
+
+    def __init__(
+        self,
+        page_chunk_collection,
+        transcription_collection,
+        segment_collection,
+        unit_collection,
+    ):
+        self.page_chunk_collection = page_chunk_collection
+        self.transcription_collection = transcription_collection
+        self.segment_collection = segment_collection
+        self.unit_collection = unit_collection
+
+    @classmethod
+    def for_client(cls, client: WeaviateClient) -> "IngestionAudit":
+        return cls(
+            init_lecture_unit_page_chunk_schema(client),
+            init_lecture_transcription_schema(client),
+            init_lecture_unit_segment_schema(client),
+            init_lecture_unit_schema(client),
+        )
+
+    def verify(self, dto: IngestionPipelineExecutionDto) -> None:
+        """Raise ``IngestionStageError`` when the index deviates from the manifest."""
+        # A transient read blip must not spuriously fail the audit of a good run.
+        self._retry = WeaviateWriteRetry.for_request()
+        manifest = build_manifest(dto)
+        problems: list[str] = []
+        problems.extend(self._verify_page_chunks(dto, manifest))
+        problems.extend(self._verify_transcriptions(dto, manifest))
+        problems.extend(self._verify_segments(dto, manifest))
+        problems.extend(self._verify_unit_row(dto))
+
+        if problems:
+            summary = "; ".join(problems)
+            raise IngestionStageError(
+                INGESTION_AUDIT_FAILED,
+                f"Ingestion audit failed for lecture unit "
+                f"{dto.lecture_unit.lecture_unit_id}: {summary}",
+            )
+        logger.info(
+            "[Lecture %d] Ingestion audit passed: %d pages, transcript=%s",
+            dto.lecture_unit.lecture_unit_id,
+            manifest.page_count,
+            manifest.expects_transcript,
+        )
+
+    def _confirmed_rows(self, collection, rows: list) -> list:
+        return confirmed_rows(collection, rows, retry=self._retry)
+
+    def _verify_page_chunks(
+        self, dto: IngestionPipelineExecutionDto, manifest: IngestionManifest
+    ) -> list[str]:
+        # confirmed_generations, not a raw scan: a scan-visible-but-object-store-missing
+        # ghost row from an older, already-purged generation can still appear here for a
+        # brief eventual-consistency window right after convergence confirmed the unit
+        # clean, and would otherwise read as "multiple generations coexist" and fail an
+        # otherwise-healthy unit.
+        real_generations, all_chunks = confirmed_generations(
+            self.page_chunk_collection,
+            self._identity_filter(dto, LectureUnitPageChunkSchema),
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+            limit=_FETCH_LIMIT,
+            return_properties=[
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+                LectureUnitPageChunkSchema.PAGE_VERSION.value,
+            ],
+            retry=self._retry,
+        )
+        generation_matches = [
+            chunk
+            for chunk in all_chunks
+            if chunk.properties.get(LectureUnitPageChunkSchema.INGESTION_RUN_ID.value)
+            in real_generations
+        ]
+        # confirmed_generations only confirms one row per generation; a ghost sibling in
+        # an otherwise-real generation would still be counted here without this second,
+        # row-level pass.
+        chunks = confirmed_rows(
+            self.page_chunk_collection, generation_matches, retry=self._retry
+        )
+        if len(all_chunks) >= _FETCH_LIMIT:
+            return [
+                f"page chunk read hit the fetch cap of {_FETCH_LIMIT}; "
+                f"refusing to certify a possibly truncated audit"
+            ]
+
+        if not manifest.expects_pdf_content:
+            if chunks:
+                return [f"{len(chunks)} page chunk(s) stored for a unit without a PDF"]
+            return []
+
+        problems = []
+        pages: set[int] = set()
+        counts_by_page: dict[int, int] = {}
+        run_ids: set = set()
+        stale_versions = 0
+        for chunk in chunks:
+            version = chunk.properties.get(
+                LectureUnitPageChunkSchema.PAGE_VERSION.value
+            )
+            if version != manifest.attachment_version:
+                stale_versions += 1
+            run_ids.add(
+                chunk.properties.get(LectureUnitPageChunkSchema.INGESTION_RUN_ID.value)
+            )
+            page_number = chunk.properties.get(
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value
+            )
+            if page_number is not None:
+                pages.add(int(page_number))
+                counts_by_page[int(page_number)] = (
+                    counts_by_page.get(int(page_number), 0) + 1
+                )
+
+        if stale_versions:
+            problems.append(
+                f"{stale_versions} chunk(s) carry an attachment version other "
+                f"than {manifest.attachment_version}"
+            )
+        if len(run_ids) > 1:
+            problems.append(f"chunks from {len(run_ids)} ingestion generations coexist")
+        missing_pages = manifest.expected_pages - pages
+        if missing_pages:
+            problems.append(f"pages without chunks: {sorted(missing_pages)}")
+        unexpected_pages = pages - manifest.expected_pages
+        if unexpected_pages:
+            problems.append(f"chunks for nonexistent pages: {sorted(unexpected_pages)}")
+
+        # Exact per-page counts, verifiable below page granularity, whenever
+        # this run (or a kept previous generation) recorded them.
+        expected_counts = dto.lecture_unit.chunk_counts_by_page
+        if expected_counts is not None:
+            mismatched = {
+                page: (expected_counts.get(page, 0), counts_by_page.get(page, 0))
+                for page in set(expected_counts) | set(counts_by_page)
+                if expected_counts.get(page, 0) != counts_by_page.get(page, 0)
+            }
+            if mismatched:
+                ordered = {page: mismatched[page] for page in sorted(mismatched)}
+                problems.append(
+                    f"per-page chunk counts differ from the prepared manifest "
+                    f"(page: expected/actual): {ordered}"
+                )
+        return problems
+
+    def _verify_transcriptions(
+        self, dto: IngestionPipelineExecutionDto, manifest: IngestionManifest
+    ) -> list[str]:
+        # See _verify_page_chunks for why this confirms generations rather than
+        # trusting a raw scan.
+        real_generations, all_rows = confirmed_generations(
+            self.transcription_collection,
+            self._identity_filter(dto, LectureTranscriptionSchema),
+            LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+            limit=_FETCH_LIMIT,
+            return_properties=[
+                LectureTranscriptionSchema.PAGE_NUMBER.value,
+                LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
+            ],
+            retry=self._retry,
+        )
+        generation_matches = [
+            row
+            for row in all_rows
+            if row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
+            in real_generations
+        ]
+        # See _verify_page_chunks for why a second, row-level pass is needed on
+        # top of the generation-level confirmation.
+        rows = confirmed_rows(
+            self.transcription_collection, generation_matches, retry=self._retry
+        )
+        if len(all_rows) >= _FETCH_LIMIT:
+            return [
+                f"transcription read hit the fetch cap of {_FETCH_LIMIT}; "
+                f"refusing to certify a possibly truncated audit"
+            ]
+
+        if not manifest.expects_transcript:
+            if rows:
+                return [
+                    f"{len(rows)} transcription row(s) stored for a unit "
+                    f"without a transcript"
+                ]
+            return []
+
+        stored_pages = {
+            int(row.properties[LectureTranscriptionSchema.PAGE_NUMBER.value])
+            for row in rows
+            if row.properties.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
+            is not None
+        }
+        expected_pages = set(manifest.transcript_slide_numbers)
+        problems = []
+        missing = expected_pages - stored_pages
+        if missing:
+            problems.append(f"transcript slides without rows: {sorted(missing)}")
+        unexpected = stored_pages - expected_pages
+        if unexpected:
+            problems.append(
+                f"transcription rows for unknown slides: {sorted(unexpected)}"
+            )
+
+        run_ids = {
+            row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
+            for row in rows
+        }
+        if len(run_ids) > 1:
+            problems.append(
+                f"transcription rows from {len(run_ids)} ingestion generations coexist"
+            )
+        # A stamped row must match the request's fingerprint. Unstamped rows are
+        # legacy and stay tolerated until their unit is re-ingested once.
+        expected_fingerprint = dto.lecture_unit.content_fingerprint
+        if expected_fingerprint is not None:
+            mismatched_stamps = sum(
+                1
+                for row in rows
+                if row.properties.get(
+                    LectureTranscriptionSchema.CONTENT_FINGERPRINT.value
+                )
+                not in (None, expected_fingerprint)
+            )
+            if mismatched_stamps:
+                problems.append(
+                    f"{mismatched_stamps} transcription row(s) carry a foreign "
+                    f"content fingerprint"
+                )
+        return problems
+
+    def _verify_segments(
+        self, dto: IngestionPipelineExecutionDto, manifest: IngestionManifest
+    ) -> list[str]:
+        expected_pages = manifest.expected_segment_pages
+        all_rows = fetch_with_retry(
+            lambda: self.segment_collection.query.fetch_objects(
+                filters=self._identity_filter(dto, LectureUnitSegmentSchema),
+                limit=_FETCH_LIMIT,
+                return_properties=[
+                    LectureUnitSegmentSchema.PAGE_NUMBER.value,
+                    LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value,
+                ],
+            ),
+            retry=self._retry,
+        ).objects
+        if len(all_rows) >= _FETCH_LIMIT:
+            return [
+                f"segment read hit the fetch cap of {_FETCH_LIMIT}; "
+                f"refusing to certify a possibly truncated audit"
+            ]
+        # Segments have no generation property (they upsert in place under a
+        # deterministic id), so a ghost here is checked per row rather than by
+        # confirming a generation.
+        rows = self._confirmed_rows(self.segment_collection, all_rows)
+        stored_pages = {
+            int(row.properties[LectureUnitSegmentSchema.PAGE_NUMBER.value])
+            for row in rows
+            if row.properties.get(LectureUnitSegmentSchema.PAGE_NUMBER.value)
+            is not None
+        }
+
+        problems = []
+        missing = expected_pages - stored_pages
+        if missing:
+            problems.append(f"slides without segment summaries: {sorted(missing)}")
+        unexpected = stored_pages - expected_pages
+        if unexpected:
+            problems.append(f"stale segment summaries: {sorted(unexpected)}")
+
+        expected_fingerprint = dto.lecture_unit.content_fingerprint
+        if expected_fingerprint is not None:
+            mismatched_stamps = sum(
+                1
+                for row in rows
+                if row.properties.get(
+                    LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value
+                )
+                not in (None, expected_fingerprint)
+            )
+            if mismatched_stamps:
+                problems.append(
+                    f"{mismatched_stamps} segment summary row(s) carry a foreign "
+                    f"content fingerprint"
+                )
+        return problems
+
+    def _verify_unit_row(self, dto: IngestionPipelineExecutionDto) -> list[str]:
+        all_rows = fetch_with_retry(
+            lambda: self.unit_collection.query.fetch_objects(
+                filters=self._identity_filter(dto, LectureUnitSchema),
+                limit=10,
+                return_properties=[
+                    LectureUnitSchema.LECTURE_UNIT_ID.value,
+                    LectureUnitSchema.CONTENT_FINGERPRINT.value,
+                ],
+            ),
+            retry=self._retry,
+        ).objects
+        # A ghost duplicate — scan-visible but not object-store-backed — must not
+        # read as a genuine second unit row and fail an otherwise single-row unit.
+        rows = self._confirmed_rows(self.unit_collection, all_rows)
+        if len(rows) != 1:
+            return [f"expected exactly one lecture unit row, found {len(rows)}"]
+
+        expected_fingerprint = dto.lecture_unit.content_fingerprint
+        if expected_fingerprint is not None:
+            stored_fingerprint = rows[0].properties.get(
+                LectureUnitSchema.CONTENT_FINGERPRINT.value
+            )
+            if stored_fingerprint != expected_fingerprint:
+                return [
+                    f"unit row carries fingerprint {stored_fingerprint!r} "
+                    f"instead of {expected_fingerprint!r}"
+                ]
+        return []
+
+    @staticmethod
+    def _identity_filter(dto: IngestionPipelineExecutionDto, schema):
+        return (
+            Filter.by_property(schema.BASE_URL.value).equal(
+                dto.settings.artemis_base_url
+            )
+            & Filter.by_property(schema.COURSE_ID.value).equal(
+                dto.lecture_unit.course_id
+            )
+            & Filter.by_property(schema.LECTURE_ID.value).equal(
+                dto.lecture_unit.lecture_id
+            )
+            & Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(
+                dto.lecture_unit.lecture_unit_id
+            )
+        )

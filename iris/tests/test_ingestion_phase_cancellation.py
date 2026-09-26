@@ -97,13 +97,13 @@ def _page_pipeline():
             lecture_unit_name="Unit",
             course_name="Course",
             pdf_file_base64="pdf",
+            force_reingest=False,
         ),
         check_if_attachment_needs_update=MagicMock(return_value=True),
         chunk_data=MagicMock(return_value=[_page_chunk()]),
-        delete_lecture_unit=MagicMock(),
         collection=collection,
         lecture_unit_collection=lecture_unit_collection,
-        get_course_language=MagicMock(return_value="en"),
+        _resolve_course_language=MagicMock(return_value="en"),
     )
 
 
@@ -120,10 +120,10 @@ def _transcription_pipeline():
             lecture_name="Lecture",
             lecture_unit_name="Unit",
             transcription=SimpleNamespace(language="en"),
+            force_reingest=True,
         ),
         chunk_transcription=MagicMock(return_value=[_transcription_chunk()]),
         summarize_chunks=MagicMock(return_value=[_transcription_chunk()]),
-        delete_existing_transcription_data=MagicMock(),
         collection=MagicMock(),
     )
 
@@ -132,10 +132,11 @@ def _segment_summary_pipeline():
     segment_collection = MagicMock()
     segment_collection.query.fetch_objects.return_value.objects = []
     slide = SimpleNamespace(
+        uuid="slide-1",
         properties={
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
             LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: 1,
-        }
+        },
     )
     page_chunk_collection = MagicMock()
     page_chunk_collection.query.fetch_objects.return_value.objects = [slide]
@@ -153,6 +154,7 @@ def _segment_summary_pipeline():
             lecture_name="Lecture",
             course_name="Course",
             base_url=BASE_URL,
+            content_fingerprint=None,
         ),
         lecture_unit_segment_collection=segment_collection,
         lecture_unit_page_chunk_collection=page_chunk_collection,
@@ -168,6 +170,10 @@ def _run_page_pipeline(pipeline):
             return_value="/tmp/x.pdf",
         ),
         patch("iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file"),
+        patch(
+            "iris.pipeline.lecture_ingestion_pipeline.fitz.open",
+            return_value=SimpleNamespace(page_count=1, close=MagicMock()),
+        ),
     ):
         LectureUnitPageIngestionPipeline.__call__.__wrapped__(pipeline)
 
@@ -185,7 +191,7 @@ def _page_replacement_target():
     return _replacement_target(
         pipeline,
         lambda: _run_page_pipeline(pipeline),
-        pipeline.delete_lecture_unit,
+        pipeline.collection.data.delete_many,
     )
 
 
@@ -194,7 +200,7 @@ def _transcription_replacement_target():
     return _replacement_target(
         pipeline,
         lambda: TranscriptionIngestionPipeline.__call__.__wrapped__(pipeline),
-        pipeline.delete_existing_transcription_data,
+        pipeline.collection.data.delete_many,
     )
 
 
@@ -237,7 +243,9 @@ def test_page_chunking_stops_after_first_page_vision_result():
     )
     pipeline.cancel_event = threading.Event()
     pipeline.callback = MagicMock()
-    pipeline.get_course_language = MagicMock(return_value="en")
+    pipeline._resolve_course_language = MagicMock(  # pylint: disable=protected-access
+        return_value="en"
+    )
 
     def interpret_and_cancel(*_args, **_kwargs):
         pipeline.cancel_event.set()
@@ -345,7 +353,7 @@ def _page_commit_target():
     return _commit_target(
         pipeline,
         lambda: _run_page_pipeline(pipeline),
-        delete_mock=pipeline.delete_lecture_unit,
+        delete_mock=pipeline.collection.data.delete_many,
         insert_mock=pipeline.collection.batch.rate_limit,
     )
 
@@ -355,7 +363,7 @@ def _transcription_commit_target():
     return _commit_target(
         pipeline,
         lambda: TranscriptionIngestionPipeline.__call__.__wrapped__(pipeline),
-        delete_mock=pipeline.delete_existing_transcription_data,
+        delete_mock=pipeline.collection.data.delete_many,
         insert_mock=pipeline.collection.batch.dynamic,
     )
 
@@ -376,6 +384,7 @@ def _lecture_unit_commit_target():
         lecture_unit_id=UNIT,
         base_url=BASE_URL,
         lecture_unit_summary="summary",
+        content_unchanged=False,
     )
 
     def run():
@@ -412,9 +421,8 @@ def _segment_summary_commit_target():
     return _commit_target(
         pipeline,
         run,
-        delete_mock=pipeline.lecture_unit_segment_collection.query.fetch_objects,
+        delete_mock=pipeline.lecture_unit_segment_collection.data.replace,
         insert_mock=pipeline.lecture_unit_segment_collection.data.insert,
-        extra_not_called=(pipeline.lecture_unit_segment_collection.data.update,),
     )
 
 

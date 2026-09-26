@@ -10,6 +10,10 @@ from weaviate.classes.query import Filter
 
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.custom_exceptions import IngestionCancelledException
+from iris.common.ingestion_errors import (
+    TRANSCRIPT_INGESTION_FAILED,
+    IngestionStageError,
+)
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
@@ -31,16 +35,29 @@ from iris.pipeline.prompts.transcription_ingestion_prompts import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
+from iris.vector_database.batch_verify import (
+    confirmed_rows,
+    delete_many_with_retry,
+    fetch_with_retry,
+    purge_other_rows,
+    write_batch_with_retry,
+)
 from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
 )
+from iris.vector_database.write_retry import WeaviateWriteRetry
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
 logger = get_logger(__name__)
 
 CHUNK_SEPARATOR_CHAR = "\31"
+
+# Upper bound on the structural skip-check read. A truncated read must never look
+# "complete" and wrongly skip a genuinely incomplete unit, so hitting the cap forces
+# re-ingestion instead. Mirrors the PDF page-chunk skip-check.
+_TRANSCRIPTION_SKIP_CHECK_FETCH_LIMIT = 10_000
 
 
 class TranscriptionIngestionPipeline(SubPipeline):
@@ -82,11 +99,33 @@ class TranscriptionIngestionPipeline(SubPipeline):
         )
         self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
+        self.skipped = False
 
     @observe(name="Transcription Ingestion Pipeline")
     def __call__(self) -> (str, []):
         try:
             lecture_unit = self.dto.lecture_unit
+            self.callback.update()
+            if (
+                not self.dto.lecture_unit.force_reingest
+                and not self.check_if_transcription_needs_update()
+            ):
+                # The stored rows provably derive from the current content
+                # (fingerprint stamps match) and cover exactly the expected
+                # slides, so re-running the summary and embedding work would
+                # reproduce what is already there.
+                logger.info(
+                    "[%s / %s] Stored transcription rows are current and "
+                    "complete, skipping transcription ingestion",
+                    self.dto.lecture_unit.lecture_name,
+                    self.dto.lecture_unit.lecture_unit_name,
+                )
+                self.skipped = True
+                for _ in range(7):
+                    self.callback.update()
+                return self.dto.lecture_unit.transcription.language, self.tokens
+            self.callback.update()
+
             self.callback.update()
             chunks = self.chunk_transcription(lecture_unit)
             self.callback.update()
@@ -110,17 +149,25 @@ class TranscriptionIngestionPipeline(SubPipeline):
             return lecture_unit.transcription.language, self.tokens
         except IngestionCancelledException:
             raise
+        except IngestionStageError as e:
+            if not e.tokens:
+                e.tokens = list(self.tokens)
+            raise
         except Exception as e:
             logger.error(
                 "Error processing transcription ingestion pipeline: %s",
                 e,
                 exc_info=True,
             )
-            raise
+            raise IngestionStageError(
+                TRANSCRIPT_INGESTION_FAILED,
+                f"Failed to ingest the transcription into the database: {e}",
+                tokens=list(self.tokens),
+            ) from e
 
-    def delete_existing_transcription_data(self, transcription: LectureUnitPageDTO):
-        self.collection.data.delete_many(
-            where=Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
+    def _get_unit_filter(self, transcription: LectureUnitPageDTO):
+        return (
+            Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
                 transcription.course_id
             )
             & Filter.by_property(LectureTranscriptionSchema.LECTURE_ID.value).equal(
@@ -134,15 +181,79 @@ class TranscriptionIngestionPipeline(SubPipeline):
             )
         )
 
+    def check_if_transcription_needs_update(self) -> bool:
+        """Decide structurally whether the stored transcription rows are current.
+
+        Skipping is only safe when every stored row carries the current
+        content fingerprint (an unstamped row is a legacy row of unknown
+        origin), all rows belong to a single ingestion generation, and the
+        stored slide numbers cover exactly the transcript's slide set.
+        """
+        expected_fingerprint = self.dto.lecture_unit.content_fingerprint
+        if expected_fingerprint is None:
+            return True
+        rows = fetch_with_retry(
+            lambda: self.collection.query.fetch_objects(
+                filters=self._get_unit_filter(self.dto.lecture_unit),
+                limit=_TRANSCRIPTION_SKIP_CHECK_FETCH_LIMIT,
+                return_properties=[
+                    LectureTranscriptionSchema.PAGE_NUMBER.value,
+                    LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
+                    LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+                ],
+            )
+        ).objects
+        if not rows:
+            return True
+
+        # A truncated read must never look "complete" and skip a genuinely incomplete
+        # unit. If we hit the cap, re-ingest rather than trust a possibly partial sample.
+        if len(rows) >= _TRANSCRIPTION_SKIP_CHECK_FETCH_LIMIT:
+            return True
+
+        stored_pages: set[int] = set()
+        run_ids: set = set()
+        for row in rows:
+            if (
+                row.properties.get(LectureTranscriptionSchema.CONTENT_FINGERPRINT.value)
+                != expected_fingerprint
+            ):
+                return True
+            run_ids.add(
+                row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
+            )
+            page_number = row.properties.get(
+                LectureTranscriptionSchema.PAGE_NUMBER.value
+            )
+            if page_number is not None:
+                stored_pages.add(int(page_number))
+
+        if len(run_ids) > 1:
+            return True
+        expected_pages = {
+            segment.slide_number
+            for segment in self.dto.lecture_unit.transcription.segments
+        }
+        if stored_pages != expected_pages:
+            return True
+
+        # A structurally complete scan can still be all ghosts (scan-visible,
+        # object-store-missing): the final audit confirms every row, so trusting
+        # the raw scan here would skip re-ingestion forever while the audit fails
+        # on every retry, with nothing able to break the loop.
+        return len(confirmed_rows(self.collection, rows)) != len(rows)
+
     def _lecture_unit_id(self) -> Optional[int]:
         lecture_unit = self.dto.lecture_unit if self.dto is not None else None
         return lecture_unit.lecture_unit_id if lecture_unit is not None else None
 
     def _prepare_batch_insert(self, chunks):
+        """Embed every chunk outside the shared write lock."""
         cancel_event = self.cancel_event
         lecture_unit_id = self._lecture_unit_id()
         prepared_chunks = []
         try:
+            total = len(chunks)
             for i, chunk in enumerate(chunks):
                 raise_if_cancelled(
                     cancel_event,
@@ -150,7 +261,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     "transcription embedding",
                 )
                 if i % 5 == 0:
-                    self.callback.update()
+                    self.callback.update(
+                        stage_name="transcript-embedding",
+                        stage_progress=i,
+                        stage_total=total,
+                    )
                 embed_chunk = self.llm_embedding.embed(
                     chunk[LectureTranscriptionSchema.SEGMENT_TEXT.value]
                 )
@@ -162,21 +277,14 @@ class TranscriptionIngestionPipeline(SubPipeline):
             raise
         return prepared_chunks
 
-    def _insert_prepared_chunks(self, prepared_chunks):
-        with self.collection.batch.dynamic() as batch:
-            try:
-                for chunk, embed_chunk in prepared_chunks:
-                    batch.add_object(properties=chunk, vector=embed_chunk)
-            except Exception as e:
-                logger.error("Error indexing lecture transcription chunk: %s", e)
-                raise
-        failed_objects = getattr(self.collection.batch, "failed_objects", None)
-        if failed_objects:
-            raise RuntimeError(
-                f"Failed to insert {len(failed_objects)} transcription chunks"
-            )
-
     def _replace_prepared_chunks(self, lecture_unit, prepared_chunks):
+        """Write-new-then-sweep, inside the shared write lock and job guard.
+
+        The new generation is inserted and verified first; only then is
+        everything that does not belong to this run removed. A crash mid-write
+        never leaves the unit without a transcription: at worst two
+        generations coexist briefly until the next run's sweep.
+        """
         job_handler = getattr(self, "job_handler", ingestion_job_handler)
         with batch_update_lock:
             with job_handler.current_job_guard(
@@ -187,8 +295,35 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 self.cancel_event,
                 "transcription replacement",
             ):
-                self.delete_existing_transcription_data(lecture_unit)
-                self._insert_prepared_chunks(prepared_chunks)
+                # One retry budget for the swap: a transient store condition re-submits
+                # only the dropped chunks, never the summary/embedding work above.
+                retry = WeaviateWriteRetry.for_request()
+                if not prepared_chunks:
+                    # Nothing new to protect via write-then-sweep ordering: the
+                    # transcript is genuinely empty (not a transient failure --
+                    # chunk_transcription already ran), so simply clear whatever
+                    # transcription is stored instead of leaving it stale forever.
+                    delete_many_with_retry(
+                        self.collection,
+                        self._get_unit_filter(self.dto.lecture_unit),
+                        "transcription chunks (empty transcript)",
+                        retry=retry,
+                    )
+                    return
+                written_ids = write_batch_with_retry(
+                    self.collection,
+                    prepared_chunks,
+                    "transcription chunks",
+                    retry=retry,
+                    open_batch=lambda collection: collection.batch.dynamic(),
+                )
+                purge_other_rows(
+                    self.collection,
+                    self._get_unit_filter(self.dto.lecture_unit),
+                    written_ids,
+                    "outdated transcription chunks",
+                    retry=retry,
+                )
 
     def chunk_transcription(
         self, transcription: LectureUnitPageDTO
@@ -211,6 +346,8 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
                     LectureTranscriptionSchema.PAGE_NUMBER.value: segment.slide_number,
                     LectureTranscriptionSchema.BASE_URL.value: self.dto.settings.artemis_base_url,
+                    LectureTranscriptionSchema.CONTENT_FINGERPRINT.value: transcription.content_fingerprint,
+                    LectureTranscriptionSchema.INGESTION_RUN_ID.value: transcription.ingestion_run_id,
                 }
 
                 slide_chunks[slide_key] = chunk
@@ -346,7 +483,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 total,
                 slide,
             )
-            self.callback.update()
+            self.callback.update(
+                stage_name="transcript-summaries",
+                stage_progress=i + 1,
+                stage_total=total,
+            )
             self.prompt = ChatPromptTemplate.from_messages(
                 [
                     (

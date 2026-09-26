@@ -1,0 +1,1163 @@
+"""Regression tests for the convergent lecture ingestion write path.
+
+Covers the invariants that keep a lecture unit from ending up partially
+ingested: all LLM work happens before any delete, every Weaviate batch and
+delete result is verified, vision failures fail the run instead of degrading
+it, and stale segments are pruned.
+"""
+
+# pylint: disable=protected-access,import-outside-toplevel
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.ingestion_errors import (
+    SLIDE_VISION_FAILED,
+    STALE_CONTENT_DELETE_FAILED,
+    VECTOR_STORE_WRITE_FAILED,
+    IngestionStageError,
+)
+from iris.config import settings
+from iris.pipeline.lecture_ingestion_pipeline import (
+    LectureUnitPageIngestionPipeline,
+)
+from iris.pipeline.lecture_ingestion_update_pipeline import (
+    LectureIngestionUpdatePipeline,
+)
+from iris.pipeline.lecture_unit_segment_summary_pipeline import (
+    LectureUnitSegmentSummaryPipeline,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+)
+from iris.vector_database.lecture_unit_schema import LectureUnitSchema
+
+
+def _delete_result(failed: int = 0, matches: int = 0) -> SimpleNamespace:
+    return SimpleNamespace(failed=failed, matches=matches, successful=matches - failed)
+
+
+def _patch_pdf(monkeypatch, page_count: int = 1) -> None:
+    fake_doc = SimpleNamespace(page_count=page_count, close=MagicMock())
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_ingestion_pipeline.save_pdf",
+        MagicMock(return_value="/tmp/test.pdf"),
+    )
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_ingestion_pipeline.cleanup_temporary_file",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_ingestion_pipeline.fitz.open",
+        MagicMock(return_value=fake_doc),
+    )
+
+
+_CURRENT_RUN_ID = "run-current"
+_UUID_OLD = "11111111-1111-1111-1111-111111111111"
+_UUID_NEW = "22222222-2222-2222-2222-222222222222"
+_UUID_GHOST = "99999999-9999-9999-9999-999999999999"
+
+
+def _sample_chunk(page_number: int = 1, text: str = "text") -> dict:
+    return {
+        LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: text,
+        LectureUnitPageChunkSchema.PAGE_NUMBER.value: page_number,
+    }
+
+
+def _page_pipeline(
+    events: list,
+    stale_rows=None,
+    ghost_uuids=None,
+    stored_chunk_languages=None,
+    stored_chunk_run_ids=None,
+) -> LectureUnitPageIngestionPipeline:
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    lecture_unit = SimpleNamespace(
+        pdf_file_base64="cGRm",
+        attachment_version=2,
+        course_id=11,
+        lecture_id=12,
+        lecture_unit_id=13,
+        lecture_name="Lecture",
+        lecture_unit_name="Unit",
+        course_name="Course",
+        display_page_numbers=None,
+        content_fingerprint="v1:fp",
+        force_reingest=False,
+        ingestion_run_id=_CURRENT_RUN_ID,
+        chunk_counts_by_page=None,
+        quality_score=None,
+        quality_flags=None,
+        course_language="en",
+    )
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=lecture_unit,
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
+    pipeline.callback = SimpleNamespace(update=MagicMock(), fail=MagicMock())
+    pipeline.tokens = []
+    pipeline.course_language = "en"
+    pipeline._hidden_until_by_page = {}
+    pipeline.skipped = False
+    pipeline.kept_previous_generation = False
+    pipeline.cancel_event = None
+
+    def record_delete(**_kwargs):
+        events.append("delete")
+        return _delete_result(matches=1)
+
+    batch = SimpleNamespace(
+        add_object=MagicMock(side_effect=lambda **_kwargs: events.append("insert"))
+    )
+    batch_context = MagicMock()
+    batch_context.__enter__ = MagicMock(return_value=batch)
+    batch_context.__exit__ = MagicMock(return_value=None)
+
+    def route_fetch(**kwargs):
+        # The sweep asks only for the run id; every other read gets no rows so
+        # the structural skip check keeps deciding "needs update".
+        if kwargs.get("return_properties") == [
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value
+        ]:
+            return SimpleNamespace(objects=list(stale_rows or []))
+        if kwargs.get("return_properties") == [
+            LectureUnitPageChunkSchema.PAGE_NUMBER.value,
+            LectureUnitPageChunkSchema.PAGE_VERSION.value,
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
+            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
+            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value,
+        ]:
+            # check_if_attachment_needs_update's structural scan, reused by the
+            # quality-retention gate: every synthetic row is otherwise
+            # structurally complete (single generation, current version, a
+            # real display number, all on page 1) so a test's chosen language
+            # per row is the only varying signal, unless the test also passes
+            # ghost_uuids (isolates object-store confirmation) or
+            # stored_chunk_run_ids (isolates single-generation grouping)
+            # instead.
+            run_ids = stored_chunk_run_ids or []
+            return SimpleNamespace(
+                objects=[
+                    SimpleNamespace(
+                        uuid=f"lang-chunk-{index}",
+                        properties={
+                            LectureUnitPageChunkSchema.PAGE_NUMBER.value: 1,
+                            LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit.attachment_version,
+                            LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: (
+                                run_ids[index] if index < len(run_ids) else "stored-run"
+                            ),
+                            LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: index
+                            + 1,
+                            LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: language,
+                        },
+                    )
+                    for index, language in enumerate(stored_chunk_languages or [])
+                ]
+            )
+        return SimpleNamespace(objects=[])
+
+    ghosts = set(ghost_uuids or [])
+
+    def confirm_by_id(object_uuid):
+        # A ghost uuid has no object-store record (returns None); every other row
+        # is a real, object-store-confirmed generation.
+        return None if object_uuid in ghosts else SimpleNamespace()
+
+    pipeline.collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(side_effect=route_fetch),
+            fetch_object_by_id=MagicMock(side_effect=confirm_by_id),
+        ),
+        data=SimpleNamespace(delete_many=MagicMock(side_effect=record_delete)),
+        batch=SimpleNamespace(
+            rate_limit=MagicMock(return_value=batch_context),
+            failed_objects=[],
+        ),
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        )
+    )
+    pipeline.llm_embedding = SimpleNamespace(
+        embed=MagicMock(side_effect=lambda _text: events.append("embed") or [0.1])
+    )
+    return pipeline
+
+
+def _stale_row(run_id="run-old", uuid=_UUID_OLD):
+    return SimpleNamespace(
+        uuid=uuid,
+        properties={LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: run_id},
+    )
+
+
+def test_page_replacement_writes_before_purging_old_generations(monkeypatch):
+    events: list = []
+    pipeline = _page_pipeline(events, stale_rows=[_stale_row()])
+    pipeline.chunk_data = MagicMock(
+        side_effect=lambda **_kwargs: events.append("chunk") or [_sample_chunk()]
+    )
+    _patch_pdf(monkeypatch)
+
+    course_language = pipeline()[0]
+
+    assert course_language == "en"
+    # The new generation is inserted before anything is deleted, so a crash
+    # mid-write can duplicate but never destroy the stored content.
+    assert events == ["chunk", "embed", "insert", "delete"]
+    pipeline.callback.fail.assert_not_called()
+
+
+def test_convergence_ignores_object_store_ghost_generations(monkeypatch):
+    """A ghost generation (scan-visible but absent from the object store) must not
+    trigger a convergence escalation or a false STALE_CONTENT_DELETE_FAILED: the
+    unit's only real generation is already clean and ghosts cannot be deleted."""
+    events: list = []
+    real_row = _stale_row(run_id="run-new", uuid=_UUID_NEW)
+    ghost_row = _stale_row(run_id="run-ghost", uuid=_UUID_GHOST)
+    pipeline = _page_pipeline(
+        events, stale_rows=[real_row, ghost_row], ghost_uuids=[_UUID_GHOST]
+    )
+    pipeline.chunk_data = MagicMock(
+        side_effect=lambda **_kwargs: events.append("chunk") or [_sample_chunk()]
+    )
+    _patch_pdf(monkeypatch)
+
+    course_language = pipeline()[0]
+
+    assert course_language == "en"
+    # Only the real generation counts, so the unit converges after the single
+    # purge: no escalation delete-and-rewrite, no failure raised.
+    assert events == ["chunk", "embed", "insert", "delete"]
+    pipeline.callback.fail.assert_not_called()
+
+
+def test_page_replacement_purges_by_unit_identity_every_run(monkeypatch):
+    # The purge is a single unit-scoped delete that keeps this run's written ids
+    # and removes everything else; it runs every time (idempotent when the unit is
+    # already clean) so previous generations and ghost rows always converge away.
+    events: list = []
+    pipeline = _page_pipeline(events)
+    pipeline.chunk_data = MagicMock(
+        side_effect=lambda **_kwargs: events.append("chunk") or [_sample_chunk()]
+    )
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    assert events == ["chunk", "embed", "insert", "delete"]
+    pipeline.collection.data.delete_many.assert_called_once()
+
+
+def test_page_replacement_fails_run_when_batch_drops_objects(monkeypatch):
+    events: list = []
+    pipeline = _page_pipeline(events)
+    pipeline.collection.batch.failed_objects = [SimpleNamespace(message="boom")]
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk()])
+    _patch_pdf(monkeypatch)
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        pipeline()
+
+    assert exc_info.value.error_code == VECTOR_STORE_WRITE_FAILED
+    pipeline.callback.fail.assert_not_called()
+
+
+def test_page_replacement_fails_run_when_sweep_delete_fails(monkeypatch):
+    events: list = []
+    pipeline = _page_pipeline(events, stale_rows=[_stale_row()])
+    pipeline.collection.data.delete_many = MagicMock(
+        return_value=_delete_result(failed=1, matches=3)
+    )
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk()])
+    _patch_pdf(monkeypatch)
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        pipeline()
+
+    assert exc_info.value.error_code == STALE_CONTENT_DELETE_FAILED
+
+
+def test_unit_row_replacement_fails_run_when_delete_fails(monkeypatch):
+    """The unit-row write path must verify its delete like every other delete."""
+    from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_unit_pipeline.LectureUnitSegmentSummaryPipeline",
+        MagicMock(return_value=MagicMock(return_value=([], []))),
+    )
+    monkeypatch.setattr(
+        "iris.pipeline.lecture_unit_pipeline.LectureUnitSummaryPipeline",
+        MagicMock(return_value=MagicMock(return_value=("summary", []))),
+    )
+
+    pipeline = object.__new__(LectureUnitPipeline)
+    pipeline.weaviate_client = MagicMock()
+    pipeline.local = True
+    pipeline.callback = None
+    pipeline.cancel_event = None
+    pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
+
+    # No stored row is reused, so the pipeline writes a new row and then purges
+    # the rest by unit identity. The purge's delete fails, and that must fail the run.
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        ),
+        data=SimpleNamespace(
+            delete_many=MagicMock(return_value=_delete_result(failed=1, matches=1)),
+            insert=MagicMock(return_value=_UUID_NEW),
+        ),
+    )
+    lecture_unit = SimpleNamespace(
+        course_id=11,
+        lecture_id=12,
+        lecture_unit_id=13,
+        base_url="https://artemis.example",
+        course_name="Course",
+        course_description="",
+        course_language="en",
+        lecture_name="Lecture",
+        lecture_unit_name="Unit",
+        lecture_unit_link="",
+        video_link="",
+        content_fingerprint="v1:abc",
+        lecture_unit_summary=None,
+        ingestion_run_id=_CURRENT_RUN_ID,
+        expected_chunk_counts_json=None,
+        pdf_page_count=1,
+        pipeline_version=1,
+        quality_score=None,
+        quality_flags_json=None,
+        content_unchanged=False,
+    )
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        pipeline(lecture_unit, initial_properties={})
+
+    assert exc_info.value.error_code == STALE_CONTENT_DELETE_FAILED
+    # The new generation's row is written before the sweep touches anything.
+    pipeline.lecture_unit_collection.data.insert.assert_called_once()
+
+
+def test_attachment_needs_update_is_structural():
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            attachment_version=2, course_id=1, lecture_id=2, lecture_unit_id=3
+        ),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        )
+    )
+
+    def needs_update(stored_chunks, page_count, requested_language="en"):
+        rows = [
+            SimpleNamespace(
+                uuid=f"chunk-{page}-{version}-{run_id}",
+                properties={
+                    LectureUnitPageChunkSchema.PAGE_NUMBER.value: page,
+                    LectureUnitPageChunkSchema.PAGE_VERSION.value: version,
+                    LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: run_id,
+                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: display,
+                    LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: language,
+                },
+            )
+            for page, version, run_id, display, language in stored_chunks
+        ]
+        pipeline.collection = SimpleNamespace(
+            query=SimpleNamespace(
+                fetch_objects=MagicMock(return_value=SimpleNamespace(objects=rows)),
+                fetch_object_by_id=MagicMock(return_value=SimpleNamespace()),
+            )
+        )
+        return pipeline.check_if_attachment_needs_update(page_count, requested_language)
+
+    run = _CURRENT_RUN_ID
+    assert needs_update([], page_count=2) is True
+    assert (
+        needs_update([(1, None, run, 1, "en"), (2, None, run, 2, "en")], page_count=2)
+        is True
+    )
+    assert (
+        needs_update([(1, 3, run, 1, "en"), (2, 3, run, 2, "en")], page_count=2) is True
+    )
+    assert needs_update([(1, 2, run, 1, "en")], page_count=2) is True
+    assert (
+        needs_update(
+            [(1, 2, run, 1, "en"), (2, 2, run, 2, "en"), (3, 2, run, 3, "en")],
+            page_count=2,
+        )
+        is True
+    )
+    # Mixed ingestion generations mean a crashed write left old and new rows.
+    assert (
+        needs_update([(1, 2, run, 1, "en"), (2, 2, "run-old", 2, "en")], page_count=2)
+        is True
+    )
+    # A null display number is legacy data; re-ingest to repopulate real numbers.
+    assert (
+        needs_update([(1, 2, run, None, "en"), (2, 2, run, 2, "en")], page_count=2)
+        is True
+    )
+    assert (
+        needs_update([(1, 2, run, 1, "en"), (2, 2, run, 2, "en")], page_count=2)
+        is False
+    )
+    # Legacy rows without any run id stay skippable when otherwise complete.
+    assert (
+        needs_update([(1, 2, None, 1, "en"), (2, 2, None, 2, "en")], page_count=2)
+        is False
+    )
+    # The requested language changed since these chunks were generated: the
+    # unit row must not be stamped with the new language while the chunk text
+    # and embeddings still reflect the old one.
+    assert (
+        needs_update(
+            [(1, 2, run, 1, "en"), (2, 2, run, 2, "en")],
+            page_count=2,
+            requested_language="de",
+        )
+        is True
+    )
+    # A null stored language is legacy data written before the field existed.
+    assert (
+        needs_update([(1, 2, run, 1, None), (2, 2, run, 2, None)], page_count=2) is True
+    )
+
+
+def test_attachment_needs_update_when_all_chunks_are_ghosts():
+    # A structurally complete scan can still be all ghosts (scan-visible,
+    # object-store-missing). Trusting the raw scan here would skip re-ingestion
+    # forever while the manifest-based audit fails on every retry, since nothing
+    # about an all-ghost result self-heals.
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            attachment_version=2, course_id=1, lecture_id=2, lecture_unit_id=3
+        ),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        )
+    )
+    ghost_rows = [
+        SimpleNamespace(
+            uuid=f"ghost-{page}",
+            properties={
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value: page,
+                LectureUnitPageChunkSchema.PAGE_VERSION.value: 2,
+                LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: _CURRENT_RUN_ID,
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: page,
+                LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: "en",
+            },
+        )
+        for page in (1, 2)
+    ]
+    pipeline.collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=ghost_rows)),
+            fetch_object_by_id=MagicMock(return_value=None),
+        )
+    )
+
+    assert pipeline.check_if_attachment_needs_update(2, "en") is True
+
+
+def test_attachment_needs_update_when_stored_chunk_counts_mismatch():
+    """A crash inside a batch flush can drop chunks below page granularity."""
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            attachment_version=2, course_id=1, lecture_id=2, lecture_unit_id=3
+        ),
+        settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+    )
+    unit_row = SimpleNamespace(
+        properties={LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 2, "2": 1}'}
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[unit_row]))
+        )
+    )
+    stored_rows = [
+        SimpleNamespace(
+            properties={
+                LectureUnitPageChunkSchema.PAGE_NUMBER.value: page,
+                LectureUnitPageChunkSchema.PAGE_VERSION.value: 2,
+                LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: _CURRENT_RUN_ID,
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: page,
+                LectureUnitPageChunkSchema.COURSE_LANGUAGE.value: "en",
+            }
+        )
+        for page in (1, 2)
+    ]
+    pipeline.collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=stored_rows))
+        )
+    )
+
+    # Pages 1..2 are covered, but page 1 should hold two chunks and holds one.
+    assert pipeline.check_if_attachment_needs_update(2, "en") is True
+
+
+def test_interpret_image_retries_then_fails_the_run():
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.tokens = []
+    pipeline._append_tokens = MagicMock()
+    pipeline.llm_chat = SimpleNamespace(
+        chat=MagicMock(side_effect=RuntimeError("vision down"))
+    )
+
+    with (
+        patch("iris.pipeline.lecture_ingestion_pipeline.time.sleep") as mock_sleep,
+        pytest.raises(IngestionStageError) as exc_info,
+    ):
+        pipeline.interpret_image("aW1n", "", "Lecture", "en")
+
+    assert exc_info.value.error_code == SLIDE_VISION_FAILED
+    assert (
+        pipeline.llm_chat.chat.call_count
+        == settings.lecture_ingestion.vision_max_attempts
+    )
+    # A provider-level failure (not a parse/validation error) backs off before
+    # every retry but the last attempt, since there is nothing left to retry into.
+    assert mock_sleep.call_count == settings.lecture_ingestion.vision_max_attempts - 1
+
+
+def test_interpret_image_rejects_empty_descriptions():
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.tokens = []
+    pipeline._append_tokens = MagicMock()
+    empty_response = SimpleNamespace(
+        token_usage=None,
+        contents=[
+            SimpleNamespace(
+                text_content='{"display_page_number": 3, "academic_description": ""}'
+            )
+        ],
+    )
+    pipeline.llm_chat = SimpleNamespace(chat=MagicMock(return_value=empty_response))
+
+    with (
+        patch("iris.pipeline.lecture_ingestion_pipeline.time.sleep") as mock_sleep,
+        pytest.raises(IngestionStageError) as exc_info,
+    ):
+        pipeline.interpret_image("aW1n", "", "Lecture", "en")
+
+    assert exc_info.value.error_code == SLIDE_VISION_FAILED
+    assert (
+        pipeline.llm_chat.chat.call_count
+        == settings.lecture_ingestion.vision_max_attempts
+    )
+    # An empty description is a parse/validation failure: retrying immediately
+    # is correct since waiting would not change the model's next answer.
+    mock_sleep.assert_not_called()
+
+
+def test_interpret_image_json_decode_error_retries_immediately():
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.tokens = []
+    pipeline._append_tokens = MagicMock()
+    malformed_response = SimpleNamespace(
+        token_usage=None,
+        contents=[SimpleNamespace(text_content="not json")],
+    )
+    pipeline.llm_chat = SimpleNamespace(chat=MagicMock(return_value=malformed_response))
+
+    with (
+        patch("iris.pipeline.lecture_ingestion_pipeline.time.sleep") as mock_sleep,
+        pytest.raises(IngestionStageError) as exc_info,
+    ):
+        pipeline.interpret_image("aW1n", "", "Lecture", "en")
+
+    assert exc_info.value.error_code == SLIDE_VISION_FAILED
+    assert (
+        pipeline.llm_chat.chat.call_count
+        == settings.lecture_ingestion.vision_max_attempts
+    )
+    # json.JSONDecodeError is a ValueError subclass: same immediate-retry path.
+    mock_sleep.assert_not_called()
+
+
+def test_update_pipeline_forwards_stage_error_code_once():
+    pipeline = object.__new__(LectureIngestionUpdatePipeline)
+    pipeline.dto = SimpleNamespace(
+        lecture_unit=SimpleNamespace(
+            course_id=1,
+            course_name="Course",
+            course_description="",
+            lecture_id=2,
+            lecture_name="Lecture",
+            lecture_unit_id=3,
+            lecture_unit_name="Unit",
+            lecture_unit_link="",
+            video_link=None,
+            transcription=None,
+            content_fingerprint=None,
+            chunk_counts_by_page=None,
+            pdf_page_count=None,
+            quality_score=None,
+            quality_flags=None,
+        ),
+        settings=SimpleNamespace(
+            authentication_token="run-1",
+            artemis_base_url="https://artemis.example",
+            artemis_llm_selection=None,
+        ),
+    )
+    pipeline.variant_id = "default"
+    pipeline._is_local = False
+    pipeline.cancel_event = None
+    pipeline._run_ingestion = MagicMock(
+        side_effect=IngestionStageError(SLIDE_VISION_FAILED, "page 4 failed")
+    )
+    callback = MagicMock()
+
+    with (
+        patch(
+            "iris.pipeline.lecture_ingestion_update_pipeline.IngestionStatusCallback",
+            return_value=callback,
+        ),
+        patch("iris.pipeline.lecture_ingestion_update_pipeline.VectorDatabase"),
+        patch(
+            "iris.pipeline.lecture_ingestion_update_pipeline.LectureUnitPipeline"
+        ) as unit_pipeline,
+    ):
+        unit_pipeline.fetch_existing_properties.return_value = {}
+        pipeline._run()
+
+    callback.fail.assert_called_once()
+    assert callback.fail.call_args.kwargs["code"] == SLIDE_VISION_FAILED
+
+
+def test_force_reingest_bypasses_the_structural_skip(monkeypatch):
+    events: list = []
+    pipeline = _page_pipeline(events)
+    pipeline.dto.lecture_unit.force_reingest = True
+    pipeline.check_if_attachment_needs_update = MagicMock(return_value=False)
+    pipeline.chunk_data = MagicMock(
+        side_effect=lambda **_kwargs: events.append("chunk") or [_sample_chunk()]
+    )
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    # The initial structural skip check at the top of __call__ is bypassed by
+    # the `not force_reingest` short-circuit -- unchanged content is
+    # re-processed rather than skipped. check_if_attachment_needs_update is
+    # still consulted exactly once, from the quality-retention gate below, to
+    # judge whether this forced run's result should be kept over the stored
+    # generation.
+    pipeline.check_if_attachment_needs_update.assert_called_once_with(1, "en")
+    assert "chunk" in events
+    assert "insert" in events
+
+
+def test_quality_reingest_keeps_the_better_stored_generation(monkeypatch):
+    events: list = []
+    pipeline = _page_pipeline(events, stored_chunk_languages=["en", "en", "en"])
+    pipeline.dto.lecture_unit.force_reingest = True
+    stored_unit_row = SimpleNamespace(
+        properties={
+            LectureUnitSchema.QUALITY_SCORE.value: 0.9,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
+            LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+        }
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(objects=[stored_unit_row])
+            )
+        )
+    )
+    # The re-run produces a thin page, scoring below the stored generation.
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    # Nothing was embedded or written: the stored generation stays.
+    assert "insert" not in events
+    assert "embed" not in events
+    assert pipeline.kept_previous_generation is True
+    # The kept generation's ledger travels on the DTO into the unit row rewrite.
+    assert pipeline.dto.lecture_unit.quality_score == 0.9
+    assert pipeline.dto.lecture_unit.chunk_counts_by_page == {1: 3}
+
+
+def test_quality_reingest_replaces_a_better_stored_generation_in_the_wrong_language(
+    monkeypatch,
+):
+    # A higher-scoring stored generation must not be kept if its actual stored
+    # chunks are in a different language than currently requested, even when
+    # the unit row's own course_language ledger coincidentally (or stalely)
+    # agrees with the request: a pre-fix run could have stamped that ledger
+    # from the transcript's language while the chunks kept their own,
+    # independently-resolved language, so only the chunks themselves are
+    # trustworthy here.
+    events: list = []
+    pipeline = _page_pipeline(events, stored_chunk_languages=["de", "de", "de"])
+    pipeline.dto.lecture_unit.force_reingest = True
+    stored_unit_row = SimpleNamespace(
+        properties={
+            LectureUnitSchema.QUALITY_SCORE.value: 0.9,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
+            LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+        }
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(objects=[stored_unit_row])
+            )
+        )
+    )
+    # The re-run scores lower, but the stored chunks are in "de" while the
+    # request (via _page_pipeline's course_language="en") wants "en".
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    # Replacement proceeds despite the lower score, because the stored chunks'
+    # language no longer matches what was requested.
+    assert "insert" in events
+    assert "embed" in events
+    assert pipeline.kept_previous_generation is False
+
+
+def test_quality_reingest_replaces_when_stored_chunks_are_ghosts(monkeypatch):
+    # A capped, empty, or ghost-only stored chunk scan must fail closed to
+    # "replace", the same safe default as every other structural check here.
+    events: list = []
+    # Every other structural fact (version, run, display number, page
+    # coverage, manifest count) is made to match, so only the ghost signal
+    # can be what forces replacement here.
+    pipeline = _page_pipeline(
+        events, stored_chunk_languages=["en"], ghost_uuids={"lang-chunk-0"}
+    )
+    pipeline.dto.lecture_unit.force_reingest = True
+    stored_unit_row = SimpleNamespace(
+        properties={
+            LectureUnitSchema.QUALITY_SCORE.value: 0.9,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 1}',
+            LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+        }
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(objects=[stored_unit_row])
+            )
+        )
+    )
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    assert "insert" in events
+    assert pipeline.kept_previous_generation is False
+
+
+def test_quality_reingest_replaces_a_crash_mixed_generation_even_with_a_higher_score(
+    monkeypatch,
+):
+    # Simulates a crash landing between writing a new generation and purging
+    # the old one: two confirmed, same-language, otherwise-valid generations
+    # now coexist. A language-only check would see all rows match and keep
+    # this mix because its ledger score is higher; that mix is not one
+    # complete generation and would fail the post-write audit on every
+    # subsequent retry, with nothing able to break the loop. Requiring the
+    # same single-generation grouping as the normal skip path must force
+    # replacement here instead.
+    events: list = []
+    pipeline = _page_pipeline(
+        events,
+        stored_chunk_languages=["en", "en", "en"],
+        stored_chunk_run_ids=["run-old-crash", "run-old-crash", "run-new-crash"],
+    )
+    pipeline.dto.lecture_unit.force_reingest = True
+    stored_unit_row = SimpleNamespace(
+        properties={
+            LectureUnitSchema.QUALITY_SCORE.value: 0.9,
+            LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: '{"1": 3}',
+            LectureUnitSchema.QUALITY_FLAGS.value: '["thin pages: [2]"]',
+        }
+    )
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(objects=[stored_unit_row])
+            )
+        )
+    )
+    # The re-run scores lower than the stored ledger (0.9), which is exactly
+    # why a language-only check would have kept the crash-damaged mix.
+    pipeline.chunk_data = MagicMock(return_value=[_sample_chunk(text="tiny")])
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    assert "insert" in events
+    assert "embed" in events
+    assert pipeline.kept_previous_generation is False
+
+
+def test_purge_other_rows_deletes_everything_except_kept_ids():
+    from iris.vector_database.batch_verify import purge_other_rows
+
+    delete_many = MagicMock(return_value=_delete_result(matches=5))
+    collection = SimpleNamespace(data=SimpleNamespace(delete_many=delete_many))
+
+    purged = purge_other_rows(collection, MagicMock(), [_UUID_NEW], "page chunks")
+
+    # A single unit-scoped delete keeps this run's ids and removes the rest.
+    assert purged == 5
+    delete_many.assert_called_once()
+
+
+def test_purge_other_rows_skips_when_nothing_to_keep():
+    """An empty write must never trigger a unit-wide wipe."""
+    from iris.vector_database.batch_verify import purge_other_rows
+
+    delete_many = MagicMock()
+    collection = SimpleNamespace(data=SimpleNamespace(delete_many=delete_many))
+
+    purged = purge_other_rows(collection, MagicMock(), [], "page chunks")
+
+    assert purged == 0
+    delete_many.assert_not_called()
+
+
+def test_purge_other_rows_fails_when_delete_reports_failures():
+    from iris.vector_database.batch_verify import purge_other_rows
+
+    collection = SimpleNamespace(
+        data=SimpleNamespace(
+            delete_many=MagicMock(return_value=_delete_result(failed=2, matches=5))
+        )
+    )
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        purge_other_rows(collection, MagicMock(), [_UUID_NEW], "page chunks")
+
+    assert exc_info.value.error_code == STALE_CONTENT_DELETE_FAILED
+
+
+def _reconcile(raw):
+    return LectureUnitPageIngestionPipeline._reconcile_display_page_numbers(raw)
+
+
+def test_reconcile_fills_unread_title_slide_from_offset():
+    # Title slide unread, the rest numbered == physical page (offset 0).
+    assert _reconcile([-1, 2, 3, 4]) == [1, 2, 3, 4]
+
+
+def test_reconcile_applies_a_constant_offset_for_a_mid_deck_gap():
+    # Printed == physical + 2 (two unnumbered lead slides); the gap fills to 6.
+    assert _reconcile([3, 4, 5, -1, 7]) == [3, 4, 5, 6, 7]
+
+
+def test_reconcile_maps_front_matter_before_page_one_to_unknown():
+    # Numbering starts at physical page 11 (dominant offset -10). The 10
+    # front-matter slides fall before printed "page 1", so they map to -1
+    # ("unknown"), never to 0 or a negative page number.
+    raw = [-1] * 10 + [1, 2, 3, 4, 5]
+    reconciled = _reconcile(raw)
+    assert reconciled == [-1] * 10 + [1, 2, 3, 4, 5]
+    assert all(value == -1 or value > 0 for value in reconciled)
+
+
+def test_reconcile_interpolates_between_read_neighbors():
+    assert _reconcile([5, -1, 7]) == [5, 6, 7]
+
+
+def test_reconcile_falls_back_to_sequential_when_nothing_is_read():
+    assert _reconcile([-1, -1, -1]) == [1, 2, 3]
+
+
+def test_reconcile_keeps_confidently_read_numbers():
+    assert _reconcile([1, 2, 3, 4, 5]) == [1, 2, 3, 4, 5]
+
+
+def test_reconcile_snaps_misread_outliers_to_dominant_offset():
+    # Vision misread several slides as "6"; the majority read their true number,
+    # so every page snaps to the dominant offset (0) and the 6s are corrected.
+    assert _reconcile([1, 6, 6, 4, 5, 6, 6, 8, 9, 10]) == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+    ]
+
+
+def test_reconcile_without_a_majority_keeps_confident_reads():
+    # No offset commands a strict majority (2 of 4), so reads are trusted rather
+    # than overridden — a genuinely irregular deck is left as vision saw it.
+    assert _reconcile([1, 1, 1, 4]) == [1, 1, 1, 4]
+
+
+def test_detect_course_language_uses_whole_deck_dominant():
+    from iris.pipeline.lecture_ingestion_pipeline import detect_course_language
+
+    # English dominates; a lone formula-only slide cannot flip the verdict because
+    # detection is over the whole corpus, not one page (no content is special-cased).
+    pages = [
+        "Introduction to deep learning and neural network optimization methods. " * 4,
+        "𝒔 𝛻𝜽 𝛽 ∘ ε 𝑘+1",
+        "The lecture explains gradient descent and backpropagation in detail. " * 4,
+    ]
+    assert detect_course_language(pages) == "en"
+
+
+def test_detect_course_language_floors_to_default_on_sparse_text():
+    from iris.pipeline.lecture_ingestion_pipeline import detect_course_language
+
+    # Too little text to judge → default rather than a guess from a scrap.
+    assert detect_course_language(["", "12", "𝛻"]) == "en"
+
+
+def test_resolve_course_language_prefers_declared_artemis_language():
+    pipeline = object.__new__(LectureUnitPageIngestionPipeline)
+    pipeline.dto = SimpleNamespace(lecture_unit=SimpleNamespace(course_language="de"))
+    # The declared language is authoritative: the document is never consulted.
+    assert pipeline._resolve_course_language(doc=None) == "de"
+
+
+def test_pipeline_version_stamped_only_when_content_pipeline_ran():
+    """A metadata-only re-dispatch (no chunk counts) must not bump the pipeline version.
+
+    Otherwise the row would read as already on the current version while its quality_score
+    stayed at the old low value, permanently disarming the once-per-version quality requeue.
+    """
+    from iris.common.ingestion_version import INGESTION_PIPELINE_VERSION
+
+    pipeline = object.__new__(LectureIngestionUpdatePipeline)
+
+    def dto_with(chunk_counts):
+        lecture_unit = SimpleNamespace(
+            course_id=1,
+            course_name="Course",
+            course_description="",
+            lecture_id=2,
+            lecture_name="Lecture",
+            lecture_unit_id=3,
+            lecture_unit_name="Unit",
+            lecture_unit_link="link",
+            video_link=None,
+            content_fingerprint="fp",
+            ingestion_run_id="run",
+            chunk_counts_by_page=chunk_counts,
+            pdf_page_count=7,
+            quality_flags=None,
+            quality_score=0.4,
+        )
+        return SimpleNamespace(
+            lecture_unit=lecture_unit,
+            settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
+        )
+
+    pipeline.dto = dto_with({1: 5})
+    ran = pipeline._build_lecture_unit_dto()  # pylint: disable=protected-access
+    assert ran.pipeline_version == INGESTION_PIPELINE_VERSION
+
+    pipeline.dto = dto_with(None)
+    skipped = pipeline._build_lecture_unit_dto()  # pylint: disable=protected-access
+    assert skipped.pipeline_version is None
+    # quality_score is still carried so the ledger fallback preserves/compares it.
+    assert skipped.quality_score == 0.4
+
+
+def test_stale_segments_are_pruned_after_the_slide_loop():
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    pipeline.cancel_event = None
+    delete_many = MagicMock(return_value=_delete_result(matches=2))
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(delete_many=delete_many)
+    )
+
+    pipeline._prune_stale_segments(1, 5)
+
+    delete_many.assert_called_once()
+
+
+def test_stale_segment_prune_failure_fails_the_run():
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    pipeline.cancel_event = None
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(
+            delete_many=MagicMock(return_value=_delete_result(failed=1, matches=2))
+        )
+    )
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        pipeline._prune_stale_segments(1, 5)
+
+    assert exc_info.value.error_code == STALE_CONTENT_DELETE_FAILED
+
+
+def test_prune_without_keep_uuids_only_filters_by_page_range():
+    # No keep_uuids (the calling convention of the two tests above, and any other
+    # caller that doesn't have a set of ids to protect): the filter must stay
+    # exactly the prior range-only shape, with no id-based condition added.
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    pipeline.cancel_event = None
+    captured = {}
+
+    def delete_many(where):
+        captured["where"] = where
+        return _delete_result(matches=0)
+
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(delete_many=delete_many)
+    )
+
+    pipeline._prune_stale_segments(1, 5)
+
+    range_conditions = captured["where"].filters[1]
+    assert len(range_conditions.filters) == 2
+
+
+def test_prune_with_keep_uuids_also_excludes_non_matching_ids_in_range():
+    # A same-slide row from before the deterministic-uuid scheme existed (a
+    # random uuid, not one of keep_uuids) falls inside the valid page range, so
+    # the range check alone can never catch it -- this is finding 7: live-
+    # verified against a real Weaviate instance (a legacy random-uuid row for
+    # an in-range page survived indefinitely without this condition, and was
+    # correctly removed once it was added, with an out-of-range page and an
+    # unrelated in-range page both unaffected either way).
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    pipeline.cancel_event = None
+    captured = {}
+
+    def delete_many(where):
+        captured["where"] = where
+        return _delete_result(matches=1)
+
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(delete_many=delete_many)
+    )
+    keep_uuid = pipeline._segment_uuid(1)
+
+    pipeline._prune_stale_segments(1, 5, [keep_uuid])
+
+    range_conditions = captured["where"].filters[1]
+    assert len(range_conditions.filters) == 3
+
+
+def test_prune_with_empty_keep_uuids_behaves_like_no_keep_uuids():
+    # An empty list (e.g. a caller that computed no uuids for some reason) must
+    # fall back to the safe range-only filter, not build a filter that treats
+    # every existing row as "not kept" and delete the whole unit's segments.
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    pipeline.cancel_event = None
+    captured = {}
+
+    def delete_many(where):
+        captured["where"] = where
+        return _delete_result(matches=0)
+
+    pipeline.lecture_unit_segment_collection = SimpleNamespace(
+        data=SimpleNamespace(delete_many=delete_many)
+    )
+
+    pipeline._prune_stale_segments(1, 5, [])
+
+    range_conditions = captured["where"].filters[1]
+    assert len(range_conditions.filters) == 2
+
+
+def test_call_passes_every_written_uuid_to_the_stale_prune(monkeypatch):
+    # Confirms __call__ actually wires the uuids it just wrote through to the
+    # prune step (the fix depends on this, not just on _prune_stale_segments'
+    # own logic in isolation).
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=3,
+        base_url="https://artemis.example",
+        lecture_name="Lecture",
+    )
+    pipeline.cancel_event = None
+    pipeline.callback = None
+    pipeline.tokens = []
+    monkeypatch.setattr(pipeline, "_get_slide_range", lambda: (1, 3))
+    monkeypatch.setattr(pipeline, "_get_transcriptions", lambda *_a, **_k: [])
+    monkeypatch.setattr(pipeline, "_get_slides", lambda *_a, **_k: [])
+    monkeypatch.setattr(pipeline, "_create_summary", lambda *_a, **_k: "summary")
+    monkeypatch.setattr(pipeline, "_upsert_lecture_object", lambda *_a, **_k: None)
+    prune_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        "_prune_stale_segments",
+        lambda *args: prune_calls.append(args),
+    )
+
+    pipeline()
+
+    assert len(prune_calls) == 1
+    start, end, keep_uuids = prune_calls[0]
+    assert (start, end) == (1, 3)
+    assert keep_uuids == [
+        pipeline._segment_uuid(1),
+        pipeline._segment_uuid(2),
+        pipeline._segment_uuid(3),
+    ]
