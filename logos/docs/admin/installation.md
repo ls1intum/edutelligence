@@ -49,20 +49,26 @@ development accounts. These accounts and their roles are defined in
 
 ## Production deployment
 
-For production, use `docker-compose.yaml` with images built and published by
-the Logos build workflow. The workflow publishes the core images to the
-project's Harbor registry (team-internal), not to the GHCR default the
-compose file falls back to, so set both in `.env` and log in to the registry
-before pulling:
+For production, use `docker-compose.yaml`. It pulls prebuilt images from the
+public GHCR registry `ghcr.io/ls1intum/edutelligence` (the compose default),
+tagged `latest` for `main` — no login required:
 
 ```bash
-REGISTRY=<your-harbor>/logos
-IMAGE_TAG=<published tag>
-docker login <your-harbor>
+docker compose --env-file .env up -d
 ```
 
-If you do not have access to that registry, build the same images locally
-from the Dockerfiles the workflow uses and tag them for a registry the host
+To pin a specific build instead of `latest`, or to pull from a private
+mirror, set both in `.env` — and log in to the registry once if it is
+private:
+
+```bash
+REGISTRY=<registry-host>/<namespace>
+IMAGE_TAG=<published tag>
+docker login <registry-host>   # private registries only; host only, no path
+```
+
+If you cannot pull from any registry, build the same images locally from
+the Dockerfiles the build workflow uses and tag them for a registry the host
 can pull from (e.g. a local registry):
 
 ```bash

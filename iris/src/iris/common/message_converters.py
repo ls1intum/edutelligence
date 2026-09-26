@@ -17,6 +17,7 @@ from iris.common.pyris_message import (
     PyrisMessage,
     PyrisToolMessage,
 )
+from iris.domain.data.command_marker import describe_command_marker
 from iris.domain.data.context_switch_marker import (
     ContextSwitchMarker,
     ContextSwitchTransition,
@@ -53,6 +54,15 @@ def convert_iris_message_to_langchain_message(
             case _:
                 text = f"The student changed the chat context to '{name}' with ID '{entity_id}'."
         return SystemMessage(content=f"[context_switch] {text}")
+
+    if iris_message.sender == IrisMessageRole.COMMAND:
+        # COMMAND markers (e.g. past point-outs) arrive as the JSON Artemis stored them as; the
+        # wording the agent reads is built here so it stays next to the prompts.
+        if not isinstance(message, JsonMessageContentDTO):
+            raise ValueError("COMMAND message must be of type JsonMessageContentDTO")
+        return SystemMessage(
+            content=describe_command_marker(message.json_content or {})
+        )
 
     if not isinstance(message, TextMessageContentDTO):
         raise ValueError("Message must be of type TextMessageContentDTO")
@@ -174,10 +184,10 @@ def map_role_to_str(
             return "user"
         case IrisMessageRole.ASSISTANT:
             return "assistant"
-        # CTXSWAP markers carry instructions for the LLM and are rendered as a
+        # CTXSWAP and COMMAND markers carry instructions for the LLM and are rendered as a
         # SystemMessage in convert_iris_message_to_langchain_message; mirror that
         # here so the direct OpenAI/Ollama paths don't reject a valid role.
-        case IrisMessageRole.SYSTEM | IrisMessageRole.CTXSWAP:
+        case IrisMessageRole.SYSTEM | IrisMessageRole.CTXSWAP | IrisMessageRole.COMMAND:
             return "system"
         case IrisMessageRole.TOOL:
             return "tool"

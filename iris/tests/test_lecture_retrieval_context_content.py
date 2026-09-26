@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
+
 from iris.domain.data.lecture_context_dto import SlidesContextDTO, VideoContextDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureRetrievalDTO,
@@ -21,9 +23,12 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
 )
 from iris.pipeline.chat.chat_pipeline import ChatPipeline, _merge_lecture_content
 from iris.retrieval.lecture.lecture_retrieval import LectureRetrieval
+from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 
 
-def _make_page_chunk(page_number: int, text: str) -> LectureUnitPageChunkRetrievalDTO:
+def _make_page_chunk(
+    page_number: int, text: str, display_page_number: int | None = None
+) -> LectureUnitPageChunkRetrievalDTO:
     return LectureUnitPageChunkRetrievalDTO(
         uuid=str(uuid4()),
         course_id=1,
@@ -36,7 +41,9 @@ def _make_page_chunk(page_number: int, text: str) -> LectureUnitPageChunkRetriev
         lecture_unit_link="http://example.com",
         course_language="en",
         page_number=page_number,
-        display_page_number=page_number,
+        display_page_number=(
+            page_number if display_page_number is None else display_page_number
+        ),
         page_text_content=text,
         base_url="http://example.com",
     )
@@ -134,6 +141,7 @@ def test_current_view_content_is_stored_for_citations():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -142,9 +150,16 @@ def test_current_view_content_is_stored_for_citations():
 
     blocks = pipeline._build_current_view(state)
 
-    # Each block names the position (page/timestamp + unit) and includes the
-    # corresponding material directly below it.
+    # The prompt gets the position only. Spelling the material out there makes the prompt end
+    # on something that reads like a finished answer, and the agent stops calling tools.
     assert blocks == [
+        "The student is currently viewing page 3 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1).",
+        "The student is currently at 50.0 seconds in the lecture video of the "
+        "lecture unit Test Unit (lecture unit ID: 1).",
+    ]
+    # The material stays reachable, but through the current-position tool.
+    assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nPage 3 content\n---",
@@ -172,6 +187,7 @@ def test_multiple_chunks_on_same_page_share_one_block():
         lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=2)],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -180,11 +196,89 @@ def test_multiple_chunks_on_same_page_share_one_block():
 
     blocks = pipeline._build_current_view(state)
 
-    # Both chunks of page 2 are bundled into a single block under one position.
+    # One position in the prompt, and both chunks of page 2 bundled under that one position in
+    # what the current-position tool reads out.
     assert blocks == [
+        "The student is currently viewing page 2 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1)."
+    ]
+    assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 2 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nFirst half\nSecond half\n---"
+    ]
+
+
+def test_current_position_is_labelled_with_the_printed_page_number():
+    """A deck whose printed numbering is shifted must be described by what the student reads.
+
+    The technical page index (5, used to look the chunk up) stays internal; the slide itself says
+    3, and that is the number the agent may repeat in its answer.
+    """
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+
+    retriever = MagicMock()
+    retriever.fetch_context_content.return_value = (
+        [_make_page_chunk(5, "Shifted deck", display_page_number=3)],
+        [],
+    )
+
+    state = SimpleNamespace(
+        lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=5)],
+        lecture_retriever=retriever,
+        lecture_content_storage={},
+        current_view_storage={},
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(artemis_base_url="http://example.com"),
+            course=SimpleNamespace(id=1),
+        ),
+    )
+
+    blocks = pipeline._build_current_view(state)
+
+    assert blocks == [
+        "The student is currently viewing page 3 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1)."
+    ]
+    # The technical index must not leak into the prompt: the agent would quote it as the page.
+    assert "page 5" not in blocks[0]
+    # The lookup itself still runs off the technical index.
+    assert retriever.fetch_context_content.call_args.kwargs["context_pages"] == [
+        {"lecture_unit_id": 1, "page": 5}
+    ]
+
+
+@pytest.mark.parametrize("unnumbered", [-1, 0])
+def test_current_position_names_no_page_for_an_unnumbered_slide(unnumbered):
+    """Ingestion marks an unreadable slide number as -1 (older records as 0).
+
+    Neither is a number the student can read off the slide, so the position is described without
+    one rather than by the technical index.
+    """
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+
+    retriever = MagicMock()
+    retriever.fetch_context_content.return_value = (
+        [_make_page_chunk(5, "Cover slide", display_page_number=unnumbered)],
+        [],
+    )
+
+    state = SimpleNamespace(
+        lecture_contexts=[SlidesContextDTO(type="slides", lectureUnitId=1, page=5)],
+        lecture_retriever=retriever,
+        lecture_content_storage={},
+        current_view_storage={},
+        dto=SimpleNamespace(
+            settings=SimpleNamespace(artemis_base_url="http://example.com"),
+            course=SimpleNamespace(id=1),
+        ),
+    )
+
+    blocks = pipeline._build_current_view(state)
+
+    assert blocks == [
+        "The student is currently viewing an unnumbered page of the lecture slides "
+        "of the lecture unit Test Unit (lecture unit ID: 1)."
     ]
 
 
@@ -201,6 +295,7 @@ def test_position_omitted_when_material_not_ingested():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -233,6 +328,7 @@ def test_only_ingested_positions_are_described():
         ],
         lecture_retriever=retriever,
         lecture_content_storage={},
+        current_view_storage={},
         dto=SimpleNamespace(
             settings=SimpleNamespace(artemis_base_url="http://example.com"),
             course=SimpleNamespace(id=1),
@@ -242,6 +338,10 @@ def test_only_ingested_positions_are_described():
     blocks = pipeline._build_current_view(state)
 
     assert blocks == [
+        "The student is currently viewing page 3 of the lecture slides of the "
+        "lecture unit Test Unit (lecture unit ID: 1)."
+    ]
+    assert state.current_view_storage[CONTENT_BLOCKS_KEY] == [
         "The student is currently viewing page 3 of the lecture slides of the "
         "lecture unit Test Unit (lecture unit ID: 1). The content of this slide:"
         "\n---\nPage 3 content\n---",

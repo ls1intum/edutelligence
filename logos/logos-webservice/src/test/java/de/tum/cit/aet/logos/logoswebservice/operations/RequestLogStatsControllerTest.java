@@ -249,7 +249,11 @@ class RequestLogStatsControllerTest {
            .andExpect(jsonPath("$.requesters.length()").value(1))
            .andExpect(jsonPath("$.requesters[0].id").value(1001))
            .andExpect(jsonPath("$.requesters[0].label").value("Test User"))
-           .andExpect(jsonPath("$.requesters[0].requestCount").value(1));
+           .andExpect(jsonPath("$.requesters[0].requestCount").value(1))
+           // Providers that actually carried traffic in the range, for the
+           // global provider filter on the statistics page.
+           .andExpect(jsonPath("$.providers").isArray())
+           .andExpect(jsonPath("$.providers.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
     }
 
     @Test

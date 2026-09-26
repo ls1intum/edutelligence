@@ -5,18 +5,20 @@ Spring Boot service that handles all management REST APIs for the Logos LLM plat
 ## Architecture overview
 
 ```
-Browser / logos-ui
+Browser / logos-ui / API clients
       │
   Traefik :8080
+      ├── /v1/*, /openai/*, /jobs/*             → logos-webservice gateway (priority 100; scaleable)
+      │                                            cloud named-model → Azure/OpenAI directly
+      │                                            local / mixed → reverse-proxy to orchestrator
       ├── /api/me, /api/users, /api/teams      → logos-webservice (priority 200, strip /api)
       ├── /api/logosdb/*                        → logos-webservice (priority 200, strip /api)
       ├── /api/admin/*                          → logos-webservice (priority 200, strip /api)
       ├── /api/ws/stats, /api/ws/stats/v2       → logos-webservice (priority 200, strip /api)
-      ├── /v1/*, /openai/*, /jobs/*             → logos-orchestrator (Python, priority 100)
-      └── /api/*, /docs/*, /metrics/*           → logos-orchestrator (Python, priority 100)
+      └── /docs/*, /metrics/*, logosnode admin  → logos-orchestrator (Python)
 ```
 
-Spring sees paths **without** the `/api` prefix (Traefik strips it). The database is shared with the Python service — schema is managed by Liquibase.
+Spring sees management paths **without** the `/api` prefix (Traefik strips it). Inference paths (`/v1`, …) keep their public prefix. The database is shared with the Python service — schema is managed by Liquibase.
 
 ## Prerequisites
 

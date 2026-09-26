@@ -10,7 +10,9 @@
 #   18443  →  Landing page (Traefik HTTP)
 #   18080  →  logos-orchestrator direct (bypasses Traefik AND the rate
 #                    gateway — debugging only, handy during development)
-#   18082  →  logos-webservice direct (same: bypasses the rate gateway)
+#   18082  →  logos-webservice direct (bypasses the rate gateway). Omit or
+#             change this publish when scaling webservice (`--scale
+#             logos-webservice=N`); host port bindings cannot be shared.
 #   5432   →  PostgreSQL
 #
 # Worker node: point LOGOS_URL=http://host.docker.internal:18080
@@ -191,26 +193,8 @@ services:
       # Traefik container (see there) so they outlive this service's
       # restarts.
 
-      # === Routing: /v1 ===
-      - "traefik.http.routers.logos-orchestrator-v1.rule=PathPrefix(`/v1`)"
-      - "traefik.http.routers.logos-orchestrator-v1.entrypoints=internal8090"
-      - "traefik.http.routers.logos-orchestrator-v1.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-v1.middlewares=rl-model"
-      - "traefik.http.routers.logos-orchestrator-v1.priority=100"
-
-      # === Routing: /openai ===
-      - "traefik.http.routers.logos-orchestrator-openai.rule=PathPrefix(`/openai`)"
-      - "traefik.http.routers.logos-orchestrator-openai.entrypoints=internal8090"
-      - "traefik.http.routers.logos-orchestrator-openai.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-openai.middlewares=rl-model"
-      - "traefik.http.routers.logos-orchestrator-openai.priority=100"
-
-      # === Routing: /jobs ===
-      - "traefik.http.routers.logos-orchestrator-jobs.rule=PathPrefix(`/jobs`)"
-      - "traefik.http.routers.logos-orchestrator-jobs.entrypoints=internal8090"
-      - "traefik.http.routers.logos-orchestrator-jobs.service=logos-orchestrator"
-      - "traefik.http.routers.logos-orchestrator-jobs.middlewares=rl-jobs"
-      - "traefik.http.routers.logos-orchestrator-jobs.priority=100"
+      # Public /v1|/openai|/jobs are on logos-webservice (inference gateway).
+      # Local traffic is reverse-proxied here on the compose network.
 
       # === Routing: /api (UI-internal endpoints; application server strips /api prefix) ===
       # rl-admin, not rl-model: the gateway classifies /api as control-plane
@@ -265,7 +249,8 @@ services:
     build:
       context: ./logos-webservice
       dockerfile: Dockerfile
-    container_name: logos-webservice
+    # No fixed container_name so `docker compose ... up --scale logos-webservice=2`
+    # works locally (Traefik load-balances logos-webservice-svc).
     restart: unless-stopped
     depends_on:
       logos-db:
@@ -280,6 +265,9 @@ services:
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-logos-local-internal-secret}"
+      LOGOS_GATEWAY_ENABLED: "${LOGOS_GATEWAY_ENABLED:-true}"
+      LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS: "${LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS:-15}"
+      LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS:-1000000}"
       # Per-IP rate limits: /info (no credential) and repeated auth failures on
       # /logosdb/get_model_health. See application.properties (logos.rate-limiting.*).
       LOGOS_RATE_LIMITING_ENABLED: "${LOGOS_RATE_LIMITING_ENABLED:-true}"
@@ -319,6 +307,25 @@ services:
     labels:
       - "traefik.enable=true"
       # strip-api middleware is defined on the Traefik container (see above).
+
+      # === Routing: public inference gateway (/v1, /openai, /jobs) ===
+      - "traefik.http.routers.webservice-v1.rule=PathPrefix(`/v1`)"
+      - "traefik.http.routers.webservice-v1.entrypoints=internal8090"
+      - "traefik.http.routers.webservice-v1.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-v1.middlewares=rl-model"
+      - "traefik.http.routers.webservice-v1.priority=100"
+
+      - "traefik.http.routers.webservice-openai.rule=PathPrefix(`/openai`)"
+      - "traefik.http.routers.webservice-openai.entrypoints=internal8090"
+      - "traefik.http.routers.webservice-openai.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-openai.middlewares=rl-model"
+      - "traefik.http.routers.webservice-openai.priority=100"
+
+      - "traefik.http.routers.webservice-jobs.rule=PathPrefix(`/jobs`)"
+      - "traefik.http.routers.webservice-jobs.entrypoints=internal8090"
+      - "traefik.http.routers.webservice-jobs.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-jobs.middlewares=rl-jobs"
+      - "traefik.http.routers.webservice-jobs.priority=100"
 
       # === Routing: /api/me, /api/users, /api/teams, /api/info ===
       - "traefik.http.routers.webservice-identity.rule=PathPrefix(`/api/me`) || PathPrefix(`/api/users`) || PathPrefix(`/api/teams`) || Path(`/api/info`)"

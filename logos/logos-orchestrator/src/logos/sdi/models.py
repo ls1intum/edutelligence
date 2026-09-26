@@ -416,6 +416,12 @@ class ModelProfile:
     # skipped, the post-wake request did not serve, or the worker predates
     # the field.
     wake_from_sleep_time_s: Optional[float] = None
+    # Steady-state awake host-RAM footprint of a loaded EngineCore (process-tree
+    # PSS). Long-lived vLLM lanes can accumulate sticky shared-memory far above
+    # the cold-load / calibrated size; sleep→wake does not reset that ceiling.
+    # The worker reports a high-water mark. None from a worker that predates
+    # the field or before the first measurement.
+    host_ram_mb: Optional[float] = None
     # Host RAM the lane keeps for the whole time it sleeps, as opposed to the
     # peak during the call above. sleep_l1 relocates the weights to the host
     # rather than dropping them, so a sleeping lane holds roughly its weight
@@ -500,6 +506,7 @@ class ModelProfile:
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
             "cold_load_time_s": self.cold_load_time_s,
             "wake_from_sleep_time_s": self.wake_from_sleep_time_s,
+            "host_ram_mb": self.host_ram_mb,
             "host_ram_residual_mb": self.host_ram_residual_mb,
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,

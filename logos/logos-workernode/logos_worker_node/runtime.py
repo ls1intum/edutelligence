@@ -14,7 +14,9 @@ from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary,
 
 logger = logging.getLogger(__name__)
 
-SERVICE_VERSION = "2.0.0"
+# Tracks the EduTelligence suite version, which is what the release workflow
+# tags this worker's image with. Bump it with the rest of the release metadata.
+SERVICE_VERSION = "3.0"
 
 # Module import happens once at process startup, so this is a good proxy
 # for the worker's process start time.

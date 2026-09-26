@@ -1,0 +1,10 @@
+{# struggle_no_new_help.j2 - the confirm_close counterpart to struggle_hint_contract.j2.
+
+   confirm_close only judges resolution, so it gets no hint contract and no ladder: it
+   may not hint at all. Both student-visible fields are constrained the same way. #}
+NO NEW HELP. This run only judges whether the flagged struggle is resolved. Do not
+diagnose, do not hint, and do not hint by implication. `closingSentence` and
+`episodeLabel` are the only student-visible fields, and both are emitted only when you
+return `resolved: true`. Name WHAT the student got working; never restate HOW it works or
+what the fix was. Never reproduce code, solution details, reference solutions, or
+template repositories.

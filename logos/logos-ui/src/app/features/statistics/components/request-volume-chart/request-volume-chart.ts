@@ -19,7 +19,7 @@ export interface ChartTooltip {
 }
 import { SegmentedSwitchComponent } from '../segmented-switch/segmented-switch';
 import { CHART_ROLE, seriesColor } from '../../statistics.constants';
-import { timeAxisLabels } from '../../statistics.utils';
+import { formatBucketRange, timeAxisLabels } from '../../statistics.utils';
 import { nearestIndex, pointerPlotFrac } from '../chart-interaction.util';
 
 export interface DataPoint {
@@ -50,10 +50,8 @@ function formatCount(v: number): string {
 }
 
 /**
- * Full, unambiguous timestamp for tooltips (always carries the day, and the
- * year once the span is wide enough for it to matter). Local time, like the
- * x-axis ticks from `timeAxisLabels` and the range selection that produced
- * them, so a tooltip never contradicts the tick above it.
+ * Full, unambiguous timestamp for tooltips when the bucket width is unknown.
+ * Prefer {@link formatBucketRange} whenever bucketMs is available.
  */
 function formatTimestamp(ts: number, spanMs: number): string {
   const d = new Date(ts);
@@ -63,6 +61,11 @@ function formatTimestamp(ts: number, spanMs: number): string {
     });
   }
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function bucketTimeLabel(ts: number, bucketMs: number, spanMs: number): string {
+  if (bucketMs > 0) return formatBucketRange(ts, bucketMs);
+  return formatTimestamp(ts, spanMs);
 }
 
 // ── Internal chart types ─────────────────────────────────────────────────────
@@ -80,14 +83,8 @@ export interface BarSegment {
   seriesKey: string;
 }
 
-export interface PolylinePoint {
-  x: number;
-  y: number;
-}
-
 export interface ChartData {
   rects: BarSegment[];
-  totalPolyline: PolylinePoint[];
   gridLines: Array<{ y: number; label: string }>;
   xLabels: Array<{ x: number; label: string }>;
   plotLeft: number;
@@ -120,6 +117,8 @@ export class RequestVolumeChartComponent implements OnChanges {
   @Input() modelSeriesMap: Record<string, DataPoint[]> = {};
   @Input() modelLabelById: Record<string, string> = {};
   @Input() modelColors: Record<string, string> = {};
+  /** Width of each volume bar in ms; drives explicit range labels in tooltips. */
+  @Input() bucketMs = 0;
   @Input() resetZoomTrigger = 0;
 
   // ── Outputs ─────────────────────────────────────────────────────────────
@@ -129,6 +128,8 @@ export class RequestVolumeChartComponent implements OnChanges {
   // ── Internal state ───────────────────────────────────────────────────────
   readonly mode = signal<ViewMode>('provider');
   readonly hiddenSeries = signal<Set<string>>(new Set());
+  /** Legend hover — dims every other series the way the model-share donut does. */
+  readonly hoveredSeries = signal<string | null>(null);
 
   toggleSeries(key: string): void {
     const next = new Set(this.hiddenSeries());
@@ -138,6 +139,23 @@ export class RequestVolumeChartComponent implements OnChanges {
 
   isHidden(key: string): boolean {
     return this.hiddenSeries().has(key);
+  }
+
+  onLegendEnter(key: string): void {
+    this.hoveredSeries.set(key);
+  }
+
+  onLegendLeave(): void {
+    this.hoveredSeries.set(null);
+  }
+
+  isBarDimmed(seriesKey: string): boolean {
+    const hovered = this.hoveredSeries();
+    return hovered !== null && hovered !== seriesKey;
+  }
+
+  isBarHighlighted(seriesKey: string): boolean {
+    return this.hoveredSeries() === seriesKey;
   }
 
   /** Whether the chart has any underlying data. Drives the empty-state independently
@@ -151,6 +169,7 @@ export class RequestVolumeChartComponent implements OnChanges {
   private readonly _modelMap = signal<Record<string, DataPoint[]>>({});
   private readonly _modelLbl = signal<Record<string, string>>({});
   private readonly _modelClr = signal<Record<string, string>>({});
+  private readonly _bucketMs = signal(0);
 
   // ── Mode switch options ─────────────────────────────────────────────────
   readonly modeOptions = [
@@ -159,7 +178,6 @@ export class RequestVolumeChartComponent implements OnChanges {
   ];
 
   // ── Chart layout constants (exposed for template) ───────────────────────
-  readonly totalLineColor = CHART_ROLE.total;
   readonly CHART_W = CHART_W;
   readonly CHART_H = CHART_H;
   readonly CHART_PAD_LEFT = CHART_PAD_LEFT;
@@ -175,13 +193,13 @@ export class RequestVolumeChartComponent implements OnChanges {
     const modelMap = this._modelMap();
     const modelLbl = this._modelLbl();
     const modelClr = this._modelClr();
+    const bucketMs = this._bucketMs();
     const mode = this.mode();
     const hidden = this.hiddenSeries();
 
     const n = total.length;
     const empty: ChartData = {
       rects: [],
-      totalPolyline: [],
       gridLines: [],
       xLabels: [],
       plotLeft: CHART_PAD_LEFT,
@@ -205,7 +223,7 @@ export class RequestVolumeChartComponent implements OnChanges {
 
     for (let i = 0; i < n; i++) {
       const ts = total[i].timestamp;
-      const timeLabel = formatTimestamp(ts, spanMs);
+      const timeLabel = bucketTimeLabel(ts, bucketMs, spanMs);
       let stacks: BucketStack = [];
 
       if (mode === 'provider') {
@@ -266,12 +284,6 @@ export class RequestVolumeChartComponent implements OnChanges {
       rects.push(...segRects);
     }
 
-    // Build total polyline (provider mode only, unless hidden)
-    const totalPolyline: PolylinePoint[] = hidden.has('total') ? [] : total.map((p, i) => ({
-      x: CHART_PAD_LEFT + i * slotW + slotW / 2,
-      y: CHART_PAD_TOP + plotH * (1 - Math.min(p.value / maxVal, 1)),
-    }));
-
     // Grid lines
     const gridLines = [0.25, 0.5, 0.75, 1.0].map((f) => ({
       y: CHART_PAD_TOP + plotH * (1 - f),
@@ -299,13 +311,12 @@ export class RequestVolumeChartComponent implements OnChanges {
       // needs to say which moment the lone bar covers.
       xLabels.push({
         x: Math.round(CHART_PAD_LEFT + slotW / 2),
-        label: formatTimestamp(firstTs, spanMs),
+        label: bucketTimeLabel(firstTs, bucketMs, spanMs),
       });
     }
 
     return {
       rects,
-      totalPolyline,
       gridLines,
       xLabels,
       plotLeft: CHART_PAD_LEFT,
@@ -329,10 +340,10 @@ export class RequestVolumeChartComponent implements OnChanges {
         color: modelClr[id] ?? seriesColor(idx),
       }));
     }
+    // Provider view: cloud/local bars only.
     return [
       { key: 'cloud', label: 'Cloud', color: CHART_ROLE.cloud },
       { key: 'local', label: 'Local', color: CHART_ROLE.local },
-      { key: 'total', label: 'Total', color: CHART_ROLE.total },
     ];
   });
 
@@ -366,12 +377,15 @@ export class RequestVolumeChartComponent implements OnChanges {
         if (val > 0) rows.push({ label: lbl[id] ?? id, value: val, color: clr[id] ?? seriesColor(idx) });
       });
     }
-    if (!hidden.has('total')) rows.push({ label: 'Total', value: total[i].value, color: CHART_ROLE.total });
     const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
     const slotW = plotW / total.length;
     const x = CHART_PAD_LEFT + i * slotW + slotW / 2;
     const spanMs = total.length > 1 ? total[total.length - 1].timestamp - total[0].timestamp : 0;
-    return { x, rows, timeLabel: formatTimestamp(total[i].timestamp, spanMs) };
+    return {
+      x,
+      rows,
+      timeLabel: bucketTimeLabel(total[i].timestamp, this._bucketMs(), spanMs),
+    };
   });
 
   // ── Drag-to-zoom state ───────────────────────────────────────────────────
@@ -386,31 +400,6 @@ export class RequestVolumeChartComponent implements OnChanges {
   /** Whether a drag is in progress */
   isDraggingSig = signal(false);
 
-  // ── Total-line smoothed path ─────────────────────────────────────────────
-  // Builds a smooth SVG path through the total points using a Catmull-Rom
-  // spline converted to cubic Béziers (tension 0 = standard Catmull-Rom).
-  readonly totalLinePath = computed(() => {
-    const pts = this.chartData().totalPolyline;
-    if (pts.length < 2) return '';
-    if (pts.length === 2) return `M${pts[0].x},${pts[0].y} L${pts[1].x},${pts[1].y}`;
-
-    let d = `M${pts[0].x},${pts[0].y}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i - 1] ?? pts[i];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2] ?? p2;
-
-      const c1x = p1.x + (p2.x - p0.x) / 6;
-      const c1y = p1.y + (p2.y - p0.y) / 6;
-      const c2x = p2.x - (p3.x - p1.x) / 6;
-      const c2y = p2.y - (p3.y - p1.y) / 6;
-
-      d += ` C${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y}`;
-    }
-    return d;
-  });
-
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['totalLineData']) this._total.set(this.totalLineData);
     if (changes['cloudLineData']) this._cloud.set(this.cloudLineData);
@@ -418,6 +407,7 @@ export class RequestVolumeChartComponent implements OnChanges {
     if (changes['modelSeriesMap']) this._modelMap.set(this.modelSeriesMap);
     if (changes['modelLabelById']) this._modelLbl.set(this.modelLabelById);
     if (changes['modelColors']) this._modelClr.set(this.modelColors);
+    if (changes['bucketMs']) this._bucketMs.set(this.bucketMs);
 
     if (changes['resetZoomTrigger'] && !changes['resetZoomTrigger'].firstChange) {
       this.clearZoomSelection();

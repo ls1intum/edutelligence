@@ -33,17 +33,25 @@ public class RequestLogStatsService {
     }
 
     /**
-     * Aggregates for one time range, optionally narrowed to a team or a single
-     * requester.
+     * Aggregates for one time range, optionally narrowed to a team, a single
+     * requester, a provider, and/or failed requests only.
      *
-     * {@code userId} / {@code teamId} are nullable and independent: null means
-     * "everyone", and the two combine (a user within a team). The scope reaches
+     * {@code userId} / {@code teamId} / {@code providerId} are nullable and
+     * independent: null means "everyone" / "every provider", and they combine
+     * (a user within a team on one provider). {@code errorsOnly} keeps only
+     * rows whose outcome is {@code error} or {@code timeout}. The scope reaches
      * every aggregate below, because they are all drawn on the same page — a
      * filter that moved only some of them would leave the page contradicting
      * itself.
      */
     public Map<String, Object> getRequestLogStats(String startDate, String endDate, int targetBuckets,
                                                   Integer userId, Integer teamId) {
+        return getRequestLogStats(startDate, endDate, targetBuckets, userId, teamId, null, false);
+    }
+
+    public Map<String, Object> getRequestLogStats(String startDate, String endDate, int targetBuckets,
+                                                  Integer userId, Integer teamId,
+                                                  Integer providerId, boolean errorsOnly) {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         ZonedDateTime endDt = endDate != null ? ZonedDateTime.parse(endDate).withZoneSameInstant(ZoneOffset.UTC) : now;
         ZonedDateTime startDt = startDate != null
@@ -65,11 +73,11 @@ public class RequestLogStatsService {
         // from log_entry directly, which is what useRollup = false selects.
         boolean useRollup = bucketSeconds >= SECONDS_PER_HOUR;
 
-        Map<String, Object> totals = queryTotals(startTs, endTs, userId, teamId);
-        Map<String, Integer> statusCounts = queryStatusCounts(startTs, endTs, userId, teamId);
-        List<Map<String, Object>> modelBreakdown = queryModelBreakdown(startTs, endTs, userId, teamId);
-        List<Map<String, Object>> timeSeries = queryTimeSeries(startTs, endTs, bucketSeconds, useRollup, userId, teamId);
-        List<Map<String, Object>> modelTimeSeries = queryModelTimeSeries(startTs, endTs, bucketSeconds, useRollup, userId, teamId);
+        Map<String, Object> totals = queryTotals(startTs, endTs, userId, teamId, providerId, errorsOnly);
+        Map<String, Integer> statusCounts = queryStatusCounts(startTs, endTs, userId, teamId, providerId, errorsOnly);
+        List<Map<String, Object>> modelBreakdown = queryModelBreakdown(startTs, endTs, userId, teamId, providerId, errorsOnly);
+        List<Map<String, Object>> timeSeries = queryTimeSeries(startTs, endTs, bucketSeconds, useRollup, userId, teamId, providerId, errorsOnly);
+        List<Map<String, Object>> modelTimeSeries = queryModelTimeSeries(startTs, endTs, bucketSeconds, useRollup, userId, teamId, providerId, errorsOnly);
 
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("totals", totals);
@@ -97,9 +105,16 @@ public class RequestLogStatsService {
      * range or the team does. Requesters are narrowed to {@code teamId} when one
      * is picked — that is the whole point, since the platform's full user list
      * runs long enough to be unusable without a search box, and most of it has
-     * never made a request at all.
+     * never made a request at all. Providers are narrowed the same way by team
+     * and requester, never by the selected provider, because this list is that
+     * picker.
      */
     public Map<String, Object> getScopeOptions(String startDate, String endDate, Integer teamId) {
+        return getScopeOptions(startDate, endDate, teamId, null, null, false);
+    }
+
+    public Map<String, Object> getScopeOptions(String startDate, String endDate, Integer teamId,
+                                               Integer userId, Integer providerId, boolean errorsOnly) {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         ZonedDateTime endDt = endDate != null ? ZonedDateTime.parse(endDate).withZoneSameInstant(ZoneOffset.UTC) : now;
         ZonedDateTime startDt = startDate != null
@@ -112,9 +127,11 @@ public class RequestLogStatsService {
         Timestamp endTs = Timestamp.from(endDt.toInstant());
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("teams", toScopeOptions(logEntryRepository.findTeamsWithTraffic(startTs, endTs)));
+        payload.put("teams", toScopeOptions(logEntryRepository.findTeamsWithTraffic(startTs, endTs, providerId, errorsOnly)));
         payload.put("requesters",
-            toScopeOptions(logEntryRepository.findRequestersWithTraffic(startTs, endTs, teamId)));
+            toScopeOptions(logEntryRepository.findRequestersWithTraffic(startTs, endTs, teamId, providerId, errorsOnly)));
+        payload.put("providers",
+            toScopeOptions(logEntryRepository.findProvidersWithTraffic(startTs, endTs, teamId, userId, errorsOnly)));
         return payload;
     }
 
@@ -130,8 +147,9 @@ public class RequestLogStatsService {
             .toList();
     }
 
-    private Map<String, Object> queryTotals(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
-        RequestLogTotalsProjection p = logEntryRepository.findTotals(start, end, userId, teamId);
+    private Map<String, Object> queryTotals(Timestamp start, Timestamp end, Integer userId, Integer teamId,
+                                            Integer providerId, boolean errorsOnly) {
+        RequestLogTotalsProjection p = logEntryRepository.findTotals(start, end, userId, teamId, providerId, errorsOnly);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("requests", p.getRequests());
         m.put("cloudRequests", p.getCloudRequests());
@@ -145,16 +163,20 @@ public class RequestLogStatsService {
         return m;
     }
 
-    private Map<String, Integer> queryStatusCounts(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
+    private Map<String, Integer> queryStatusCounts(Timestamp start, Timestamp end, Integer userId, Integer teamId,
+                                                   Integer providerId, boolean errorsOnly) {
         Map<String, Integer> counts = new LinkedHashMap<>();
-        for (StatusCountProjection p : logEntryRepository.findStatusCounts(start, end, userId, teamId)) {
-            counts.put(p.getStatus().toLowerCase(), p.getCnt());
+        for (StatusCountProjection p : logEntryRepository.findStatusCounts(start, end, userId, teamId, providerId, errorsOnly)) {
+            String status = p.getStatus() == null ? "pending" : p.getStatus().toLowerCase();
+            if ("unknown".equals(status)) status = "pending";
+            counts.put(status, p.getCnt());
         }
         return counts;
     }
 
-    private List<Map<String, Object>> queryModelBreakdown(Timestamp start, Timestamp end, Integer userId, Integer teamId) {
-        return logEntryRepository.findModelBreakdown(start, end, userId, teamId).stream()
+    private List<Map<String, Object>> queryModelBreakdown(Timestamp start, Timestamp end, Integer userId, Integer teamId,
+                                                          Integer providerId, boolean errorsOnly) {
+        return logEntryRepository.findModelBreakdown(start, end, userId, teamId, providerId, errorsOnly).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("modelId", p.getModelId() != null ? p.getModelId() : -1);
@@ -171,8 +193,9 @@ public class RequestLogStatsService {
     }
 
     private List<Map<String, Object>> queryTimeSeries(Timestamp start, Timestamp end, int bucketSeconds,
-                                                      boolean useRollup, Integer userId, Integer teamId) {
-        return logEntryRepository.findTimeSeries(start, end, bucketSeconds, useRollup, userId, teamId).stream()
+                                                      boolean useRollup, Integer userId, Integer teamId,
+                                                      Integer providerId, boolean errorsOnly) {
+        return logEntryRepository.findTimeSeries(start, end, bucketSeconds, useRollup, userId, teamId, providerId, errorsOnly).stream()
             .filter(p -> p.getBucketTs() != null)
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -188,9 +211,10 @@ public class RequestLogStatsService {
     }
 
     private List<Map<String, Object>> queryModelTimeSeries(Timestamp start, Timestamp end, int bucketSeconds,
-                                                           boolean useRollup, Integer userId, Integer teamId) {
+                                                           boolean useRollup, Integer userId, Integer teamId,
+                                                           Integer providerId, boolean errorsOnly) {
         List<Map<String, Object>> result = new ArrayList<>();
-        for (ModelTimeSeriesProjection p : logEntryRepository.findModelTimeSeries(start, end, bucketSeconds, useRollup, userId, teamId)) {
+        for (ModelTimeSeriesProjection p : logEntryRepository.findModelTimeSeries(start, end, bucketSeconds, useRollup, userId, teamId, providerId, errorsOnly)) {
             if (p.getBucketTs() == null) continue;
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("timestamp", (long) (double) p.getBucketTs() * 1000L);
@@ -206,6 +230,13 @@ public class RequestLogStatsService {
 
     static int chooseBucketSeconds(long durationSeconds, int targetBuckets) {
         double rawBucket = Math.max((double) durationSeconds / targetBuckets, 60);
+        // A ~month-long window is daily even if the client still asks for ~96
+        // buckets, which used to land on six-hour bars. Shorter windows keep
+        // the target-bucket rounding (five-minute bars on a calendar day,
+        // hourly on a week).
+        if (durationSeconds >= 14L * 86_400 && durationSeconds <= 45L * 86_400) {
+            rawBucket = 86_400;
+        }
         int best = NICE_BUCKETS[0];
         double bestDiff = Math.abs(rawBucket - best);
         for (int c : NICE_BUCKETS) {

@@ -145,6 +145,21 @@
   model: text-embedding-3-small
   api_key:
   cost_per_million_input_token: 0.02
+# Example for a deployment actually serving an instruction-tuned embedding model
+# (e.g. Qwen3-Embedding via an OpenAI-compatible gateway, base_url set): only set
+# retrieval_instruction on an entry like this — never on a plain OpenAI/Azure
+# entry, which has no instruction-tuned protocol to satisfy and would just embed
+# the instruction text itself as query content.
+# - id: qwen3-embedding
+#   type: openai_embedding
+#   model: qwen3-embedding
+#   base_url: "<your-vllm-gateway>/v1"
+#   api_key:
+#   retrieval_instruction: >-
+#     Instruct: Given a search query from a university student, retrieve
+#     relevant passages from lecture materials that answer or cover the
+#     query
+#     Query:
 
 # ── Whisper transcription models ─────────────────────────────────────────────
 - api_key:
@@ -170,6 +185,11 @@
   api_key:
   endpoint: "your_cohere-endpoint"
   cost_per_1k_requests: 2
+# Deployments without a reranking service can preserve vector-search order:
+# - id: passthrough-reranker
+#   type: passthrough_reranker
+#   model: passthrough
+#   cost_per_1k_requests: 0
 
 # ── Ollama models (local) ───────────────────────────────────────────────────
 # TUM-internal users: substitute your own Ollama/OpenAI-compatible endpoint (e.g. https://gpu.aet.cit.tum.de/ollama)

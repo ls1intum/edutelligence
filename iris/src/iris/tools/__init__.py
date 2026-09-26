@@ -6,20 +6,24 @@ Each tool is in its own file for better organization and maintainability.
 
 from .additional_exercise_details import create_tool_get_additional_exercise_details
 from .build_logs_analysis import create_tool_get_build_logs_analysis
+from .combined_view_point_out import create_tool_combined_view_point_out
 
 # Course-related tools
 from .course_details import create_tool_get_course_details
 from .course_simple_details import create_tool_get_simple_course_details
+from .current_view_content import create_tool_current_view_content
 from .exercise_example_solution import create_tool_get_example_solution
 from .exercise_list import create_tool_get_exercise_list
 from .exercise_problem_statement import create_tool_get_exercise_problem_statement
 from .faq_content_retrieval import create_tool_faq_content_retrieval
 from .feedbacks import create_tool_get_feedbacks
 from .file_lookup import create_tool_file_lookup
+from .file_lookup_numbered import create_tool_file_lookup_with_line_numbers
 from .last_artifact import create_tool_get_last_artifact
 
 # Retrieval tools
 from .lecture_content_retrieval import create_tool_lecture_content_retrieval
+from .local_vs_submitted_diff import create_tool_local_vs_submitted_diff
 
 # MCQ generation tool
 from .mcq_generation import create_tool_generate_mcq_questions
@@ -41,9 +45,13 @@ __all__ = [
     "create_tool_get_feedbacks",
     "create_tool_repository_files",
     "create_tool_file_lookup",
+    "create_tool_file_lookup_with_line_numbers",
+    "create_tool_local_vs_submitted_diff",
     # Retrieval tools
     "create_tool_lecture_content_retrieval",
     "create_tool_faq_content_retrieval",
+    "create_tool_combined_view_point_out",
+    "create_tool_current_view_content",
     # Tutor Suggestion tools
     "create_tool_get_example_solution",
     "create_tool_get_last_artifact",

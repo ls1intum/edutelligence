@@ -678,8 +678,47 @@ export const chooseDynamicTargetBuckets = (spanMs: number): number => {
   const hour = 60 * 60 * 1000;
   const day = 24 * hour;
 
-  if (spanMs > 30 * day) return 90;
+  if (spanMs > 45 * day) return 90;
+  // ~month windows want one bar per day, not the old six-hour buckets.
+  if (spanMs > 14 * day) return 30;
   if (spanMs > 7 * day) return 96;
   if (spanMs > day) return 108;
-  return 120;
+  // Calendar day (and shorter): five-minute bars — 86_400 / 300 ≈ 288.
+  return 288;
 };
+
+/**
+ * Explicit bucket range for volume-chart tooltips, e.g. "04:30 – 04:35" for
+ * five-minute bars or "Sep 1" for a daily bucket.
+ */
+export function formatBucketRange(startMs: number, bucketMs: number): string {
+  if (!Number.isFinite(startMs) || !Number.isFinite(bucketMs) || bucketMs <= 0) {
+    return new Date(startMs).toLocaleString();
+  }
+  const start = new Date(startMs);
+  const end = new Date(startMs + bucketMs);
+  const dayMs = 86_400_000;
+
+  if (bucketMs >= dayMs) {
+    if (bucketMs === dayMs) {
+      return start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+    const startLabel = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endLabel = new Date(end.getTime() - 1).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    });
+    return `${startLabel} – ${endLabel}`;
+  }
+
+  const fmt = (d: Date) =>
+    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  // Same calendar day: show times only. Crossing midnight keeps the day so
+  // "23:00 – 00:00" is not read as a backwards interval.
+  if (start.toDateString() === new Date(end.getTime() - 1).toDateString()) {
+    return `${fmt(start)} – ${fmt(end)}`;
+  }
+  const dayFmt = (d: Date) =>
+    `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${fmt(d)}`;
+  return `${dayFmt(start)} – ${dayFmt(end)}`;
+}

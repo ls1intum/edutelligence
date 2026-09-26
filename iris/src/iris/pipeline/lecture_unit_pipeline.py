@@ -1,8 +1,11 @@
+from threading import Event
 from typing import Optional
 
 from weaviate.classes.query import Filter
 
+from iris.common.cancellation import raise_if_cancelled
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import LlmRequestHandler
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
@@ -26,13 +29,19 @@ class LectureUnitPipeline(SubPipeline):
     then updating the vector database with the processed lecture unit information.
     """
 
-    def __init__(self, local: bool = False, callback: Optional[StatusCallback] = None):
+    def __init__(
+        self,
+        local: bool = False,
+        callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
+    ):
         super().__init__(implementation_id="lecture_unit_pipeline")
         vector_database = VectorDatabase()
         self.weaviate_client = vector_database.get_client()
         self.lecture_unit_collection = init_lecture_unit_schema(self.weaviate_client)
         self.local = local
         self.callback = callback
+        self.cancel_event = cancel_event
         embedding_model = resolve_model(
             "lecture_unit_pipeline", "default", "embedding", local=local
         )
@@ -71,6 +80,7 @@ class LectureUnitPipeline(SubPipeline):
         lecture_unit: LectureUnitDTO,
         initial_properties: Optional[dict] = None,
     ):
+        cancel_event = self.cancel_event
         lecture_unit_filter = self._filter(lecture_unit)
         if initial_properties is None:
             initial_units = self.lecture_unit_collection.query.fetch_objects(
@@ -84,6 +94,7 @@ class LectureUnitPipeline(SubPipeline):
                 lecture_unit,
                 local=self.local,
                 callback=self.callback,
+                cancel_event=cancel_event,
             )()
         )
         lecture_unit.lecture_unit_summary, tokens_unit_summary = (
@@ -95,59 +106,77 @@ class LectureUnitPipeline(SubPipeline):
             )()
         )
 
+        raise_if_cancelled(
+            cancel_event, lecture_unit.lecture_unit_id, "lecture unit embedding"
+        )
         embedding = self.llm_embedding.embed(lecture_unit.lecture_unit_summary)
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
 
         with batch_update_lock:
-            latest_units = self.lecture_unit_collection.query.fetch_objects(
-                filters=lecture_unit_filter, limit=1
-            ).objects
-            latest_properties = latest_units[0].properties if latest_units else {}
+            with job_handler.current_job_guard(
+                lecture_unit.base_url,
+                lecture_unit.course_id,
+                lecture_unit.lecture_id,
+                lecture_unit.lecture_unit_id,
+                cancel_event,
+                "lecture unit replacement",
+            ):
+                latest_units = self.lecture_unit_collection.query.fetch_objects(
+                    filters=lecture_unit_filter, limit=1
+                ).objects
+                latest_properties = latest_units[0].properties if latest_units else {}
 
-            def metadata_value(property_name: str, incoming_value):
-                """Keep metadata updated while this expensive re-ingestion was running."""
-                initial_value = initial_properties.get(property_name)
-                latest_value = latest_properties.get(property_name)
-                return latest_value if latest_value != initial_value else incoming_value
+                def metadata_value(property_name: str, incoming_value):
+                    """Keep metadata updated while this expensive re-ingestion was running."""
+                    initial_value = initial_properties.get(property_name)
+                    latest_value = latest_properties.get(property_name)
+                    return (
+                        latest_value
+                        if latest_value != initial_value
+                        else incoming_value
+                    )
 
-            # Delete only after all fallible preparation succeeds and while metadata
-            # updates are excluded from the replacement window.
-            self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
-            self.lecture_unit_collection.data.insert(
-                properties={
-                    LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
-                    LectureUnitSchema.COURSE_NAME.value: metadata_value(
-                        LectureUnitSchema.COURSE_NAME.value, lecture_unit.course_name
-                    ),
-                    LectureUnitSchema.COURSE_DESCRIPTION.value: metadata_value(
-                        LectureUnitSchema.COURSE_DESCRIPTION.value,
-                        lecture_unit.course_description,
-                    ),
-                    LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
-                    LectureUnitSchema.LECTURE_NAME.value: metadata_value(
-                        LectureUnitSchema.LECTURE_NAME.value, lecture_unit.lecture_name
-                    ),
-                    LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
-                    LectureUnitSchema.LECTURE_UNIT_NAME.value: metadata_value(
-                        LectureUnitSchema.LECTURE_UNIT_NAME.value,
-                        lecture_unit.lecture_unit_name,
-                    ),
-                    LectureUnitSchema.LECTURE_UNIT_LINK.value: metadata_value(
-                        LectureUnitSchema.LECTURE_UNIT_LINK.value,
-                        lecture_unit.lecture_unit_link,
-                    ),
-                    LectureUnitSchema.VIDEO_LINK.value: metadata_value(
-                        LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
-                    ),
-                    LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
-                    LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
-                    LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
-                        LectureUnitSchema.RELEASE_DATE.value
-                    ),
-                    LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
-                        LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
-                    ),
-                },
-                vector=embedding,
-            )
+                # Commit phase: all expensive work already succeeded, so keep the
+                # replacement window tight and free of extra fallible steps.
+                self.lecture_unit_collection.data.delete_many(where=lecture_unit_filter)
+                self.lecture_unit_collection.data.insert(
+                    properties={
+                        LectureUnitSchema.COURSE_ID.value: lecture_unit.course_id,
+                        LectureUnitSchema.COURSE_NAME.value: metadata_value(
+                            LectureUnitSchema.COURSE_NAME.value,
+                            lecture_unit.course_name,
+                        ),
+                        LectureUnitSchema.COURSE_DESCRIPTION.value: metadata_value(
+                            LectureUnitSchema.COURSE_DESCRIPTION.value,
+                            lecture_unit.course_description,
+                        ),
+                        LectureUnitSchema.LECTURE_ID.value: lecture_unit.lecture_id,
+                        LectureUnitSchema.LECTURE_NAME.value: metadata_value(
+                            LectureUnitSchema.LECTURE_NAME.value,
+                            lecture_unit.lecture_name,
+                        ),
+                        LectureUnitSchema.LECTURE_UNIT_ID.value: lecture_unit.lecture_unit_id,
+                        LectureUnitSchema.LECTURE_UNIT_NAME.value: metadata_value(
+                            LectureUnitSchema.LECTURE_UNIT_NAME.value,
+                            lecture_unit.lecture_unit_name,
+                        ),
+                        LectureUnitSchema.LECTURE_UNIT_LINK.value: metadata_value(
+                            LectureUnitSchema.LECTURE_UNIT_LINK.value,
+                            lecture_unit.lecture_unit_link,
+                        ),
+                        LectureUnitSchema.VIDEO_LINK.value: metadata_value(
+                            LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
+                        ),
+                        LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
+                        LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
+                        LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
+                            LectureUnitSchema.RELEASE_DATE.value
+                        ),
+                        LectureUnitSchema.SLIDE_VISIBILITY.value: latest_properties.get(
+                            LectureUnitSchema.SLIDE_VISIBILITY.value, "{}"
+                        ),
+                    },
+                    vector=embedding,
+                )
 
         return tokens_unit_summary + token_unit_segment_summary

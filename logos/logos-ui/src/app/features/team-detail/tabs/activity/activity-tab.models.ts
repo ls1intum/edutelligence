@@ -44,6 +44,12 @@ export interface RequestCursor {
   request_id: string;
 }
 
+/** One distinct question asked of this team, and how many times. */
+export interface TeamMostAskedQuestion {
+  question: string;
+  count: number;
+}
+
 export interface TeamActivityPayload {
   team_id: number;
   days: number;
@@ -59,6 +65,7 @@ export interface TeamActivityPayload {
   total_tokens: number;
   total_requests: number;
   requesters: TeamRequester[];
+  most_asked_questions: TeamMostAskedQuestion[];
   requests: RequestItem[];
   requests_total: number;
   requests_has_more: boolean;

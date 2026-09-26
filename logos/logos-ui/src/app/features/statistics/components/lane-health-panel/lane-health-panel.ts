@@ -4,6 +4,7 @@ import {
   OnChanges,
   OnDestroy,
   SimpleChanges,
+  computed,
   inject,
   signal,
   ChangeDetectionStrategy,
@@ -166,24 +167,43 @@ export function formatContextWindow(tokens: number | null | undefined): string |
   return formatTokenCount(tokens);
 }
 
-/** Which manual sleep/wake action a lane row offers, if any. */
-export type LaneSleepAction = 'sleep' | 'wake' | null;
+/** Which manual sleep/drain/wake action a lane row offers, if any. */
+export type LaneSleepAction = 'sleep' | 'drain' | 'wake' | null;
 
 /**
- * Which manual sleep/wake action a lane row offers.
+ * Which manual sleep/drain/wake action a lane row offers.
  *
  * Wake only on a lane that is actually asleep: vLLM's /wake_up on an awake
  * engine is a no-op at best, so the button would promise a transition that is
  * not coming. Sleep only on a lane that is awake and idle: the server first
- * drains in-flight requests (mode="wait"), so on a busy lane the click would
- * block for as long as the drain takes — the panel offers the action only
- * where it takes effect immediately. Lanes whose engine has no sleep mode
- * (sleep mode disabled reports sleep_state "unsupported", a lane that never
- * slept reports "unknown") offer neither.
+ * drains in-flight requests (mode="wait"), so the click takes effect
+ * immediately — it is offered only where that is true.
+ *
+ * A busy awake lane gets Drain instead of nothing: it stops new requests from
+ * reaching the lane, waits for the in-flight ones to finish, and only then
+ * puts the lane to sleep — or unloads it when the host cannot hold a resident
+ * sleeper, or the lane's backend has no sleep mode at all. The button is
+ * offered on every busy lane (sleep mode "unknown" included): the server
+ * makes the sleep-versus-unload decision with the fresh snapshot, and a lane
+ * that does not drain in time simply keeps serving and can be retried.
+ *
+ * "Busy" mirrors the strict drain's own completion condition, which waits for
+ * every activity counter to read zero: active_requests (the requests Logos is
+ * proxying) plus vLLM's requests_running and queue_waiting, which can hold
+ * work internally. A lane with active_requests at zero but queued vLLM work
+ * would otherwise get a best-effort Sleep, whose bounded wait can reach its
+ * budget and drop that work — Drain is the safe choice there.
+ *
+ * Lanes that are awake and idle with no sleep mode (sleep mode disabled
+ * reports sleep_state "unsupported", a lane that never slept reports
+ * "unknown") offer neither — there is nothing to sleep and nothing to drain.
  */
 export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   if (lane.sleep_state === 'sleeping') return 'wake';
-  if (lane.sleep_state === 'awake' && !(lane.active_requests > 0)) return 'sleep';
+  if (lane.active_requests > 0 || (lane.requests_running ?? 0) > 0 || (lane.queue_waiting ?? 0) > 0) {
+    return 'drain';
+  }
+  if (lane.sleep_state === 'awake') return 'sleep';
   return null;
 }
 
@@ -205,10 +225,20 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   unloadingLaneId = signal<string | null>(null);
   unloadError = signal<string | null>(null);
 
-  // ── Sleep/wake state ─────────────────────────────────────────────────────
+  // ── Sleep/drain/wake state ───────────────────────────────────────────────
   sleepingLaneId = signal<string | null>(null);
+  drainingLaneId = signal<string | null>(null);
   wakingLaneId = signal<string | null>(null);
   sleepWakeError = signal<string | null>(null);
+
+  /** True while any sleep/drain/wake of any lane is in flight. All three
+   *  buttons — and all three handlers — gate on this instead of on their own
+   *  signal: a status refresh can swap a draining lane's button back to an
+   *  enabled Sleep, and the per-signal guard alone would let that click
+   *  through under a running drain, racing the admin commands on one lane. */
+  anyLaneActionInFlight = computed(
+    () => this.sleepingLaneId() !== null || this.drainingLaneId() !== null || this.wakingLaneId() !== null,
+  );
 
   // ── Load-lane state ──────────────────────────────────────────────────────
   pickerOpen = signal(false);
@@ -396,6 +426,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
    */
   private unloadAttempt = 0;
   private sleepAttempt = 0;
+  private drainAttempt = 0;
   private wakeAttempt = 0;
 
   async handleUnload(laneId: string): Promise<void> {
@@ -428,7 +459,9 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
 
   async handleSleep(laneId: string): Promise<void> {
     const pid = this.providerId;
-    if (pid == null || this.sleepingLaneId() != null) return;
+    // Gate on any in-flight action, not just a sleep: a drain (or wake) still
+    // running on any lane must not be raced by a sleep on this one.
+    if (pid == null || this.anyLaneActionInFlight()) return;
     const attempt = ++this.sleepAttempt;
     this.sleepingLaneId.set(laneId);
     this.sleepWakeError.set(null);
@@ -446,9 +479,39 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
     }
   }
 
+  /**
+   * Drain a busy lane: the server stops routing new requests to it, waits
+   * for the in-flight ones, then sleeps (or unloads) it. The click therefore
+   * runs for as long as the last request does — the "Draining…" state is the
+   * operator's only feedback during the wait, so it stays up until the
+   * server answers. A 409 means the lane did not drain in time and kept
+   * serving; the error line says so and the button simply comes back.
+   */
+  async handleDrain(laneId: string): Promise<void> {
+    const pid = this.providerId;
+    // Gate on any in-flight action, not just a drain — see handleSleep.
+    if (pid == null || this.anyLaneActionInFlight()) return;
+    const attempt = ++this.drainAttempt;
+    this.drainingLaneId.set(laneId);
+    this.sleepWakeError.set(null);
+
+    let failed: unknown = null;
+    try {
+      await this.statisticsService.drainLane(pid, laneId);
+    } catch (err: unknown) {
+      failed = err;
+    }
+    // Same ownership rule as handleUnload.
+    if (this.drainAttempt === attempt) {
+      this.drainingLaneId.set(null);
+      if (failed !== null) this.sleepWakeError.set(this.sleepWakeErrorText('Drain', laneId, failed));
+    }
+  }
+
   async handleWake(laneId: string): Promise<void> {
     const pid = this.providerId;
-    if (pid == null || this.wakingLaneId() != null) return;
+    // Gate on any in-flight action, not just a wake — see handleSleep.
+    if (pid == null || this.anyLaneActionInFlight()) return;
     const attempt = ++this.wakeAttempt;
     this.wakingLaneId.set(laneId);
     this.sleepWakeError.set(null);
@@ -561,12 +624,14 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       this.unloadingLaneId.set(null);
       this.sleepWakeError.set(null);
       this.sleepingLaneId.set(null);
+      this.drainingLaneId.set(null);
       this.wakingLaneId.set(null);
       // The in-flight calls are abandoned as well: when they settle later,
       // their counters no longer match, so they cannot touch the shared
       // signal or error of the worker the operator is on now.
       this.unloadAttempt++;
       this.sleepAttempt++;
+      this.drainAttempt++;
       this.wakeAttempt++;
     }
     // The lane the operator asked for has arrived in the status stream — the

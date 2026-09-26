@@ -83,14 +83,15 @@
             <select
               class="field-input priority-select"
               [attr.aria-label]="'Queue priority for team ' + team.name"
-              title="Queue priority of this team's traffic (applies to all its keys without an explicit key priority)"
-              [value]="team.priority ?? ''"
+              title="Queue priority of this team's traffic (applies to all its keys without an explicit key priority). 'Default' is not a fixed value: the team's policy-level priority applies — Normal (5) when the policy sets none."
               [disabled]="prioritySaving().has(team.id)"
               (click)="$event.stopPropagation()"
               (change)="$event.stopPropagation(); changeTeamPriority(team, $any($event.target).value)"
             >
               @for (option of priorityOptions; track option.value) {
-                <option [value]="option.value">{{ option.label }}</option>
+                <option [value]="option.value" [selected]="option.value === priorityValue(team)">
+                  {{ option.label }}
+                </option>
               }
             </select>
           } @else {

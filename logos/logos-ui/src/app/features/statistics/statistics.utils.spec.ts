@@ -1,5 +1,6 @@
 import {
   extractProviderHostRamMb,
+  formatBucketRange,
   formatPercent,
   formatTokenCount,
   formatUptime,
@@ -292,5 +293,21 @@ describe('formatUptime', () => {
 
   it('reads days and hours at a day or more', () => {
     expect(formatUptime('2026-09-13T04:00:00Z', nowMs)).toBe('3d 8h');
+  });
+});
+
+/**
+ * Explicit volume-bucket ranges for chart tooltips.
+ */
+describe('formatBucketRange', () => {
+  it('formats a five-minute bucket as a time range', () => {
+    // Local-time formatting: pin the instant so the label is stable across TZ.
+    const start = new Date(2026, 8, 18, 4, 30, 0).getTime();
+    expect(formatBucketRange(start, 5 * 60_000)).toBe('04:30 – 04:35');
+  });
+
+  it('formats a daily bucket as a single calendar day', () => {
+    const start = new Date(2026, 8, 1, 0, 0, 0).getTime();
+    expect(formatBucketRange(start, 86_400_000)).toBe('Sep 1');
   });
 });

@@ -127,6 +127,27 @@ def test_record_sleeping_vram_ema():
     assert abs(profile.sleeping_residual_mb - 530.0) < 1.0
 
 
+def test_record_host_ram_keeps_high_water_mark_across_lean_replica():
+    """Sticky EngineCore growth must not be averaged down by a fresh lean lane."""
+    registry = ModelProfileRegistry()
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 80_000.0, sleeping=False)
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 5_500.0, sleeping=False)
+
+    profile = registry.get_profile("Qwen/Qwen3.8-27B")
+    assert profile is not None
+    assert profile.host_ram_mb == 80_000.0
+
+
+def test_record_host_ram_sleeping_keeps_high_water_mark():
+    registry = ModelProfileRegistry()
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 70_000.0, sleeping=True)
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 8_000.0, sleeping=True)
+
+    profile = registry.get_profile("Qwen/Qwen3.8-27B")
+    assert profile is not None
+    assert profile.host_ram_residual_mb == 70_000.0
+
+
 def test_disk_size_bytes_does_not_derive_base_residency():
     """The legacy disk_size_bytes field is informational — no base_residency from it."""
     registry = ModelProfileRegistry()

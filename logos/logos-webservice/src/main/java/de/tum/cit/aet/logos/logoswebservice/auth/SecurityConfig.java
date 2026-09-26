@@ -55,6 +55,9 @@ public class SecurityConfig {
                 // models_discovered is authenticated with the internal secret in
                 // the controller — same reason: it is not a JWT.
                 .requestMatchers(HttpMethod.POST, "/internal/models_discovered").permitAll()
+                // Inference gateway authenticates Logos API keys in-controller;
+                // Bearer values on these paths are API keys, not JWTs.
+                .requestMatchers("/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(rs -> rs
                 .bearerTokenResolver(new LogosBearerTokenResolver())
@@ -73,7 +76,6 @@ public class SecurityConfig {
     @Bean("logosCorsConfigurationSource")
     public CorsConfigurationSource logosCorsConfigurationSource(
             @Value("${logos.cors.allowed-origins:}") String allowedOrigins) {
-        CorsConfiguration cfg = new CorsConfiguration();
         // Default: no allowed origins. NOTE: this is not "same-origin allowed" —
         // browsers attach an Origin header to POST requests and WebSocket
         // handshakes even when the UI and API share an origin, so with an empty
@@ -85,20 +87,52 @@ public class SecurityConfig {
         // but credentialed `*` is rejected by Spring by design — use specific
         // origins in production.
         boolean credentialsSafe = true;
+        CorsConfiguration cfg = new CorsConfiguration();
+        CorsConfiguration inference = new CorsConfiguration();
         for (String origin : allowedOrigins.split(",")) {
             String o = origin.strip();
             if (o.isEmpty()) continue;
             if (o.contains("*")) {
                 cfg.addAllowedOriginPattern(o);
+                inference.addAllowedOriginPattern(o);
                 credentialsSafe = false;
             } else {
                 cfg.addAllowedOrigin(o);
+                inference.addAllowedOrigin(o);
             }
         }
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // Admin UI CORS stays tight. Inference paths previously went through the
+        // orchestrator (allow-all headers); preserve that for /v1|/openai|/jobs so
+        // cross-origin clients can send policy and other OpenAI-compatible headers.
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "logos_key", "logos-key"));
         cfg.setAllowCredentials(credentialsSafe);
+
+        inference.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // Explicit allowlist (not *): the orchestrator proxy forwards non-hop-by-hop
+        // headers, so browsers must not be able to attach arbitrary ones.
+        inference.setAllowedHeaders(List.of(
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "OpenAI-Organization",
+            "OpenAI-Project",
+            "OpenAI-Beta",
+            "logos_key",
+            "logos-key",
+            "policy",
+            "X-Request-ID",
+            "X-Logos-Batch-Execution"
+        ));
+        inference.setAllowCredentials(credentialsSafe);
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/v1/**", inference);
+        source.registerCorsConfiguration("/v1", inference);
+        source.registerCorsConfiguration("/openai/**", inference);
+        source.registerCorsConfiguration("/openai", inference);
+        source.registerCorsConfiguration("/jobs/**", inference);
+        source.registerCorsConfiguration("/jobs", inference);
         source.registerCorsConfiguration("/**", cfg);
         return source;
     }
@@ -163,6 +197,13 @@ public class SecurityConfig {
                 path = path.substring(contextPath.length());
             }
             if ("/logosdb/get_model_health".equals(path) || "/internal/models_discovered".equals(path)) {
+                return null;
+            }
+            // Logos API keys often arrive as Authorization: Bearer <key>. Do not
+            // feed them to the JWT resource-server filter.
+            if (path.equals("/v1") || path.startsWith("/v1/")
+                || path.equals("/openai") || path.startsWith("/openai/")
+                || path.equals("/jobs") || path.startsWith("/jobs/")) {
                 return null;
             }
             String token = defaultResolver.resolve(request);

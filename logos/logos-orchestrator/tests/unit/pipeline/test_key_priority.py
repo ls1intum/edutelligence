@@ -119,7 +119,9 @@ class _StubExecutionContext:
 
 
 class _FakeContextResolver:
-    async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+    async def resolve_context(
+        self, model_id, provider_id, request_path=None, request_id=None, **kwargs
+    ):  # noqa: ARG002
         return _StubExecutionContext(model_id, provider_id)
 
 

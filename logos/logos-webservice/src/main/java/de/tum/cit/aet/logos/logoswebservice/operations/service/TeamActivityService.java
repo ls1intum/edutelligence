@@ -50,6 +50,9 @@ public class TeamActivityService {
     /** Rows of the request list per page. */
     private static final int REQUEST_PAGE_SIZE = 20;
 
+    /** How many distinct questions the "Most Asked Questions" section shows. */
+    private static final int MOST_ASKED_QUESTIONS_LIMIT = 5;
+
     /**
      * Ceiling of one trace export. A consented team on a busy month can outrun
      * a download that still fits in a browser tab; the export then keeps the
@@ -136,11 +139,17 @@ public class TeamActivityService {
         // the picker, and narrowing it by the current pick would leave no way
         // back to the others.
         payload.put("requesters", toScopeOptions(logEntryRepository.findRequestersWithTraffic(
-            since, Timestamp.from(now), teamId)));
+            since, Timestamp.from(now), teamId, null, false)));
         payload.put("requests", requests.get("requests"));
         payload.put("requests_total", requests.get("total"));
         payload.put("requests_has_more", requests.get("has_more"));
         payload.put("requests_next_cursor", requests.get("next_cursor"));
+        payload.put("most_asked_questions", logEntryRepository
+                    .findMostAskedQuestions(since, Timestamp.from(now), teamId, MOST_ASKED_QUESTIONS_LIMIT)
+                    .stream()
+                    .map(p -> Map.of("question", p.getQuestion(), "count", p.getAskCount()))
+                    .toList()
+                );
         return payload;
     }
 

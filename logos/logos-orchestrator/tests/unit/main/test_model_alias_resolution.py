@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main
+from logos.logosnode_snapshot import _resolve_requested_model_name
 from logos.routers import user_facing as user_facing_mod
 
 # ---------------------------------------------------------------------------
@@ -62,24 +63,24 @@ class DummyDB:
 def test_resolver_matches_canonical_name_case_insensitively():
     models = [{"name": "GPT-4", "aliases": []}]
 
-    assert main._resolve_requested_model_name("GPT-4", models) == "GPT-4"
-    assert main._resolve_requested_model_name("gpt-4", models) == "GPT-4"
-    assert main._resolve_requested_model_name("Gpt-4", models) == "GPT-4"
+    assert _resolve_requested_model_name("GPT-4", models) == "GPT-4"
+    assert _resolve_requested_model_name("gpt-4", models) == "GPT-4"
+    assert _resolve_requested_model_name("Gpt-4", models) == "GPT-4"
 
 
 def test_resolver_matches_planner_alias_case_insensitively():
     models = [{"name": "Qwen/Qwen2.5-0.5B", "aliases": []}]
 
-    assert main._resolve_requested_model_name("Qwen_Qwen2.5-0.5B", models) == "Qwen/Qwen2.5-0.5B"
-    assert main._resolve_requested_model_name("qwen_qwen2.5-0.5b", models) == "Qwen/Qwen2.5-0.5B"
-    assert main._resolve_requested_model_name("planner-Qwen_Qwen2.5-0.5B", models) == "Qwen/Qwen2.5-0.5B"
+    assert _resolve_requested_model_name("Qwen_Qwen2.5-0.5B", models) == "Qwen/Qwen2.5-0.5B"
+    assert _resolve_requested_model_name("qwen_qwen2.5-0.5b", models) == "Qwen/Qwen2.5-0.5B"
+    assert _resolve_requested_model_name("planner-Qwen_Qwen2.5-0.5B", models) == "Qwen/Qwen2.5-0.5B"
 
 
 def test_resolver_matches_stored_alias_case_insensitively():
     models = [{"name": "llama-3.1-70b", "aliases": ["local-most-powerful"]}]
 
-    assert main._resolve_requested_model_name("local-most-powerful", models) == "llama-3.1-70b"
-    assert main._resolve_requested_model_name("Local-Most-Powerful", models) == "llama-3.1-70b"
+    assert _resolve_requested_model_name("local-most-powerful", models) == "llama-3.1-70b"
+    assert _resolve_requested_model_name("Local-Most-Powerful", models) == "llama-3.1-70b"
 
 
 def test_resolver_prefers_canonical_name_over_alias():
@@ -89,7 +90,7 @@ def test_resolver_prefers_canonical_name_over_alias():
         {"name": "other-model", "aliases": ["Fast"]},
     ]
 
-    assert main._resolve_requested_model_name("fast", models) == "fast"
+    assert _resolve_requested_model_name("fast", models) == "fast"
 
 
 def test_resolver_rejects_an_ambiguous_alias():
@@ -99,7 +100,7 @@ def test_resolver_rejects_an_ambiguous_alias():
         {"name": "model-b", "aliases": ["LOCAL-MOST-POWERFUL"]},
     ]
 
-    assert main._resolve_requested_model_name("local-most-powerful", models) is None
+    assert _resolve_requested_model_name("local-most-powerful", models) is None
 
 
 def test_resolver_prefers_stored_alias_over_planner_alias():
@@ -112,7 +113,7 @@ def test_resolver_prefers_stored_alias_over_planner_alias():
         {"name": "other-model", "aliases": ["acme_foo"]},
     ]
 
-    assert main._resolve_requested_model_name("acme_foo", models) == "other-model"
+    assert _resolve_requested_model_name("acme_foo", models) == "other-model"
 
 
 def test_resolver_ambiguous_stored_alias_does_not_fall_through_to_planner():
@@ -125,7 +126,7 @@ def test_resolver_ambiguous_stored_alias_does_not_fall_through_to_planner():
         {"name": "Acme Foo", "aliases": []},
     ]
 
-    assert main._resolve_requested_model_name("acme_foo", models) is None
+    assert _resolve_requested_model_name("acme_foo", models) is None
 
 
 def test_resolver_rejects_duplicate_normalized_model_names():
@@ -137,24 +138,24 @@ def test_resolver_rejects_duplicate_normalized_model_names():
         {"name": "FOO", "aliases": []},
     ]
 
-    assert main._resolve_requested_model_name("foo", models) is None
-    assert main._resolve_requested_model_name("Foo", models) is None
-    assert main._resolve_requested_model_name("foo", [{"name": "Foo", "aliases": []}]) == "Foo"
+    assert _resolve_requested_model_name("foo", models) is None
+    assert _resolve_requested_model_name("Foo", models) is None
+    assert _resolve_requested_model_name("foo", [{"name": "Foo", "aliases": []}]) == "Foo"
 
 
 def test_resolver_returns_none_for_unknown_or_empty_names():
     models = [{"name": "gpt-4", "aliases": ["fast"]}]
 
-    assert main._resolve_requested_model_name("nope", models) is None
-    assert main._resolve_requested_model_name("", models) is None
-    assert main._resolve_requested_model_name(None, models) is None
-    assert main._resolve_requested_model_name("   ", models) is None
+    assert _resolve_requested_model_name("nope", models) is None
+    assert _resolve_requested_model_name("", models) is None
+    assert _resolve_requested_model_name(None, models) is None
+    assert _resolve_requested_model_name("   ", models) is None
 
 
 def test_resolver_tolerates_entries_without_an_aliases_key():
     models = [{"name": "gpt-4"}, {"name": "other", "aliases": None}]
 
-    assert main._resolve_requested_model_name("GPT-4", models) == "gpt-4"
+    assert _resolve_requested_model_name("GPT-4", models) == "gpt-4"
 
 
 # ---------------------------------------------------------------------------

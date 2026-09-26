@@ -347,10 +347,8 @@ async def test_execute_infer_command_passthrough(monkeypatch):
             assert url.endswith("/v1/chat/completions")
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
     result = await client._execute_infer_command(  # noqa: SLF001
         {
             "lane_id": "lane-a",
@@ -398,10 +396,8 @@ async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(mon
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
         {
@@ -458,10 +454,8 @@ async def test_execute_infer_command_base64_encodes_binary_multipart_response(mo
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
         {
@@ -519,10 +513,8 @@ async def test_execute_infer_command_preserves_binary_when_json_parsing_fails(mo
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
 
     result = await client._execute_infer_command(  # noqa: SLF001
         {
@@ -845,10 +837,11 @@ async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
-            return last_revision  # never changes
+            return last_revision, last_count_revision  # never changes
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -893,13 +886,14 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
             iterations[0] += 1
             if iterations[0] >= 5:
                 client._stopping.set()
-            return last_revision
+            return last_revision, last_count_revision
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -920,6 +914,169 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
     await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
 
     assert send_calls == []
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_loop_count_bump_sends_patch_not_full_build(monkeypatch):
+    """A count change (no lifecycle change, no interval elapsed) must take the
+    in-memory patch path : the loop must NOT rebuild the full status
+    (all lanes, all probes) just because a request was counted."""
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        status_refresh_interval_seconds=60,
+    )
+    app = _DummyApp()
+
+    class _CountBumpLaneManager:
+        status_revision = 0
+
+        def __init__(self):
+            self.count_revision = 0
+
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
+            await asyncio.sleep(0)
+            self.count_revision += 1
+            return last_revision, self.count_revision
+
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _CountBumpLaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {  # noqa: SLF001
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+
+    calls: list[str] = []
+
+    async def _fake_full(_ws, force=False):
+        calls.append("full")
+        return True
+
+    async def _fake_patch(_ws):
+        calls.append("patch")
+        if len(calls) >= 2:
+            client._stopping.set()
+        return True
+
+    client._send_runtime_status = _fake_full  # type: ignore[method-assign]  # noqa: SLF001
+    client._send_count_update = _fake_patch  # type: ignore[method-assign]  # noqa: SLF001
+
+    fake_time = SimpleNamespace(monotonic=lambda: 0.0)
+    monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
+
+    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+
+    assert calls == ["patch", "patch"]
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_patches_lane_and_capacity_counts(monkeypatch):
+    """The patch updates each lane's active_requests and the capacity total,
+    sends a normal status message, and leaves the stored baseline unmutated."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 2, "lane-b": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [
+            {"lane_id": "lane-a", "active_requests": 0, "runtime_state": "loaded"},
+            {"lane_id": "lane-b", "active_requests": 0, "runtime_state": "loaded"},
+        ],
+        "capacity": {"active_requests": 0, "lane_count": 2},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is True
+    assert len(sends) == 1
+    runtime = sends[0]["runtime"]
+    assert sends[0]["type"] == "status"
+    lanes = {lane["lane_id"]: lane["active_requests"] for lane in runtime["lanes"]}
+    assert lanes == {"lane-a": 2, "lane-b": 1}
+    assert runtime["capacity"]["active_requests"] == 3
+    # Deep copy: the baseline keeps its own (unpatched) objects.
+    assert client._last_runtime_payload is not baseline  # noqa: SLF001
+    assert baseline["lanes"][0]["active_requests"] == 0
+    assert baseline["capacity"]["active_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_with_unchanged_counts_is_still_sent(monkeypatch):
+    """An increment and decrement can both land between the last push and the
+    count-triggered snapshot: the patched payload then matches the previous
+    one, but the push must still go out — the orchestrator's per-snapshot
+    forwarding budget resets only on a new status push."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            # The +1/-1 pair cancelled out since the baseline push.
+            return {"lane-a": 0}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    # Establish the baseline bookkeeping exactly as the initial push would.
+    await client._send_runtime_payload(object(), baseline, force=True)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert len(sends) == 1
+    sends.clear()
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is True
+    assert len(sends) == 1
+    assert sends[0]["runtime"]["lanes"][0]["active_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_without_baseline_falls_back_to_full_build(monkeypatch):
+    """Before the first full push there is no payload to patch — the count
+    update must fall back to a forced full build."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {}  # noqa: SLF001
+    client._send_runtime_status = AsyncMock(return_value=True)  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_count_update(None)  # noqa: SLF001
+
+    client._send_runtime_status.assert_awaited_once_with(None, force=True)  # type: ignore[attr-defined]
 
 
 def test_runtime_has_transient_lanes_uses_last_payload():
@@ -2629,10 +2786,9 @@ async def _run_stream(monkeypatch, chunks: list[bytes], status_code: int = 200) 
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
     upstream = _FakeUpstream(status_code, chunks)
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _FakeStreamClient(upstream),
-    )
+    # The relay uses one pooled client shared by all commands , so
+    # the fake is pinned on the instance, not the httpx class.
+    monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
     ws = _CollectWS()
     await client._execute_stream_command(  # noqa: SLF001
         ws, "cmd-1", {"lane_id": "lane-a", "payload": {"messages": []}}
@@ -3149,10 +3305,8 @@ def _stream_client_fixture(monkeypatch, upstream):
         app,
         LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
     )
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _FakeStreamClient(upstream),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
     return client, lane_manager
 
 
@@ -3287,10 +3441,20 @@ async def test_cancel_command_only_touches_its_target(monkeypatch):
         app,
         LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
     )
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _FakeStreamClient(next(upstreams)),
-    )
+
+    class _TwoUpstreamClient:
+        # Both commands share the pooled relay client ; distinguish
+        # them per send instead of per client instance.
+        def build_request(self, *a, **k):  # noqa: ANN002, ANN003
+            return SimpleNamespace()
+
+        async def send(self, request, stream=True):  # noqa: ARG002
+            return next(upstreams)
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(client, "_relay_client", _TwoUpstreamClient())  # noqa: SLF001
     ws = _CollectWS()
 
     for cmd_id in ("cmd-a", "cmd-b"):
@@ -3338,9 +3502,14 @@ async def test_hello_advertises_the_cancel_action():
 
 
 @pytest.mark.asyncio
-async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
+async def test_cancelling_a_non_streaming_infer_aborts_the_relay_request(monkeypatch):
     """The sync `infer` path is exposed the same way — a client that leaves
-    mid-request would otherwise keep the lane busy for the whole generation."""
+    mid-request would otherwise keep the lane busy for the whole generation.
+
+    Since the relay uses one pooled client  there is no per-request
+    connection to close: cancelling the task aborts the in-flight POST (httpx
+    releases the connection as it unwinds) and the shared client keeps
+    serving every other command."""
     app = _DummyApp()
     lane_manager = type("LaneMgr", (), {})()
     lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
@@ -3352,24 +3521,21 @@ async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
     )
 
     posting = asyncio.Event()
-    state = {"closed": False}
+    post_aborted = asyncio.Event()
 
     class _BlockingHttpClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
-            state["closed"] = True
-            return False
-
         async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
             posting.set()
-            await asyncio.Event().wait()  # generation never finishes
+            try:
+                await asyncio.Event().wait()  # generation never finishes
+            except asyncio.CancelledError:
+                post_aborted.set()
+                raise
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _BlockingHttpClient(),
-    )
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(client, "_relay_client", _BlockingHttpClient())  # noqa: SLF001
 
     ws = _CollectWS()
     await client._handle_message(  # noqa: SLF001
@@ -3390,8 +3556,53 @@ async def test_cancelling_a_non_streaming_infer_closes_the_relay(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert state["closed"] is True, "the relay connection to the lane stayed open"
+    assert post_aborted.is_set(), "the in-flight relay request was never aborted"
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_the_pooled_relay_client(monkeypatch) -> None:
+    """The relay client is shared by every command , so its
+    lifecycle belongs to the bridge: stop() — not any command — may close it."""
+    app = _DummyApp()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    relay = AsyncMock()
+    monkeypatch.setattr(client, "_relay_client", relay)
+
+    await client.stop()
+
+    relay.aclose.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stream_finally_does_not_close_the_shared_client(monkeypatch) -> None:
+    """Closing the pooled client after one stream would break every other
+    in-flight command: the finally may only close the streamed response,
+    which is what makes vLLM abort the sequence."""
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    upstream = _FakeUpstream(200, [b"tok1"])
+    relay = _FakeStreamClient(upstream)
+    relay.aclose = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(client, "_relay_client", relay)
+
+    ws = _CollectWS()
+    await client._execute_stream_command(  # noqa: SLF001
+        ws, "cmd-1", {"lane_id": "lane-a", "payload": {"messages": []}}
+    )
+
+    relay.aclose.assert_not_awaited()
+    assert [f["type"] for f in ws.frames] == ["stream_start", "stream_chunk", "stream_end"]
 
 
 # ---------------------------------------------------------------------------

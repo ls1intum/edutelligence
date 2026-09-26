@@ -16,7 +16,11 @@
       @for (section of navSections(); track section.label) {
         <p class="nav-section-label">{{ section.label }}</p>
         @for (item of section.items; track item.path) {
-          <a [routerLink]="item.path" routerLinkActive="nav-item--active" class="nav-item">
+          <a
+            [routerLink]="item.path"
+            class="nav-item"
+            [class.nav-item--active]="isNavActive(item)"
+          >
             <app-icon-tile [icon]="item.piIcon" [size]="28" />
             <span class="nav-label">{{ item.label }}</span>
           </a>

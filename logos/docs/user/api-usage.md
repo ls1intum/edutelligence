@@ -16,7 +16,7 @@ them to source control or put them in client-side applications.
 Set `stream` to `true` to receive server-sent events:
 
 ```bash
-curl https://logos.example.com/v1/chat/completions \
+curl https://logos.aet.cit.tum.de/v1/chat/completions \
   -H "Authorization: ******" \
   -H "Content-Type: application/json" \
   -d '{"model":"your-model","stream":true,"messages":[{"role":"user","content":"Explain recursion."}]}'

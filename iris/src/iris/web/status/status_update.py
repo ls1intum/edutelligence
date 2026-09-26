@@ -18,6 +18,8 @@ from iris.domain.communication.communication_tutor_suggestion_status_update_dto 
 )
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
+from iris.domain.status.command_dto import CommandDTO
+from iris.domain.status.command_result_dto import CommandResultDTO
 from iris.domain.status.competency_extraction_status_update_dto import (
     CompetencyExtractionStatusUpdateDTO,
 )
@@ -32,9 +34,18 @@ from iris.domain.status.rewriting_status_update_dto import (
 )
 from iris.domain.status.run_state_dto import RunStateEnum, StatusErrorDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
+from iris.domain.status.struggle_intervention_status_update_dto import (
+    StruggleInterventionStatusUpdateDTO,
+)
 from iris.tracing import TracedThreadPoolExecutor
 
 logger = get_logger(__name__)
+
+# How long to wait for Artemis to carry out a command on the client and reply. Must exceed the
+# Artemis-side client-ack timeout (5s) plus the HTTP round trip, so a slow client surfaces as
+# "not applied" rather than a transport error. Lower this only after Artemis' own timeout has been
+# lowered and deployed — the other order makes Iris give up while an answer is still on its way.
+COMMAND_TIMEOUT_SECONDS = 10
 
 
 class StatusCallback:
@@ -45,10 +56,42 @@ class StatusCallback:
     # Result-like payload fields that describe a single RUNNING update and must
     # NOT leak into later heartbeats or the terminal send. ``result`` carries
     # e.g. transcription checkpoint JSON; ``display_page_numbers`` is attached
-    # only to the send that produced it. Persistent fields (run_state, error,
-    # tokens, activities, and identity fields such as the lecture-unit id) are
-    # intentionally excluded so they keep accumulating across updates.
-    _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = ("result", "display_page_numbers")
+    # only to the send that produced it. ``stage``/``stage_sources`` (global
+    # search) name the pipeline phase THIS update crossed into — without
+    # clearing them, the terminal finish()/fail() send (which does not pass
+    # its own stage) still carries the last RUNNING update's stage name (e.g.
+    # "generating"), contradicting the FINISHED/FAILED run state it is sent
+    # with. Persistent fields (run_state, error, tokens, activities, and
+    # identity fields such as the lecture-unit id) are intentionally excluded
+    # so they keep accumulating across updates. A name absent from a given
+    # status DTO subtype is a harmless no-op (see _clear_transient_result_fields).
+    _TRANSIENT_RESULT_FIELDS: tuple[str, ...] = (
+        "result",
+        "display_page_numbers",
+        "stage",
+        "stage_sources",
+    )
+
+    # Backoff between retries of a delivery-critical frame, in seconds.
+    _RETRY_BACKOFF_S: tuple[int, ...] = (1, 2, 4)
+
+    def _send_payload_with_backoff(
+        self, payload: dict[str, Any], attempts: int
+    ) -> bool:
+        """Send a payload, retrying up to ``attempts`` times with backoff.
+
+        A frame Artemis must not lose (the chat answer, a terminal decision) is worth a second and a
+        third try; everything else is sent once, because a heartbeat that fails is superseded by the
+        next one anyway and retrying it only delays the pipeline.
+        """
+        for attempt in range(attempts):
+            if self._send_status_payload(payload):
+                return True
+            if attempt < attempts - 1:
+                time.sleep(
+                    self._RETRY_BACKOFF_S[min(attempt, len(self._RETRY_BACKOFF_S) - 1)]
+                )
+        return False
 
     def __init__(self, url: str, run_id: str, status: StatusUpdateDTO):
         self.url = url
@@ -259,6 +302,52 @@ class StatusCallback:
         )
         logger.warning(message)
         capture_message(message)
+
+    def execute_command(self, command: CommandDTO) -> CommandResultDTO:
+        """Synchronously ask Artemis to carry out a command on the client (e.g. a point-out) and
+        return whether it was applied.
+
+        Blocks until Artemis has driven the client and replied, so the agent tool learns the real
+        outcome before formulating its answer. Any transport failure or timeout is treated as
+        "not applied" so the pipeline never hangs on a command.
+
+        Args:
+            command: The command Artemis should carry out.
+
+        Returns:
+            The result reported by Artemis (``applied``).
+        """
+        # The command endpoint is the sibling of the status endpoint (…/runs/{runId}/command).
+        # Guard the derivation so a callback URL that unexpectedly lacks "/status" surfaces as
+        # "not applied" instead of silently POSTing to a wrong URL.
+        if "/status" not in self.url:
+            logger.warning(
+                "Cannot derive command URL from callback URL without a '/status' suffix; "
+                "treating the command as not applied."
+            )
+            return CommandResultDTO(applied=False)
+        command_url = self.url.rsplit("/status", 1)[0] + "/command"
+        try:
+            resp = requests.post(
+                command_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.run_id}",
+                },
+                json=command.model_dump(by_alias=True, exclude_none=True),
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            return CommandResultDTO.model_validate(resp.json())
+        except Exception as e:
+            # Refused connection, read timeout, error status, unparseable body: all mean the command
+            # did not happen, and the agent is told that rather than the pipeline breaking over it.
+            # All are reported, because none is an ordinary result — Artemis' client-ack timeout sits
+            # below ours, so a command the client ignored arrives as a valid ``applied: false`` and
+            # never reaches this handler. Anything that does means the call itself went wrong.
+            logger.warning("Iris command could not be executed by Artemis: %s", e)
+            capture_exception(e)
+            return CommandResultDTO(applied=False)
 
 
 class ChatRunCallback(StatusCallback):
@@ -530,3 +619,54 @@ class AutonomousTutorCallback(StatusCallback):
             run_id,
             AutonomousTutorPipelineStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
         )
+
+
+class StruggleInterventionCallback(StatusCallback):
+    """Status callback for the proactive struggle-intervention pipeline."""
+
+    def __init__(self, run_id: str, base_url: str):
+        url = f"{base_url}/{self.api_url}/struggle-intervention/runs/{run_id}/status"
+        super().__init__(
+            url,
+            run_id,
+            StruggleInterventionStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        )
+        self._trailing_finish_seen = False
+
+    # Attempts (with backoff) for the terminal frame, matching the chat callback's
+    # delivery-critical sends.
+    _TERMINAL_RETRY_ATTEMPTS = 3
+
+    def on_status_update(self) -> bool:
+        """Post the current status, retrying the terminal frame.
+
+        The terminal frame is the only thing Artemis ever learns about this run: it carries the
+        decision, and it is what completes the student's in-flight request. ``finish`` marks the
+        run terminal before it posts and this callback absorbs the pipeline's trailing finish, so
+        nothing behind it would try again. One 5xx or one restart landing on this POST would drop
+        the hint and leave the client waiting for its own timeout.
+        """
+        if not self._terminal_sent:
+            return super().on_status_update()
+        return self._send_payload_with_backoff(
+            self._serialize_status(), self._TERMINAL_RETRY_ATTEMPTS
+        )
+
+    def _reject_after_terminal(self, operation: str) -> None:
+        """Absorb the one trailing finish this pipeline's shape produces.
+
+        post_agent_hook owns the terminal frame here: it finishes the decision itself, or fails
+        a help request that came back unusable. AbstractAgentPipeline then closes every run with
+        a finish of its own, which arrives after that and is rejected. It is structural, not an
+        anomaly, so it must not reach Sentry on every single run. Exactly one is absorbed; a
+        second one, and every rejected fail or update, stays an anomaly and is reported.
+        """
+        if operation == "finish" and not self._trailing_finish_seen:
+            self._trailing_finish_seen = True
+            logger.debug(
+                "Absorbed the trailing finish for run %s; the pipeline had already sent its "
+                "terminal frame",
+                self.run_id,
+            )
+            return
+        super()._reject_after_terminal(operation)

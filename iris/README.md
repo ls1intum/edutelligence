@@ -53,7 +53,7 @@ their programming exercises on Artemis in a pedagogically meaningful way.
 
 ### Prerequisites
 
-- **Python 3.12**: Ensure that Python 3.12 is installed.
+- **Python 3.13**: Ensure that Python 3.13 is installed.
 
   ```bash
   python --version

@@ -45,6 +45,9 @@
   height: auto;
   padding: 6px 32px 6px 12px;
   font-weight: var(--font-weight-medium);
+  // Native <select> otherwise sizes to the longest <option>, which left a
+  // hollow gap beside short labels like "All teams" next to a wider neighbour.
+  field-sizing: content;
 }
 
 .app-select__static {

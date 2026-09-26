@@ -179,6 +179,14 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
   endpoint: "<your-endpoint>"
   api_key: "<your-key>"
   cost_per_1k_requests: 2
+
+# Or use a local no-network fallback when no reranking service is available
+- id: passthrough-reranker
+  name: Passthrough reranker
+  description: Preserve vector-search order
+  type: passthrough_reranker
+  model: passthrough
+  cost_per_1k_requests: 0
 ```
 
 ### Parameter Reference
@@ -190,7 +198,7 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 | `description`                   | Yes          | Additional description                                             |
 | `type`                          | Yes          | Model type (see below)                                             |
 | `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`) |
-| `api_key`                       | Yes          | API key for the provider                                           |
+| `api_key`                       | Provider     | API key for external providers; omit for passthrough               |
 | `endpoint`                      | Azure/Cohere | Provider endpoint URL                                              |
 | `host`                          | Ollama       | Ollama server host URL                                             |
 | `api_version`                   | Azure        | Azure API version                                                  |
@@ -202,16 +210,17 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 
 ### Model Types
 
-| Type                | Provider       | Class                                                     |
-| ------------------- | -------------- | --------------------------------------------------------- |
-| `openai_chat`       | OpenAI         | `DirectOpenAIChatModel` — Chat completions                |
-| `azure_chat`        | Azure OpenAI   | `AzureOpenAIChatModel` — Chat completions via Azure       |
-| `openai_embedding`  | OpenAI         | `DirectOpenAIEmbeddingModel` — Text embeddings            |
-| `azure_embedding`   | Azure OpenAI   | `AzureOpenAIEmbeddingModel` — Text embeddings via Azure   |
-| `openai_completion` | OpenAI         | `DirectOpenAICompletionModel` — Text completions          |
-| `azure_completion`  | Azure OpenAI   | `AzureOpenAICompletionModel` — Text completions via Azure |
-| `ollama`            | Ollama         | `OllamaModel` — Local model inference                     |
-| `cohere_azure`      | Cohere (Azure) | `CohereAzureClient` — Reranking                           |
+| Type                   | Provider       | Class                                                     |
+| ---------------------- | -------------- | --------------------------------------------------------- |
+| `openai_chat`          | OpenAI         | `DirectOpenAIChatModel` — Chat completions                |
+| `azure_chat`           | Azure OpenAI   | `AzureOpenAIChatModel` — Chat completions via Azure       |
+| `openai_embedding`     | OpenAI         | `DirectOpenAIEmbeddingModel` — Text embeddings            |
+| `azure_embedding`      | Azure OpenAI   | `AzureOpenAIEmbeddingModel` — Text embeddings via Azure   |
+| `openai_completion`    | OpenAI         | `DirectOpenAICompletionModel` — Text completions          |
+| `azure_completion`     | Azure OpenAI   | `AzureOpenAICompletionModel` — Text completions via Azure |
+| `ollama`               | Ollama         | `OllamaModel` — Local model inference                     |
+| `cohere_azure`         | Cohere (Azure) | `CohereAzureClient` — Reranking                           |
+| `passthrough_reranker` | Local          | `PassthroughReranker` — Preserve vector-search order      |
 
 ### How Models Are Selected
 

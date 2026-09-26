@@ -68,14 +68,14 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any()))
+        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));
         // A fresh, mutable payload per call — the push writes "total" into it
         // while a filter is on, and the real service returns a fresh map too.
         when(requestLogService.getLatestRequests(
-                any(), any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean()))
+                any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean()))
             .thenAnswer(inv -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("requests", servedRows.stream().map(HashMap::new).toList());
@@ -156,9 +156,9 @@ class StatsV2WebSocketHandlerFeedStatusTest {
 
         // A stable scope: the probe repeats its fingerprint, and the feed
         // counts its one queued row.
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
             .thenReturn("6;2026-08-29T21:00:00Z");
-        when(requestLogService.countFeedRows(any(), any(), any(), any(), any())).thenReturn(1L);
+        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any())).thenReturn(1L);
 
         handler.handleMessage(session, new TextMessage("{\"action\":\"set_feed_status\",\"status\":\"queued\"}"));
         assertThat(pushedTypes()).containsExactly("requests");
@@ -181,7 +181,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         // Out-of-bucket traffic moves — the scope's newest event advances
         // while the queued page is untouched, so the feed's own signature
         // stays put and only the probe reports it.
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
             .thenReturn("6;2026-08-29T21:05:00Z");
         ReflectionTestUtils.setField(handler, "globalTick", 30);
         invokeTick();
@@ -195,14 +195,14 @@ class StatsV2WebSocketHandlerFeedStatusTest {
     void the_bucket_count_is_recounted_only_when_the_row_set_moves() throws Exception {
         connectAndInit();
 
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
             .thenReturn("1;2026-08-29T21:00:00Z");
-        when(requestLogService.countFeedRows(any(), any(), any(), any(), any())).thenReturn(1L);
+        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any())).thenReturn(1L);
 
         servedRows = List.of(row("req-1", 100));
         handler.handleMessage(session, new TextMessage("{\"action\":\"set_feed_status\",\"status\":\"queued\"}"));
         // The forced push after a filter change counts the bucket.
-        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any());
+        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any());
         clearInvocations(requestLogService);
         sent.clear();
 
@@ -211,7 +211,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         servedRows = List.of(row("req-1", 101));
         invokePushRequests(false);
         assertThat(pushedTypes()).containsExactly("requests");
-        verify(requestLogService, never()).countFeedRows(any(), any(), any(), any(), any());
+        verify(requestLogService, never()).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any());
         sent.clear();
 
         // A second queued row appears: the row set has moved, so the count is
@@ -219,6 +219,6 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         servedRows = List.of(row("req-1", 101), row("req-2", 40));
         invokePushRequests(false);
         assertThat(pushedTypes()).containsExactly("requests");
-        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any());
+        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
 }

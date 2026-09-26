@@ -116,7 +116,11 @@ def parse_provider_config(name: str) -> dict:
     }
 
 
-def request_setup(headers: dict, api_key_id: int, db: "DBManager | None" = None):
+def request_setup(
+    headers: dict,
+    api_key_id: int,
+    db: "DBManager | None" = None,
+):
     """
     Get available models for the user and normalize provider types.
 

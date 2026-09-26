@@ -4,6 +4,31 @@ import pytest
 
 import logos as main
 from logos import PipelineRequest, RequestPipeline, SchedulingResult
+from logos.logosnode_snapshot import _resolve_requested_model_name
+
+
+def _proxy_model_db(models):
+    """DummyDB for _execute_proxy_mode: resolves names with the same pure
+    resolver that the production DBManager.resolve_proxy_model delegates to,
+    so alias/case semantics under test match production."""
+
+    class DummyDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def resolve_proxy_model(self, api_key_id, requested_name):
+            resolved = _resolve_requested_model_name(requested_name, models)
+            if resolved is None:
+                return None
+            for model in models:
+                if model["name"] == resolved:
+                    return model["id"], model["name"]
+            return None
+
+    return DummyDB
 
 
 async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
@@ -23,7 +48,7 @@ async def test_execute_proxy_mode_requires_model_in_body(monkeypatch):
         await main._execute_proxy_mode(
             body={"stream": True},  # no "model" key
             headers={"Authorization": "Bearer x"},
-            auth=MagicMock(key_value="lg-key", api_key_id=1),
+            auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
             deployments=[{"model_id": 1, "provider_id": 1}],
             log_id=None,
             is_async_job=False,
@@ -164,19 +189,120 @@ async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_ali
     streaming_response.assert_not_awaited()
 
 
-async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
-    """_execute_proxy_mode keeps classification/scheduling but narrows deployments to one model."""
+async def test_execute_resource_mode_logosnode_skips_the_budget_db_checkout(monkeypatch):
+    """A scheduled logosnode provider costs no DB checkout for the budget
+    check — budgets only meter cloud usage, so the check returns before
+    touching the database ."""
+
+    instantiations = []
 
     class DummyDB:
+        def __init__(self):
+            instantiations.append(1)
+
         def __enter__(self):
             return self
 
-        def __exit__(self, *args):
+        def __exit__(self, *a):
             return False
 
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 27, "name": "gemma2:2b"}]
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+
+    class Result:
+        success = True
+        error = None
+        execution_context = MagicMock(model_name="local-model", provider_type="logosnode")
+        provider_id = 1
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-budget-local", "provider_type": "logosnode"}
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type("P", (), {"process": AsyncMock(return_value=Result())}),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+    sync_response = AsyncMock(return_value={"mode": "sync"})
+    streaming_response = AsyncMock(return_value={"mode": "stream"})
+    monkeypatch.setattr(main, "_sync_response", sync_response)
+    monkeypatch.setattr(main, "_streaming_response", streaming_response)
+
+    response = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1, "type": "logosnode"}],
+        body={"model": "local-model"},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1, cloud_rl=None, local_rl=None),
+        log_id=1,
+        is_async_job=False,
+    )
+
+    assert response == {"mode": "sync"}
+    assert instantiations == []
+
+
+async def test_execute_resource_mode_cloud_still_checks_the_budget_in_db(monkeypatch):
+    """The checkout is only skipped for logosnode — cloud keys keep the check."""
+
+    instantiations = []
+
+    class DummyDB:
+        def __init__(self):
+            instantiations.append(1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get_team(self, team_id):
+            return None
+
+        def get_api_key_budget_limit(self, api_key_id):
+            return None
+
+    monkeypatch.setattr(main, "DBManager", DummyDB)
+
+    class Result:
+        success = True
+        error = None
+        execution_context = MagicMock(model_name="cloud-model", provider_type="cloud")
+        provider_id = 1
+        model_id = 10
+        classification_stats = {}
+        scheduling_stats = {"request_id": "req-budget-cloud", "provider_type": "cloud"}
+
+    monkeypatch.setattr(
+        main,
+        "_pipeline",
+        type("P", (), {"process": AsyncMock(return_value=Result())}),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_extract_policy", lambda *args, **kwargs: {"p": "ok"})
+    sync_response = AsyncMock(return_value={"mode": "sync"})
+    streaming_response = AsyncMock(return_value={"mode": "stream"})
+    monkeypatch.setattr(main, "_sync_response", sync_response)
+    monkeypatch.setattr(main, "_streaming_response", streaming_response)
+
+    response = await main._execute_resource_mode(
+        deployments=[{"model_id": 10, "provider_id": 1, "type": "cloud"}],
+        body={"model": "cloud-model"},
+        headers={"h": "v"},
+        auth=MagicMock(key_value="lg-test", api_key_id=1, cloud_rl=None, local_rl=None),
+        log_id=1,
+        is_async_job=False,
+    )
+
+    assert response == {"mode": "sync"}
+    assert instantiations == [1]
+
+
+async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
+    """_execute_proxy_mode keeps classification/scheduling but narrows deployments to one model."""
+
+    monkeypatch.setattr(main, "DBManager", _proxy_model_db([{"id": 27, "name": "gemma2:2b"}]))
 
     called = {}
 
@@ -200,13 +326,12 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
         called["request_id"] = request_id
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(
         body={"model": "gemma2:2b", "stream": False},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[
             {"model_id": 27, "provider_id": 12},
             {"model_id": 99, "provider_id": 1},
@@ -225,16 +350,7 @@ async def test_execute_proxy_mode_routes_through_resource_mode(monkeypatch):
 async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
     """Planner-safe underscore aliases resolve to canonical DB model names."""
 
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 32, "name": "Qwen/Qwen2.5-0.5B-Instruct"}]
+    monkeypatch.setattr(main, "DBManager", _proxy_model_db([{"id": 32, "name": "Qwen/Qwen2.5-0.5B-Instruct"}]))
 
     called = {}
 
@@ -257,13 +373,12 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
         called["allowed_models_override"] = allowed_models_override
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(
         body={"model": "Qwen_Qwen2.5-0.5B-Instruct", "stream": True},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[
             {"model_id": 32, "provider_id": 13},
             {"model_id": 99, "provider_id": 1},
@@ -281,16 +396,11 @@ async def test_execute_proxy_mode_resolves_planner_sanitized_alias(monkeypatch):
 async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
     """A request pinned to an alt tag routes to the model carrying it."""
 
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 32, "name": "llama-3.1-70b", "aliases": ["local-most-powerful"]}]
+    monkeypatch.setattr(
+        main,
+        "DBManager",
+        _proxy_model_db([{"id": 32, "name": "llama-3.1-70b", "aliases": ["local-most-powerful"]}]),
+    )
 
     called = {}
 
@@ -313,13 +423,12 @@ async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
         called["allowed_models_override"] = allowed_models_override
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(
         body={"model": "local-most-powerful", "stream": True},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[
             {"model_id": 32, "provider_id": 13},
             {"model_id": 99, "provider_id": 1},
@@ -336,16 +445,7 @@ async def test_execute_proxy_mode_resolves_stored_alias(monkeypatch):
 
 
 async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeypatch):
-    class DummyDB:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def get_models_info(api_key_id=None):
-            return [{"id": 27, "name": "gemma2:2b", "aliases": []}]
+    monkeypatch.setattr(main, "DBManager", _proxy_model_db([{"id": 27, "name": "gemma2:2b", "aliases": []}]))
 
     called = {}
 
@@ -366,13 +466,12 @@ async def test_execute_proxy_mode_resolves_model_name_case_insensitively(monkeyp
         called["body"] = body
         return {"status": "resource"}
 
-    monkeypatch.setattr(main, "DBManager", DummyDB)
     monkeypatch.setattr(main, "_execute_resource_mode", fake_resource_mode)
 
     result = await main._execute_proxy_mode(
         body={"model": "GEMMA2:2B", "stream": False},
         headers={"Authorization": "Bearer x"},
-        auth=MagicMock(key_value="lg-key", api_key_id=1),
+        auth=MagicMock(key_value="lg-key", api_key_id=1, resolved_proxy_model=None),
         deployments=[{"model_id": 27, "provider_id": 12}],
         log_id=None,
         is_async_job=False,

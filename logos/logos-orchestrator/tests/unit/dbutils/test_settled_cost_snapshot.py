@@ -6,6 +6,11 @@ riskier half (a function bug, a lock, a statement timeout), so it must run after
 the status write is durably committed and its failure must be swallowed. The
 snapshot is also recomputed on every finalization so a retry that corrects the
 persisted usage rows corrects the stored cost.
+
+The sync response path settles the snapshot on the queued payload write
+(``store_response_payload(settle_cost=True)`` —  O14): the snapshot only
+reads columns the billing commit made durable, so it prices after that commit
+in its own transaction.
 """
 
 from __future__ import annotations
@@ -67,3 +72,48 @@ def test_snapshot_sql_recomputes_and_carries_no_null_guard():
     # a no-op and freeze a cost snapshotted from partial usage.
     assert "settled_cost_micro_cents IS NULL" not in dbmanager._SETTLED_COST_SNAPSHOT_SQL
     assert "logos_price_usage" in dbmanager._SETTLED_COST_SNAPSHOT_SQL
+
+
+def _privacy_row(level="FULL"):
+    return MagicMock(fetchone=lambda: (level,))
+
+
+def test_queued_payload_write_settles_the_cost_after_its_commit():
+    db = _db()
+    db.session.execute.side_effect = [
+        _privacy_row(),  # privacy lookup
+        MagicMock(),  # payload UPDATE
+        MagicMock(),  # snapshot UPDATE
+    ]
+
+    db.store_response_payload(42, {"a": 1}, settle_cost=True)
+
+    names = _call_names(db)
+    assert names.count("execute") == 3
+    payload_commit = names.index("commit")
+    snapshot_execute = names.index("execute", payload_commit)
+    assert snapshot_execute > payload_commit  # prices only what the billing/payload commit made durable
+    assert "commit" in names[snapshot_execute + 1 :]  # the snapshot keeps its own commit
+
+
+def test_payload_write_without_settle_cost_does_not_price():
+    db = _db()
+    db.session.execute.side_effect = [_privacy_row(), MagicMock()]
+
+    db.store_response_payload(42, {"a": 1})
+
+    assert _call_names(db).count("execute") == 2
+
+
+def test_pricing_failure_in_queued_settle_keeps_the_payload_committed():
+    db = _db()
+    db.session.execute.side_effect = [
+        _privacy_row(),
+        MagicMock(),
+        RuntimeError("logos_price_usage failed"),
+    ]
+
+    db.store_response_payload(42, {"a": 1}, settle_cost=True)  # must not raise
+
+    names = _call_names(db)
+    assert names.index("commit") < names.index("rollback")

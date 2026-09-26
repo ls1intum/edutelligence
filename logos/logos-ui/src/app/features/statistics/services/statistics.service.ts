@@ -32,6 +32,9 @@ export interface LatestRequestsPage {
 export interface RequestFilter {
   userId: number | null;
   teamId: number | null;
+  providerId: number | null;
+  /** Keep only error/timeout outcomes when true. */
+  errorsOnly: boolean;
   /** One lifecycle bucket (queued/running/error/finished), or null for all. */
   status: string | null;
 }
@@ -43,10 +46,11 @@ export interface ScopeOption {
   requestCount: number;
 }
 
-/** What the filter dropdowns should offer for the current range and team. */
+/** What the filter dropdowns should offer for the current range and scope. */
 export interface ScopeOptions {
   teams: ScopeOption[];
   requesters: ScopeOption[];
+  providers: ScopeOption[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -67,11 +71,23 @@ export class StatisticsService {
    * unsearchable in a native select, and mostly made up of people who have never
    * sent a request.
    */
-  getScopeOptions(startIso: string, endIso: string, teamId: number | null): Promise<ScopeOptions> {
+  getScopeOptions(
+    startIso: string,
+    endIso: string,
+    scope: {
+      teamId: number | null;
+      userId: number | null;
+      providerId: number | null;
+      errorsOnly: boolean;
+    },
+  ): Promise<ScopeOptions> {
     return firstValueFrom(this.http.post<ScopeOptions>('/api/logosdb/request_log_scope_options', {
       start_date: startIso,
       end_date: endIso,
-      team_id: teamId,
+      team_id: scope.teamId,
+      user_id: scope.userId,
+      provider_id: scope.providerId,
+      errors_only: scope.errorsOnly || null,
     }));
   }
 
@@ -100,6 +116,8 @@ export class StatisticsService {
         limit,
         user_id: filter.userId,
         team_id: filter.teamId,
+        provider_id: filter.providerId,
+        errors_only: filter.errorsOnly || null,
         status: filter.status,
         cursor_ts: cursor?.ts ?? null,
         cursor_id: cursor?.request_id ?? null,
@@ -162,6 +180,22 @@ export class StatisticsService {
    */
   sleepLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/sleep', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  /**
+   * Take a busy lane offline without dropping its in-flight requests. The
+   * server marks the lane out of the rotation, waits for the in-flight
+   * requests to finish, then sleeps the lane — or unloads it when the host
+   * cannot hold a resident sleeper. The call can take as long as the last
+   * request runs (plus the sleep), so the panel shows "Draining…" for the
+   * whole ride. A lane that does not drain in time answers an error and
+   * keeps serving, so the click can simply be retried.
+   */
+  drainLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/drain', {
       provider_id: providerId,
       lane_id: laneId,
     }));

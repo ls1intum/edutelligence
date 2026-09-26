@@ -1,6 +1,6 @@
 {
   "name": "athena-docs",
-  "version": "2.7",
+  "version": "3.0",
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
