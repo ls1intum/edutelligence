@@ -366,6 +366,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
             len(transcription.transcription.segments),
             len(slide_chunks),
         )
+        # Semantic splitting embeds text with no callback in between, so it reports its own stage
+        slide_group_count = len(slide_chunks)
+        self.callback.update(
+            stage_name="transcript-chunking",
+            stage_progress=0,
+            stage_total=slide_group_count,
+        )
         for i, segment in enumerate(slide_chunks.values()):
             raise_if_cancelled(
                 cancel_event,
@@ -383,6 +390,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 chunks.append(segment)
                 continue
 
+            self.callback.update(
+                stage_name="transcript-chunking",
+                stage_progress=i,
+                stage_total=slide_group_count,
+            )
             semantic_chunks = self.llm_embedding.split_text_semantically(
                 segment[LectureTranscriptionSchema.SEGMENT_TEXT.value],
                 breakpoint_threshold_type="gradient",
@@ -427,6 +439,11 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 )
                 offset_start = offset_end + 1
 
+        self.callback.update(
+            stage_name="transcript-chunking",
+            stage_progress=slide_group_count,
+            stage_total=slide_group_count,
+        )
         logger.info(
             "[%s / %s] Chunking complete: %d final chunks",
             transcription.lecture_name,

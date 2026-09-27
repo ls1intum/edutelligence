@@ -335,7 +335,14 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
                 "before alignment checkpoint",
             )
-            callback.update(result=json.dumps(checkpoint_2))
+            # Artemis switches to INGESTING on this checkpoint and records the stage it carries in the
+            # same request, so the sticky transcription stage is cleared to start indexing without one
+            callback.update(
+                result=json.dumps(checkpoint_2),
+                stage_name=None,
+                stage_progress=None,
+                stage_total=None,
+            )
             logger.info(
                 "[Lecture %d] Checkpoint 2: enriched transcript (%d segments)",
                 lecture_unit_id,
@@ -401,6 +408,9 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
                 "before video download",
             )
+            callback.update(
+                stage_name="downloading", stage_progress=None, stage_total=None
+            )
             video_source_type = self.dto.lecture_unit.video_source_type
             if video_source_type == VideoSourceType.YOUTUBE:
                 ts = settings.transcription
@@ -444,7 +454,14 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 lecture_unit_id,
                 "before alignment checkpoint",
             )
-            callback.update(result=json.dumps(checkpoint_2))
+            # Artemis switches to INGESTING on this checkpoint and records the stage it carries in the
+            # same request, so the sticky transcription stage is cleared to start indexing without one
+            callback.update(
+                result=json.dumps(checkpoint_2),
+                stage_name=None,
+                stage_progress=None,
+                stage_total=None,
+            )
             logger.info(
                 "[Lecture %d] Checkpoint 2: enriched transcript (%d segments)",
                 lecture_unit_id,
