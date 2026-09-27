@@ -290,6 +290,9 @@ def test_run_ingestion_audits_before_the_terminal_callback():
         pipeline._run_ingestion(callback, {})
 
     assert order == ["audit", "finish"]
+    callback.update.assert_any_call(
+        stage_name="audit", stage_progress=None, stage_total=None
+    )
 
 
 def test_run_fails_with_audit_code_when_the_audit_rejects_the_unit():

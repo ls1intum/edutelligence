@@ -625,7 +625,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         # against the request inputs before certifying the run. Report the audit
         # as its own stage so the client can show "Verifying" rather than staying
         # on "Indexing" through the final read-back.
-        callback.update(stage_name="audit")
+        # The audit has no counter; clear the sticky one of the previous stage
+        callback.update(stage_name="audit", stage_progress=None, stage_total=None)
         stage_started_at = time.monotonic()
         IngestionAudit.for_client(client).verify(self.dto)
         self._stage_durations["audit"] = time.monotonic() - stage_started_at
