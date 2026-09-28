@@ -220,7 +220,7 @@ def system_and_messages(payload: Dict[str, Any]) -> Tuple[str, List[Dict[str, An
 # rate observed in production. The marker carries no instruction for the
 # model to preserve, so it is dropped rather than translated.
 _BILLING_HEADER_RE = re.compile(
-    r"\Ax-anthropic-billing-header:\s*(?:[\w.\-]+=[^;\n]*;\s*)+",
+    r"\Ax-anthropic-billing-header:[ \t]*(?:[\w.\-]+=[^;\n]*;[ \t]*)+",
     re.IGNORECASE,
 )
 
@@ -247,19 +247,39 @@ def strip_billing_header_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]
     Returns ``payload`` itself, unchanged, when there is no ``system`` field or
     it does not start with the marker — the common case for every client that
     is not Claude Code.
+
+    A system prompt that is *only* the marker — the whole string, or a first
+    block with no other content — would otherwise come out as an empty
+    string or an empty text block once stripped. The Messages API rejects an
+    empty text block outright, so that case drops the now-empty piece instead:
+    the first block (keeping any that follow), or the ``system`` field itself
+    when nothing is left of it. Not observed in practice (every captured
+    marker was followed by real prompt text in the same block), but cheap to
+    handle rather than assume.
     """
     system = payload.get("system")
     if isinstance(system, str):
         stripped = strip_billing_header(system)
         if stripped == system:
             return payload
-        return {**payload, "system": stripped}
+        if stripped:
+            return {**payload, "system": stripped}
+        result = dict(payload)
+        del result["system"]
+        return result
     if isinstance(system, list) and system:
         first = system[0]
         if isinstance(first, dict) and isinstance(first.get("text"), str):
             stripped = strip_billing_header(first["text"])
             if stripped != first["text"]:
-                return {**payload, "system": [{**first, "text": stripped}, *system[1:]]}
+                rest = system[1:]
+                if stripped:
+                    return {**payload, "system": [{**first, "text": stripped}, *rest]}
+                if rest:
+                    return {**payload, "system": rest}
+                result = dict(payload)
+                del result["system"]
+                return result
     return payload
 
 

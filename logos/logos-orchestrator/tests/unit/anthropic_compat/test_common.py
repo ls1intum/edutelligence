@@ -72,6 +72,45 @@ def test_strip_billing_header_from_payload_returns_the_same_object_without_a_mar
     assert strip_billing_header_from_payload(clean) is clean
 
 
+def test_strip_billing_header_preserves_newlines_after_the_marker():
+    # The marker's own trailing whitespace must not eat formatting the prompt
+    # put there on purpose -- a blank line separating the marker from the
+    # actual system prompt has to survive the strip.
+    assert strip_billing_header(_MARKER + "\n\n" + _PROMPT) == "\n\n" + _PROMPT
+    assert strip_billing_header(_MARKER + "\n" + _PROMPT) == "\n" + _PROMPT
+
+
+def test_strip_billing_header_from_payload_drops_a_marker_only_string_system():
+    # Stripping a system prompt that is *nothing but* the marker would
+    # otherwise forward an empty string; drop the field instead.
+    payload = {"system": _MARKER, "messages": []}
+    result = strip_billing_header_from_payload(payload)
+    assert "system" not in result
+    assert result["messages"] == []
+
+
+def test_strip_billing_header_from_payload_drops_a_marker_only_first_block_with_more_blocks():
+    # The Messages API rejects an empty text block outright, so a marker-only
+    # first block must be dropped entirely rather than forwarded as
+    # {"type": "text", "text": ""} -- the later blocks still carry real
+    # instructions and must survive.
+    payload = {
+        "system": [
+            {"type": "text", "text": _MARKER},
+            {"type": "text", "text": "Be brief."},
+        ],
+    }
+    result = strip_billing_header_from_payload(payload)
+    assert result["system"] == [{"type": "text", "text": "Be brief."}]
+
+
+def test_strip_billing_header_from_payload_drops_system_when_the_only_block_is_marker_only():
+    payload = {"system": [{"type": "text", "text": _MARKER}], "messages": []}
+    result = strip_billing_header_from_payload(payload)
+    assert "system" not in result
+    assert result["messages"] == []
+
+
 def test_strip_billing_header_from_payload_preserves_everything_else():
     payload = {
         "model": "Qwen/Qwen3.8-27B",
