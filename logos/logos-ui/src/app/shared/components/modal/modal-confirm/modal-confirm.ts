@@ -1,10 +1,10 @@
 import { Component, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
-import { TumUiDialogComponent } from '@tumaet/ui-angular';
+import { TumAetUiDialogComponent } from '@tumaet/ui-angular';
 
 @Component({
   selector: 'app-modal-confirm',
   standalone: true,
-  imports: [TumUiDialogComponent],
+  imports: [TumAetUiDialogComponent],
   templateUrl: './modal-confirm.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './modal-confirm.scss',
