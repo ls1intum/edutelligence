@@ -129,7 +129,7 @@ class GatewayAdmissionConcurrencyTest {
 
         try {
             Integer logId = CompletableFuture
-                .supplyAsync(() -> accounting.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY))
+                .supplyAsync(() -> accounting.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY))
                 .get(5, TimeUnit.SECONDS);
 
             assertThat(logId).isNotNull();
@@ -156,7 +156,7 @@ class GatewayAdmissionConcurrencyTest {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-                return accounting.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY);
+                return accounting.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY);
             });
         }
         start.countDown();
@@ -201,9 +201,9 @@ class GatewayAdmissionConcurrencyTest {
         setKeyBudget(f.apiKeyId(), 2 * RESERVATION);
         snapshot.enforceCloudBudget(f.key());
 
-        assertThat(local.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY)).isNotNull();
-        assertThat(local.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY)).isNotNull();
-        assertThatThrownBy(() -> local.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY))
+        assertThat(local.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY)).isNotNull();
+        assertThat(local.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY)).isNotNull();
+        assertThatThrownBy(() -> local.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY))
             .isInstanceOf(ResponseStatusException.class)
             .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
                 .isEqualTo(HttpStatus.PAYMENT_REQUIRED));
@@ -221,67 +221,11 @@ class GatewayAdmissionConcurrencyTest {
         setTeamBudget(f.teamId(), 2 * RESERVATION);
         snapshot.enforceCloudBudget(f.key());
 
-        assertThat(local.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY)).isNotNull();
-        assertThat(local.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY)).isNotNull();
-        assertThatThrownBy(() -> local.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY))
+        assertThat(local.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY)).isNotNull();
+        assertThat(local.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY)).isNotNull();
+        assertThatThrownBy(() -> local.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY))
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("Team monthly budget exceeded");
-    }
-
-    // --------------------------------------------------- shared RPM / TPM
-
-    @Test
-    void admission_storesTheTokenEstimateOnTheReservation() {
-        Fixture f = seedFixture(ApiKeyType.application);
-        int estimate = GatewayCloudRateLimiter.estimateTokens(REQUEST_BODY);
-        Integer logId = accounting.admitAndReserve(
-            f.key(), f.deployment(), null, null, estimate, REQUEST_BODY);
-
-        assertThat(logId).isNotNull();
-        assertThat(jdbc.queryForObject(
-            "SELECT gateway_estimated_tokens FROM log_entry WHERE id = ?", Integer.class, logId))
-            .isEqualTo(estimate);
-    }
-
-    @Test
-    void sharedTpm_rejectsWhenRecentEstimatesWouldExceedTheLimit() {
-        // Two admissions land their estimates in the shared window (as if on
-        // two replicas). A third that would push the sum past the limit is
-        // refused — the same check every replica runs against the same rows.
-        Fixture f = seedFixture(ApiKeyType.application);
-        int estimate = 400;
-        int tpmLimit = 1000;
-
-        assertThat(accounting.admitAndReserve(
-            f.key(), f.deployment(), null, tpmLimit, estimate, REQUEST_BODY)).isNotNull();
-        assertThat(accounting.admitAndReserve(
-            f.key(), f.deployment(), null, tpmLimit, estimate, REQUEST_BODY)).isNotNull();
-        assertThatThrownBy(() -> accounting.admitAndReserve(
-                f.key(), f.deployment(), null, tpmLimit, estimate, REQUEST_BODY))
-            .isInstanceOf(ResponseStatusException.class)
-            .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS))
-            .hasMessageContaining("TPM limit reached");
-
-        assertThat(inFlightReservations(f.apiKeyId())).isEqualTo(2);
-        assertThat(recentEstimatedTokens(f.apiKeyId())).isEqualTo(800);
-    }
-
-    @Test
-    void sharedRpm_rejectsWhenRecentGatewayRowsReachTheLimit() {
-        Fixture f = seedFixture(ApiKeyType.application);
-        int rpmLimit = 2;
-
-        assertThat(accounting.admitAndReserve(
-            f.key(), f.deployment(), rpmLimit, null, 10, REQUEST_BODY)).isNotNull();
-        assertThat(accounting.admitAndReserve(
-            f.key(), f.deployment(), rpmLimit, null, 10, REQUEST_BODY)).isNotNull();
-        assertThatThrownBy(() -> accounting.admitAndReserve(
-                f.key(), f.deployment(), rpmLimit, null, 10, REQUEST_BODY))
-            .isInstanceOf(ResponseStatusException.class)
-            .hasMessageContaining("RPM limit reached");
-
-        assertThat(inFlightReservations(f.apiKeyId())).isEqualTo(2);
     }
 
     // --------------------------------------------------------------- helpers
@@ -291,7 +235,7 @@ class GatewayAdmissionConcurrencyTest {
     }
 
     private int admit(Fixture f) {
-        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY);
+        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY);
         assertThat(id).isNotNull();
         return id;
     }
@@ -347,14 +291,5 @@ class GatewayAdmissionConcurrencyTest {
             "SELECT COUNT(*)::int FROM log_entry WHERE api_key_id = ? AND result_status IS NULL "
             + "AND request_id LIKE 'gw-%'", Integer.class, apiKeyId);
         return n == null ? 0 : n;
-    }
-
-    private long recentEstimatedTokens(int apiKeyId) {
-        Long n = jdbc.queryForObject(
-            "SELECT COALESCE(SUM(gateway_estimated_tokens), 0)::bigint FROM log_entry "
-            + "WHERE api_key_id = ? AND request_id LIKE 'gw-%' "
-            + "AND timestamp_request > NOW() - INTERVAL '60 seconds'",
-            Long.class, apiKeyId);
-        return n == null ? 0L : n;
     }
 }

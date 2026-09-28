@@ -8,7 +8,6 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -16,7 +15,6 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -24,13 +22,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * Budget-visible accounting for the direct-cloud path.
  *
  * <p>{@link #admitAndReserve} checks the budget from the short-TTL snapshot,
- * optionally enforces a shared RPM window from {@code log_entry}, then inserts
- * an in-flight reservation ({@code result_status IS NULL}) and adds it to this
- * instance's snapshot. Nothing on that path locks a shared row or touches more
- * than the key's own recent rows: requests on one key run concurrently, across
- * threads and across replicas, and their cost does not grow with the size of
- * the log. The budget is approximate by design — see
- * {@link GatewayBudgetService} for the overshoot bound.
+ * then inserts an in-flight reservation ({@code result_status IS NULL}) and
+ * adds it to this instance's snapshot. Cloud RPM/TPM are enforced separately
+ * in Redis ({@link GatewayCloudRateLimiter}) before this method runs. Nothing
+ * on this path locks a shared row or touches more than the key's own recent
+ * rows: requests on one key run concurrently, across threads and across
+ * replicas, and their cost does not grow with the size of the log. The budget
+ * is approximate by design — see {@link GatewayBudgetService} for the
+ * overshoot bound.
  *
  * <p>{@link #reconcileStale} zeros reservations abandoned after process loss.
  * It sweeps the whole table (bounded by the partial index on in-flight gateway
@@ -75,69 +74,23 @@ public class GatewayCloudAccounting {
     }
 
     /**
-     * Check budget (and optional shared RPM/TPM) then insert an in-flight
-     * reservation.
+     * Check budget then insert an in-flight reservation.
      *
      * <p>Deliberately lock-free. A per-key row lock here would serialize every
      * request on that key for the whole admission, on every replica at once;
-     * the reservation row is what makes concurrent admissions visible to each
-     * other, and the insert is atomic on its own. Two requests on the same key
-     * that are admitted in the same instant may both pass the check — the
-     * overshoot that admits is one reservation per such request, the bound the
-     * budget already documents.
+     * the reservation row is what makes concurrent budget admissions visible
+     * to each other, and the insert is atomic on its own. Two requests on the
+     * same key that are admitted in the same instant may both pass the budget
+     * check — the overshoot that admits is one reservation per such request,
+     * the bound the budget already documents. Cloud RPM/TPM are claimed in
+     * Redis before this method is called.
      *
-     * <p>RPM and TPM are the same shared window across replicas: recent
-     * {@code gw-*} rows are counted and their {@code gateway_estimated_tokens}
-     * summed. The estimate for this request is stored on the row so later
-     * admissions on any replica see it.
-     *
-     * @param sharedRpmLimit   per-key cloud RPM across replicas, or {@code null}
-     * @param sharedTpmLimit   per-key cloud TPM across replicas, or {@code null}
-     * @param estimatedTokens  admission-time token estimate for this request
-     * @param requestBody      the forwarded request, stored when the key logs payloads
+     * @param requestBody the forwarded request, stored when the key logs payloads
      * @return log_entry id, or {@code null} when reservation amount is 0
      */
     @Transactional
-    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
-                                   Integer sharedRpmLimit, Integer sharedTpmLimit,
-                                   int estimatedTokens, byte[] requestBody) {
+    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment, byte[] requestBody) {
         budgetService.enforceCloudBudget(key);
-
-        boolean checkRpm = sharedRpmLimit != null && sharedRpmLimit > 0;
-        boolean checkTpm = sharedTpmLimit != null && sharedTpmLimit > 0;
-        if (checkRpm || checkTpm) {
-            MapSqlParameterSource rateParams = new MapSqlParameterSource()
-                .addValue("aki", key.id())
-                .addValue("window", GatewayCloudRateLimiter.WINDOW_SECONDS);
-            jdbc.query("""
-                SELECT COUNT(*)::int AS recent_rpm,
-                       COALESCE(SUM(gateway_estimated_tokens), 0)::bigint AS recent_tpm
-                FROM log_entry
-                WHERE api_key_id = :aki
-                  AND request_id LIKE 'gw-%'
-                  AND timestamp_request > NOW() - make_interval(secs => :window)
-                """, rateParams, rs -> {
-                if (!rs.next()) {
-                    return null;
-                }
-                if (checkRpm && rs.getInt("recent_rpm") >= sharedRpmLimit) {
-                    throw new ResponseStatusException(
-                        HttpStatus.TOO_MANY_REQUESTS,
-                        "RPM limit reached (" + sharedRpmLimit + "/"
-                            + GatewayCloudRateLimiter.WINDOW_SECONDS + "s)");
-                }
-                if (checkTpm) {
-                    long recentTpm = rs.getLong("recent_tpm");
-                    if (recentTpm + Math.max(0, estimatedTokens) > sharedTpmLimit) {
-                        throw new ResponseStatusException(
-                            HttpStatus.TOO_MANY_REQUESTS,
-                            "TPM limit reached (" + sharedTpmLimit + "/"
-                                + GatewayCloudRateLimiter.WINDOW_SECONDS + "s)");
-                    }
-                }
-                return null;
-            });
-        }
 
         if (reservationMicroCents <= 0) {
             return null;
@@ -153,8 +106,7 @@ public class GatewayCloudAccounting {
             .addValue("provider_id", deployment.providerId())
             .addValue("settled", reservationMicroCents)
             .addValue("privacy_level", privacyLevel(key))
-            .addValue("input_payload", key.logsFullPayloads() ? asJsonb(requestBody) : null)
-            .addValue("estimated_tokens", Math.max(0, estimatedTokens));
+            .addValue("input_payload", key.logsFullPayloads() ? asJsonb(requestBody) : null);
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO log_entry (
@@ -162,26 +114,18 @@ public class GatewayCloudAccounting {
                 api_key_id, team_id, user_id, environment,
                 model_id, provider_id, request_id,
                 result_status, cost_finalized, settled_cost_micro_cents,
-                privacy_level, input_payload, gateway_estimated_tokens
+                privacy_level, input_payload
             ) VALUES (
                 NOW(), NOW(),
                 :api_key_id, :team_id, :user_id, :environment,
                 :model_id, :provider_id, :request_id,
                 NULL, TRUE, :settled,
-                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb),
-                :estimated_tokens
+                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb)
             )
             """, params, keys, new String[] {"id"});
         Number id = keys.getKey();
         budgetService.noteReservation(key, reservationMicroCents);
         return id == null ? null : id.intValue();
-    }
-
-    /** Test helper: admit with no shared rate limits. */
-    Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
-                            Integer sharedRpmLimit, byte[] requestBody) {
-        return admitAndReserve(key, deployment, sharedRpmLimit, null,
-            GatewayCloudRateLimiter.estimateTokens(requestBody), requestBody);
     }
 
     /**

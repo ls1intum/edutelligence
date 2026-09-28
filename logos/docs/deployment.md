@@ -296,8 +296,11 @@ Optional `.env` knobs:
 
 - `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count for the
   core `docker-compose.yaml`. Cloud RPM and TPM are both enforced shared
-  across replicas (recent `gw-*` log rows and their admission-time token
-  estimates).
+  across replicas via Redis (`logos-redis`, sliding 60 s window).
+- `REDIS_HOST` / `REDIS_PORT` (default `logos-redis` / `6379` in compose) —
+  shared rate-limit store for the inference gateway. Ephemeral: a Redis
+  restart clears the window (limits reset for up to 60 s). When a per-key
+  limit is set and Redis is unreachable, cloud admission fails closed (503).
 - `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
   accepts the public paths but proxies every request to the orchestrator after
   API-key auth.

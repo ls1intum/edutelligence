@@ -336,12 +336,16 @@ services:
     depends_on:
       logos-db:
         condition: service_healthy
+      logos-redis:
+        condition: service_healthy
     environment:
       DB_HOST: logos-db
       DB_PORT: 5432
       DB_NAME: logosdb
       DB_USER: postgres
       DB_PASSWORD: root
+      REDIS_HOST: logos-redis
+      REDIS_PORT: 6379
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       # Inference gateway (Phase 1 of the cloud/local split). When false, the
@@ -486,6 +490,21 @@ services:
       retries: 10
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  # Shared cloud RPM/TPM window for logos-webservice replicas. Ephemeral:
+  # a restart clears the sliding window (limits reset for up to 60 s).
+  logos-redis:
+    image: redis:7-alpine
+    container_name: logos-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
     networks:
       - internal
 

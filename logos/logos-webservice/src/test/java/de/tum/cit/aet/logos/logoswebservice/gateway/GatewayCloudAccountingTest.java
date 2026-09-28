@@ -267,7 +267,7 @@ class GatewayCloudAccountingTest {
     }
 
     private int admit(Fixture f) {
-        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), null, REQUEST_BODY);
+        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY);
         assertThat(id).isNotNull();
         return id;
     }

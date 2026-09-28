@@ -35,6 +35,8 @@ import jakarta.servlet.http.HttpServletRequest;
  *   <li>{@link GatewayBudgetService}'s short-TTL budget usage/limit cache</li>
  *   <li>JDK {@link java.net.http.HttpClient} connection pools in the forwarders</li>
  * </ul>
+ * Cloud RPM/TPM live in Redis ({@link GatewayCloudRateLimiter}), shared by every
+ * replica — not process state.
  *
  * <p>When {@code logos.gateway.enabled=false}, every request is proxied to the
  * orchestrator after API-key auth (safe fallback).
@@ -112,13 +114,9 @@ public class InferenceGatewayController {
                 ctx.deploymentsForModel(), request, modelName);
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
+                cloudRateLimiter.enforce(ctx.key(), body);
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(),
-                    decision.deployment(),
-                    cloudRateLimiter.cloudRpmLimit(ctx.key()),
-                    cloudRateLimiter.cloudTpmLimit(ctx.key()),
-                    GatewayCloudRateLimiter.estimateTokens(body),
-                    body);
+                    ctx.key(), decision.deployment(), body);
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
