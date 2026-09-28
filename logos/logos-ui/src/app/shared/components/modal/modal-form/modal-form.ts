@@ -1,7 +1,7 @@
 import { Component, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
-import { TumUiDialogComponent, type TumUiDialogSize } from '@tumaet/ui-angular';
+import { TumAetUiDialogComponent, type TumAetUiDialogSize } from '@tumaet/ui-angular';
 
-const SIZE_MAP: Record<'sm' | 'md' | 'lg' | 'xl', TumUiDialogSize> = {
+const SIZE_MAP: Record<'sm' | 'md' | 'lg' | 'xl', TumAetUiDialogSize> = {
   sm: 'small',
   md: 'medium',
   lg: 'large',
@@ -11,7 +11,7 @@ const SIZE_MAP: Record<'sm' | 'md' | 'lg' | 'xl', TumUiDialogSize> = {
 @Component({
   selector: 'app-modal-form',
   standalone: true,
-  imports: [TumUiDialogComponent],
+  imports: [TumAetUiDialogComponent],
   templateUrl: './modal-form.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './modal-form.scss',
@@ -22,7 +22,7 @@ export class ModalFormComponent {
   @Input() size: 'sm' | 'md' | 'lg' | 'xl' = 'md';
   @Output() visibleChange = new EventEmitter<boolean>();
 
-  protected get tumUiSize(): TumUiDialogSize {
+  protected get tumUiSize(): TumAetUiDialogSize {
     return SIZE_MAP[this.size];
   }
 }

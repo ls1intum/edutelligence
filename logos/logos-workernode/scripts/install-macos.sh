@@ -56,13 +56,13 @@ export LOGOS_METAL_VENV="$METAL_VENV"
 # use. Bump ref and checksums together when upgrading (and re-check the patch
 # patterns below against the new installer — see the version-pinning section
 # of MACOS.md).
-VLLM_METAL_REF="v0.29.0"
+VLLM_METAL_REF="v0.30.0"
 VLLM_METAL_INSTALLER="https://raw.githubusercontent.com/vllm-project/vllm-metal/${VLLM_METAL_REF}/install.sh"
 # Unchanged from v0.28.0 on purpose, not an oversight: install.sh and
 # scripts/lib.sh are byte-identical at both tags (re-verified against
 # v0.29.0), so only the wheels below move. Always re-compute these when
 # bumping — an identical checksum is a fact to confirm, never to assume.
-VLLM_METAL_INSTALLER_SHA256="0d0400a5527169cc2a2934189081c357464a64f3b463542e6f56921f036f984a"
+VLLM_METAL_INSTALLER_SHA256="ce9894403571fd662a47c2c3f4d84eb2ba3079480bf65cd6bddf8dfa2642277c"
 # The pinned installer performs further fetches of its own before it installs
 # anything — and it only checksums itself. At this tag it sources
 # scripts/lib.sh from the mutable `main` branch (executed code!), selects the
@@ -71,15 +71,15 @@ VLLM_METAL_INSTALLER_SHA256="0d0400a5527169cc2a2934189081c357464a64f3b463542e6f5
 # pinned tag and verified HERE, before the installer ever runs, and the
 # installer is patched to consume the verified copies:
 VLLM_METAL_LIB="https://raw.githubusercontent.com/vllm-project/vllm-metal/${VLLM_METAL_REF}/scripts/lib.sh"
-VLLM_METAL_LIB_SHA256="874d05acf9601a3f68e7c1246179a7ca3bb3f2f9ed9856f5f71df4bdaf293da8"
-VLLM_METAL_WHEEL_NAME="vllm_metal-0.29.0-cp312-cp312-macosx_15_0_arm64.whl"
+VLLM_METAL_LIB_SHA256="43e77d9853c81f0ca7a75b649af7051cd040b78a03d1992caad1210850d9046b"
+VLLM_METAL_WHEEL_NAME="vllm_metal-0.30.0-cp312-cp312-macosx_15_0_arm64.whl"
 VLLM_METAL_WHEEL_URL="https://github.com/vllm-project/vllm-metal/releases/download/${VLLM_METAL_REF}/${VLLM_METAL_WHEEL_NAME}"
-VLLM_METAL_WHEEL_SHA256="0d03dcc2be9a4286a19c5e53e1355d2e47acdbf2be6f9de9cbb48cc4b880f393"
+VLLM_METAL_WHEEL_SHA256="3955de8b2c75b633ef889b70fa469a4db661a0c5bb2f78e36272d68b16da9353"
 # vLLM core wheel (cp312 — the installer's lib.sh creates the venv with
 # Python 3.12). PyPI carries no macOS vLLM wheel, hence the release URL.
-VLLM_CORE_WHEEL_NAME="vllm-0.29.0+cpu-cp312-cp312-macosx_11_0_arm64.whl"
-VLLM_CORE_WHEEL_URL="https://github.com/vllm-project/vllm/releases/download/v0.29.0/vllm-0.29.0%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl"
-VLLM_CORE_WHEEL_SHA256="7133cb494664c502b07b114fe915847f0e71296d502f67f6fa76172ba46978df"
+VLLM_CORE_WHEEL_NAME="vllm-0.30.0+cpu-cp312-cp312-macosx_11_0_arm64.whl"
+VLLM_CORE_WHEEL_URL="https://github.com/vllm-project/vllm/releases/download/v0.30.0/vllm-0.30.0%2Bcpu-cp312-cp312-macosx_11_0_arm64.whl"
+VLLM_CORE_WHEEL_SHA256="fd9adfd566a8afa4ecbdf36b04bab10ebf43cd9ca18eca4b0a0bf2013b8de135"
 # Two different things, deliberately separate.
 #
 # PINNED is the version of the wheels above — what the managed default venv is
@@ -92,7 +92,7 @@ VLLM_CORE_WHEEL_SHA256="7133cb494664c502b07b114fe915847f0e71296d502f67f6fa76172b
 # venvs, which only have to be new enough. A routine release bump is NOT a new
 # compatibility requirement, so the workflow leaves this alone — raise it by
 # hand only when something genuinely stops working below that version.
-VLLM_METAL_PINNED_VERSION="0.29.0"
+VLLM_METAL_PINNED_VERSION="0.30.0"
 VLLM_METAL_MIN_VERSION="0.29.0"
 
 log()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
