@@ -141,3 +141,7 @@ class DatasetMetadataRequest(BaseModel):
 
 class BenchmarkLimitsRequest(BaseModel):
     model_provider_id: int = Field(gt=0)
+
+
+class HfReachabilityRequest(BaseModel):
+    hf_repo_id: str = Field(min_length=1, max_length=200)

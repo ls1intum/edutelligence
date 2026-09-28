@@ -288,7 +288,33 @@ _make_submodule(
 # ---------------------------------------------------------------------------
 
 _hf = _make_module("huggingface_hub")
-_make_submodule(_hf, "utils", {"disable_progress_bars": _noop})
+_make_submodule(_hf, "utils", {"disable_progress_bars": _noop, "validate_repo_id": _noop})
+
+
+class _HfRepositoryNotFoundError(Exception):
+    pass
+
+
+class _HfGatedRepoError(_HfRepositoryNotFoundError):
+    pass
+
+
+class _HfApi:
+    def auth_check(self, repo_id, *, token=None):
+        raise NotImplementedError("tests must replace huggingface_hub.HfApi")
+
+
+_make_submodule(
+    _hf,
+    "errors",
+    {
+        "HFValidationError": type("HFValidationError", (ValueError,), {}),
+        "RepositoryNotFoundError": _HfRepositoryNotFoundError,
+        "GatedRepoError": _HfGatedRepoError,
+    },
+)
+if not hasattr(_hf, "HfApi"):
+    _hf.HfApi = _HfApi
 
 _transformers = _make_module("transformers")
 _transformers_utils = _make_submodule(_transformers, "utils")
