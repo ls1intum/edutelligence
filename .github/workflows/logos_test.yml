@@ -132,6 +132,10 @@ jobs:
         run: npm ci
         working-directory: logos/logos-ui
 
+      - name: Run unit tests
+        run: npm test -- --watch=false
+        working-directory: logos/logos-ui
+
       - name: Build static web export
         run: npm run build
         working-directory: logos/logos-ui
