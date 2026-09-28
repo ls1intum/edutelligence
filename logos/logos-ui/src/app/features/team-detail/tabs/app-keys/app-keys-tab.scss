@@ -502,11 +502,6 @@
   &--low {
     background: rgb(var(--color-typography-700));
   }
-
-  &--inherit {
-    background: transparent;
-    border: 1px solid rgb(var(--color-typography-700));
-  }
 }
 
 .sla-select {

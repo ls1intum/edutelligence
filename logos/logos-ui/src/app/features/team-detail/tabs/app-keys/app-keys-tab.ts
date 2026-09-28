@@ -30,6 +30,7 @@ import {
   KeySla,
   SLA_OPTIONS,
   SLA_PRIORITY,
+  DEFAULT_SLA,
   slaHint,
   slaLabel,
   slaOfPriority,
@@ -118,16 +119,18 @@ export class AppKeysTabComponent {
   }
 
   /**
-   * The stored priority when it is not the tier's canonical value — the
-   * orchestrator buckets any such value as NORMAL but still dequeues it ahead
-   * of a plain 5, so the exact number is worth showing instead of hiding.
+   * A stored priority that is neither the tier's own value nor 0 ("nothing
+   * chosen yet"). The queue buckets 2..9 as NORMAL but still dequeues a 7
+   * ahead of a plain 5, so the exact number is worth showing rather than
+   * hiding behind the tier it rounds to.
    */
   rawPriorityNote(key: TeamApiKey): string | null {
     // While a change is in flight the stored value is still the old one, which
     // would read as a contradiction next to the tier already shown.
     if (this.slaSaving().has(key.id)) return null;
     const raw = key.default_priority ?? 0;
-    return raw !== SLA_PRIORITY[this.slaOf(key)] ? String(raw) : null;
+    if (raw === 0 || raw === SLA_PRIORITY[this.slaOf(key)]) return null;
+    return String(raw);
   }
 
   async changeSla(key: TeamApiKey, sla: KeySla): Promise<void> {
@@ -202,7 +205,7 @@ export class AppKeysTabComponent {
   createLoading = signal(false);
   createError = signal('');
   cEnv = signal('prod');
-  cSla = signal<KeySla>('inherit');
+  cSla = signal<KeySla>(DEFAULT_SLA);
   cBudget = signal('');
   cCloudRpm = signal('');
   cCloudTpm = signal('');
@@ -236,7 +239,7 @@ export class AppKeysTabComponent {
 
   resetCreate(): void {
     this.cEnv.set('prod');
-    this.cSla.set('inherit');
+    this.cSla.set(DEFAULT_SLA);
     this.cBudget.set('');
     this.cCloudRpm.set('');
     this.cCloudTpm.set('');
