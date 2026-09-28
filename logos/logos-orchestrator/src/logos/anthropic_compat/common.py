@@ -199,6 +199,90 @@ def system_and_messages(payload: Dict[str, Any]) -> Tuple[str, List[Dict[str, An
     return "\n\n".join(part for part in system_parts if part), conversation
 
 
+# Claude Code stamps a per-request billing/telemetry marker onto the very
+# first characters of the system prompt:
+#
+#   x-anthropic-billing-header: cc_version=2.1.276.791; cc_entrypoint=cli;
+#
+# with extra key=value pairs (cc_workload=cron, cc_is_subagent=true, ...)
+# depending on how the CLI was invoked. The key=value pairs vary by CLI
+# version, by subagent, by cron run and by interactive-vs-headless
+# invocation, so two requests in the very same conversation can start with
+# different bytes even though the rest of the system prompt — everything
+# after this marker — is byte-identical.
+#
+# That difference at token 0 matters more than it looks: an engine that keys
+# its own prefix cache off matching bytes (vLLM's --enable-prefix-caching)
+# throws away the entire cached prefix on a mismatch, however deep the two
+# prompts actually agree. Measured against a Claude Code conversation with
+# ~80k-token turns, 43% of consecutive turns diverged on exactly this marker
+# and paid a full re-prefill (tens of seconds) for it — matching the miss
+# rate observed in production. The marker carries no instruction for the
+# model to preserve, so it is dropped rather than translated.
+_BILLING_HEADER_RE = re.compile(
+    r"\Ax-anthropic-billing-header:[ \t]*(?:[\w.\-]+=[^;\n]*;[ \t]*)+",
+    re.IGNORECASE,
+)
+
+
+def strip_billing_header(text: str) -> str:
+    """Drop a leading Claude Code billing-header marker, if present.
+
+    A no-op for text from any other client, and for a system prompt that does
+    not start with the marker.
+    """
+    return _BILLING_HEADER_RE.sub("", text, count=1)
+
+
+def strip_billing_header_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return ``payload`` with a leading billing-header marker dropped from ``system``.
+
+    Only the text of the first system block is touched — a second block, a
+    ``cache_control`` entry on the first, and the rest of the request all pass
+    through untouched. This runs before any dialect translation and before the
+    verbatim forward to a Messages-native upstream (vLLM, another Logos
+    instance) alike, since both would otherwise carry the marker's bytes
+    straight into whatever prefix cache the request lands on.
+
+    Returns ``payload`` itself, unchanged, when there is no ``system`` field or
+    it does not start with the marker — the common case for every client that
+    is not Claude Code.
+
+    A system prompt that is *only* the marker — the whole string, or a first
+    block with no other content — would otherwise come out as an empty
+    string or an empty text block once stripped. The Messages API rejects an
+    empty text block outright, so that case drops the now-empty piece instead:
+    the first block (keeping any that follow), or the ``system`` field itself
+    when nothing is left of it. Not observed in practice (every captured
+    marker was followed by real prompt text in the same block), but cheap to
+    handle rather than assume.
+    """
+    system = payload.get("system")
+    if isinstance(system, str):
+        stripped = strip_billing_header(system)
+        if stripped == system:
+            return payload
+        if stripped:
+            return {**payload, "system": stripped}
+        result = dict(payload)
+        del result["system"]
+        return result
+    if isinstance(system, list) and system:
+        first = system[0]
+        if isinstance(first, dict) and isinstance(first.get("text"), str):
+            stripped = strip_billing_header(first["text"])
+            if stripped != first["text"]:
+                rest = system[1:]
+                if stripped:
+                    return {**payload, "system": [{**first, "text": stripped}, *rest]}
+                if rest:
+                    return {**payload, "system": rest}
+                result = dict(payload)
+                del result["system"]
+                return result
+    return payload
+
+
 def image_data_url(block: Dict[str, Any]) -> Optional[str]:
     """Turn an Anthropic image block into a ``data:``/``https:`` URL.
 
