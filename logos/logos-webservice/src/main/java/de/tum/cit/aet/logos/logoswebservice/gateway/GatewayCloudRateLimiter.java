@@ -38,12 +38,14 @@ public class GatewayCloudRateLimiter {
     private static final String ADMIT_SCRIPT = """
         local rpm_key = KEYS[1]
         local tpm_key = KEYS[2]
-        local now = tonumber(ARGV[1])
-        local window_ms = tonumber(ARGV[2])
-        local rpm_limit = tonumber(ARGV[3])
-        local tpm_limit = tonumber(ARGV[4])
-        local tokens = tonumber(ARGV[5])
-        local member = ARGV[6]
+        -- Redis server time so skewed replica clocks cannot prune each other early.
+        local redis_time = redis.call('TIME')
+        local now = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+        local window_ms = tonumber(ARGV[1])
+        local rpm_limit = tonumber(ARGV[2])
+        local tpm_limit = tonumber(ARGV[3])
+        local tokens = tonumber(ARGV[4])
+        local member = ARGV[5]
         local cutoff = now - window_ms
 
         redis.call('ZREMRANGEBYSCORE', rpm_key, '-inf', cutoff)
@@ -106,7 +108,6 @@ public class GatewayCloudRateLimiter {
         }
 
         int estimatedTokens = estimateTokens(body);
-        long now = System.currentTimeMillis();
         long windowMs = WINDOW_SECONDS * 1000L;
         String member = UUID.randomUUID().toString();
         String rpmKey = "gw:rpm:" + key.id();
@@ -117,7 +118,6 @@ public class GatewayCloudRateLimiter {
             result = redis.execute(
                 admitScript,
                 List.of(rpmKey, tpmKey),
-                Long.toString(now),
                 Long.toString(windowMs),
                 Integer.toString(checkRpm ? limits.rpm() : 0),
                 Integer.toString(checkTpm ? limits.tpm() : 0),

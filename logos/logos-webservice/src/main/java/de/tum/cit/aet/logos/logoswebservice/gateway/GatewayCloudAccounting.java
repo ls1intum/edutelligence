@@ -15,6 +15,8 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -23,10 +25,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *
  * <p>{@link #admitAndReserve} checks the budget from the short-TTL snapshot,
  * then inserts an in-flight reservation ({@code result_status IS NULL}) and
- * adds it to this instance's snapshot. Cloud RPM/TPM are enforced separately
- * in Redis ({@link GatewayCloudRateLimiter}) before this method runs. Nothing
- * on this path locks a shared row or touches more than the key's own recent
- * rows: requests on one key run concurrently, across threads and across
+ * after commit adds it to this instance's snapshot. Cloud RPM/TPM are enforced
+ * separately in Redis ({@link GatewayCloudRateLimiter}) before this method runs.
+ * Nothing on this path locks a shared row or touches more than the key's own
+ * recent rows: requests on one key run concurrently, across threads and across
  * replicas, and their cost does not grow with the size of the log. The budget
  * is approximate by design — see {@link GatewayBudgetService} for the
  * overshoot bound.
@@ -124,8 +126,23 @@ public class GatewayCloudAccounting {
             )
             """, params, keys, new String[] {"id"});
         Number id = keys.getKey();
-        budgetService.noteReservation(key, reservationMicroCents);
+        // Bump the snapshot only after commit so a concurrent refresh cannot
+        // SELECT before the row is visible and then overwrite the bump.
+        noteReservationAfterCommit(key, reservationMicroCents);
         return id == null ? null : id.intValue();
+    }
+
+    private void noteReservationAfterCommit(GatewayKey key, long microCents) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    budgetService.noteReservation(key, microCents);
+                }
+            });
+        } else {
+            budgetService.noteReservation(key, microCents);
+        }
     }
 
     /**

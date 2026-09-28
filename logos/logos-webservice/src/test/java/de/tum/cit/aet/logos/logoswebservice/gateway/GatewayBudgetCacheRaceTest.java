@@ -111,6 +111,23 @@ class GatewayBudgetCacheRaceTest {
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
     }
 
+    @Test
+    void noteReservationBeforeRefreshRegisters_isPreservedByInstall() throws Exception {
+        GatewayKey key = applicationKey(KEY_ID);
+        budget.enforceCloudBudget(key);
+        String usageKey = usageCacheKey(KEY_ID);
+
+        clock.advanceMillis(TTL_SECONDS * 1000L + 1);
+        // Bump the expired entry before any refresh claims inflight.
+        budget.noteReservation(key, 50L);
+        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
+
+        usageFromDb.set(100L); // concurrent SELECT would miss an uncommitted row
+        budget.enforceCloudBudget(key);
+
+        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
+    }
+
     private static String usageCacheKey(int apiKeyId) {
         String monthStart = YearMonth.from(T0.atZone(ZoneOffset.UTC)).atDay(1).toString();
         return "usage:key:" + apiKeyId + ":" + monthStart;

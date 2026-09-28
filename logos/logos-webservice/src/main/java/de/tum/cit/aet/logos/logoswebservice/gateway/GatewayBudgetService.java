@@ -81,6 +81,16 @@ public class GatewayBudgetService {
     /** Single-flight usage/limit loads: concurrent misses share one refresh. */
     private final ConcurrentHashMap<String, CompletableFuture<CacheEntry>> inflight = new ConcurrentHashMap<>();
 
+    /**
+     * Per-cache-key monitors. {@link #addToCachedUsage} and the drain/install
+     * half of {@link #refresh} share one critical section so a bump cannot
+     * observe a half-finished refresh (or leave an orphan pending increment).
+     */
+    private final ConcurrentHashMap<String, Object> keyMonitors = new ConcurrentHashMap<>();
+
+    private Object monitorFor(String cacheKey) {
+        return keyMonitors.computeIfAbsent(cacheKey, ignored -> new Object());
+    }
     @Autowired
     public GatewayBudgetService(
             NamedParameterJdbcTemplate jdbc,
@@ -278,16 +288,18 @@ public class GatewayBudgetService {
     }
 
     private void addToCachedUsage(String cacheKey, long microCents) {
-        cache.compute(cacheKey, (k, entry) -> {
-            if (entry == null) {
-                return null;
+        synchronized (monitorFor(cacheKey)) {
+            cache.compute(cacheKey, (k, entry) -> {
+                if (entry == null) {
+                    return null;
+                }
+                long current = entry.value instanceof Long l ? l : 0L;
+                return new CacheEntry(current + microCents, entry.loadedAtMs);
+            });
+            // Queue while a refresh may overwrite this entry; install merges it.
+            if (inflight.containsKey(cacheKey)) {
+                pendingUsageIncrements.computeIfAbsent(cacheKey, ignored -> new LongAdder()).add(microCents);
             }
-            long current = entry.value instanceof Long l ? l : 0L;
-            return new CacheEntry(current + microCents, entry.loadedAtMs);
-        });
-        // Queue while a refresh may overwrite this entry; install merges it.
-        if (inflight.containsKey(cacheKey)) {
-            pendingUsageIncrements.computeIfAbsent(cacheKey, ignored -> new LongAdder()).add(microCents);
         }
     }
 
@@ -323,39 +335,60 @@ public class GatewayBudgetService {
             return join(winner);
         }
         try {
-            // Re-check under the single-flight claim: another thread may have
-            // installed a fresh entry before we registered.
-            CacheEntry latest = cache.get(key);
-            long now = clock.millis();
-            if (latest != null && now - latest.loadedAtMs < ttlMillis) {
-                created.complete(latest);
-                return latest;
+            synchronized (monitorFor(key)) {
+                // Re-check under the single-flight claim: another thread may have
+                // installed a fresh entry before we registered.
+                CacheEntry latest = cache.get(key);
+                long now = clock.millis();
+                if (latest != null && now - latest.loadedAtMs < ttlMillis) {
+                    LongAdder pending = pendingUsageIncrements.remove(key);
+                    if (pending != null && latest.value instanceof Long current) {
+                        long extra = pending.sum();
+                        if (extra > 0L) {
+                            latest = new CacheEntry(current + extra, latest.loadedAtMs);
+                            cache.put(key, latest);
+                        }
+                    }
+                    created.complete(latest);
+                    inflight.remove(key, created);
+                    return latest;
+                }
             }
 
             T value = loader.load();
             long loadedAt = clock.millis();
-            Object toStore = value;
-            if (value instanceof Long loaded) {
-                // Bumps from noteReservation while this load ran (also applied to
-                // the live entry for concurrent readers). DB may already include
-                // the same reservation — double-count errs towards refusing.
-                LongAdder pending = pendingUsageIncrements.remove(key);
-                long extra = pending == null ? 0L : pending.sum();
-                toStore = loaded + extra;
-            }
 
-            Object installedValue = toStore;
-            CacheEntry installed = cache.compute(key, (k, existing) -> {
-                // A fresher snapshot won the race; keep it (and its bumps).
-                if (existing != null
-                        && existing.loadedAtMs >= refreshStartedAtMs
-                        && loadedAt - existing.loadedAtMs < ttlMillis) {
-                    return existing;
-                }
-                return new CacheEntry(installedValue, loadedAt);
-            });
-            created.complete(installed);
-            return installed;
+            synchronized (monitorFor(key)) {
+                LongAdder pending = value instanceof Long ? pendingUsageIncrements.remove(key) : null;
+                long extra = pending == null ? 0L : pending.sum();
+
+                CacheEntry installed = cache.compute(key, (k, existing) -> {
+                    // A fresher snapshot won the race; keep it and fold pending bumps in.
+                    if (existing != null
+                            && existing.loadedAtMs >= refreshStartedAtMs
+                            && loadedAt - existing.loadedAtMs < ttlMillis) {
+                        if (extra > 0L && existing.value instanceof Long current) {
+                            return new CacheEntry(current + extra, existing.loadedAtMs);
+                        }
+                        return existing;
+                    }
+                    if (value instanceof Long loaded) {
+                        // pending: bumps during this load. max with existing: a
+                        // pre-inflight bump that lost the containsKey race.
+                        long merged = loaded + extra;
+                        if (existing != null && existing.value instanceof Long bumped) {
+                            merged = Math.max(merged, bumped);
+                        }
+                        return new CacheEntry(merged, loadedAt);
+                    }
+                    return new CacheEntry(value, loadedAt);
+                });
+                created.complete(installed);
+                // Drop inflight before releasing the monitor so a bump cannot
+                // queue against a refresh that will never drain again.
+                inflight.remove(key, created);
+                return installed;
+            }
         } catch (RuntimeException | Error e) {
             created.completeExceptionally(e);
             throw e;
