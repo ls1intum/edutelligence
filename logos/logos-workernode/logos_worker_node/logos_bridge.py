@@ -1022,6 +1022,7 @@ class LogosBridgeClient:
         model_name: str,
         *,
         persist: bool = True,
+        record_probe_log: bool = True,
         gpu_devices: str = "",
         kv_cache_dtype: str = "",
         dtype: str = "",
@@ -1073,7 +1074,10 @@ class LogosBridgeClient:
         non-power-of-2 tp must be checked at that exact tp too, or it gets
         permanently excluded before its valid configuration is ever tried.
 
-        ``persist=False`` skips the model_profiles write. Never raises.
+        ``persist=False`` skips the model_profiles write.
+        ``record_probe_log=False`` keeps a rejection out of
+        calibration_probe_logs, where it would replace the node's last real
+        calibration row. Never raises.
         """
         from logos_worker_node.calibration import (  # noqa: PLC0415
             _max_tp_for_plan,
@@ -1152,7 +1156,7 @@ class LogosBridgeClient:
         # this attempt only, stays a candidate, rechecked every session.
         if hf_meta is not None and hf_meta.source == "error:model-not-found-or-unauthorized":
             result["unsupported_reason"] = REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
-            if persist:
+            if persist and record_probe_log:
                 self._record_precheck_rejection(
                     model_name,
                     REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
@@ -1167,7 +1171,7 @@ class LogosBridgeClient:
         # Skip this attempt only; stays a candidate, rechecked every session.
         if hf_meta is not None and hf_meta.source == "error:model-gated":
             result["unsupported_reason"] = REASON_MODEL_GATED
-            if persist:
+            if persist and record_probe_log:
                 self._record_precheck_rejection(
                     model_name, REASON_MODEL_GATED, tensor_parallel_size=tensor_parallel_size, gpu_devices=gpu_devices
                 )
@@ -1321,9 +1325,13 @@ class LogosBridgeClient:
                 else:
                     description = "HF compatibility precheck: no VRAM left for a min KV cache at every TP size."
                 await self._persist_permanent_unsupported(model_name, unsupported_reason, description)
-                self._record_precheck_rejection(
-                    model_name, unsupported_reason, tensor_parallel_size=tensor_parallel_size, gpu_devices=gpu_devices
-                )
+                if record_probe_log:
+                    self._record_precheck_rejection(
+                        model_name,
+                        unsupported_reason,
+                        tensor_parallel_size=tensor_parallel_size,
+                        gpu_devices=gpu_devices,
+                    )
 
         return result
 
@@ -1368,6 +1376,7 @@ class LogosBridgeClient:
         plan = self._resolve_configured_plan(model_name)
         result = await self._run_hf_compatibility_precheck(
             model_name,
+            record_probe_log=False,
             gpu_devices=str(plan.get("gpu_devices") or ""),
             kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
             dtype=str(plan.get("dtype") or ""),
@@ -1872,16 +1881,23 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"unsupported reason={_unsupported.reason_code}",
                     )
-                    # No probe ran, but the reason is worth keeping queryable
-                    # in calibration_probe_logs (not just the live event feed)
-                    # — see _record_precheck_rejection for why this gets its
-                    # own checklist row instead of no row at all.
-                    self._record_precheck_rejection(
-                        model_name,
-                        _unsupported.reason_code,
-                        tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
-                        gpu_devices=str(plan.get("gpu_devices") or ""),
+                    from logos_worker_node.hf_model_info import (  # noqa: PLC0415
+                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
                     )
+
+                    # A vLLM load failure keeps the row of the probe that
+                    # found it; only a precheck verdict has no row of its own.
+                    if _unsupported.reason_code in (
+                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+                    ):
+                        self._record_precheck_rejection(
+                            model_name,
+                            _unsupported.reason_code,
+                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+                            gpu_devices=str(plan.get("gpu_devices") or ""),
+                        )
                     continue
 
                 # Pre-flight: sleep gate. If the worker config forbids sleep

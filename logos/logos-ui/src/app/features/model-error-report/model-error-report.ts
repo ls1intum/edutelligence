@@ -229,7 +229,7 @@ interface ReasonDescription {
   readonly label: string;
   readonly description: string;
   // Which failure domain (see above) this reason attaches to when the UI
-  // has to classify a raw log itself (backend-supplied `stages` already
+  // has to classify a raw log itself (worker-supplied `stages` already
   // carry their own attachment and ignore this). undefined = no single
   // deterministic point — resolved positionally instead, same convention
   // as calibration.py's Pattern.domain=None.
@@ -239,7 +239,7 @@ interface ReasonDescription {
   // unlike `label`/`description` above which are polished for display.
   // Used ONLY to scroll to and highlight the matching log line (see
   // openNodeLog) when this reason came from the regex fallback path —
-  // backend-supplied stages carry their own log_anchor instead.
+  // worker-supplied stages carry their own log_anchor instead.
   readonly needle?: string;
   // For a reason that can occur at more than one point in the sequence
   // (domain=undefined, resolved positionally — e.g. cuda-oom can be
@@ -276,14 +276,6 @@ const UNSUPPORTED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
       'architecture.',
     domain: DOMAIN_ENGINE_INIT,
     needle: 'does not recognize this architecture',
-  },
-  'requires-trust-remote-code': {
-    label: 'Requires trust_remote_code',
-    description:
-      'This repository ships custom modeling code and requires ' +
-      'trust_remote_code=True, which is not auto-enabled.',
-    domain: DOMAIN_MODEL_RESOLUTION,
-    needle: 'trust_remote_code=True',
   },
   'unsupported-quantization': {
     label: 'Unsupported quantization method',
@@ -372,6 +364,15 @@ const NODE_UNHEALTHY_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
 };
 
 const OBSERVED_REASON_DESCRIPTIONS: Record<string, ReasonDescription> = {
+  'requires-trust-remote-code': {
+    label: 'Requires trust_remote_code (observed)',
+    description:
+      'This repository ships custom modeling code. The worker retries ' +
+      'automatically with --trust-remote-code; if this is still shown, ' +
+      'that retry failed too — see the full log.',
+    domain: DOMAIN_MODEL_RESOLUTION,
+    needle: 'contains custom code which must be executed',
+  },
   'cuda-oom': {
     label: 'CUDA out of memory (observed)',
     description:
@@ -493,7 +494,7 @@ function lookupReason(
     label: code,
     description:
       `Worker reported reason code "${code}", which the UI does ` +
-      'not yet recognize (frontend out of date with calibration.py?).',
+      'not yet recognize.',
   };
 
   const override = resolvedDomainId
@@ -1725,7 +1726,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
       const reasonKind = stage.reason_kind ?? undefined;
       const reasonCode = stage.reason_code ?? undefined;
-      // The backend places the failure on the resolved stage's ROW
+      // The worker places the failure on the resolved stage's ROW
       // (stage.name is that stage's label) but doesn't send display
       // text — look up the domain id for that label so a
       // positionally-resolved reason (e.g. cuda-oom) picks its
@@ -1745,19 +1746,17 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         errorDetail: resolved?.description ?? stage.generic_error_detail ?? undefined,
         reasonKind,
         reasonCode,
-        // The backend already computed the raw-log anchor (pattern
+        // The worker already computed the raw-log anchor (pattern
         // needle, or the generic grep's own raw summary line) — use it
-        // directly rather than re-deriving via the frontend's own
-        // reason tables.
+        // directly rather than re-deriving it from the UI's reason tables.
         logAnchor: stage.log_anchor ?? undefined,
       };
     });
 
     let failedStage = stages.find(stage => stage.status === 'failure');
 
-    // success=false but the backend didn't flag any stage — stale or
-    // inconsistent data (e.g. from before a calibration.py fix). Don't
-    // let the checklist silently render all-green for a failed run.
+    // success=false but the worker didn't flag any stage (inconsistent
+    // data). Don't let the checklist render all-green for a failed run.
     if (!failedStage && !success) {
       const mappedIndex = authoritativeReason?.domain
         ? stages.findIndex(
@@ -1771,7 +1770,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         ? lookupReason(
             authoritativeReason.kind,
             authoritativeReason.code,
-            CALIBRATION_DOMAINS[fallbackIndex]?.id
+            CALIBRATION_DOMAINS.find(
+              domain => domain.label === stages[fallbackIndex]?.name
+            )?.id
           )
         : undefined;
 
@@ -1896,12 +1897,10 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       // (undefined reason, or one resolved positionally) — otherwise
       // the checklist would misplace e.g. hf-network-timeout there
       // instead of Model Resolution & Download.
-      const domainIndex = authoritativeReason?.domain
-        ? CALIBRATION_DOMAINS.findIndex(
-            domain => domain.id === authoritativeReason.domain
-          )
-        : -1;
-      const failedDomain = CALIBRATION_DOMAINS[domainIndex !== -1 ? domainIndex : 0];
+      const failedDomainId = authoritativeReason?.domain ?? DOMAIN_NODE_PREFLIGHT;
+      const failedDomain =
+        CALIBRATION_DOMAINS.find(domain => domain.id === failedDomainId) ??
+        CALIBRATION_DOMAINS.find(domain => domain.id === DOMAIN_NODE_PREFLIGHT)!;
       return {
         providerId,
         node,
@@ -1993,7 +1992,10 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       domain.completionPatterns.some(pattern => pattern.test(block))
     );
     for (let index = 0; index < domains.length; index++) {
-      if (domains[index].completionPatterns.length === 0) {
+      // A raw vLLM log only exists once the HF precheck has passed.
+      if (domains[index].id === DOMAIN_HF_PRECHECK) {
+        completed[index] = true;
+      } else if (domains[index].completionPatterns.length === 0) {
         completed[index] = completed.slice(index + 1).some(Boolean);
       }
     }

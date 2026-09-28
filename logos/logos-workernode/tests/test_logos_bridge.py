@@ -1779,6 +1779,91 @@ async def test_hf_precheck_skips_model_whose_weights_dont_fit(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_hf_precheck_records_nonexistent_repo_as_its_own_row_in_a_session(tmp_path, monkeypatch):
+    """Inside a calibration session the rejection gets its own checklist row,
+    since no probe ran that could have written one."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/does-not-exist"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-not-found-or-unauthorized"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        MagicMock(side_effect=AssertionError("must not probe a nonexistent repo")),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    events = [
+        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
+    ]  # noqa: SLF001
+    assert events[-1]["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
+    assert events[-1]["log_text"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason_code", "expect_row"),
+    [("unsupported-architecture", False), ("insufficient-vram-for-weights", True)],
+)
+async def test_unsupported_list_skip_writes_precheck_row_only_for_precheck_reasons(
+    tmp_path, monkeypatch, reason_code, expect_row
+):
+    """A vLLM load failure on the unsupported list keeps the row of the probe
+    that found it; re-recording it as an HF precheck row would move it to the
+    wrong checklist phase."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import _UNSUPPORTED_MODELS_FILE, UnsupportedModelEntry, _record_unsupported_model
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    _record_unsupported_model(
+        tmp_path / "calibration_logs" / _UNSUPPORTED_MODELS_FILE,
+        UnsupportedModelEntry(
+            model="org/listed-model",
+            reason_code=reason_code,
+            recorded_at="2026-09-28T00:00:00Z",
+            description="test entry",
+        ),
+    )
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/listed-model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        MagicMock(side_effect=AssertionError("must not probe a listed model")),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    events = [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
+    assert bool(events) is expect_row
+
+
+@pytest.mark.asyncio
 async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatch):
     """A model whose HF-reported weights fit gets _hf_weight_bytes/_hf_max_tp_ceiling
     injected into the plan, and its profile is seeded with the HF estimate."""
@@ -2141,14 +2226,8 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
     log_dir = tmp_path / "calibration_logs"
     assert is_model_unsupported(log_dir, "org/does-not-exist") is None
 
-    # Still visible in the Model Error Report as its own precheck row —
-    # not silently invisible just because it's not a permanent verdict.
-    events = [
-        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
-    ]  # noqa: SLF001
-    assert events[-1]["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
-    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
-    assert events[-1]["log_text"] is None
+    # An on-demand check must not replace the node's last calibration row.
+    assert not [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -2218,11 +2297,7 @@ async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path
     assert profile is None or profile.calibration_unsupported is not True
     assert client._list_uncalibrated_models() == ["org/gated-model"]  # noqa: SLF001
 
-    events = [
-        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
-    ]  # noqa: SLF001
-    assert events[-1]["unsupported_reason"] == REASON_MODEL_GATED
-    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
+    assert not [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
 
 
 @pytest.mark.asyncio

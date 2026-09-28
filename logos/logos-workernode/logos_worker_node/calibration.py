@@ -648,16 +648,22 @@ _OBSERVED_TRANSIENT_PATTERNS: tuple[ObservedTransientErrorPattern, ...] = (
         ),
     ),
     ObservedTransientErrorPattern(
-        # torch.AcceleratorError's "CUDA error: <reason>" prefix — covers
-        # runtime CUDA failures other than OOM (e.g. "unspecified launch
-        # failure", "an illegal memory access was encountered"). Seen in
-        # production (2026-09-07) during multi-GPU CUDA-graph warmup —
-        # one rank's dummy pooler run crashed with torch.AcceleratorError
-        # while another rank had already succeeded (gte-Qwen2-1.5B-
-        # instruct calibration on hochbruegge).
-        # Can happen at essentially any point CUDA kernels run — weight
-        # load, warmup, graph capture — so domain=None, resolved
-        # positionally like cuda-oom.
+        # cudaErrorMemoryAllocation (cuBLAS, NCCL, graph capture) is worded
+        # this way instead of torch's "CUDA out of memory"; must match
+        # before the generic "CUDA error:" prefix below.
+        needle="CUDA error: out of memory",
+        reason_code="cuda-oom",
+        description=(
+            "The GPU ran out of memory while loading the model or "
+            "reserving KV cache. The calibration kv-cache search will "
+            "retry with a smaller budget automatically."
+        ),
+    ),
+    ObservedTransientErrorPattern(
+        # torch.AcceleratorError's "CUDA error: <reason>" prefix for any
+        # non-OOM runtime failure, e.g. "unspecified launch failure" during
+        # multi-GPU CUDA-graph warmup. Can occur wherever kernels run, so
+        # domain=None, resolved positionally like cuda-oom.
         needle="CUDA error:",
         reason_code="cuda-runtime-error",
         description=(
@@ -740,8 +746,8 @@ def _classify_observed_transient_error(
 # ---------------------------------------------------------------------------
 # Deployment domain checklist.
 #
-# Replaces a flat, log-line-driven "stage" list with the 7 failure domains
-# declared above (_DOMAIN_*) — each is one row in the error-report UI's
+# The 7 failure domains declared above (_DOMAIN_*) — each is one row in the
+# error-report UI's
 # checklist. A domain's completion is proven by a regex signature vLLM
 # reliably prints when that phase finishes; a domain with no such signal
 # of its own (node_preflight — CUDA/driver failures happen before any
@@ -797,10 +803,9 @@ _CALIBRATION_DOMAINS: tuple[CalibrationDomain, ...] = (
     CalibrationDomain(
         # NCCL/process-group setup for multi-GPU runs happens as part of
         # engine construction, before weight loading — placed right after
-        # engine_init. No completion pattern of its own: there's no log
-        # line in the verified set (see the 12-stage history this was
-        # ported from) that proves multi-GPU coordination specifically
-        # succeeded, as opposed to engine construction in general.
+        # engine_init. No completion pattern of its own: no vLLM log line
+        # proves multi-GPU coordination specifically succeeded, as opposed
+        # to engine construction in general.
         # Inferred complete once a LATER domain's signal fires, same rule
         # as node_preflight. nccl-handshake-failure still gets a FIXED
         # domain assignment on its pattern (below) despite that — the
@@ -1823,7 +1828,7 @@ class CalibrationResult:
     # _NODE_LEVEL_TRANSIENT_PATTERNS. Critically: when this is set, NO
     # blacklist entry of any kind was written — the failure isn't the
     # calibration's fault and leaving artefacts behind just pollutes
-    # things (see deioma 2026-06-04).
+    # the blacklists.
     node_unhealthy_reason: str | None = None
     # Set when the last failing probe matched an
     # ``_OBSERVED_TRANSIENT_PATTERNS`` entry, or "metal-oom" (see
@@ -1831,8 +1836,8 @@ class CalibrationResult:
     # blacklisting or node-health state.
     observed_reason: str | None = None
     # Stage-by-stage checklist (see _classify_calibration_stages) for the
-    # last-evaluated failing probe — None on success (the frontend still
-    # derives a stage view from log_text for successful nodes) and on any
+    # last-evaluated failing probe — None on success (the UI derives a
+    # synthetic all-success stage view for successful nodes) and on any
     # failure where no probe ever produced a classifiable log segment.
     stages: list[dict[str, Any]] | None = None
     # True when the KV search exhausted its range because a probe actually
@@ -2902,7 +2907,8 @@ def _calibrate_model_probe(
 
             if fatal_pattern is not None:
                 _reason_kind, _reason_code, _reason_domain, _reason_needle = (
-                    "unsupported",
+                    # A non-persisted pattern is retried, never blacklisted.
+                    "unsupported" if fatal_pattern.persist else "observed",
                     fatal_pattern.reason_code,
                     fatal_pattern.domain,
                     fatal_pattern.needle,
@@ -4248,7 +4254,7 @@ def calibrate_with_tp_escalation(
         OOM before vLLM ever reaches the custom-code check, so the
         requirement only surfaces once a wider tp gets far enough."""
         _err = result.error or ""
-        if result.success or ("trust_remote_code=True" not in _err and "contains custom code" not in _err):
+        if result.success or ("requires-trust-remote-code" not in _err and "contains custom code" not in _err):
             return plan, result
         logger.info("  %s requires trust_remote_code — adding flag and retrying", model_name)
         extra = list(plan.get("extra_args") or [])

@@ -2401,8 +2401,37 @@ def test_calibrate_model_skips_when_on_unsupported_list(tmp_path: Path):
     assert managers["spawn"].call_count == 0
 
 
+def test_trust_remote_code_pattern_ignores_the_engine_config_line():
+    """vLLM prints trust_remote_code=True in its engine config on every run
+    started with the flag, so only the transformers error may match."""
+    config_line = (
+        "INFO 09-28 20:02:30 [core.py:93] Initializing a V1 LLM engine (v0.30.0) with config: "
+        "model='org/custom', tokenizer='org/custom', trust_remote_code=True, dtype=torch.bfloat16"
+    )
+    assert _classify_fatal_load_error(config_line) is None
+
+    error = (
+        "ValueError: The repository for org/custom contains custom code which must be executed to "
+        "correctly load the model. Please pass the argument `trust_remote_code=True`."
+    )
+    pattern = _classify_fatal_load_error(error)
+    assert pattern is not None
+    assert pattern.reason_code == "requires-trust-remote-code"
+
+
+def test_cuda_error_out_of_memory_is_classified_as_cuda_oom():
+    """cudaErrorMemoryAllocation is worded "CUDA error: out of memory" and
+    must not fall through to the generic cuda-runtime-error reason."""
+    from logos_worker_node.calibration import _classify_observed_transient_error
+
+    oom = _classify_observed_transient_error("RuntimeError: CUDA error: out of memory")
+    assert oom is not None and oom.reason_code == "cuda-oom"
+    other = _classify_observed_transient_error("RuntimeError: CUDA error: unspecified launch failure")
+    assert other is not None and other.reason_code == "cuda-runtime-error"
+
+
 def test_kv_cache_fit_domain_matches_real_vllm_log_line():
-    """Lines from a real calibration log on hochbruegge (vLLM v0.30.0)."""
+    """Lines from a real calibration log (vLLM v0.30.0, kv_cache_memory_bytes set)."""
     domain = next(d for d in _CALIBRATION_DOMAINS if d.id == _DOMAIN_KV_CACHE_FIT)
     (pattern,) = domain.completion_patterns
     assert pattern.search(

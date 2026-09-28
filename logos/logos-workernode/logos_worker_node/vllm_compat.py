@@ -309,13 +309,14 @@ _FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
         domain="engine_init",
     ),
     FatalLoadErrorPattern(
-        needle="trust_remote_code=True",
+        # Not "trust_remote_code=True": vLLM's engine-config line prints
+        # that on every run started with the flag, failed or not.
+        needle="contains custom code which must be executed",
         reason_code="requires-trust-remote-code",
         description=(
-            "This repository ships custom modeling code and requires "
-            "trust_remote_code=True to load. Deliberately not auto-enabled "
-            "(arbitrary code execution) — remove this entry only after "
-            "reviewing the repo's code and enabling it explicitly."
+            "This repository ships custom modeling code. The worker retries "
+            "automatically with --trust-remote-code; if this reason is still "
+            "shown, that retry failed too — see the full log."
         ),
         domain="model_resolution",
         # _retry_with_trust_remote_code_if_needed retries this within the
