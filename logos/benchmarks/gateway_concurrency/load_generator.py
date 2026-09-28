@@ -2,14 +2,20 @@
 tolerates, where the limit comes from, and its behaviour at the limit.
 
 Ramps concurrency in steps; each step fires ``n`` streaming
-``POST /v1/chat/completions`` requests at once (``asyncio.gather``) and holds
-every admitted stream open — see ``_StepBarrier`` — until the whole step has
-been admitted or rejected, then waits for all of them to finish or fail.
+``POST /v1/chat/completions`` requests at once (``asyncio.gather``) while the
+fake upstream pins its completions open until the whole step is being
+relayed, then waits for all of them to finish or fail.
+
 The hold is what makes the step a concurrency measurement: the fake
 upstream's completion lasts about a second, so an unsynchronised wave lets
 early streams close before the last ones are admitted, and its size would
-say nothing about how much the gateway held at once. Each step therefore
-reports ``peak_concurrent_streams`` — measured overlap — next to ``n``.
+say nothing about how much the gateway held at once. The hold and the count
+both live in the upstream (``fake_cloud_upstream.py``, ``/_bench/*``)
+because a gateway relay task is alive exactly while it pumps an upstream
+response — whereas a paused *client* proves nothing, since the gateway can
+buffer a small completion into the socket and free its slot regardless.
+Each step therefore reports ``peak_concurrent_relays`` — overlap measured
+at the far end of the gateway — next to ``n``.
 Stops a fixed number of steps after the first one whose failure rate crosses
 the threshold — far enough to see *how* it degrades (graceful backpressure
 vs. hangs/crashes), not so far that a runaway client outlives the point of
@@ -39,10 +45,10 @@ Environment (all optional, defaults in parentheses):
                                     the limit"
   LOGOS_BENCH_GW_STEPS_PAST_LIMIT  (2)     how many more steps to run once
                                     a step has crossed the threshold
-  LOGOS_BENCH_GW_HOLD_TIMEOUT_S    (30.0)  how long a step may wait for all
-                                    of its requests to be admitted or
-                                    rejected before the barrier gives up;
-                                    must stay below the client read timeout
+  LOGOS_BENCH_GW_HOLD_TIMEOUT_S    (30.0)  how long the upstream barrier may
+                                    wait for a step to be fully relayed
+                                    before giving up; must stay below both
+                                    the client and the gateway read timeouts
   LOGOS_GATEWAY_ASYNC_MAX_SIZE          (64)   informational only — must match
   LOGOS_GATEWAY_ASYNC_QUEUE_CAPACITY    (200)  the webservice's own config to
                                                 mean anything in the report
@@ -98,107 +104,45 @@ def _steps(aggregate_ceiling: int) -> List[int]:
     return sorted({max(8, round(aggregate_ceiling * f)) for f in fractions})
 
 
-class _StepBarrier:
-    """Keeps every admitted stream of a step open until the whole step has
-    been decided, and records how many were open at the same time.
-
-    Firing ``n`` requests in one ``gather`` does not hold ``n`` streams open:
-    the fake upstream's completion lasts about a second, so with a large step
-    the first streams finish while the last ones are still being admitted,
-    and the wave size says nothing about how much the gateway held at once.
-
-    Each stream therefore reports in when the gateway admits it (first byte
-    of a 2xx) and then waits here. The barrier drops only once every request
-    in the step has either been admitted or terminally failed, so the
-    admitted ones overlap by construction, and ``peak_open`` is the number
-    that were genuinely concurrent — measured, not inferred from ``n``.
-
-    ``timed_out`` marks a step whose requests never all resolved within the
-    hold budget; the barrier then releases anyway rather than sitting there
-    until httpx's read timeout fires on every held stream, and the flag says
-    the step's ``peak_open`` is a lower bound.
-
-    Single-threaded asyncio: the counters need no locking.
-    """
-
-    def __init__(self, target: int, hold_timeout_s: float) -> None:
-        self._target = target
-        self._hold_timeout_s = hold_timeout_s
-        self._resolved = 0
-        self._open = 0
-        self.peak_open = 0
-        self.timed_out = False
-        self._gate = asyncio.Event()
-        if target <= 0:
-            self._gate.set()
-
-    def _resolve_one(self) -> None:
-        self._resolved += 1
-        if self._resolved >= self._target:
-            self._gate.set()
-
-    def handle(self) -> "_StreamHandle":
-        return _StreamHandle(self)
-
-
-class _StreamHandle:
-    """One request's view of the barrier — exactly one ``_resolve_one`` each."""
-
-    def __init__(self, barrier: _StepBarrier) -> None:
-        self._barrier = barrier
-        self._admitted = False
-
-    async def opened(self) -> None:
-        barrier = self._barrier
-        self._admitted = True
-        barrier._open += 1
-        barrier.peak_open = max(barrier.peak_open, barrier._open)
-        barrier._resolve_one()
-        try:
-            await asyncio.wait_for(barrier._gate.wait(), timeout=barrier._hold_timeout_s)
-        except asyncio.TimeoutError:
-            # Release everyone, not just this stream: the step is already
-            # unmeasurable as a synchronised wave, and stranding the rest
-            # would only add read timeouts on top of that.
-            barrier.timed_out = True
-            barrier._gate.set()
-
-    def closed(self) -> None:
-        if self._admitted:
-            self._barrier._open -= 1
-        else:
-            # Rejected or dropped before the gateway ever wrote to it — it
-            # still decides the step, otherwise the barrier waits forever
-            # for an admission that is never coming.
-            self._barrier._resolve_one()
-
-
-async def _one_stream(
-    client: httpx.AsyncClient, url: str, headers: Dict[str, str], barrier: _StepBarrier
-) -> gw.RequestResult:
-    handle = barrier.handle()
-    return await gw.stream_chat_completion(client, url, headers, on_open=handle.opened, on_close=handle.closed)
-
-
 async def _run_step(
     client: httpx.AsyncClient, url: str, headers: Dict[str, str], n: int, hold_timeout_s: float
 ) -> Dict[str, Any]:
-    barrier = _StepBarrier(n, hold_timeout_s)
-    results = await asyncio.gather(*(_one_stream(client, url, headers, barrier) for _ in range(n)))
+    """One ramp step: arm the upstream barrier, fire ``n``, read the overlap.
+
+    The barrier lives in the fake upstream, not here. A gateway relay task is
+    alive exactly while it pumps an upstream response, so pinning the
+    upstream responses open pins the gateway's slots with them, and the
+    upstream's own peak is the number of slots it really held. Pausing this
+    client instead would prove only that httpx stopped reading: the gateway
+    can push a small completion into the socket buffers and free the slot
+    while the client is still at the barrier.
+    """
+    await gw.arm_upstream_step(client, n, hold_timeout_s)
+    results = await asyncio.gather(*(gw.stream_chat_completion(client, url, headers) for _ in range(n)))
+    stats = await gw.upstream_step_stats(client)
+    await gw.arm_upstream_step(client, 0, hold_timeout_s)  # disarm for the other legs
+
     ok = [r for r in results if r.ok]
     failed = [r for r in results if not r.ok]
+    truncated = [r for r in results if r.stream_complete is False and r.status_code is not None]
     fail_rate = len(failed) / n if n else 0.0
     error_samples = sorted({r.error for r in failed if r.error})[:5]
+
     return {
         "concurrency": n,
-        "peak_concurrent_streams": barrier.peak_open,
-        "hold_timed_out": barrier.timed_out,
+        "peak_concurrent_relays": stats.get("peak_concurrent_relays", 0),
+        "upstream_admitted": stats.get("admitted", 0),
+        "hold_timed_out": bool(stats.get("timed_out")),
         "ok": len(ok),
         "failed": len(failed),
+        "truncated_streams": len(truncated),
         "fail_rate": fail_rate,
         "ttfb_ms": summarize([r.ttfb_ms for r in ok if r.ttfb_ms is not None]),
-        # Time at the barrier is excluded upstream (RequestResult.held_ms), so
-        # this stays a latency number rather than a measure of the step size.
+        # Measured under the barrier, so these are not comparable with the
+        # latency leg: a request past the ceiling waits for a held slot
+        # before its first byte, and that wait is indistinguishable here
+        # from the gateway's own queueing. The ramp is a capacity
+        # measurement; latency_diff.py is the latency measurement.
         "total_ms": summarize([r.total_ms for r in results]),
         "error_samples": error_samples,
     }
@@ -239,11 +183,11 @@ async def run() -> Dict[str, Any]:
             step_results.append(step)
             print(
                 f"    ok={step['ok']} failed={step['failed']} fail_rate={step['fail_rate']:.1%} "
-                f"peak_open={step['peak_concurrent_streams']}"
+                f"peak_relays={step['peak_concurrent_relays']}"
                 f"{' (hold timed out)' if step['hold_timed_out'] else ''} "
                 f"ttfb p50={step['ttfb_ms'].get('p50_ms', 0):.0f}ms total p50={step['total_ms'].get('p50_ms', 0):.0f}ms"
             )
-            peak_held = max(peak_held, step["peak_concurrent_streams"])
+            peak_held = max(peak_held, step["peak_concurrent_relays"])
             if onset_concurrency is None and step["fail_rate"] > fail_threshold:
                 onset_concurrency = n
                 print(f"  [concurrency] onset of failures at n={n} (fail_rate > {fail_threshold:.0%})")
@@ -255,10 +199,10 @@ async def run() -> Dict[str, Any]:
     return {
         "steps": step_results,
         "onset_concurrency": onset_concurrency,
-        # The headline number: streams the gateway provably held open at the
-        # same time. onset_concurrency is the size of the wave that first
-        # broke, which is only an upper bound on what was actually held.
-        "max_concurrent_streams_held": peak_held,
+        # The headline number: relays the gateway provably had open at the
+        # same time, counted at the upstream end. onset_concurrency is the
+        # size of the wave that first broke, only an upper bound on that.
+        "max_concurrent_relays": peak_held,
         "hold_timeout_s": hold_timeout_s,
         "fail_threshold": fail_threshold,
         "configured_ceiling": {

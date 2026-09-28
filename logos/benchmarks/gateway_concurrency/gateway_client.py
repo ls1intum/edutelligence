@@ -19,7 +19,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -87,67 +87,95 @@ class RequestResult:
     ttfb_ms: Optional[float]
     total_ms: float
     error: Optional[str]
-    held_ms: float = 0.0
+    sse_events: int = 0
+    # None for non-streaming calls; False marks a 2xx response whose body
+    # stopped before the terminal event, which is a failed completion no
+    # matter what the status line said.
+    stream_complete: Optional[bool] = None
 
 
-async def stream_chat_completion(
-    client: httpx.AsyncClient,
-    url: str,
-    headers: Dict[str, str],
-    on_open: Optional[Callable[[], Awaitable[None]]] = None,
-    on_close: Optional[Callable[[], None]] = None,
-) -> RequestResult:
+_SSE_DONE = "[DONE]"
+
+
+def _sse_events(buffer: str) -> Tuple[List[str], str]:
+    """Split a decoded buffer into complete SSE events plus the leftover.
+
+    Events are separated by a blank line and a chunk can cut one anywhere,
+    so only whole events are returned; the tail stays in the buffer for the
+    next chunk. Without this, a terminal event split across two chunks reads
+    as a truncated stream.
+    """
+    normalized = buffer.replace("\r\n", "\n")
+    parts = normalized.split("\n\n")
+    return parts[:-1], parts[-1]
+
+
+def _is_done(event: str) -> bool:
+    return any(line.startswith("data:") and line[len("data:") :].strip() == _SSE_DONE for line in event.split("\n"))
+
+
+async def stream_chat_completion(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> RequestResult:
     """One streaming POST /v1/chat/completions, consumed to the end.
 
     A held-open stream is what actually occupies a gateway executor-pool
     slot — a client that stopped at the first chunk would under-count
     concurrency held, not model it.
 
-    ``on_open`` is awaited once the first byte of a 2xx response has arrived,
-    i.e. exactly when the gateway has admitted this stream and is writing to
-    it. Awaiting inside the read loop stops this client from draining the
-    response, so the stream — and the executor slot behind it — stays held
-    for as long as the callback takes to return. The concurrency leg uses
-    that to keep every stream of a step open until the whole step has been
-    admitted; the time spent there is reported as ``held_ms`` and excluded
-    from ``total_ms``, which would otherwise measure the benchmark's own
-    barrier rather than the gateway.
-
-    ``on_close`` runs once the request is over, however it ended (success,
-    error status, transport failure), so a caller counting streams in flight
-    cannot leak a slot.
+    Success needs the terminal ``data: [DONE]`` event, not just a 2xx status.
+    The status line is written before the completion is relayed, so a stream
+    cut off midway — which is exactly what killing a replica under load
+    produces — still arrives as ``HTTP 200``; counting that as ok would let
+    the failover leg report no visible impact for a truncated answer.
     """
     t0 = time.perf_counter()
     ttfb_ms: Optional[float] = None
-    held_ms = 0.0
+    buffer = ""
+    events = 0
+    saw_done = False
     try:
         async with client.stream("POST", url, headers=headers, json=chat_payload(stream=True)) as resp:
             status = resp.status_code
-            ok = 200 <= status < 300
-            async for _chunk in resp.aiter_bytes():
+            http_ok = 200 <= status < 300
+            async for chunk in resp.aiter_bytes():
                 if ttfb_ms is None:
                     ttfb_ms = (time.perf_counter() - t0) * 1000.0
-                    if ok and on_open is not None:
-                        hold_start = time.perf_counter()
-                        await on_open()
-                        held_ms = (time.perf_counter() - hold_start) * 1000.0
-            total_ms = (time.perf_counter() - t0) * 1000.0 - held_ms
+                if not http_ok:
+                    continue  # drain the error body; it is not SSE
+                buffer += chunk.decode("utf-8", errors="replace")
+                complete, buffer = _sse_events(buffer)
+                for event in complete:
+                    if not event.strip():
+                        continue
+                    events += 1
+                    if _is_done(event):
+                        saw_done = True
+            total_ms = (time.perf_counter() - t0) * 1000.0
+            if not http_ok:
+                error = f"HTTP {status}"
+            elif not saw_done:
+                error = f"stream ended without {_SSE_DONE} after {events} event(s)"
+            else:
+                error = None
             return RequestResult(
-                ok=ok,
+                ok=http_ok and saw_done,
                 status_code=status,
                 ttfb_ms=ttfb_ms,
                 total_ms=total_ms,
-                error=None if ok else f"HTTP {status}",
-                held_ms=held_ms,
+                error=error,
+                sse_events=events,
+                stream_complete=saw_done,
             )
     except Exception as exc:  # noqa: BLE001 — any transport failure is a benchmark data point, not a crash
-        total_ms = (time.perf_counter() - t0) * 1000.0 - held_ms
+        total_ms = (time.perf_counter() - t0) * 1000.0
         return RequestResult(
-            ok=False, status_code=None, ttfb_ms=ttfb_ms, total_ms=total_ms, error=repr(exc), held_ms=held_ms
+            ok=False,
+            status_code=None,
+            ttfb_ms=ttfb_ms,
+            total_ms=total_ms,
+            error=repr(exc),
+            sse_events=events,
+            stream_complete=False,
         )
-    finally:
-        if on_close is not None:
-            on_close()
 
 
 async def post_chat_completion(client: httpx.AsyncClient, url: str, headers: Dict[str, str]) -> RequestResult:
@@ -167,6 +195,29 @@ async def post_chat_completion(client: httpx.AsyncClient, url: str, headers: Dic
     except Exception as exc:  # noqa: BLE001
         total_ms = (time.perf_counter() - t0) * 1000.0
         return RequestResult(ok=False, status_code=None, ttfb_ms=None, total_ms=total_ms, error=repr(exc))
+
+
+async def arm_upstream_step(client: httpx.AsyncClient, target: int, hold_timeout_s: float) -> None:
+    """Arm the fake upstream's barrier for the next concurrency step.
+
+    Measuring overlap at the upstream rather than in this process is the
+    point: a gateway relay task lives exactly as long as the upstream
+    response it is pumping, whereas a paused client proves only that httpx
+    stopped reading — the gateway may already have buffered the whole small
+    response and released the slot.
+    """
+    resp = await client.post(
+        f"{upstream_url()}/_bench/step",
+        json={"target": target, "hold_timeout_s": hold_timeout_s},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+
+
+async def upstream_step_stats(client: httpx.AsyncClient) -> Dict[str, Any]:
+    resp = await client.get(f"{upstream_url()}/_bench/stats", timeout=10.0)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def gateway_headers() -> Dict[str, str]:

@@ -9,9 +9,14 @@ philosophy as ``e2e/tests/conftest.py`` — start it yourself first).
 A fixed number of workers keep ``concurrency`` streaming requests in flight
 for the whole run (each finishes and immediately starts another), one
 replica is killed partway through, and every request is classified:
-  - ok: HTTP 2xx
-  - connectivity failure: connection error/timeout or HTTP 5xx — the only
-    outcomes a live replica behind Traefik should not otherwise produce
+  - ok: HTTP 2xx *and* a stream that reached its terminal SSE event
+  - connectivity failure: connection error/timeout, HTTP 5xx, or a 2xx
+    stream cut off before that terminal event — the only outcomes a live
+    replica behind Traefik should not otherwise produce. A truncated stream
+    belongs here and not under "other": the status line goes out before the
+    completion is relayed, so killing a replica mid-answer is seen by the
+    client as a successful HTTP 200 carrying half a response, which is
+    exactly the visible impact this leg exists to catch.
   - other failure: any other non-2xx (would indicate a real bug, not a
     failover problem, given the seeded key is valid)
 
@@ -39,15 +44,22 @@ def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
 
+def _is_truncated(r: gw.RequestResult) -> bool:
+    """A 2xx whose stream stopped before the terminal SSE event."""
+    return r.stream_complete is False and r.status_code is not None and 200 <= r.status_code < 300
+
+
 def _classify(results: List[gw.RequestResult]) -> Dict[str, Any]:
     ok = [r for r in results if r.ok]
-    connectivity_failed = [r for r in results if not r.ok and (r.status_code is None or r.status_code >= 500)]
-    other_failed = [r for r in results if not r.ok and r.status_code is not None and r.status_code < 500]
+    failed = [r for r in results if not r.ok]
+    connectivity_failed = [r for r in failed if r.status_code is None or r.status_code >= 500 or _is_truncated(r)]
+    other_failed = [r for r in failed if r.status_code is not None and r.status_code < 500 and not _is_truncated(r)]
     max_total_ms = max((r.total_ms for r in results), default=0.0)
     return {
         "total": len(results),
         "ok": len(ok),
         "connectivity_failures": len(connectivity_failed),
+        "truncated_streams": len([r for r in results if _is_truncated(r)]),
         "other_failures": len(other_failed),
         "max_total_ms": max_total_ms,
         "connectivity_failure_samples": sorted({r.error for r in connectivity_failed if r.error})[:5],

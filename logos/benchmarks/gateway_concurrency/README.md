@@ -23,13 +23,21 @@ GPU lane), different tool.
   killing one is visible to clients under real concurrent load (a heavier,
   automated version of `../../scripts/gateway-failover-demo.sh`'s light
   polling check).
-  The ramp's headline number is **peak held**, not step size: a step's
-  streams are pinned open at a barrier until the whole step has been
-  admitted or rejected, and the report gives the overlap that actually
-  occurred. Firing *n* requests at once does not hold *n* streams open —
-  the fake upstream's completion lasts about a second, so without the
-  barrier the early streams close before the last ones are even admitted
-  and the wave size bounds nothing.
+  The ramp's headline number is **peak relayed**, not step size. Firing
+  *n* requests at once does not mean *n* were ever concurrent: the fake
+  upstream's completion lasts about a second, so the early streams close
+  before the last ones are even admitted. The barrier that fixes this, and
+  the counter that reports it, both live in the **fake upstream**
+  (`/_bench/step`, `/_bench/stats`), not in the load generator — a gateway
+  relay task is alive exactly as long as the upstream response it is
+  pumping, whereas a paused client proves nothing, because the gateway can
+  push a small completion into the socket buffers and free its slot while
+  the client is still reading.
+  A streaming request counts as successful only once its terminal
+  `data: [DONE]` event arrives. The status line is written before the
+  completion is relayed, so a stream cut off midway — what killing a
+  replica under load produces — still arrives as `HTTP 200`; the failover
+  leg classifies such a truncated stream as a connectivity failure.
 - **Not measured:** a real cloud provider's own throttling (the upstream is
   a fake, see below, on purpose), local/mixed-path routing through the
   orchestrator, budget/rate-limit enforcement (the seed disables both so
@@ -42,7 +50,7 @@ GPU lane), different tool.
 | File | Role |
 |---|---|
 | `run_benchmark.py` | Director: starts the fake upstream, checks the gateway is reachable, runs all three legs, writes the report. Does **not** start `logos-webservice` itself — see Prerequisites. |
-| `fake_cloud_upstream.py` | FastAPI app imitating an OpenAI-shaped `/v1/chat/completions` (streaming SSE + non-streaming), configurable per-token delay |
+| `fake_cloud_upstream.py` | FastAPI app imitating an OpenAI-shaped `/v1/chat/completions` (streaming SSE + non-streaming), configurable per-token delay. Also hosts the concurrency leg's barrier and overlap counter under `/_bench/*` |
 | `gateway_client.py` | Shared async request helpers used by all three legs |
 | `load_generator.py` | Concurrency-ramp leg |
 | `latency_diff.py` | Added-latency leg |

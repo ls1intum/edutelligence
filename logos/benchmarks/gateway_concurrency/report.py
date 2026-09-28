@@ -30,7 +30,7 @@ def build_markdown(result: Dict[str, Any]) -> str:
         onset = conc["onset_concurrency"]
         onset_str = str(onset) if onset is not None else "not reached within the tested steps"
         lines.append(
-            f"Peak streams held open simultaneously: **{conc.get('max_concurrent_streams_held', 0)}**. "
+            f"Peak streams relayed simultaneously: **{conc.get('max_concurrent_relays', 0)}**. "
             f"Onset of failures (>{conc['fail_threshold']:.0%} of a step): **{onset_str}** requests per step. "
             f"Configured ceiling: `max-size`={ceiling['spring_task_execution_pool_max_size']} + "
             f"`queue-capacity`={ceiling['spring_task_execution_pool_queue_capacity']} "
@@ -38,23 +38,30 @@ def build_markdown(result: Dict[str, Any]) -> str:
             f"x {ceiling['replicas']} replica(s) = ≈{ceiling['approx_admission_ceiling']}."
         )
         lines.append("")
-        lines.append("| Step size | Peak held | OK | Failed | Fail rate | TTFB p50 | TTFB p95 | Total p50 |")
-        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|")
+        lines.append(
+            "| Step size | Peak relayed | OK | Failed | Truncated | Fail rate | TTFB p50 | TTFB p95 | Total p50 |"
+        )
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
         for step in conc["steps"]:
-            peak = step.get("peak_concurrent_streams", 0)
+            peak = step.get("peak_concurrent_relays", 0)
             peak_cell = f"{peak} ⚠️" if step.get("hold_timed_out") else str(peak)
             lines.append(
-                f"| {step['concurrency']} | {peak_cell} | {step['ok']} | {step['failed']} | {step['fail_rate']:.1%} | "
+                f"| {step['concurrency']} | {peak_cell} | {step['ok']} | {step['failed']} | "
+                f"{step.get('truncated_streams', 0)} | {step['fail_rate']:.1%} | "
                 f"{_ms(step['ttfb_ms'].get('p50_ms', 0))} ms | {_ms(step['ttfb_ms'].get('p95_ms', 0))} ms | "
                 f"{_ms(step['total_ms'].get('p50_ms', 0))} ms |"
             )
         lines.append("")
         lines.append(
-            "_Step size_ is how many requests were fired at once; _peak held_ is how many streams the gateway "
-            "actually had open at the same time — admitted streams are held at a barrier until the whole step "
-            "has been admitted or rejected, so only the latter bounds concurrency. ⚠️ marks a step that hit the "
-            f"{conc.get('hold_timeout_s', 0):.0f}s hold budget before resolving, making its peak a lower bound. "
-            "Latencies exclude time spent at the barrier."
+            "_Step size_ is how many requests were fired at once; _peak relayed_ is how many completions the "
+            "gateway was pumping at the same moment, counted at the fake upstream — a gateway relay task lives "
+            "exactly as long as the upstream response behind it, so only this bounds concurrency. The upstream "
+            "pins each completion open until the whole step is being relayed. ⚠️ marks a step that never became "
+            f"fully concurrent within the {conc.get('hold_timeout_s', 0):.0f}s hold budget — which is what "
+            "reaching the ceiling looks like. _Truncated_ counts 2xx streams that ended without the terminal SSE "
+            "event; they are failures. Latencies here are measured under the barrier and include waiting for a "
+            "held slot, so read them as behaviour under load, not as the gateway's latency — that is the "
+            "added-latency section below."
         )
         lines.append("")
 
@@ -100,7 +107,8 @@ def build_markdown(result: Dict[str, Any]) -> str:
             f"**{icon}** killed `{fo['killed_container']}` at t={fo['kill_after_s']}s into a "
             f"{fo['duration_s']}s run with {fo['concurrency']} concurrent streams. "
             f"total={fo['total']}, ok={fo['ok']}, "
-            f"**connectivity failures={fo['connectivity_failures']}** (connection error/timeout/5xx), "
+            f"**connectivity failures={fo['connectivity_failures']}** (connection error/timeout/5xx, "
+            f"incl. {fo.get('truncated_streams', 0)} truncated stream(s)), "
             f"other failures={fo['other_failures']}, max latency={_ms(fo['max_total_ms'])} ms."
         )
         if fo["connectivity_failures"]:

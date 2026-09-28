@@ -8,6 +8,15 @@ throttling. The gateway's ``CloudForwardUrlBuilder`` forwards to
 endpoint (see ``seed.sql``), so this only has to answer plain
 ``POST /v1/chat/completions`` — no Azure deployment-path emulation needed.
 
+It also carries the concurrency leg's measurement point. A gateway
+streaming task stays alive for exactly as long as it is relaying one of
+these responses, so the number of completions in flight *here* is the
+number of gateway relay slots occupied. A client cannot observe that: the
+gateway can push a small response into the socket buffers and free its
+slot while the client is still reading. ``/_bench/*`` therefore arms a
+server-side barrier that pins every completion open until a whole step is
+being relayed, and reports the peak overlap it saw.
+
 Run: ``uvicorn fake_cloud_upstream:app --host 0.0.0.0 --port <port> --no-access-log``
 
 Environment (all optional):
@@ -24,7 +33,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -46,6 +55,102 @@ _FILLER_WORD = "token "
 _seq = 0
 
 
+class _StepGate:
+    """Server-side barrier and overlap counter for one concurrency step.
+
+    ``active`` rises when a completion starts being relayed and falls when
+    it ends, so ``peak`` is the largest number of gateway relay tasks alive
+    at the same moment — the capacity number the ramp is after. Disarmed
+    (``target`` 0) it only counts, which is what the latency and failover
+    legs want.
+
+    ``released_at`` is wall clock rather than a monotonic reading because
+    the load generator subtracts the barrier from its own latency samples
+    and runs in a different process on the same host.
+    """
+
+    def __init__(self) -> None:
+        self.target = 0
+        self.hold_timeout_s = 30.0
+        self.active = 0
+        self.peak = 0
+        self.admitted = 0
+        self.timed_out = False
+        self.released_at: Optional[float] = None
+        self._gate = asyncio.Event()
+        self._gate.set()
+
+    def arm(self, target: int, hold_timeout_s: float) -> None:
+        self.target = max(0, target)
+        self.hold_timeout_s = hold_timeout_s
+        self.active = 0
+        self.peak = 0
+        self.admitted = 0
+        self.timed_out = False
+        self.released_at = None
+        self._gate = asyncio.Event()
+        if self.target <= 0:
+            self._release()
+
+    def _release(self) -> None:
+        if self.released_at is None:
+            self.released_at = time.time()
+        self._gate.set()
+
+    async def enter(self) -> None:
+        self.active += 1
+        self.admitted += 1
+        self.peak = max(self.peak, self.active)
+        if self.target and self.admitted >= self.target:
+            self._release()
+        if self._gate.is_set():
+            return
+        try:
+            await asyncio.wait_for(self._gate.wait(), timeout=self.hold_timeout_s)
+        except asyncio.TimeoutError:
+            # The step never reached its target, which *is* the ceiling.
+            # Release rather than sit here until the gateway's own upstream
+            # read timeout turns a measurement into an outage.
+            self.timed_out = True
+            self._release()
+
+    def leave(self) -> None:
+        self.active -= 1
+
+    def stats(self) -> Dict[str, Any]:
+        return {
+            "target": self.target,
+            "peak_concurrent_relays": self.peak,
+            "admitted": self.admitted,
+            "active": self.active,
+            "timed_out": self.timed_out,
+            "released_at": self.released_at,
+            "hold_timeout_s": self.hold_timeout_s,
+        }
+
+
+_gate = _StepGate()
+
+
+async def _held_open(inner: AsyncIterator[str]) -> AsyncIterator[str]:
+    """Relay ``inner``, pausing once the first chunk is out.
+
+    Pausing after the first chunk and not before it keeps the client's TTFB
+    a measurement of the gateway's admission latency; everything after it is
+    the barrier, which the load generator subtracts using ``released_at``.
+    """
+    entered = False
+    try:
+        async for chunk in inner:
+            yield chunk
+            if not entered:
+                entered = True
+                await _gate.enter()
+    finally:
+        if entered:
+            _gate.leave()
+
+
 class _ChatRequest(BaseModel):
     model: str = ""
     messages: list = []
@@ -55,6 +160,23 @@ class _ChatRequest(BaseModel):
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     return {}
+
+
+class _StepArm(BaseModel):
+    target: int = 0
+    hold_timeout_s: float = 30.0
+
+
+@app.post("/_bench/step")
+async def bench_arm_step(req: _StepArm) -> Dict[str, Any]:
+    """Arm the barrier for the next step. Not part of the OpenAI surface."""
+    _gate.arm(req.target, req.hold_timeout_s)
+    return _gate.stats()
+
+
+@app.get("/_bench/stats")
+async def bench_stats() -> Dict[str, Any]:
+    return _gate.stats()
 
 
 @app.get("/v1/models")
@@ -105,7 +227,7 @@ async def chat_completions(req: _ChatRequest):
     request_id = f"chatcmpl-bench-gw-{_seq}"
     model = req.model or MODEL_NAME
     if req.stream:
-        return StreamingResponse(_sse_chunks(model, request_id), media_type="text/event-stream")
+        return StreamingResponse(_held_open(_sse_chunks(model, request_id)), media_type="text/event-stream")
     if TOKEN_DELAY_S > 0:
         await asyncio.sleep(TOKEN_DELAY_S * TOKEN_COUNT)
     text = (_FILLER_WORD * TOKEN_COUNT).strip()
