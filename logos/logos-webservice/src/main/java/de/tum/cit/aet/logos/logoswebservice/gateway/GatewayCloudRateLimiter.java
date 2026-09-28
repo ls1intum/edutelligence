@@ -19,9 +19,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * generic {@code rpm_limit}/{@code tpm_limit}, then team defaults.
  *
  * <p><b>RPM</b> is enforced shared across webservice replicas via
- * {@link GatewayCloudAccounting#admitAndReserve} (counts recent {@code gw-*}
- * log rows under a per-key row lock). <b>TPM</b> remains process-local here
- * (token estimates are not durable); Traefik is still the cluster-wide brake.
+ * {@link GatewayCloudAccounting#admitAndReserve}, which counts the key's
+ * {@code gw-*} log rows from the last window (an indexed range on the key's own
+ * rows, no lock). <b>TPM</b> remains process-local here (token estimates are
+ * not durable); Traefik is still the cluster-wide brake.
  * Prefer {@code LOGOS_WEBSERVICE_REPLICAS=1} when tight per-key TPM matters.
  */
 @Service

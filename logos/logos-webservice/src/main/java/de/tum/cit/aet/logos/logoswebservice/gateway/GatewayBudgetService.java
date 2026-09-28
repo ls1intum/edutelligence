@@ -33,18 +33,25 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * <p><b>Overshoot bound:</b> with TTL {@code T} seconds, a multi-instance
  * deployment (or concurrent requests on one instance after a spend lands in
  * {@code log_entry_cost}) can admit traffic for up to roughly {@code T} seconds
- * after the true budget is exhausted — <em>except</em> on the direct-cloud path,
- * where {@link GatewayCloudAccounting} writes an in-flight reservation into
+ * after the true budget is exhausted. On the direct-cloud path
+ * {@link GatewayCloudAccounting} writes an in-flight reservation into
  * {@code log_entry} (counted by this service alongside {@code log_entry_cost})
- * before the upstream call and invalidates this cache,
- * so concurrent admissions on the same instance see the reservation immediately.
- * A reservation counts only while the request is in flight: once settled, the
- * row is priced from its token usage and reaches this service through
- * {@code log_entry_cost} like any other request.
- * Cross-instance lag remains bounded by {@code T} until the other instances'
- * caches expire. Example: TTL 15s → overshoot ≲ concurrent spend in any 15s
- * window after the true breach (plus one reservation per in-flight direct-cloud
- * request). Lower the TTL to tighten the bound at the cost of more DB load.
+ * before the upstream call and adds it to this instance's cached snapshot via
+ * {@link #noteReservation}, so later admissions on the same instance see it
+ * without a database round trip; other instances pick it up when their
+ * snapshots expire. A reservation counts only while the request is in flight:
+ * once settled, the row is priced from its token usage and reaches this
+ * service through {@code log_entry_cost} like any other request. Example:
+ * TTL 15s → overshoot ≲ spend admitted in any 15s window after the true
+ * breach, plus one reservation per request admitted on other instances in
+ * that window. Lower the TTL to tighten the bound at the cost of more DB load.
+ *
+ * <p>Nothing here serializes requests: the snapshot is refreshed at most once
+ * per TTL per key, and a refresh is the only query whose cost grows with the
+ * key's month of traffic. The bound is the price of that. Trading it for
+ * exactness — a per-key lock around check-and-reserve, or a snapshot reload
+ * per request — makes every request on a key wait for a full re-pricing of
+ * that key's month, so admission time grows with the log; do not.
  */
 @Service
 public class GatewayBudgetService {
@@ -159,8 +166,8 @@ public class GatewayBudgetService {
                     SELECT SUM(le.settled_cost_micro_cents)
                     FROM log_entry le
                     WHERE le.api_key_id = :aki
-                      AND le.request_id LIKE 'gw-%%'
                       AND le.result_status IS NULL
+                      AND le.request_id LIKE 'gw-%'
                       AND le.settled_cost_micro_cents IS NOT NULL
                       AND le.settled_cost_micro_cents > 0
                       AND le.timestamp_request >= CAST(:month AS DATE)
@@ -209,8 +216,8 @@ public class GatewayBudgetService {
                     WHERE le.api_key_id = ANY(
                             ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
                           )
-                      AND le.request_id LIKE 'gw-%%'
                       AND le.result_status IS NULL
+                      AND le.request_id LIKE 'gw-%'
                       AND le.settled_cost_micro_cents IS NOT NULL
                       AND le.settled_cost_micro_cents > 0
                       AND le.timestamp_request >= CAST(:month AS DATE)
@@ -222,18 +229,41 @@ public class GatewayBudgetService {
         return v == null ? 0L : v;
     }
 
-    /** Drop usage (and limit) cache entries for this key so a reservation is visible immediately. */
-    void invalidateUsageCache(GatewayKey key) {
-        if (key == null) {
+    /**
+     * Add a reservation just written for this key to the cached month-to-date
+     * usage, so the next admission on this instance counts it.
+     *
+     * <p>Adjusts the snapshot in place instead of dropping it: a drop would
+     * make the next request re-price the key's whole month, and admission
+     * must not do work that grows with the log. The entry
+     * keeps its load time, so the snapshot still expires — and is then read
+     * back from the database, where the reservation row is counted while in
+     * flight and the settled charge after — on the same schedule as before.
+     * Until then the snapshot may over-count a request that has already
+     * settled, which errs towards refusing, never towards overspend.
+     *
+     * <p>The team snapshot counts developer-key spend only, so only a
+     * developer key's reservation is added to it. A snapshot that is not
+     * cached needs nothing: its next load reads the row from the database.
+     */
+    void noteReservation(GatewayKey key, long microCents) {
+        if (key == null || microCents <= 0 || ttlMillis <= 0) {
             return;
         }
         String monthStart = YearMonth.from(LocalDate.now(clock.withZone(ZoneOffset.UTC)))
             .atDay(1)
             .toString();
-        cache.remove("usage:key:" + key.id() + ":" + monthStart);
-        if (key.teamId() != null) {
-            cache.remove("usage:team:" + key.teamId() + ":" + monthStart);
+        addToCachedUsage("usage:key:" + key.id() + ":" + monthStart, microCents);
+        if (key.teamId() != null && key.keyType() == ApiKeyType.developer) {
+            addToCachedUsage("usage:team:" + key.teamId() + ":" + monthStart, microCents);
         }
+    }
+
+    private void addToCachedUsage(String cacheKey, long microCents) {
+        cache.computeIfPresent(cacheKey, (k, entry) -> {
+            long current = entry.value instanceof Long l ? l : 0L;
+            return new CacheEntry(current + microCents, entry.loadedAtMs);
+        });
     }
 
     @SuppressWarnings("unchecked")

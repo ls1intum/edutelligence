@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Direct-cloud gateway reservations in flight.
+
+         The inference gateway admits a direct-cloud request by inserting a
+         log_entry row with result_status NULL and a request_id prefixed gw-,
+         and settles it when the upstream response ends. Two queries look for
+         exactly those rows:
+
+           * GatewayBudgetService adds the reservations still in flight to a
+             key's (or a team's developer keys') month-to-date spend;
+           * GatewayCloudAccounting.reconcileStale zeros the ones a lost
+             process never settled.
+
+         Without this index neither predicate is selective: request_id LIKE
+         'gw-%' cannot use the plain btree on request_id under a non-C
+         collation, and result_status is not indexed at all, so the sweep is a
+         scan of the whole table and the in-flight sum a walk over the key's
+         whole month. This index keeps both proportional to the rows still in
+         flight (a handful) rather than to the table — the sweep is scheduled
+         on every replica, and the sum runs on every budget snapshot refresh.
+
+         The predicate is spelled exactly as in the two queries: PostgreSQL
+         uses a partial index only when it can see the query's WHERE clause
+         implies the index predicate, and for LIKE that means textual match.
+
+         Runs outside a transaction so CONCURRENTLY can build without locking
+         log_entry against the logos-orchestrator, which keeps writing to this
+         table while logos-webservice is redeployed (same rationale as
+         012/014/027/028/035/036). -->
+    <changeSet id="041-log-entry-gateway-in-flight-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_gateway_in_flight"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_gateway_in_flight
+                ON log_entry (api_key_id, timestamp_request)
+                WHERE result_status IS NULL AND request_id LIKE 'gw-%';
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_gateway_in_flight;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

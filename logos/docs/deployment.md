@@ -292,10 +292,17 @@ Optional `.env` knobs:
   API-key auth.
 - `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
   overshoot bound; see `GatewayBudgetService`.
-- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
-  cost reserved in `log_entry_cost` before each direct-cloud forward so
-  concurrent admissions see the spend; reconciled (kept or zeroed) when the
-  stream completes.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — flat
+  cost reserved in `log_entry` before each direct-cloud forward so concurrent
+  admissions see the spend; replaced by the priced token usage (or zeroed on
+  failure) when the stream completes. Admission takes no lock and does no work
+  that grows with the size of the log: requests on one key run in parallel on
+  every replica, and the budget is approximate within the cache TTL.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES` (default `30`) — a
+  reservation still in flight after this long belongs to a process that is
+  gone and is zeroed.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS` (default `60`) — how
+  often each replica sweeps for such stale reservations.
 
 ## Environment variables
 
