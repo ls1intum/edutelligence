@@ -264,17 +264,17 @@ The service has no fixed `container_name`, so Compose can run more than one
 replica; Traefik load-balances them under `logos-webservice-svc`.
 
 The deploy workflows (`logos_deploy-{dev,test,prod}.yml`) scale to this count
-automatically on every deploy, defaulting to **2** when `.env` does not set
-`LOGOS_WEBSERVICE_REPLICAS` — a single replica means a crash or a routine
-deploy is user-visible on the inference gateway. Set the desired count in the
-core node's `.env` explicitly if you want something other than 2:
+automatically on every deploy, defaulting to **1** when `.env` does not set
+`LOGOS_WEBSERVICE_REPLICAS`. Raising it hides crashes and routine deploys from
+the inference gateway, at the cost of the per-key TPM caveat below — set the
+desired count in the core node's `.env`:
 
 ```bash
 # in the .env next to docker-compose.yaml
 LOGOS_WEBSERVICE_REPLICAS=2
 
 # Pass the same .env into Compose so the scale count is not expanded by the
-# host shell (a bare ${LOGOS_WEBSERVICE_REPLICAS:-2} would default to 2 when
+# host shell (a bare ${LOGOS_WEBSERVICE_REPLICAS:-1} would default to 1 when
 # the variable is only set in .env and not exported).
 docker compose --env-file .env up -d --scale logos-webservice=2
 ```
@@ -287,7 +287,7 @@ Or, with Compose interpolating from `.env`:
 #   or export before invoking:
 set -a && source .env && set +a
 docker compose --env-file .env up -d \
-  --scale "logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-2}"
+  --scale "logos-webservice=${LOGOS_WEBSERVICE_REPLICAS:-1}"
 ```
 
 On the **dev** compose, drop or retarget the host publish `18082:8081` before
@@ -298,12 +298,12 @@ short-TTL budget cache are the remaining per-instance state (see
 
 Optional `.env` knobs:
 
-- `LOGOS_WEBSERVICE_REPLICAS` (default `2`) — webservice replica count for the
+- `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count for the
   core `docker-compose.yaml`. Cloud RPM is enforced shared across replicas
   (a DB row-lock in `GatewayCloudAccounting`); cloud TPM stays per-replica
   (`GatewayCloudRateLimiter`), so a key's effective TPM ceiling scales with
-  the replica count. Set this back to `1` on a deployment where a tight
-  per-key TPM limit matters more than gateway failover.
+  the replica count. Raise this above `1` only on a deployment where gateway
+  failover matters more than a tight per-key TPM limit.
 - `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
   accepts the public paths but proxies every request to the orchestrator after
   API-key auth.
