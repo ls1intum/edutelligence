@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.gateway;
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -169,22 +170,31 @@ final class GatewayUsageExtractor {
     }
 
     /**
+     * Parse a response body into a JSON value.
+     *
+     * @return the parsed value, or null when the body is absent, not JSON, or
+     *         was truncated by the capture cap
+     */
+    static JsonNode parseJsonBody(ObjectMapper mapper, byte[] body) {
+        if (body == null || body.length == 0) {
+            return null;
+        }
+        try {
+            return mapper.readTree(body);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * Pull usage out of a non-streaming JSON response body.
      *
      * <p>Chat Completions puts it at the top level; the Responses API nests it
      * under {@code response} when the body is an event envelope.
      */
     static Map<String, Long> fromJsonBody(ObjectMapper mapper, byte[] body) {
-        if (body == null || body.length == 0) {
-            return Map.of();
-        }
-        try {
-            return fromEnvelope(mapper.readTree(body));
-        } catch (Exception e) {
-            // A body that is not JSON (or was truncated by the capture cap)
-            // simply yields no usage; the caller falls back to the reservation.
-            return Map.of();
-        }
+        JsonNode root = parseJsonBody(mapper, body);
+        return root == null ? Map.of() : fromEnvelope(root);
     }
 
     /**
@@ -207,26 +217,70 @@ final class GatewayUsageExtractor {
     }
 
     /**
+     * The service tier the response reports — 'default', 'flex', 'priority',
+     * 'scale', ... — lowercased, or null when it reports none.
+     *
+     * <p>The OpenAI-shaped surfaces echo the tier they served, and the
+     * discounted {@code token_prices} rows are keyed off it: losing the tier
+     * bills a Flex-served request at the default rate. It is read top-level
+     * (Chat Completions, non-streaming Responses) or off the {@code response}
+     * envelope (streaming Responses events). Anthropic/Bedrock do not report
+     * one, so they price at the default tier.
+     */
+    static String serviceTier(JsonNode root) {
+        if (root == null || !root.isObject()) {
+            return null;
+        }
+        String tier = tierValue(root.get("service_tier"));
+        if (tier == null) {
+            JsonNode response = root.get("response");
+            if (response != null && response.isObject()) {
+                tier = tierValue(response.get("service_tier"));
+            }
+        }
+        return tier;
+    }
+
+    /** A usable tier value lowercased, or null when absent, null, or blank. */
+    private static String tierValue(JsonNode node) {
+        if (node != null && node.isTextual() && !node.asText().isBlank()) {
+            return node.asText().strip().toLowerCase(Locale.ROOT);
+        }
+        return null;
+    }
+
+    /**
      * Pull usage out of one SSE {@code data:} line.
      *
      * @return the usage of that event, or empty when the line carries none
      */
     static Map<String, Long> fromSseDataLine(ObjectMapper mapper, String line) {
+        JsonNode event = parseSseDataLine(mapper, line);
+        return event == null ? Map.of() : fromEnvelope(event);
+    }
+
+    /**
+     * Parse one SSE {@code data:} line into a JSON value.
+     *
+     * @return the event payload, or null when the line is not a JSON event
+     *         (no data prefix, blank, {@code [DONE]}, or malformed)
+     */
+    static JsonNode parseSseDataLine(ObjectMapper mapper, String line) {
         if (line == null) {
-            return Map.of();
+            return null;
         }
         String trimmed = line.strip();
         if (!trimmed.startsWith("data:")) {
-            return Map.of();
+            return null;
         }
         String payload = trimmed.substring("data:".length()).strip();
         if (payload.isEmpty() || "[DONE]".equals(payload)) {
-            return Map.of();
+            return null;
         }
         try {
-            return fromEnvelope(mapper.readTree(payload.getBytes(StandardCharsets.UTF_8)));
+            return mapper.readTree(payload.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
-            return Map.of();
+            return null;
         }
     }
 }

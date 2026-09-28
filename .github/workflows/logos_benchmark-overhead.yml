@@ -111,9 +111,10 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          uv venv .venv
+          # Match the orchestrator image instead of resolving newer libraries
+          # whose defaults can change the database driver or request path.
+          uv sync --locked --refresh-package shared
           source .venv/bin/activate
-          uv pip install .
           uv pip install -r ../logos-workernode/requirements.txt
           # The checked-in gRPC gencode (src/logos/grpclocal/model_pb2.py) was
           # generated with protoc 6.30; older protobuf runtimes refuse to
