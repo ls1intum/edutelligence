@@ -1,6 +1,6 @@
 // ─── Shared modal body utilities ──────────────────────────────────────────────
 // The dialog panel chrome itself (sizing, background, border, shadow) now comes
-// from tum-ui-dialog's own template, which has no styleClass passthrough.
+// from tumaet-ui-dialog's own template, which has no styleClass passthrough.
 // Default layout for <div class="dialog-body"> inside app-modal-form.
 // Component SCSS can override these via its own (scoped) .dialog-body rule.
 
