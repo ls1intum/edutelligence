@@ -23,6 +23,13 @@ GPU lane), different tool.
   killing one is visible to clients under real concurrent load (a heavier,
   automated version of `../../scripts/gateway-failover-demo.sh`'s light
   polling check).
+  The ramp's headline number is **peak held**, not step size: a step's
+  streams are pinned open at a barrier until the whole step has been
+  admitted or rejected, and the report gives the overlap that actually
+  occurred. Firing *n* requests at once does not hold *n* streams open —
+  the fake upstream's completion lasts about a second, so without the
+  barrier the early streams close before the last ones are even admitted
+  and the wave size bounds nothing.
 - **Not measured:** a real cloud provider's own throttling (the upstream is
   a fake, see below, on purpose), local/mixed-path routing through the
   orchestrator, budget/rate-limit enforcement (the seed disables both so

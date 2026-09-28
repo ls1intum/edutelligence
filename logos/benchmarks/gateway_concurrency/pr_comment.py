@@ -64,17 +64,39 @@ def _pr_number() -> Optional[str]:
     return str(number) if number else None
 
 
+def _is_own_comment(comment: Dict[str, Any]) -> bool:
+    """Whether this workflow wrote the comment.
+
+    The anchor alone does not identify authorship: any PR participant can
+    post it, and the workflow would then try to PATCH a comment it does not
+    own, get a 403, and drop the report instead of publishing it. Ownership
+    is the login the workflow posts under — ``github-actions[bot]`` for the
+    default ``GITHUB_TOKEN``, overridable for stacks that run this under a
+    GitHub App or a dedicated bot account.
+    """
+    author = os.environ.get("LOGOS_BENCH_COMMENT_AUTHOR", "github-actions[bot]")
+    return (comment.get("user") or {}).get("login") == author
+
+
 def _find_last_bench_comment(api_comments: str, token: str) -> Optional[Dict[str, Any]]:
+    """The workflow's own most recent anchored comment, or None.
+
+    Walks every page rather than stopping at the first page with a match:
+    an older bot comment on page 1 must not shadow the current one further
+    down the thread, or each run would edit a stale comment and the report
+    would stop appearing at the bottom of the PR.
+    """
+    latest: Optional[Dict[str, Any]] = None
     page = 1
     while True:
         comments = _api_request("GET", f"{api_comments}?per_page=100&page={page}", token)
         if not comments:
-            return None
-        matching = [c for c in comments if _ANCHOR in (c.get("body") or "")]
+            return latest
+        matching = [c for c in comments if _ANCHOR in (c.get("body") or "") and _is_own_comment(c)]
         if matching:
-            return matching[-1]
+            latest = matching[-1]
         if len(comments) < 100:
-            return None
+            return latest
         page += 1
 
 

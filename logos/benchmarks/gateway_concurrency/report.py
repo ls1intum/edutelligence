@@ -30,21 +30,32 @@ def build_markdown(result: Dict[str, Any]) -> str:
         onset = conc["onset_concurrency"]
         onset_str = str(onset) if onset is not None else "not reached within the tested steps"
         lines.append(
-            f"Onset of failures (>{conc['fail_threshold']:.0%} of a step): **{onset_str}** concurrent streams. "
+            f"Peak streams held open simultaneously: **{conc.get('max_concurrent_streams_held', 0)}**. "
+            f"Onset of failures (>{conc['fail_threshold']:.0%} of a step): **{onset_str}** requests per step. "
             f"Configured ceiling: `max-size`={ceiling['spring_task_execution_pool_max_size']} + "
             f"`queue-capacity`={ceiling['spring_task_execution_pool_queue_capacity']} "
             f"(≈{ceiling['approx_admission_ceiling_per_replica']} per replica) "
             f"x {ceiling['replicas']} replica(s) = ≈{ceiling['approx_admission_ceiling']}."
         )
         lines.append("")
-        lines.append("| Concurrency | OK | Failed | Fail rate | TTFB p50 | TTFB p95 | Total p50 |")
-        lines.append("|---:|---:|---:|---:|---:|---:|---:|")
+        lines.append("| Step size | Peak held | OK | Failed | Fail rate | TTFB p50 | TTFB p95 | Total p50 |")
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|")
         for step in conc["steps"]:
+            peak = step.get("peak_concurrent_streams", 0)
+            peak_cell = f"{peak} ⚠️" if step.get("hold_timed_out") else str(peak)
             lines.append(
-                f"| {step['concurrency']} | {step['ok']} | {step['failed']} | {step['fail_rate']:.1%} | "
+                f"| {step['concurrency']} | {peak_cell} | {step['ok']} | {step['failed']} | {step['fail_rate']:.1%} | "
                 f"{_ms(step['ttfb_ms'].get('p50_ms', 0))} ms | {_ms(step['ttfb_ms'].get('p95_ms', 0))} ms | "
                 f"{_ms(step['total_ms'].get('p50_ms', 0))} ms |"
             )
+        lines.append("")
+        lines.append(
+            "_Step size_ is how many requests were fired at once; _peak held_ is how many streams the gateway "
+            "actually had open at the same time — admitted streams are held at a barrier until the whole step "
+            "has been admitted or rejected, so only the latter bounds concurrency. ⚠️ marks a step that hit the "
+            f"{conc.get('hold_timeout_s', 0):.0f}s hold budget before resolving, making its peak a lower bound. "
+            "Latencies exclude time spent at the barrier."
+        )
         lines.append("")
 
     # -- added latency -------------------------------------------------------
