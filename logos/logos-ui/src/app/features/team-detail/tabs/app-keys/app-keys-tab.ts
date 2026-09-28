@@ -118,21 +118,6 @@ export class AppKeysTabComponent {
     return index === 0 || this.slaOf(keys[index - 1]) !== this.slaOf(keys[index]);
   }
 
-  /**
-   * A stored priority that is neither the tier's own value nor 0 ("nothing
-   * chosen yet"). The queue buckets 2..9 as NORMAL but still dequeues a 7
-   * ahead of a plain 5, so the exact number is worth showing rather than
-   * hiding behind the tier it rounds to.
-   */
-  rawPriorityNote(key: TeamApiKey): string | null {
-    // While a change is in flight the stored value is still the old one, which
-    // would read as a contradiction next to the tier already shown.
-    if (this.slaSaving().has(key.id)) return null;
-    const raw = key.default_priority ?? 0;
-    if (raw === 0 || raw === SLA_PRIORITY[this.slaOf(key)]) return null;
-    return String(raw);
-  }
-
   async changeSla(key: TeamApiKey, sla: KeySla): Promise<void> {
     if (!this.canEdit || this.slaSaving().has(key.id) || this.slaOf(key) === sla) return;
     const previous = this.slaOverrides().get(key.id);

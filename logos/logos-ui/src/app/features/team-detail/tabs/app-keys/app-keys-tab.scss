@@ -520,16 +520,6 @@
   text-overflow: ellipsis;
 }
 
-.sla-raw {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border-radius: 6px;
-  background: rgb(var(--color-primary-400) / var(--opacity-soft));
-  color: rgb(var(--color-text-accent));
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-}
-
 // Gap left behind while a row is dragged, sized like a collapsed row.
 .drag-placeholder {
   height: 52px;
