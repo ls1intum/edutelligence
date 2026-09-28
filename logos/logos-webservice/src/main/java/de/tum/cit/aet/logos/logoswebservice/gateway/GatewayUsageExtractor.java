@@ -231,15 +231,20 @@ final class GatewayUsageExtractor {
         if (root == null || !root.isObject()) {
             return null;
         }
-        JsonNode tier = root.get("service_tier");
+        String tier = tierValue(root.get("service_tier"));
         if (tier == null) {
             JsonNode response = root.get("response");
             if (response != null && response.isObject()) {
-                tier = response.get("service_tier");
+                tier = tierValue(response.get("service_tier"));
             }
         }
-        if (tier != null && tier.isTextual() && !tier.asText().isBlank()) {
-            return tier.asText().strip().toLowerCase(Locale.ROOT);
+        return tier;
+    }
+
+    /** A usable tier value lowercased, or null when absent, null, or blank. */
+    private static String tierValue(JsonNode node) {
+        if (node != null && node.isTextual() && !node.asText().isBlank()) {
+            return node.asText().strip().toLowerCase(Locale.ROOT);
         }
         return null;
     }

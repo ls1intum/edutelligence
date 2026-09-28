@@ -211,6 +211,14 @@ class GatewayUsageExtractorTest {
     }
 
     @Test
+    void serviceTier_unusableRootTierFallsBackToTheEnvelope() throws Exception {
+        // A present-but-null root tier must not shadow a usable nested one.
+        assertThat(serviceTierOf(
+            "{\"service_tier\":null,\"response\":{\"service_tier\":\"flex\"}}"))
+            .isEqualTo("flex");
+    }
+
+    @Test
     void serviceTier_absentOrMalformedYieldsNothing() throws Exception {
         assertThat(serviceTierOf("{\"usage\":{}}")).isNull();
         assertThat(serviceTierOf("{\"service_tier\":null}")).isNull();
