@@ -30,10 +30,10 @@ class GatewayUsageCaptureTest {
             capture.write(bytes, i, Math.min(chunkSize, bytes.length - i));
         }
         capture.close();
-        return new Result(capture.usage(), sink.toString(StandardCharsets.UTF_8));
+        return new Result(capture.usage(), sink.toString(StandardCharsets.UTF_8), capture.serviceTier());
     }
 
-    private record Result(Map<String, Long> usage, String forwarded) {
+    private record Result(Map<String, Long> usage, String forwarded, String serviceTier) {
     }
 
     @Test
@@ -158,6 +158,43 @@ class GatewayUsageCaptureTest {
 
         assertThat(sink.toString(StandardCharsets.UTF_8)).isEqualTo(body);
         assertThat(capture.usage()).containsExactlyInAnyOrderEntriesOf(Map.of("prompt_tokens", 3L));
+    }
+
+    @Test
+    void jsonResponse_readsTheServiceTierAlongsideUsage() throws IOException {
+        String body = """
+            {"usage":{"prompt_tokens":120,"completion_tokens":30},"service_tier":"Flex"}""";
+
+        Result result = stream("application/json", body, 8);
+
+        assertThat(result.serviceTier()).isEqualTo("flex");
+        assertThat(result.usage()).containsEntry("prompt_tokens", 120L);
+    }
+
+    @Test
+    void responsesStream_readsTheTierFromTheCompletedEvent() throws IOException {
+        // SSE data fields are single-line; the whole event JSON rides on one
+        // data: line.
+        String body = """
+            event: response.completed
+            data: {"type":"response.completed","response":{"service_tier":"flex","usage":{"input_tokens":64,"output_tokens":12}}}
+
+            """;
+
+        Result result = stream(SSE, body, 13);
+
+        assertThat(result.serviceTier()).isEqualTo("flex");
+        assertThat(result.usage()).containsEntry("prompt_tokens", 64L);
+    }
+
+    @Test
+    void responseWithoutTier_reportsNone() throws IOException {
+        String body = "{\"usage\":{\"prompt_tokens\":5}}";
+
+        Result result = stream("application/json", body, 8);
+
+        assertThat(result.serviceTier()).isNull();
+        assertThat(result.usage()).containsEntry("prompt_tokens", 5L);
     }
 
     @Test

@@ -156,19 +156,27 @@ public class GatewayCloudAccounting {
      * @param usage        canonical token counts, empty when the response reported none
      * @param responseBody the response to store, or {@code null} when the key does
      *                     not log payloads or the response streamed
+     * @param serviceTier  the tier the response reported (e.g. {@code flex}),
+     *                     or {@code null}; pricing prefers the matching
+     *                     {@code token_prices} row for it
      */
     @Transactional
-    public void settleSuccess(Integer logEntryId, Map<String, Long> usage, byte[] responseBody) {
+    public void settleSuccess(Integer logEntryId, Map<String, Long> usage,
+                              byte[] responseBody, String serviceTier) {
         if (logEntryId == null) {
             return;
         }
         boolean priced = usage != null && !usage.isEmpty();
         // Claim the row first: a reservation already zeroed by reconcileStale
-        // (or settled by a racing callback) must not gain usage rows.
+        // (or settled by a racing callback) must not gain usage rows. The tier
+        // settles in the same statement the row transitions to success, so
+        // log_entry_cost never reads a settled row without the tier its
+        // response reported.
         int claimed = jdbc.update(priced ? """
             UPDATE log_entry
                SET timestamp_response = NOW(),
                    result_status = 'success',
+                   service_tier = :serviceTier,
                    settled_cost_micro_cents = NULL,
                    cost_finalized = FALSE
              WHERE id = :id
@@ -177,10 +185,11 @@ public class GatewayCloudAccounting {
             UPDATE log_entry
                SET timestamp_response = NOW(),
                    result_status = 'success',
+                   service_tier = :serviceTier,
                    cost_finalized = TRUE
              WHERE id = :id
                AND result_status IS NULL
-            """, new MapSqlParameterSource("id", logEntryId));
+            """, new MapSqlParameterSource("id", logEntryId).addValue("serviceTier", serviceTier));
         if (claimed == 0) {
             return;
         }
