@@ -1,11 +1,13 @@
 # Logos deployment
 
-Logos deploys pull-based. Prebuilt images are published to the public GHCR
-registry `ghcr.io/ls1intum/edutelligence` — `latest` tracks `main`, and a
-pinned tag pins a specific build. A deployment is the compose file plus a
-`.env` on each node, and an update is `docker compose pull` and
-`docker compose up -d`. Nothing is pushed to a node from CI, and a worker
-node needs no inbound port at all (see the
+Logos deploys pull-based. Prebuilt images are published to the project's
+Harbor registry (`${LOGOS_HARBOR_REGISTRY}/logos`) — `latest` tracks `main`,
+and a pinned tag pins a specific build. Builds of `main` are mirrored to
+public GHCR as well, so a self-hosted install pulls without credentials (see
+the [installation guide](admin/installation.md)); deployments use Harbor. A
+deployment is the compose file plus a `.env` on each node, and an update is
+`docker compose pull` and `docker compose up -d`. Nothing is pushed to a node
+from CI, and a worker node needs no inbound port at all (see the
 [architecture overview](developer/architecture) for the subsystem
 breakdown).
 
@@ -32,12 +34,21 @@ A deployment consists of:
 | `logos-rate-gateway` | per-IP rate limiting (nginx) |
 | `logos-agent`, `logos-agent-gateway`, `logos-agent-workspace` | the agent stack (only with the `agent` profile) |
 | `logos-workernode-vllm` | the worker node runtime (on the GPU host) |
-| `logos-workernode-mlx` | the Apple Silicon worker — published to **public GHCR** at `ghcr.io/ls1intum/logos-workernode-mlx`, and the only image that is never run as a container (see the MLX section below) |
+| `logos-workernode-mlx` | the Apple Silicon worker — the only image not pushed to Harbor, and the only one that is never run as a container (see the MLX section below) |
 
-`REGISTRY` (default `ghcr.io/ls1intum/edutelligence`) and `IMAGE_TAG`
-(default `latest`) in the `.env` select the source. The public registry needs
-no login; a deployment with a private mirror sets `REGISTRY` and logs in once
-(`docker login`).
+`REGISTRY` (default `ghcr.io/ls1intum/edutelligence`, the public mirror) and
+`IMAGE_TAG` (default `latest`) in the `.env` select the source. The deploy
+workflows write `${LOGOS_HARBOR_REGISTRY}/logos` and the deployed tag into
+the `.env` they ship, so every node pulls from Harbor and logs in once
+(`docker login`); the default is there for installs that have no Harbor
+account.
+
+The mirror is written by pushes to `main` only — a pull request builds to
+Harbor alone, where the cleanup workflow prunes its `pr-<number>` tag, and a
+release publishes its version tag there too. Nothing prunes a public package,
+which is why PR and release builds stay off it. When a package appears for the
+first time, check that it is public: a private one answers a self-hosted
+install with a 403, and Package settings → Change visibility is the fix.
 
 ## Updating
 
