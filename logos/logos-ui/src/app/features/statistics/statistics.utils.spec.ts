@@ -4,6 +4,7 @@ import {
   formatPercent,
   formatTokenCount,
   formatUptime,
+  isUnifiedMemoryProvider,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -200,6 +201,45 @@ describe('extractProviderHostRamMb', () => {
       freeMb: 0,
       reported: true,
     });
+  });
+});
+
+/**
+ * A provider's memory is a single pool (not a VRAM pool beside a RAM pool)
+ * when its device reports unified memory. The page decides on this alone, so
+ * the answer has to be exactly "Metal", never anything that merely looks
+ * like it.
+ */
+describe('isUnifiedMemoryProvider', () => {
+  it('reads the device mode off the provider signals', () => {
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { device_mode: 'metal' },
+      },
+    };
+    expect(isUnifiedMemoryProvider(sample)).toBe(true);
+  });
+
+  it('is false for every other device mode', () => {
+    for (const mode of ['cuda', 'none', 'unknown', '']) {
+      expect(
+        isUnifiedMemoryProvider({
+          timestamp: 't',
+          scheduler_signals: { provider: { device_mode: mode } },
+        }),
+      ).toBe(false);
+    }
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: { provider: {} } })).toBe(
+      false,
+    );
+  });
+
+  it('is false when the sample or its signals are missing', () => {
+    expect(isUnifiedMemoryProvider({ timestamp: 't' })).toBe(false);
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: {} })).toBe(false);
+    expect(isUnifiedMemoryProvider(null)).toBe(false);
+    expect(isUnifiedMemoryProvider(undefined)).toBe(false);
   });
 });
 

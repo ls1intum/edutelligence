@@ -26,6 +26,7 @@ import {
   formatPercent,
   formatRangeLabel,
   formatTokenCount as formatTokenCountValue,
+  isUnifiedMemoryProvider,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -86,6 +87,16 @@ type ProviderGlassRow = {
   modelsLoaded: number;
   ram: { reported: boolean; totalMb: number; freeMb: number; usedMb: number };
   hasLaneRam: boolean;
+  /**
+   * True when the worker runs on unified memory (Apple Silicon / Metal): the
+   * page then shows one "Unified memory" panel instead of the VRAM and RAM
+   * pair, which would describe the same pool twice.
+   */
+  unifiedMemory: boolean;
+  /** Pool figures for the unified panel: host RAM when reported, else the
+   *  worker's device memory reading. 0 on non-unified rows. */
+  unifiedTotalMb: number;
+  unifiedFreeMb: number;
   fallbackVramPie: DonutSlice[];
   vramUsedGb: number;
   vramTotalGb: number;
@@ -575,6 +586,7 @@ export class Statistics implements OnInit, OnDestroy {
         ? toVramSeriesPoint(sample, new Date(sample.timestamp).getTime())
         : null;
       const modelsLoaded = point?.models_loaded ?? point?.loaded_models?.length ?? 0;
+      const unifiedMemory = isUnifiedMemoryProvider(sample);
 
       return {
         name,
@@ -588,6 +600,12 @@ export class Statistics implements OnInit, OnDestroy {
         modelsLoaded,
         ram,
         hasLaneRam: Object.values(lanes).some((l) => typeof l.host_ram_mb === 'number'),
+        unifiedMemory,
+        // The single pool is the host's physical RAM; the device reading is
+        // only a wired-down budget slice of it and serves as the fallback for
+        // workers that predate the host_memory summary.
+        unifiedTotalMb: unifiedMemory ? (ram.reported ? ram.totalMb : vram.totalMb) : 0,
+        unifiedFreeMb: unifiedMemory ? (ram.reported ? ram.freeMb : vram.freeMb) : 0,
         fallbackVramPie: this._fallbackVramPie(point),
         vramUsedGb: point?.used_vram_gb ?? 0,
         vramTotalGb: point?.total_vram_gb ?? (point?.used_vram_gb ?? 0) + (point?.remaining_vram_gb ?? 0),
