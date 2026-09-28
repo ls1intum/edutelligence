@@ -1647,19 +1647,20 @@ def test_no_attn_override_by_default(monkeypatch):
     assert "--attention-config.backend" not in cmd
 
 
-def test_explicit_attention_backend_config(monkeypatch):
+@pytest.mark.parametrize("backend", ["FLASHINFER", "FLASH_ATTN", "TRITON_ATTN", "FLEX_ATTENTION", "TURBOQUANT"])
+def test_explicit_attention_backend_config(monkeypatch, backend):
     """Explicit attention_backend in config should be passed to vLLM."""
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(
         model="test-model",
         vllm=True,
-        vllm_config=VllmConfig(attention_backend="TRITON_ATTN"),
+        vllm_config=VllmConfig(attention_backend=backend),
     )
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
     idx = cmd.index("--attention-config.backend")
-    assert cmd[idx + 1] == "TRITON_ATTN"
+    assert cmd[idx + 1] == backend
 
 
 def test_auto_attention_backend_pre_ampere(monkeypatch):
@@ -2727,6 +2728,25 @@ async def test_sharded_checkpoint_skipped_for_speculative_lane(monkeypatch, tmp_
     assert handle._sharded_model_dir is not None
 
 
+def test_auto_gmu_resizes_calibrated_kv_allocation_when_tp_changes() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        residency_source="calibrated",
+        tensor_parallel_size=2,
+        loaded_vram_mb=15988,
+        kv_budget_mb=4096,
+    )
+    handle = VllmProcessHandle("lane", 15000, WorkerConfig(), model_profiles=profiles, per_gpu_total_mb=lambda: 16384)
+    lane = LaneConfig(
+        model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="4G")
+    )
+    assert handle._resolve_gmu(lane.vllm_config, lane) == pytest.approx(11892 / 16384)
+    lane.vllm_config.gpu_memory_utilization = 0.9
+    assert handle._resolve_gmu(lane.vllm_config, lane) == 0.9
+
+
 @pytest.mark.asyncio
 async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeypatch, tmp_path) -> None:
     """A rejection recorded for the current vLLM sends the lane straight to the
@@ -2873,3 +2893,25 @@ async def test_stream_logs_stores_concurrency_factor_not_token_count(monkeypatch
     await handle._stream_logs()
 
     assert handle.max_concurrency == 8
+
+
+def test_startup_failure_keeps_root_exception_before_shutdown_tail():
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle._recent_logs.extend(
+        [
+            "(EngineCore pid=12) ValueError: Selected backend FLASHINFER is not valid for this configuration.",
+            "(EngineCore pid=12) Reason: ['compute capability not supported']",
+            *["cleanup line"] * 20,
+            "RuntimeError: Engine core initialization failed. See root cause above.",
+        ]
+    )
+    error = handle._format_startup_failure(60)
+    assert "Cause: ValueError: Selected backend FLASHINFER" in error[:1000]
+    assert "compute capability not supported" in error[:1000]
+    assert "Engine core initialization failed" not in handle._startup_root_cause()
+
+
+def test_generic_startup_error_does_not_invent_a_root_cause():
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle._recent_logs.append("RuntimeError: Engine core initialization failed. See root cause above.")
+    assert handle._startup_root_cause() == ""

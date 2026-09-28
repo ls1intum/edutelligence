@@ -5,6 +5,10 @@
 // ==========================================================================
 
 .model-error-report {
+  // Match the summary cards in Complete Logs on Dev; reserve monospace for code.
+  --model-detail-font-family: sans-serif;
+  --model-detail-font-size: var(--font-size-sm);
+  --model-detail-heading-size: var(--font-size-base);
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -143,6 +147,14 @@
   min-height: 400px;
 }
 
+.tab-content--technical {
+  font-family: var(--model-detail-font-family);
+  font-size: var(--model-detail-font-size);
+  line-height: var(--line-height-normal);
+
+  button, input, select, textarea { font-family: inherit; }
+}
+
 // ==========================================================================
 // Performance
 // ==========================================================================
@@ -161,14 +173,14 @@
 
   h2 {
     color: rgb(var(--color-typography-100));
-    font-size: var(--font-size-base);
+    font-size: var(--model-detail-heading-size);
     font-weight: var(--font-weight-semibold);
   }
 
   p {
     margin-top: 3px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 }
 
@@ -177,7 +189,7 @@
   align-items: center;
   gap: 7px;
   color: rgb(var(--color-typography-500));
-  font-size: var(--font-size-sm);
+  font-size: var(--model-detail-font-size);
   font-weight: var(--font-weight-medium);
 
   i {
@@ -200,11 +212,10 @@
   gap: 20px;
 }
 
-.performance-card {
-  @include glass-surface;
+.performance-card,
+.logs-panel { @include glass-surface; }
 
-  padding: 24px;
-}
+.performance-card { padding: 24px; }
 
 .performance-card__header {
   display: flex;
@@ -220,14 +231,14 @@
 
   h3 {
     color: rgb(var(--color-typography-100));
-    font-size: var(--font-size-base);
+    font-size: var(--model-detail-heading-size);
     font-weight: var(--font-weight-semibold);
   }
 
   p {
     margin-top: 4px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 }
 
@@ -249,7 +260,7 @@
   strong {
     margin-bottom: 4px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
     font-weight: var(--font-weight-semibold);
     letter-spacing: var(--letter-spacing-wide);
   }
@@ -259,7 +270,7 @@
     justify-content: space-between;
     gap: 8px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 
   b {
@@ -271,7 +282,7 @@
 .performance-card__footer {
   margin-top: 18px;
   color: rgb(var(--color-typography-500));
-  font-size: var(--font-size-sm);
+  font-size: var(--model-detail-font-size);
 }
 
 @media (max-width: 1100px) {
@@ -284,10 +295,6 @@
   .performance-header {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .performance-refresh {
-    justify-content: center;
   }
 
   .performance-list,
@@ -721,10 +728,7 @@
 // ==========================================================================
 
 .logs-panel {
-  @include glass-surface;
-
   padding: 12px;
-  border-radius: 8px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -745,7 +749,7 @@
 }
 
 .log-selector__label {
-  font-size: var(--font-size-base);
+  font-size: var(--model-detail-heading-size);
   font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-700));
 }
@@ -846,8 +850,8 @@
   overflow: auto;
   background: rgb(var(--color-surface-0));
   color: rgb(var(--color-typography-100));
-  font-family: 'JetBrains Mono', monospace;
-  font-size: var(--font-size-sm);
+  font-family: monospace;
+  font-size: var(--model-detail-font-size);
   line-height: var(--line-height-normal);
 }
 
@@ -947,56 +951,20 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.calibration-status--success {
-  border-color:
-    rgb(
-      var(--color-success)
-      / var(--opacity-border)
-    );
-  background:
-    rgb(
-      var(--color-success)
-      / var(--opacity-faint)
-    );
+.calibration-status--success { --status-color: var(--color-success); }
+.calibration-status--failure { --status-color: var(--color-error); }
 
-  .calibration-status__icon {
-    color: rgb(var(--color-success));
-    background:
-      rgb(
-        var(--color-success)
-        / var(--opacity-soft)
-      );
-  }
-
-  .calibration-status__value {
-    color: rgb(var(--color-success));
-  }
-}
-
+.calibration-status--success,
 .calibration-status--failure {
-  border-color:
-    rgb(
-      var(--color-error)
-      / var(--opacity-border)
-    );
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-faint)
-    );
+  border-color: rgb(var(--status-color) / var(--opacity-border));
+  background: rgb(var(--status-color) / var(--opacity-faint));
 
   .calibration-status__icon {
-    color: rgb(var(--color-error));
-    background:
-      rgb(
-        var(--color-error)
-        / var(--opacity-soft)
-      );
+    color: rgb(var(--status-color));
+    background: rgb(var(--status-color) / var(--opacity-soft));
   }
 
-  .calibration-status__value {
-    color: rgb(var(--color-error));
-  }
+  .calibration-status__value { color: rgb(var(--status-color)); }
 }
 
 // ==========================================================================
@@ -1004,19 +972,11 @@
 // ==========================================================================
 
 .log-line--highlighted {
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-soft)
-    );
+  background: rgb(var(--color-error) / var(--opacity-soft));
 
   .log-line-number {
-    background:
-      rgb(
-        var(--color-error)
-        / var(--opacity-faint)
-      );
     color: rgb(var(--color-error));
+    background: rgb(var(--color-error) / var(--opacity-faint));
   }
 
   .log-line-content {
@@ -1044,5 +1004,22 @@
 
   .check-name {
     font-size: var(--font-size-sm);
+  }
+}
+
+.benchmark-worker-select {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px;
+  font-size: var(--model-detail-font-size);
+  select {
+    min-height: 40px;
+    padding: 8px 10px;
+    font: inherit;
+    color: inherit;
+    background: var(--surface-card, transparent);
+    border: 1px solid var(--surface-border, #d1d5db);
+    border-radius: 6px;
   }
 }

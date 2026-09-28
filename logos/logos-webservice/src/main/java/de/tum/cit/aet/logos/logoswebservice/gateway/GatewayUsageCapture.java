@@ -6,10 +6,12 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Sniffs the token usage out of a cloud response while it streams to the client.
+ * Sniffs the token usage and the service tier out of a cloud response while it
+ * streams to the client.
  *
  * <p>The client's bytes are never delayed or altered: every write passes
  * straight through to the delegate and the copy is what gets inspected. Two
@@ -50,6 +52,7 @@ final class GatewayUsageCapture extends OutputStream {
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private boolean bufferOverflowed;
     private Map<String, Long> usage = Map.of();
+    private String serviceTier;
     private byte[] capturedBody;
 
     GatewayUsageCapture(OutputStream delegate, ObjectMapper objectMapper, String upstreamContentType) {
@@ -72,6 +75,11 @@ final class GatewayUsageCapture extends OutputStream {
     /** The usage seen so far; empty when the response carried none. */
     Map<String, Long> usage() {
         return usage;
+    }
+
+    /** The service tier the response reported, lowercased; null when it reported none. */
+    String serviceTier() {
+        return serviceTier;
     }
 
     /**
@@ -167,11 +175,19 @@ final class GatewayUsageCapture extends OutputStream {
         }
         String line = buffer.toString(StandardCharsets.UTF_8);
         buffer.reset();
-        Map<String, Long> found = GatewayUsageExtractor.fromSseDataLine(objectMapper, line);
+        JsonNode event = GatewayUsageExtractor.parseSseDataLine(objectMapper, line);
+        if (event == null) {
+            return;
+        }
+        Map<String, Long> found = GatewayUsageExtractor.fromEnvelope(event);
         if (!found.isEmpty()) {
             // Later events refine earlier ones (Responses API reports usage on
             // response.completed after incremental events).
             usage = found;
+        }
+        String tier = GatewayUsageExtractor.serviceTier(event);
+        if (tier != null) {
+            serviceTier = tier;
         }
     }
 
@@ -181,9 +197,13 @@ final class GatewayUsageCapture extends OutputStream {
         }
         byte[] body = buffer.toByteArray();
         buffer.reset();
-        Map<String, Long> found = GatewayUsageExtractor.fromJsonBody(objectMapper, body);
-        if (!found.isEmpty()) {
-            usage = found;
+        JsonNode root = GatewayUsageExtractor.parseJsonBody(objectMapper, body);
+        if (root != null) {
+            Map<String, Long> found = GatewayUsageExtractor.fromEnvelope(root);
+            if (!found.isEmpty()) {
+                usage = found;
+            }
+            serviceTier = GatewayUsageExtractor.serviceTier(root);
         }
         if (retainBody) {
             capturedBody = body;
