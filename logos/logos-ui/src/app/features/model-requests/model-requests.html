@@ -1,0 +1,87 @@
+<section class="model-requests">
+  <div class="section-header">
+    <div>
+      <h2 class="section-title">Model requests</h2>
+      <p class="section-subtitle">
+        Need a model that Logos does not serve yet? Vote for it. Each of you gets one
+        vote per model — the most-voted missing models rise to the top.
+      </p>
+    </div>
+    <button class="ghost" (click)="refresh()" [disabled]="loading()">Refresh</button>
+  </div>
+
+  <section class="card">
+    <h3>Request a model</h3>
+
+    <label class="field">
+      <span>Model name</span>
+      <input
+        type="text"
+        [value]="name()"
+        (input)="name.set($any($event.target).value)"
+        (keyup.enter)="submit()"
+        placeholder="e.g. gpt-5"
+        autocomplete="off"
+      />
+      <small>The exact model identifier you would use in a request's <code>model</code> field.</small>
+    </label>
+
+    <button class="primary" [disabled]="!name().trim() || submitting()" (click)="submit()">
+      {{ submitting() ? 'Submitting…' : 'Vote for this model' }}
+    </button>
+  </section>
+
+  @if (error()) {
+    <p class="error" role="alert">{{ error() }}</p>
+  } @if (notice()) {
+    <p class="notice">{{ notice() }}</p>
+  }
+
+  <section class="card">
+    @if (loading()) {
+      <p class="empty">Loading…</p>
+    } @else if (requests().length === 0) {
+      <p class="empty">No model requests yet — be the first to ask for one.</p>
+    } @else {
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Votes</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (request of requests(); track request.id) {
+            <tr>
+              <td class="mono">{{ request.name }}</td>
+              <td>
+                {{ request.request_count }}
+                {{ request.request_count === 1 ? 'vote' : 'votes' }}
+              </td>
+              <td class="row-action">
+                @if (request.has_voted) {
+                  <button
+                    class="ghost"
+                    [disabled]="submitting()"
+                    (click)="toggle(request)"
+                  >
+                    Undo vote
+                  </button>
+                } @else {
+                  <button
+                    class="ghost ghost--vote"
+                    [disabled]="submitting()"
+                    (click)="toggle(request)"
+                  >
+                    Vote
+                  </button>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </section>
+</section>

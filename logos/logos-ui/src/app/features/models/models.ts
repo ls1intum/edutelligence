@@ -14,6 +14,7 @@ import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { ModelRequests } from '../model-requests/model-requests';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { Router } from '@angular/router';
 import { daysSince, formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
@@ -28,6 +29,7 @@ import { daysSince, formatLastUsed as formatLastUsedLabel } from '../../shared/u
     SearchInputComponent,
     DataTableComponent,
     ErrorMessageComponent,
+    ModelRequests,
   ],
   templateUrl: './models.html',
   changeDetection: ChangeDetectionStrategy.Eager,

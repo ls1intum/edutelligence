@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Model requests: a vote for a model Logos does not serve yet.
+
+         Users who want a model that is not on the platform vote for it; the
+         votes are a demand signal, not a configuration change. `requested_models`
+         is one row per requested model (the registry), and `requested_model_votes`
+         records who voted for what, so that:
+           * every user gets exactly one vote per model (the unique pair index),
+           * a user can take their vote back and cast it again, and
+           * the per-model count is just the number of votes for it.
+
+         A model that an admin later adds to `models` stops being "requested" —
+         the listing filters those out — and voting for a model that is already
+         in `models` is refused. When a requested model's last vote is taken back,
+         its registry row is removed. -->
+    <changeSet id="034-requested-models" author="maltebai">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="requested_models"/></not>
+        </preConditions>
+        <createTable tableName="requested_models">
+            <column name="id" type="INTEGER" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_requested_models"/>
+            </column>
+            <column name="name" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <sql><![CDATA[
+            -- One registry row per requested model, independent of how the name
+            -- was cased: "GPT-5" and "gpt-5" are the same model. The service
+            -- serializes the check-and-insert with an advisory lock; this index
+            -- is the backstop that keeps the invariant even if that regresses.
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_requested_models_name_lower
+                ON requested_models (lower(name));
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP INDEX IF EXISTS uq_requested_models_name_lower;
+            </sql>
+            <dropTable tableName="requested_models"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Who voted for which requested model.
+
+         The unique (requested_model_id, user_id) pair is what enforces "one
+         vote per voter per model": a second vote by the same user for the same
+         model cannot insert a second row. Both foreign keys cascade, so
+         removing a user or a requested model cleans up their votes with it. -->
+    <changeSet id="034-requested-model-votes" author="maltebai">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="requested_model_votes"/></not>
+        </preConditions>
+        <createTable tableName="requested_model_votes">
+            <column name="id" type="INTEGER" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_requested_model_votes"/>
+            </column>
+            <column name="requested_model_id" type="INTEGER">
+                <constraints nullable="false"
+                             foreignKeyName="fk_requested_model_votes_model"
+                             references="requested_models(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="user_id" type="INTEGER">
+                <constraints nullable="false"
+                             foreignKeyName="fk_requested_model_votes_user"
+                             references="users(id)"
+                             deleteCascade="true"/>
+            </column>
+        </createTable>
+        <sql><![CDATA[
+            -- One vote per user per requested model.
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_requested_model_votes_model_user
+                ON requested_model_votes (requested_model_id, user_id);
+
+            -- Counting a model's votes (and the "who has voted" lookups).
+            CREATE INDEX IF NOT EXISTS idx_requested_model_votes_model
+                ON requested_model_votes (requested_model_id);
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP INDEX IF EXISTS idx_requested_model_votes_model;
+                DROP INDEX IF EXISTS uq_requested_model_votes_model_user;
+            </sql>
+            <dropTable tableName="requested_model_votes"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

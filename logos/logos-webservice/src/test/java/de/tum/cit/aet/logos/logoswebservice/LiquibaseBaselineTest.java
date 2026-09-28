@@ -118,6 +118,30 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration034_requestedModelsAndVotesTablesExist() {
+        // The model-request voting feature: a registry of requested models
+        // (one row per model, unique on the lower-cased name) plus the votes
+        // (one row per voter, unique on the (model, user) pair so each user gets
+        // exactly one vote per model).
+        assertThat(tableExists("requested_models")).isTrue();
+        assertThat(columnExists("requested_models", "id")).isTrue();
+        assertThat(columnExists("requested_models", "name")).isTrue();
+        assertThat(tableExists("requested_model_votes")).isTrue();
+        assertThat(columnExists("requested_model_votes", "id")).isTrue();
+        assertThat(columnExists("requested_model_votes", "requested_model_id")).isTrue();
+        assertThat(columnExists("requested_model_votes", "user_id")).isTrue();
+        for (String indexName : new String[] {
+            "uq_requested_models_name_lower",
+            "uq_requested_model_votes_model_user",
+        }) {
+            Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+                Integer.class, indexName);
+            assertThat(count).as("index %s", indexName).isEqualTo(1);
+        }
+    }
+
+    @Test
     void migration003_backfillsKeyForKeylessMembership() {
         // A current membership with no developer key for that team (the legacy
         // logos_admin case) must receive exactly one active developer key whose
