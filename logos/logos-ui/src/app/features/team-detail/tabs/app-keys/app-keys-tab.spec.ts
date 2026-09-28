@@ -16,7 +16,7 @@ import { SLA_PRIORITY } from './key-sla';
  * which tier a dropped row lands in is worth pinning down.
  */
 describe('AppKeysTabComponent reordering', () => {
-  let updateApiKey: jasmine.Spy;
+  const updateApiKey = vi.fn();
 
   const makeKey = (id: number, priority: number): TeamApiKey => ({
     id,
@@ -62,7 +62,8 @@ describe('AppKeysTabComponent reordering', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    updateApiKey = jasmine.createSpy('updateApiKey').and.returnValue(Promise.resolve());
+    vi.clearAllMocks();
+    updateApiKey.mockResolvedValue(undefined);
     TestBed.configureTestingModule({
       providers: [{ provide: TeamManagementService, useValue: { updateApiKey } }],
     });
@@ -125,7 +126,7 @@ describe('AppKeysTabComponent reordering', () => {
 
   it('restores the previous tier when saving the SLA fails', async () => {
     const { component, mediumA } = setup();
-    updateApiKey.and.returnValue(Promise.reject(new Error('nope')));
+    updateApiKey.mockRejectedValue(new Error('nope'));
 
     await component.onDrop(drop(1, 0));
 
