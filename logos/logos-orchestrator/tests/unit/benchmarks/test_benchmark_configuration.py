@@ -50,6 +50,7 @@ def test_custom_dataset_and_concurrency_are_used_in_scenario():
         {"seed": -1},
         {"profile": "unknown"},
         {"serving_overrides": {"vllm_binary": "/tmp/program"}},
+        {"serving_overrides": {"attention_backend": "FLASHINFER --other-flag"}},
     ],
 )
 def test_invalid_settings_are_rejected(settings):
@@ -169,3 +170,16 @@ def test_serving_overrides_preserve_unrelated_flags_and_replace_old_values():
     assert captured["pipeline_parallel_size"] == 4
     assert captured["max_num_batched_tokens"] == 2048
     assert captured["hf_overrides"] == {"key": 1}
+
+
+@pytest.mark.parametrize("backend", ["FLASHINFER", "FLASH_ATTN", "TRITON_ATTN", "FLEX_ATTENTION", "TURBOQUANT"])
+def test_attention_backend_is_applied_and_recorded(backend):
+    from logos.benchmarks.configuration import ServingOverrides
+    from logos.benchmarks.guidellm_runner import apply_serving_overrides, extract_serving_configuration
+
+    current = {"attention_backend": "TRITON_ATTN", "tensor_parallel_size": 2}
+    updated = apply_serving_overrides(current, ServingOverrides(attention_backend=backend))
+    assert updated == {"attention_backend": backend, "tensor_parallel_size": 2}
+    assert current["attention_backend"] == "TRITON_ATTN"
+    status = {"runtime": {"lanes": [{"model": "m", "lane_config": {"vllm_config": updated}}]}}
+    assert extract_serving_configuration(status, "m")["attention_backend"] == backend

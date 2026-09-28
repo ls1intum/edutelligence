@@ -58,11 +58,23 @@ def test_combination_includes_current_settings_when_only_one_field_changes():
         ({"kv_cache_memory_bytes": "0"}, "greater than zero"),
         ({"kv_cache_memory_bytes": "999G"}, "smaller than its total memory"),
         ({"max_num_seqs": 32, "max_num_batched_tokens": 8}, "at least max sequences"),
+        ({"attention_backend": "TURBOQUANT"}, "requires a turboquant KV cache dtype"),
     ],
 )
 def test_known_memory_and_batch_limits(overrides, message):
     with pytest.raises(ValueError, match=message):
         validate_worker_overrides(ServingOverrides(**overrides), worker_limits(snapshot(), "m"))
+
+
+@pytest.mark.parametrize("cache", ["turboquant_k8v4", "turboquant_4bit_nc", "turboquant_k3v4_nc", "turboquant_3bit_nc"])
+def test_turboquant_uses_explicit_or_existing_cache_setting(cache):
+    limits = worker_limits(snapshot(), "m")
+    validate_worker_overrides(ServingOverrides(attention_backend="TURBOQUANT", kv_cache_dtype=cache), limits)
+    limits["current"]["kv_cache_dtype"] = cache
+    validate_worker_overrides(ServingOverrides(attention_backend="TURBOQUANT"), limits)
+    limits["current"]["attention_backend"] = "TURBOQUANT"
+    with pytest.raises(ValueError, match="requires a turboquant"):
+        validate_worker_overrides(ServingOverrides(kv_cache_dtype="auto"), limits)
 
 
 def test_unknown_gpu_inventory_does_not_invent_a_limit():

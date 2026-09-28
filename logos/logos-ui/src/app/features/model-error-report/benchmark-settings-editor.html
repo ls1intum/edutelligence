@@ -146,6 +146,9 @@
             <input [type]="field.type" [attr.min]="field.min ?? null" [attr.max]="field.max ?? null" [attr.step]="field.step ?? 1"
               [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)" placeholder="Keep current" />
           }
+          @if (field.key === 'attention_backend') {
+            <small>Support depends on GPU, model and vLLM version. TURBOQUANT needs a turboquant KV cache dtype.</small>
+          }
         </label>
       }
     </div>

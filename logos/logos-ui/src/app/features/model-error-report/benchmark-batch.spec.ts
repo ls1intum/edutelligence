@@ -5,6 +5,21 @@ const sweep = (key: string, values: string): Sweep => ({ key, mode: 'values', va
 const limits = { gpu_count: 2, gpu_memory_bytes: 24 * 1024 ** 3, current: { tensor_parallel_size: 1, pipeline_parallel_size: 1 } };
 
 describe('Benchmark batch plan', () => {
+  it('varies attention backends while keeping the other controls fixed', () => {
+    const settings = { ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { tensor_parallel_size: 2 } };
+    const batch = buildBatch(settings, 50, [sweep('attention_backend', 'FLASHINFER,FLASH_ATTN,TRITON_ATTN,FLEX_ATTENTION')], 3, limits, true);
+    expect(batch.configurations.map(s => s.serving_overrides['attention_backend'])).toEqual(['FLASHINFER', 'FLASH_ATTN', 'TRITON_ATTN', 'FLEX_ATTENTION']);
+    expect(batch.configurations.every(s => s.serving_overrides['tensor_parallel_size'] === 2 && s.samples === 50)).toBe(true);
+    expect(batch.repetitions).toBe(3);
+    expect(settings.serving_overrides).toEqual({ tensor_parallel_size: 2 });
+    expect(() => buildBatch(settings, 50, [sweep('attention_backend', 'typo')], 3, limits, true)).toThrow(/Attention backend/);
+  });
+  it('validates TURBOQUANT against the effective KV cache setting', () => {
+    const backend = [sweep('attention_backend', 'TURBOQUANT')];
+    expect(() => buildBatch(DEFAULT_BENCHMARK_SETTINGS, 5, backend, 1, limits, true)).toThrow(/turboquant KV cache dtype/);
+    const settings = { ...DEFAULT_BENCHMARK_SETTINGS, serving_overrides: { kv_cache_dtype: 'turboquant_k8v4' } };
+    expect(buildBatch(settings, 5, backend, 2, limits, true).configurations[0].serving_overrides['attention_backend']).toBe('TURBOQUANT');
+  });
   it('creates all combinations with fixed controls and supports more than 15 runs', () => {
     const settings = { ...DEFAULT_BENCHMARK_SETTINGS, seed: 17, serving_overrides: { pipeline_parallel_size: 1, enable_prefix_caching: false } };
     const batch = buildBatch(settings, 50, [sweep('concurrency', '1,4,16'), sweep('tensor_parallel_size', '1,2')], 5, limits, true);

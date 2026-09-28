@@ -46,6 +46,7 @@ export function datasetViewerUrl(settings: Pick<BenchmarkSettings, 'dataset' | '
 export const SERVING_FIELDS = [
   { key: 'tensor_parallel_size', label: 'Tensor parallel size', type: 'number', min: 1, max: 64 },
   { key: 'pipeline_parallel_size', label: 'Pipeline parallel size', type: 'number', min: 1, max: 64 },
+  { key: 'attention_backend', label: 'Attention backend', type: 'text' },
   { key: 'gpu_memory_utilization', label: 'GPU memory utilization', type: 'number', min: 0.1, max: 1, step: 0.01 },
   { key: 'kv_cache_memory_bytes', label: 'KV cache memory per GPU (e.g. 4G)', type: 'text' },
   { key: 'kv_cache_dtype', label: 'KV cache dtype', type: 'text' },
@@ -93,8 +94,9 @@ export interface BenchmarkWorkerLimits {
 }
 
 export const SERVING_CHOICES: Record<string, readonly string[]> = {
+  attention_backend: ['FLASHINFER', 'FLASH_ATTN', 'TRITON_ATTN', 'FLEX_ATTENTION', 'TURBOQUANT'],
   dtype: ['auto', 'float16', 'bfloat16', 'float32', 'half', 'float'],
-  kv_cache_dtype: ['auto', 'fp8', 'fp8_e4m3', 'fp8_e5m2'],
+  kv_cache_dtype: ['auto', 'fp8', 'fp8_e4m3', 'fp8_e5m2', 'turboquant_k8v4', 'turboquant_4bit_nc', 'turboquant_k3v4_nc', 'turboquant_3bit_nc'],
 };
 
 export function servingValidationErrors(settings: BenchmarkSettings, limits: BenchmarkWorkerLimits | null): string[] {
@@ -117,6 +119,9 @@ export function servingValidationErrors(settings: BenchmarkSettings, limits: Ben
   if (limits?.gpu_count == null) return [...errors, 'Worker GPU limits are unavailable. Reload the limits before changing vLLM settings.'];
   if (limits.gpu_count === 0) return [...errors, 'No NVIDIA GPUs are available for this model on the selected worker.'];
   const effective = { ...limits.current, ...overrides };
+  if (effective['attention_backend'] === 'TURBOQUANT' && !String(effective['kv_cache_dtype'] ?? '').startsWith('turboquant_')) {
+    errors.push('TURBOQUANT requires a turboquant KV cache dtype. Select a compatible KV cache dtype first.');
+  }
   const tp = Number(effective['tensor_parallel_size'] ?? 1);
   const pp = Number(effective['pipeline_parallel_size'] ?? 1);
   if (tp * pp > limits.gpu_count) errors.push(`TP ${tp} × PP ${pp} requires ${tp * pp} GPUs; this worker provides ${limits.gpu_count} for this model.`);

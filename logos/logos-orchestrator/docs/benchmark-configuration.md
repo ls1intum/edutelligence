@@ -26,6 +26,18 @@ vLLM overrides apply only to Logos workers. Blank fields keep the current worker
 
 Changed vLLM settings remain active after the benchmark, including if measurement fails or is cancelled after reconfiguration. There is no automatic rollback. Deploy the updated workernode together with the orchestrator to enforce the `require_idle` reconfiguration guard.
 
+`attention_backend` can be fixed for a run or varied in a batch: `FLASHINFER`,
+`FLASH_ATTN`, `TRITON_ATTN`, `FLEX_ATTENTION`, and `TURBOQUANT`. An empty
+override preserves the worker setting. Explicit choices use the existing worker
+`--attention-config.backend` flag and are recorded with the benchmark, so
+comparisons of other parameters do not mix different attention settings.
+Support depends on the installed vLLM version, GPU, model and cache format;
+an incompatible choice fails preparation instead of silently falling back.
+`TURBOQUANT` requires a `turboquant_*` KV cache dtype; the editor exposes those
+formats and validates that prerequisite before starting. The backend priority
+tables in the [vLLM documentation](https://docs.vllm.ai/en/latest/design/attention_backends/)
+describe automatic selection, not a performance ranking for every model.
+
 ## API
 
 All Spring endpoints below require `logos_admin` and forward to the internal orchestrator API using the existing internal authentication:

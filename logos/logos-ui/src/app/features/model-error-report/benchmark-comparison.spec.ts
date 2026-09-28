@@ -51,6 +51,7 @@ describe('Benchmark parameter isolation', () => {
     ['scenario', 'spec', 'data_column_mapper', 'column_mappings', 'text_column'],
     ['serving', 'pipeline_parallel_size'],
     ['serving', 'kv_cache_memory'],
+    ['serving', 'attention_backend'],
     ['serving', 'enable_prefix_caching'],
     ['metadata', 'guidellm_version'],
   ])('excludes changed control %j', (...path) => {

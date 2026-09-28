@@ -22,7 +22,16 @@
         @if (field(sweep.key).type === 'number') {
           <label>Input<select [ngModel]="sweep.mode" (ngModelChange)="update(index, {mode: $event})"><option value="values">Values</option><option value="range">Range</option></select></label>
         }
-        @if (sweep.mode === 'values') {
+        @if (sweep.key === 'attention_backend') {
+          <fieldset class="backend-choices">
+            <legend>Backends to test</legend>
+            @for (choice of choices[sweep.key]; track choice) {
+              <label><input type="checkbox" [checked]="sweep.values.split(',').includes(choice)"
+                (change)="toggleBackend(index, choice, $any($event.target).checked)">{{ choice }}</label>
+            }
+            <small>Support depends on GPU, model and vLLM version. TURBOQUANT needs a turboquant KV cache dtype.</small>
+          </fieldset>
+        } @else if (sweep.mode === 'values') {
           <label class="values">{{ field(sweep.key).type === 'boolean' ? 'Values: true, false' : 'Values' }}
             <input type="text" aria-label="Values separated by commas" [ngModel]="sweep.values" (ngModelChange)="update(index, {values: $event})" [placeholder]="field(sweep.key).type === 'number' ? 'e.g. 1, 2, 4' : ''">
           </label>

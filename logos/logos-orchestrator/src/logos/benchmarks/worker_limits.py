@@ -40,6 +40,10 @@ def validate_worker_overrides(overrides: ServingOverrides, limits: dict) -> None
     if count == 0:
         raise ValueError("This worker has no available NVIDIA GPUs for this model.")
     effective = {**limits["current"], **requested}
+    if effective.get("attention_backend") == "TURBOQUANT" and not str(effective.get("kv_cache_dtype", "")).startswith(
+        "turboquant_"
+    ):
+        raise ValueError("TURBOQUANT requires a turboquant KV cache dtype. Select a compatible KV cache dtype first.")
     tp = int(effective.get("tensor_parallel_size") or 1)
     pp = int(effective.get("pipeline_parallel_size") or 1)
     if tp * pp > count:

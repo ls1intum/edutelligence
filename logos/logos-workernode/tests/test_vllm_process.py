@@ -1647,19 +1647,20 @@ def test_no_attn_override_by_default(monkeypatch):
     assert "--attention-config.backend" not in cmd
 
 
-def test_explicit_attention_backend_config(monkeypatch):
+@pytest.mark.parametrize("backend", ["FLASHINFER", "FLASH_ATTN", "TRITON_ATTN", "FLEX_ATTENTION", "TURBOQUANT"])
+def test_explicit_attention_backend_config(monkeypatch, backend):
     """Explicit attention_backend in config should be passed to vLLM."""
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(
         model="test-model",
         vllm=True,
-        vllm_config=VllmConfig(attention_backend="TRITON_ATTN"),
+        vllm_config=VllmConfig(attention_backend=backend),
     )
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
     idx = cmd.index("--attention-config.backend")
-    assert cmd[idx + 1] == "TRITON_ATTN"
+    assert cmd[idx + 1] == backend
 
 
 def test_auto_attention_backend_pre_ampere(monkeypatch):

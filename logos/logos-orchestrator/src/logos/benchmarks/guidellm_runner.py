@@ -24,6 +24,7 @@ _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "tok
 _SERVING_KEYS = {
     "tensor_parallel_size",
     "pipeline_parallel_size",
+    "attention_backend",
     "kv_cache_dtype",
     "kv_cache_memory_bytes",
     "max_num_seqs",

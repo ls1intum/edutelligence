@@ -1,6 +1,6 @@
 import { Component, computed, effect, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { BenchmarkSettings, BenchmarkWorkerLimits } from './benchmark-settings';
+import { BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES } from './benchmark-settings';
 import { BenchmarkBatch, buildBatch, configurationValue, SWEEP_FIELDS, Sweep } from './benchmark-batch';
 
 @Component({
@@ -32,6 +32,7 @@ export class BenchmarkBatchEditor {
   });
   readonly validChange = output<boolean>();
   readonly value = configurationValue;
+  readonly choices = SERVING_CHOICES;
   constructor() {
     effect(() => { this.planChange.emit(this.plan().batch); this.validChange.emit(!this.plan().error); });
   }
@@ -40,9 +41,16 @@ export class BenchmarkBatchEditor {
     if (!key) return;
     const field = this.field(key);
     const current = configurationValue({ ...this.settings(), samples: this.samples() }, key) ?? this.limits()?.current[key];
-    const value = current ?? (field.type === 'boolean' ? false : field.type === 'number' ? field.min ?? 1 : 'auto');
+    const value = current === '' || current == null
+      ? (SERVING_CHOICES[key]?.[0] ?? (field.type === 'boolean' ? false : field.type === 'number' ? field.min ?? 1 : 'auto'))
+      : current;
     this.sweeps.update(sweeps => [...sweeps, { key, mode: 'values', values: String(value), start: Number(value), end: Number(value), step: field.step ?? 1 }]);
   }
   update(index: number, patch: Partial<Sweep>) { this.sweeps.update(sweeps => sweeps.map((sweep, i) => i === index ? { ...sweep, ...patch } : sweep)); }
+  toggleBackend(index: number, backend: string, checked: boolean) {
+    const selected = new Set(this.sweeps()[index].values.split(','));
+    if (checked) selected.add(backend); else selected.delete(backend);
+    this.update(index, { values: SERVING_CHOICES['attention_backend'].filter(value => selected.has(value)).join(',') });
+  }
   remove(index: number) { this.sweeps.update(sweeps => sweeps.filter((_, i) => i !== index)); }
 }

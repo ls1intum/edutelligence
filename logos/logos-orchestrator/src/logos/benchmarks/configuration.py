@@ -11,7 +11,20 @@ class ServingOverrides(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tensor_parallel_size: int | None = Field(default=None, ge=1, le=64)
     pipeline_parallel_size: int | None = Field(default=None, ge=1, le=64)
-    kv_cache_dtype: Literal["auto", "fp8", "fp8_e4m3", "fp8_e5m2"] | None = None
+    attention_backend: Literal["FLASHINFER", "FLASH_ATTN", "TRITON_ATTN", "FLEX_ATTENTION", "TURBOQUANT"] | None = None
+    kv_cache_dtype: (
+        Literal[
+            "auto",
+            "fp8",
+            "fp8_e4m3",
+            "fp8_e5m2",
+            "turboquant_k8v4",
+            "turboquant_4bit_nc",
+            "turboquant_k3v4_nc",
+            "turboquant_3bit_nc",
+        ]
+        | None
+    ) = None
     kv_cache_memory_bytes: str | None = Field(
         default=None, max_length=32, pattern=r"^(?:[0-9]+(?:[.][0-9]+)?[KMGkmg]?)?$"
     )
