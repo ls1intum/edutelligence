@@ -80,7 +80,7 @@ def _record_capacity_floor_if_applicable(
     """
     returncode = proc.poll() if proc is not None else None
     log_tail = _read_log_since(log_path, 0) if log_path.exists() else ""
-    is_capacity_failure = bool(working_set_mb) and _is_metal_capacity_failure(returncode, log_tail)
+    is_capacity_failure = _is_metal_capacity_failure(returncode, log_tail)
 
     # Backend-agnostic patterns (HF timeout/rate-limit, port conflict)
     # apply on Metal exactly as on CUDA. Only an unmatched crash falls
@@ -92,16 +92,25 @@ def _record_capacity_floor_if_applicable(
     elif is_capacity_failure:
         result.observed_reason = "metal-oom"
 
-    if is_capacity_failure:
-        result.capacity_oom = True
-        result.metal_capacity_floor_mb = working_set_mb
+    if not is_capacity_failure:
+        return
+    result.capacity_oom = True
+    # Exit code and log suffice to classify the crash; only the floor
+    # value needs a measured working-set budget.
+    if not working_set_mb:
         logger.warning(
-            "  %s: failure looks like a memory-capacity issue — this "
-            "node's working-set budget (%.0f MB) is being recorded as "
-            "a floor this model did not fit under",
+            "  %s: failure looks like a memory-capacity issue — no working-set budget known, so no floor is recorded",
             model,
-            working_set_mb,
         )
+        return
+    result.metal_capacity_floor_mb = working_set_mb
+    logger.warning(
+        "  %s: failure looks like a memory-capacity issue — this "
+        "node's working-set budget (%.0f MB) is being recorded as "
+        "a floor this model did not fit under",
+        model,
+        working_set_mb,
+    )
 
 
 # Matches VllmConfig.mm_processor_cache_gb's own default (models.py) — vLLM's

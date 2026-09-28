@@ -536,6 +536,24 @@ def test_generic_observed_pattern_takes_priority_over_metal_oom():
     assert result.metal_capacity_floor_mb == pytest.approx(20_000.0)
 
 
+def test_capacity_failure_without_working_set_budget_still_reports_metal_oom():
+    """No budget from probe_device_info must not hide the OOM itself —
+    only the floor value, which is the budget, stays unset."""
+    patches, mock_proc = _patch_metal_infra(
+        wired_memory_sequence=[4000.0],
+        wait_ready_side_effect=RuntimeError("vLLM exited before becoming ready (code=-9)"),
+    )
+    mock_proc.poll.return_value = -9
+    patches["device_info"] = patch("logos_worker_node.calibration_metal.probe_device_info", return_value=None)
+    patches["log_tail"] = patch("logos_worker_node.calibration_metal._read_log_since", return_value="")
+    result, _mocks = _run({"model": "org/model"}, patches)
+
+    assert not result.success
+    assert result.capacity_oom is True
+    assert result.observed_reason == "metal-oom"
+    assert result.metal_capacity_floor_mb is None
+
+
 def test_non_capacity_failure_leaves_floor_unset():
     """A generic non-signal failure with no memory marker in the log must
     not be mistaken for a capacity issue."""
