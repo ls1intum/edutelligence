@@ -145,6 +145,21 @@
   model: text-embedding-3-small
   api_key:
   cost_per_million_input_token: 0.02
+# Example for a deployment actually serving an instruction-tuned embedding model
+# (e.g. Qwen3-Embedding via an OpenAI-compatible gateway, base_url set): only set
+# retrieval_instruction on an entry like this — never on a plain OpenAI/Azure
+# entry, which has no instruction-tuned protocol to satisfy and would just embed
+# the instruction text itself as query content.
+# - id: qwen3-embedding
+#   type: openai_embedding
+#   model: qwen3-embedding
+#   base_url: "<your-vllm-gateway>/v1"
+#   api_key:
+#   retrieval_instruction: >-
+#     Instruct: Given a search query from a university student, retrieve
+#     relevant passages from lecture materials that answer or cover the
+#     query
+#     Query:
 
 # ── Whisper transcription models ─────────────────────────────────────────────
 - api_key:

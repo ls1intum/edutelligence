@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { TestBed } from '@angular/core/testing';
-import sparklineStyles from './sparkline.scss?raw';
 import { SparklineComponent } from './sparkline';
+
+const sparklineStyles = readStyleSheet('sparkline.scss');
 
 /**
  * The polyline the sparkline draws.
@@ -100,6 +104,15 @@ describe('sparkline stylesheet', () => {
     expect(body).not.toMatch(/height:\s*28px/);
   });
 });
+
+/**
+ * Reads a stylesheet from the spec's directory as raw text. The unit-test
+ * builder's pipeline cannot resolve `?raw` imports, and the environment
+ * applies no layout — the specs pin CSS declarations as text instead.
+ */
+function readStyleSheet(file: string): string {
+  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), file), 'utf8');
+}
 
 /**
  * The declaration block of a top-level rule, so the assertions above read

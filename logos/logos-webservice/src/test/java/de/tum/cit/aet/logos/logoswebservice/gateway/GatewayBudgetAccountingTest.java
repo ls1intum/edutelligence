@@ -91,7 +91,7 @@ class GatewayBudgetAccountingTest {
     void settledCloudRequest_countsWhatItCostNotTheReservation() {
         Fixture f = seedFixture(ApiKeyType.application);
         setKeyBudget(f.apiKeyId(), 500_000L);
-        accounting.settleSuccess(admit(f), USAGE, null);
+        accounting.settleSuccess(admit(f), USAGE, null, null);
 
         // 56_000 spent against a 500_000 limit leaves room; had the flat
         // reservation been counted, 1_000_000 would already be over it.
@@ -102,7 +102,7 @@ class GatewayBudgetAccountingTest {
     @Test
     void settledCloudRequest_isCountedExactlyOnce() {
         Fixture f = seedFixture(ApiKeyType.application);
-        accounting.settleSuccess(admit(f), USAGE, null);
+        accounting.settleSuccess(admit(f), USAGE, null, null);
 
         // A limit just above one charge admits; just below it rejects. Double
         // counting would reject at both.
@@ -116,8 +116,8 @@ class GatewayBudgetAccountingTest {
     @Test
     void spendAccumulatesAcrossSettledRequests() {
         Fixture f = seedFixture(ApiKeyType.application);
-        accounting.settleSuccess(admit(f), USAGE, null);
-        accounting.settleSuccess(admit(f), USAGE, null);
+        accounting.settleSuccess(admit(f), USAGE, null, null);
+        accounting.settleSuccess(admit(f), USAGE, null, null);
 
         setKeyBudget(f.apiKeyId(), 2 * REAL_COST + 1);
         assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key()))
@@ -138,7 +138,7 @@ class GatewayBudgetAccountingTest {
         // between a concurrent request and an overspend.
         assertBudgetRejects(f);
 
-        accounting.settleSuccess(logId, USAGE, null);
+        accounting.settleSuccess(logId, USAGE, null, null);
         assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key()))
             .doesNotThrowAnyException();
     }
@@ -161,7 +161,7 @@ class GatewayBudgetAccountingTest {
         Fixture f = seedFixture(ApiKeyType.application);
         setKeyBudget(f.apiKeyId(), RESERVATION);
 
-        accounting.settleSuccess(admit(f), Map.of(), null);
+        accounting.settleSuccess(admit(f), Map.of(), null, null);
 
         assertBudgetRejects(f);
     }
@@ -184,7 +184,7 @@ class GatewayBudgetAccountingTest {
     @Test
     void teamBudgetCountsSettledCloudSpendOfItsDeveloperKeys() {
         Fixture f = seedFixture(ApiKeyType.developer);
-        accounting.settleSuccess(admit(f), USAGE, null);
+        accounting.settleSuccess(admit(f), USAGE, null, null);
 
         setTeamBudget(f.teamId(), REAL_COST + 1);
         assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key()))

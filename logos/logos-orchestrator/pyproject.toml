@@ -20,7 +20,11 @@ openai = "^1.74.0"
 pytest = "^8.3.5"
 pytest-asyncio = "^0.26.0"
 psycopg2-binary = "^2.9.10"
-SQLAlchemy = "^2.0.40"
+# Held on 2.0: SQLAlchemy 2.1 made psycopg (v3) the default driver for
+# `postgresql://` URLs, and the driver installed here is psycopg2-binary.
+# Lifting this means switching LOGOS_DB_URL to `postgresql+psycopg2://`
+# everywhere, or migrating to psycopg 3.
+SQLAlchemy = ">=2.0.40,<2.1"
 grpcio = "^1.71.0"
 grpcio-tools = "^1.71.0"
 protobuf = "^5.27.2"

@@ -283,6 +283,7 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         process_started_at=_PROCESS_STARTED_AT,
         transport=bridge.transport_status(),
         devices=devices,
+        gpu_devices=cfg.worker.gpu_devices,
         host_memory=host_memory,
         capacity=capacity,
         lanes=lanes,
