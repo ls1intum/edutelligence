@@ -49,7 +49,7 @@ jobs:
           uv venv .venv
           source .venv/bin/activate
           uv pip install .
-          uv pip install "coverage[toml]" pytest-timeout
+          uv pip install "coverage[toml]==7.16.2" "pytest-timeout==2.4.0"
         working-directory: logos/logos-orchestrator
 
       - name: Clean old coverage data

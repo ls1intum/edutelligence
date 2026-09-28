@@ -119,7 +119,7 @@ jobs:
           # The checked-in gRPC gencode (src/logos/grpclocal/model_pb2.py) was
           # generated with protoc 6.30; older protobuf runtimes refuse to
           # import it.
-          uv pip install "protobuf>=6.30,<7"
+          uv pip install "protobuf==6.33.6"
         working-directory: logos/logos-orchestrator
 
       - name: Prime HF model cache
