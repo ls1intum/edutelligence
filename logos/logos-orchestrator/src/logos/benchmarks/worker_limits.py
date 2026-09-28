@@ -1,5 +1,7 @@
 """Hardware limits for benchmark edits, derived from live worker telemetry."""
 
+import re
+
 from .configuration import ServingOverrides
 from .guidellm_runner import extract_serving_configuration
 
@@ -21,7 +23,20 @@ def worker_limits(snapshot: dict | None, model: str) -> dict:
         elif selector == "none":
             devices = []
     memories = [float(d.get("memory_total_mb") or 0) for _, d in devices]
+    gpus = []
+    restrictions = {}
+    for index, device in devices:
+        raw_cap = str((device.get("extra") or {}).get("compute_capability") or "")
+        capability = raw_cap if re.fullmatch(r"[1-9][0-9]*\.[0-9]+", raw_cap) else None
+        gpus.append({"name": device.get("name") or f"GPU {index}", "compute_capability": capability})
+        if capability and int(capability.split(".")[0]) < 8:
+            for backend in ("FLASHINFER", "FLASH_ATTN"):
+                restrictions[backend] = (
+                    f"{backend} requires Ampere or newer (SM 8.0+); " f"{gpus[-1]['name']} reports SM {capability}."
+                )
     return {
+        "gpus": gpus,
+        "attention_backend_restrictions": restrictions,
         "gpu_count": len(devices) if known else None,
         "gpu_memory_bytes": int(min(memories) * 1024**2) if memories and min(memories) > 0 else None,
         "current": extract_serving_configuration(snapshot, model),
@@ -31,6 +46,9 @@ def worker_limits(snapshot: dict | None, model: str) -> dict:
 def validate_worker_overrides(overrides: ServingOverrides, limits: dict) -> None:
     requested = overrides.model_dump(exclude_none=True)
     if not requested:
+        restriction = limits.get("attention_backend_restrictions", {}).get(limits["current"].get("attention_backend"))
+        if restriction:
+            raise ValueError(restriction)
         return
     count = limits["gpu_count"]
     if count is None:
@@ -40,6 +58,10 @@ def validate_worker_overrides(overrides: ServingOverrides, limits: dict) -> None
     if count == 0:
         raise ValueError("This worker has no available NVIDIA GPUs for this model.")
     effective = {**limits["current"], **requested}
+    backend = effective.get("attention_backend")
+    restriction = limits.get("attention_backend_restrictions", {}).get(backend)
+    if restriction:
+        raise ValueError(restriction)
     if effective.get("attention_backend") == "TURBOQUANT" and not str(effective.get("kv_cache_dtype", "")).startswith(
         "turboquant_"
     ):

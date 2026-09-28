@@ -91,6 +91,8 @@ export interface BenchmarkWorkerLimits {
   gpu_count: number | null;
   gpu_memory_bytes: number | null;
   current: Record<string, unknown>;
+  gpus?: { name: string; compute_capability: string | null }[];
+  attention_backend_restrictions?: Record<string, string>;
 }
 
 export const SERVING_CHOICES: Record<string, readonly string[]> = {
@@ -119,6 +121,8 @@ export function servingValidationErrors(settings: BenchmarkSettings, limits: Ben
   if (limits?.gpu_count == null) return [...errors, 'Worker GPU limits are unavailable. Reload the limits before changing vLLM settings.'];
   if (limits.gpu_count === 0) return [...errors, 'No NVIDIA GPUs are available for this model on the selected worker.'];
   const effective = { ...limits.current, ...overrides };
+  const restriction = limits.attention_backend_restrictions?.[String(effective['attention_backend'] ?? '')];
+  if (restriction) errors.push(restriction);
   if (effective['attention_backend'] === 'TURBOQUANT' && !String(effective['kv_cache_dtype'] ?? '').startsWith('turboquant_')) {
     errors.push('TURBOQUANT requires a turboquant KV cache dtype. Select a compatible KV cache dtype first.');
   }
@@ -143,4 +147,13 @@ export function benchmarkErrorMessage(error: unknown, fallback: string): string 
   const body = (error as any)?.error;
   const candidates = [body?.detail, body?.error?.message, body?.error?.detail, body?.error, body?.message];
   return candidates.find(value => typeof value === 'string' && value.trim()) ?? fallback;
+}
+
+export function attentionBackendRestriction(limits: BenchmarkWorkerLimits | null, backend: string): string | null {
+  return limits?.attention_backend_restrictions?.[backend] ?? null;
+}
+
+export function benchmarkGpuDescription(limits: BenchmarkWorkerLimits | null): string {
+  if (!limits?.gpus?.length) return 'GPU architecture not reported';
+  return [...new Set(limits.gpus.map(gpu => `${gpu.name} · ${gpu.compute_capability ? 'SM ' + gpu.compute_capability : 'architecture unknown'}`))].join('; ');
 }

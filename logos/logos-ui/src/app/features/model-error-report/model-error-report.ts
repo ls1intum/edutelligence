@@ -9,6 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { NgClass } from '@angular/common';
+import { BenchmarkRunFailure } from './benchmark-run-failure';
 import { BenchmarkComparison } from './benchmark-comparison';
 import { BenchmarkBatchEditor } from './benchmark-batch-editor';
 import { BenchmarkBatch } from './benchmark-batch';
@@ -269,6 +270,7 @@ const CALIBRATION_STAGES: readonly CalibrationStage[] = [
     BenchmarkSettingsEditor,
     BenchmarkBatchEditor,
     BenchmarkComparison,
+    BenchmarkRunFailure,
     ScrollingModule,
     ErrorMessageComponent,
     DataTableComponent,

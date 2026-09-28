@@ -2893,3 +2893,25 @@ async def test_stream_logs_stores_concurrency_factor_not_token_count(monkeypatch
     await handle._stream_logs()
 
     assert handle.max_concurrency == 8
+
+
+def test_startup_failure_keeps_root_exception_before_shutdown_tail():
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle._recent_logs.extend(
+        [
+            "(EngineCore pid=12) ValueError: Selected backend FLASHINFER is not valid for this configuration.",
+            "(EngineCore pid=12) Reason: ['compute capability not supported']",
+            *["cleanup line"] * 20,
+            "RuntimeError: Engine core initialization failed. See root cause above.",
+        ]
+    )
+    error = handle._format_startup_failure(60)
+    assert "Cause: ValueError: Selected backend FLASHINFER" in error[:1000]
+    assert "compute capability not supported" in error[:1000]
+    assert "Engine core initialization failed" not in handle._startup_root_cause()
+
+
+def test_generic_startup_error_does_not_invent_a_root_cause():
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle._recent_logs.append("RuntimeError: Engine core initialization failed. See root cause above.")
+    assert handle._startup_root_cause() == ""

@@ -25,9 +25,15 @@
         @if (sweep.key === 'attention_backend') {
           <fieldset class="backend-choices">
             <legend>Backends to test</legend>
+            <small class="gpu-description">{{ gpuDescription() }}</small>
             @for (choice of choices[sweep.key]; track choice) {
-              <label><input type="checkbox" [checked]="sweep.values.split(',').includes(choice)"
-                (change)="toggleBackend(index, choice, $any($event.target).checked)">{{ choice }}</label>
+              <div class="backend-option">
+                <label><input type="checkbox" [checked]="sweep.values.split(',').includes(choice)"
+                  [disabled]="!!backendRestriction(choice) && !sweep.values.split(',').includes(choice)"
+                  [attr.aria-describedby]="'backend-status-' + index + '-' + choice"
+                  (change)="toggleBackend(index, choice, $any($event.target).checked)">{{ choice }}</label>
+                <small [id]="'backend-status-' + index + '-' + choice">{{ backendRestriction(choice) || 'Not verified for this model' }}</small>
+              </div>
             }
             <small>Support depends on GPU, model and vLLM version. TURBOQUANT needs a turboquant KV cache dtype.</small>
           </fieldset>
@@ -40,7 +46,7 @@
           <label>To<input type="number" [ngModel]="sweep.end" (ngModelChange)="update(index, {end: $event})"></label>
           <label>Step<input type="number" [ngModel]="sweep.step" (ngModelChange)="update(index, {step: $event})"></label>
         }
-        <button type="button" (click)="remove(index)" [attr.aria-label]="'Keep ' + field(sweep.key).label + ' fixed'">Keep fixed</button>
+        <button type="button" (click)="remove(index)" [attr.aria-label]="'Stop varying ' + field(sweep.key).label">Stop varying</button>
       </div>
     }
     @if (plan().error; as error) { <p class="error" role="alert">{{ error }}</p> }
@@ -50,7 +56,7 @@
         @if (sweeps().length > 1) { <span class="combination-note">All combinations</span> }
       </div>
       <details class="batch-details">
-        <summary>Review plan</summary>
+        <summary>View run plan &amp; fixed settings</summary>
         <div class="preview-scroll"><table>
           <thead><tr><th>Configuration</th>@for (sweep of sweeps(); track sweep.key) { <th>{{ field(sweep.key).label }}</th> }<th>Repetitions</th></tr></thead>
           <tbody>@for (configuration of batch.configurations.slice(0, previewLimit()); track $index) {

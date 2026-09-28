@@ -50,7 +50,7 @@
     </div>
   }
   <div class="settings-grid">
-    <label>Configuration
+    <label>Dataset variant
       <select [ngModel]="settings().subset" (ngModelChange)="inspectDataset(settings().dataset, $event)" [disabled]="loading()">
         @for (subset of subsets(); track subset) { <option [value]="subset">{{ subset }}</option> }
       </select>
@@ -120,12 +120,12 @@
       }
     }
     @for (message of validationErrors(); track message) { <p role="alert" class="settings-error">{{ message }}</p> }
-    <button type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">Reset overrides</button>
+    <button type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">Clear vLLM changes</button>
     <div class="settings-grid">
       @for (field of fields; track field.key) {
         <label>{{ field.label }}
           @if (field.key === 'tensor_parallel_size' || field.key === 'pipeline_parallel_size') {
-            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)"
+            <select [attr.aria-label]="field.label" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)"
               [disabled]="limits()?.gpu_count == null || limitsLoading()">
               <option [ngValue]="''">Keep current ({{ limits()?.current?.[field.key] ?? 'auto' }})</option>
               @if (settings().serving_overrides[field.key] != null && !parallelOptions(field.key).includes(+$any(settings().serving_overrides[field.key]))) {
@@ -134,12 +134,14 @@
               @for (value of parallelOptions(field.key); track value) { <option [ngValue]="value">{{ value }}</option> }
             </select>
           } @else if (choices[field.key]) {
-            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
+            <select [attr.aria-label]="field.label" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
               <option [ngValue]="''">Keep current</option>
-              @for (value of choices[field.key]; track value) { <option [ngValue]="value">{{ value }}</option> }
+              @for (value of choices[field.key]; track value) {
+                <option [ngValue]="value" [disabled]="field.key === 'attention_backend' && !!backendRestriction(value)">{{ value }}{{ field.key === 'attention_backend' ? (backendRestriction(value) ? ' — unavailable' : ' — unverified') : '' }}</option>
+              }
             </select>
           } @else if (field.type === 'boolean') {
-            <select [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
+            <select [attr.aria-label]="field.label" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
               <option [ngValue]="''">Keep current</option><option [ngValue]="true">Enabled</option><option [ngValue]="false">Disabled</option>
             </select>
           } @else {
@@ -147,7 +149,11 @@
               [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)" placeholder="Keep current" />
           }
           @if (field.key === 'attention_backend') {
-            <small>Support depends on GPU, model and vLLM version. TURBOQUANT needs a turboquant KV cache dtype.</small>
+            <small>{{ gpuDescription() }}</small>
+            @for (backend of choices['attention_backend']; track backend) {
+              @if (backendRestriction(backend); as reason) { <small>{{ reason }}</small> }
+            }
+            <small>Other backends are unverified for this model. TURBOQUANT also requires a turboquant KV cache dtype.</small>
           }
         </label>
       }

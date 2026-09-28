@@ -40,3 +40,8 @@ dt { color: rgb(var(--color-typography-500)); } dd { margin: 4px 0 0; overflow-w
   .batch-controls input { width: 100%; }
   .sweep-row > strong { flex-basis: 100%; }
 }
+
+.backend-option { flex: 1 1 220px; min-width: 0; }
+.backend-option small { display: block; margin: 6px 0 0 24px; font-size: 12px; }
+.backend-option:has(input:disabled) label { opacity: .6; cursor: not-allowed; }
+.gpu-description { margin-bottom: 4px; }

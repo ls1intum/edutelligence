@@ -2,7 +2,7 @@ import { Component, computed, DestroyRef, effect, ElementRef, inject, input, mod
 import { ModelBenchmarkPair } from '../../shared/models/provider.model';
 import { FormsModule } from '@angular/forms';
 import { ModelManagementService } from '../../core/services/model-management.service';
-import { benchmarkErrorMessage, BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES, servingValidationErrors, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
+import { attentionBackendRestriction, benchmarkGpuDescription, benchmarkErrorMessage, BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES, servingValidationErrors, DatasetMetadata, datasetViewerUrl, DEFAULT_BENCHMARK_SETTINGS, SERVING_FIELDS } from './benchmark-settings';
 
 @Component({
   selector: 'app-benchmark-settings-editor', standalone: true, imports: [FormsModule],
@@ -16,6 +16,8 @@ export class BenchmarkSettingsEditor {
   readonly limitsLoading = signal(false);
   readonly limitsError = signal<string | null>(null);
   readonly choices = SERVING_CHOICES;
+  readonly gpuDescription = computed(() => benchmarkGpuDescription(this.limits()));
+  backendRestriction(backend: string) { return attentionBackendRestriction(this.limits(), backend); }
   readonly validationErrors = computed(() => servingValidationErrors(this.settings(), this.limits()));
   private limitsVersion = 0;
   private limitsPairId: number | null = null;

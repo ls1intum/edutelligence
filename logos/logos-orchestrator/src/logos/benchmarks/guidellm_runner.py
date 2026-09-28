@@ -537,7 +537,22 @@ async def run_benchmark_job(
                 job_id,
                 JobStatus.FAILED.value,
                 error_message=message[:1000],
-                **({"result_payload": {**progress, "stage": "failed"}} if progress else {}),
+                result_payload={
+                    **progress,
+                    "stage": "failed",
+                    "failure": {
+                        "model": model,
+                        "attention_backend": settings.serving_overrides.attention_backend
+                        or serving_configuration.get("attention_backend")
+                        or "Worker automatic selection",
+                        "settings": {
+                            **settings.model_dump(mode="json", exclude_none=True),
+                            "samples": samples,
+                            "max_output_tokens": max_output_tokens,
+                        },
+                        "details": message[:16000],
+                    },
+                },
             )
     finally:
         lease_task.cancel()

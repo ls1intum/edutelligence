@@ -555,7 +555,7 @@
                 @if (selectedBenchmarkPair()?.provider_type === 'logosnode') {
                   <button type="button" class="benchmark-run-button" (click)="useComparisonBaseline()"
                     title="Prepare GSM8K main/test, 50 requests, 512 max output tokens, seed 42, TP 1, PP 1 and concurrency 4. Other worker settings stay unchanged.">
-                    Use comparison baseline
+                    Load comparison preset
                   </button>
                 }
               </header>
@@ -631,7 +631,7 @@
                           @if (run.result.total_runs) { <progress [value]="run.result.completed_runs ?? 0" [max]="run.result.total_runs" aria-label="Completed benchmark runs"></progress> }
                         }
                         @if (run.status === 'failed' && run.error_message) {
-                          <small [attr.title]="run.error_message">{{ run.error_message }}</small>
+                          <app-benchmark-run-failure [run]="run" />
                         }
                         @if (isBenchmarkActive(run)) {
                           <button
@@ -641,7 +641,7 @@
                             [disabled]="benchmarkCancellingJobId() !== null"
                             [attr.aria-label]="'Cancel benchmark on ' + pair.provider_name"
                           >
-                            {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Cancel' }}
+                            {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Stop benchmark' }}
                           </button>
                         }
                       } @else if (!pair.endpoint_configured) {
@@ -659,7 +659,7 @@
                           <p>The benchmark runs alongside other requests. Concurrent traffic can affect measured performance.</p>
                           @if (hasServingOverrides()) { <p>The selected vLLM settings may reload the model and remain active after the run.</p> }
                           @if (benchmarkBatch()) { <p>Start the entire batch once. No confirmation is needed between runs.</p> }
-                          <button type="button" class="benchmark-cancel-button" (click)="benchmarkConfirmPairId.set(null)">Back</button>
+                          <button type="button" class="benchmark-cancel-button" (click)="benchmarkConfirmPairId.set(null)">Edit settings</button>
                         </section>
                       }
                       <button
@@ -676,7 +676,7 @@
                           Running…
                         } @else {
                           <i class="pi pi-play" aria-hidden="true"></i>
-                          {{ benchmarkConfirmPairId() === pair.model_provider_id ? 'Confirm and start' : benchmarkBatch() ? 'Start batch' : 'Run benchmark' }}
+                          {{ benchmarkConfirmPairId() === pair.model_provider_id ? 'Confirm & start' : benchmarkBatch() ? 'Review & start batch' : 'Review & start benchmark' }}
                           @if (benchmarkBatch()) { · {{ benchmarkTotalRuns() }} runs }
                         }
                       </button>

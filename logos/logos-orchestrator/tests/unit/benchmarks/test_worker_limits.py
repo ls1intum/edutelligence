@@ -129,3 +129,37 @@ async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch,
         )
     assert error.value.status_code == 400
     db.create_job_record.assert_not_called()
+
+
+@pytest.mark.parametrize("backend", ["FLASHINFER", "FLASH_ATTN"])
+def test_pre_ampere_attention_rejected_before_worker_preparation(backend):
+    status = snapshot()
+    status["runtime"]["devices"]["devices"][0].update(
+        name="Quadro RTX 5000", extra={"index": 0, "compute_capability": "7.5"}
+    )
+    limits = worker_limits(status, "m")
+    assert limits["gpus"][0]["compute_capability"] == "7.5"
+    with pytest.raises(ValueError, match="requires Ampere"):
+        validate_worker_overrides(ServingOverrides(attention_backend=backend), limits)
+    validate_worker_overrides(ServingOverrides(attention_backend="TRITON_ATTN"), limits)
+
+
+@pytest.mark.parametrize("cap", [None, "N/A", "", "8.0", "8.9", "9.0", "10.0"])
+def test_unknown_or_newer_architecture_is_not_claimed_incompatible(cap):
+    status = snapshot(1)
+    status["runtime"]["devices"]["devices"][0]["extra"] = {"compute_capability": cap}
+    assert worker_limits(status, "m")["attention_backend_restrictions"] == {}
+
+
+def test_attention_restrictions_respect_selected_gpus_and_current_backend():
+    status = snapshot(2, "1")
+    for index, cap in enumerate(["7.5", "8.0"]):
+        status["runtime"]["devices"]["devices"][index]["extra"] = {"index": index, "compute_capability": cap}
+    assert worker_limits(status, "m")["attention_backend_restrictions"] == {}
+    status["runtime"]["gpu_devices"] = "all"
+    limits = worker_limits(status, "m")
+    limits["current"]["attention_backend"] = "FLASHINFER"
+    with pytest.raises(ValueError, match="requires Ampere"):
+        validate_worker_overrides(ServingOverrides(tensor_parallel_size=1), limits)
+    with pytest.raises(ValueError, match="requires Ampere"):
+        validate_worker_overrides(ServingOverrides(), limits)

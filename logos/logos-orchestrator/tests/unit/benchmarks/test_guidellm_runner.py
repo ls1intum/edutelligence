@@ -355,5 +355,10 @@ async def test_worker_preparation_failure_keeps_specific_error_and_skips_warmup(
         serving_configuration={},
         worker_preparer=AsyncMock(side_effect=RuntimeError(error)),
     )
-    assert updates[-1] == (7, "failed", {"error_message": error})
+    assert updates[-1][0:2] == (7, "failed")
+    assert updates[-1][2]["error_message"] == error
+    failure = updates[-1][2]["result_payload"]["failure"]
+    assert failure["details"] == error
+    assert failure["model"] == "org/model"
+    assert failure["settings"]["max_output_tokens"] == 32
     warmup.assert_not_awaited()

@@ -21,6 +21,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -2536,6 +2537,24 @@ class VllmProcessHandle:
         """Public wrapper for persisting recent vLLM logs after runtime failures."""
         self._persist_failure_logs(reason)
 
+    def _startup_root_cause(self) -> str:
+        """Keep the useful exception before generic engine shutdown messages bury it."""
+        causes = []
+        for line in self._recent_logs:
+            match = re.search(r"(?:[\w.]*Error|[\w.]*Exception):\s*.+|Reason:\s*.+", line)
+            if match and not any(
+                text in match.group(0).lower()
+                for text in (
+                    "engine core initialization failed",
+                    "worker failed to initialize",
+                    "see root cause above",
+                )
+            ):
+                cause = match.group(0).strip()
+                if cause not in causes:
+                    causes.append(cause)
+        return " | ".join(causes[:3])[:1200]
+
     def _format_startup_failure(self, timeout_s: int) -> str:
         status = self.status()
         if status.state == ProcessState.STOPPED and status.return_code is not None:
@@ -2547,6 +2566,9 @@ class VllmProcessHandle:
                 f"[{self.lane_id}] vLLM did not become ready within {timeout_s}s "
                 f"(port={self.port}, state={status.state.value}, return_code={status.return_code})"
             )
+        cause = self._startup_root_cause()
+        if cause:
+            base = f"{base}. Cause: {cause}"
         hint = self._startup_hint()
         tail = self._recent_log_tail()
         if hint and tail:

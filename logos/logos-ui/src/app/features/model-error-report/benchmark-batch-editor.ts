@@ -1,6 +1,6 @@
 import { Component, computed, effect, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES } from './benchmark-settings';
+import { attentionBackendRestriction, benchmarkGpuDescription, BenchmarkSettings, BenchmarkWorkerLimits, SERVING_CHOICES } from './benchmark-settings';
 import { BenchmarkBatch, buildBatch, configurationValue, SWEEP_FIELDS, Sweep } from './benchmark-batch';
 
 @Component({
@@ -33,6 +33,8 @@ export class BenchmarkBatchEditor {
   readonly validChange = output<boolean>();
   readonly value = configurationValue;
   readonly choices = SERVING_CHOICES;
+  readonly gpuDescription = computed(() => benchmarkGpuDescription(this.limits()));
+  backendRestriction(backend: string) { return attentionBackendRestriction(this.limits(), backend); }
   constructor() {
     effect(() => { this.planChange.emit(this.plan().batch); this.validChange.emit(!this.plan().error); });
   }
@@ -41,8 +43,8 @@ export class BenchmarkBatchEditor {
     if (!key) return;
     const field = this.field(key);
     const current = configurationValue({ ...this.settings(), samples: this.samples() }, key) ?? this.limits()?.current[key];
-    const value = current === '' || current == null
-      ? (SERVING_CHOICES[key]?.[0] ?? (field.type === 'boolean' ? false : field.type === 'number' ? field.min ?? 1 : 'auto'))
+    const value = current === '' || current == null || (key === 'attention_backend' && this.backendRestriction(String(current)))
+      ? (SERVING_CHOICES[key]?.find(choice => key !== 'attention_backend' || !this.backendRestriction(choice)) ?? (field.type === 'boolean' ? false : field.type === 'number' ? field.min ?? 1 : 'auto'))
       : current;
     this.sweeps.update(sweeps => [...sweeps, { key, mode: 'values', values: String(value), start: Number(value), end: Number(value), step: field.step ?? 1 }]);
   }

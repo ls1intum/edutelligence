@@ -58,3 +58,20 @@ The start confirmation appears above the button. Confirming once submits the com
 The existing run endpoint accepts optional `batch: { configurations: [...], repetitions: 3 }`. Every configuration contains the same settings as a single run, using `samples` (1–100) inside the batch. Configurations are complete settings, not patches to the outer request. All configurations and their hardware limits are validated before a job is created. Every changed serving key must be present in every configuration to avoid inheriting a prior run's value. The job result exposes `total_runs`, `run_index` (one-based), `completed_runs`, `configuration_index`, and `repetition`.
 
 The two comparison charts sit side by side on desktop and stack on narrow screens. Each Y-axis fits its own measured range, including outliers, with 10% of that range added above and below; identical measurements use 10% of their magnitude (or 1 for zero) as padding. Each box summarizes run-level measurements for one parameter value, with all other recorded controls matching the reference. Quartiles use linear interpolation; whiskers reach the last observations within 1.5 times the interquartile range. Dots show outliers, `n` counts captured measurements, and a single measurement appears as a line. These are distributions across runs, not pooled request latencies. The individual-run table is collapsed and loads 50 rows at a time.
+
+### GPU restrictions and failed runs
+
+The benchmark editor shows GPU names and CUDA compute capabilities reported by the worker.
+FLASHINFER and FLASH_ATTN are unavailable on reported pre-Ampere GPUs (SM below 8.0).
+The same restriction is enforced when submitting a benchmark, including inherited worker settings.
+Other backends are labelled unverified: passing this GPU check does not establish model, cache,
+installed-library or runtime compatibility. Missing architecture telemetry does not imply incompatibility.
+
+A failed run records its configuration, selected attention backend and diagnostic text. The worker
+preserves useful exception lines ahead of generic engine shutdown messages. The UI exposes these
+under **View error details & configuration**; historical records may contain only the old truncated error.
+Batches still stop at the first failed run. No automatic probing or recovery has been added.
+
+**Load comparison preset** fills the comparison template; **Clear vLLM changes** removes draft
+serving overrides, and **Stop varying** removes a parameter from the sweep. These actions do not
+restore settings already applied to a worker.
