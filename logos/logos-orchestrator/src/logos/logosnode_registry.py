@@ -314,6 +314,9 @@ class ProviderSession:
     # discover uncalibrated models (capabilities_models only contains
     # already-calibrated entries that are safe to route requests to).
     configured_models: set[str] = field(default_factory=set)
+    # Unlike last_heartbeat, this never moves for the life of the session —
+    # the "ws connection uptime" baseline for the stats page.
+    connected_at: datetime = field(default_factory=_utc_now)
     last_heartbeat: datetime = field(default_factory=_utc_now)
     first_status_received: bool = False
     latest_runtime: dict[str, Any] = field(default_factory=dict)
@@ -334,6 +337,14 @@ class ProviderSession:
     # it too, so under streaming load it changes constantly while the lane
     # signals stay put.
     runtime_revision: int = 0
+    # Bumped whenever any field peek_runtime_snapshot() embeds changes — a
+    # runtime push (latest_runtime, capabilities, configured_models,
+    # last_heartbeat) or an event append (latest_events, last_heartbeat).
+    # Lets peek memoise the assembled dict per version instead of rebuilding
+    # it on every read: the scheduler and the capacity planner call it
+    # several times per request, and the rebuild copies the event backlog
+    # each time .
+    snapshot_version: int = 0
     # Bridge actions the worker advertised in its hello. Used to feature-gate
     # commands a worker may not know yet — an unrecognised action comes back
     # as "Unsupported bridge command", so it is cheaper to ask first.
@@ -363,6 +374,11 @@ class LogosNodeRuntimeRegistry:
     ) -> None:
         self._tickets: dict[str, AuthTicket] = {}
         self._sessions: dict[int, ProviderSession] = {}
+        # peek_runtime_snapshot memo: provider_id -> (snapshot_version, dict).
+        # Event-loop thread only, so a plain dict (same rule as the O15
+        # provider view caches). Bounded by the provider count; entries are
+        # dropped with their session.
+        self._peek_cache: dict[int, tuple[int, dict[str, Any]]] = {}
         self._lock = asyncio.Lock()
         self._recent_sample_window = timedelta(hours=1)
         self._recent_sample_max = 5000
@@ -694,6 +710,7 @@ class LogosNodeRuntimeRegistry:
             if websocket is not None and session.websocket is not websocket:
                 return
             self._sessions.pop(provider_id, None)
+            self._peek_cache.pop(int(provider_id), None)
             self._recently_disconnected[int(provider_id)] = time.monotonic()
         pending_cmds = len(session.pending_commands)
         pending_streams = len(session.pending_streams)
@@ -746,6 +763,8 @@ class LogosNodeRuntimeRegistry:
             return
         session.worker_id = worker_id or session.worker_id
         session.last_heartbeat = _utc_now()
+        # worker_id / max_lanes / heartbeat are all peek-visible .
+        session.snapshot_version += 1
         session.max_lanes = max_lanes
         if actions is not None:
             session.actions = {a for a in actions if isinstance(a, str) and a.strip()}
@@ -787,6 +806,9 @@ class LogosNodeRuntimeRegistry:
         was_first = not session.first_status_received
         session.first_status_received = True
         session.last_heartbeat = _utc_now()
+        # This call always moves peek-visible state (latest_runtime,
+        # last_heartbeat), so the memoised snapshot must be rebuilt .
+        session.snapshot_version += 1
         if was_first:
             self.sync_desired_lanes_from_runtime(provider_id)
         # None = worker predates the field; the lifecycle events stay the only
@@ -923,6 +945,10 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
+        # last_heartbeat is peek-visible and moves on every call (events are
+        # appended when present), so the memoised snapshot is stale after
+        # each one .
+        session.snapshot_version += 1
         if isinstance(event, dict):
             session.latest_events.append(event)
             session.latest_events = session.latest_events[-500:]
@@ -1048,6 +1074,7 @@ class LogosNodeRuntimeRegistry:
         session = await self._get_session(provider_id)
         if session is not None:
             session.last_heartbeat = _utc_now()
+            session.snapshot_version += 1  # heartbeat is peek-visible
 
     async def on_vllm_metrics(self, provider_id: int, metrics_text: str) -> None:
         session = await self._get_session(provider_id)
@@ -1059,6 +1086,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1071,6 +1099,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1083,6 +1112,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1103,6 +1133,7 @@ class LogosNodeRuntimeRegistry:
         if session is None:
             return
         session.last_heartbeat = _utc_now()
+        session.snapshot_version += 1  # heartbeat is peek-visible
         cmd_id = str(payload.get("cmd_id", "")).strip()
         if not cmd_id:
             return
@@ -1363,23 +1394,50 @@ class LogosNodeRuntimeRegistry:
         """Provider ids with a registered session (live or recently seen)."""
         return list(self._sessions.keys())
 
+    def peek_runtime_revision(self, provider_id: int) -> int | None:
+        """The session's runtime revision without building a snapshot dict.
+
+        ``update_runtime`` replaces ``latest_runtime`` and bumps this counter
+        in one step, so a derived structure the providers memoise per
+        revision  stays exact for the whole window between two
+        worker status pushes. Returns None when the session is gone.
+        """
+        session = self._sessions.get(int(provider_id))
+        return session.runtime_revision if session is not None else None
+
     def peek_runtime_snapshot(self, provider_id: int) -> dict[str, Any] | None:
+        """The session's latest state as a read-only snapshot dict.
+
+        Memoised per ``snapshot_version`` : the scheduler and the
+        capacity planner call this several times per request, and every
+        rebuild re-sorts the model sets and copies the event backlog. The
+        version moves on exactly the mutations that change any field below
+        (see the bump sites), so a cache hit is always current. Consumers
+        must treat the dict — and its nested ``runtime`` / ``events`` values,
+        which alias the live session state — as read-only, as before.
+        """
         session = self._sessions.get(int(provider_id))
         if session is None:
             return None
-        return {
+        cached = self._peek_cache.get(session.provider_id)
+        if cached is not None and cached[0] == session.snapshot_version:
+            return cached[1]
+        snapshot = {
             "provider_id": session.provider_id,
             "session_id": session.session_id,
             "worker_id": session.worker_id,
             "capabilities_models": sorted(session.capabilities_models),
             "configured_models": sorted(session.configured_models),
             "first_status_received": session.first_status_received,
+            "connected_at": session.connected_at.isoformat(),
             "last_heartbeat": session.last_heartbeat.isoformat(),
             "runtime": session.latest_runtime,
             "events": list(session.latest_events),
             "max_lanes": session.max_lanes,
             "runtime_revision": session.runtime_revision,
         }
+        self._peek_cache[session.provider_id] = (session.snapshot_version, snapshot)
+        return snapshot
 
     def peek_vllm_metrics(self, provider_id: int) -> tuple[str, str] | None:
         """Return (worker_id, metrics_text) for the last vLLM metrics push, if any."""

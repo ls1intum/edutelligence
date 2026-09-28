@@ -45,10 +45,15 @@ describe('ApiKeyModalComponent', () => {
     component.key = key;
     component.canEdit = true;
     fixture.detectChanges();
+    // The dialog opens via a CDK Dialog signal effect and renders its content
+    // into an overlay appended to document.body, not the fixture's own DOM
+    // subtree; whenStable() flushes that effect before tests query the DOM.
+    await fixture.whenStable();
   });
 
   it('allows an editor to enable custom permissions', () => {
-    const toggle: HTMLButtonElement = fixture.nativeElement.querySelector('.toggle-btn');
+    const toggle: HTMLButtonElement | null = document.querySelector('.toggle-btn');
+    if (!toggle) throw new Error('toggle button not found');
 
     expect(toggle.disabled).toBe(false);
     toggle.click();
@@ -87,7 +92,7 @@ describe('ApiKeyModalComponent', () => {
 
       // Reopening the modal re-runs initForm via ngOnChanges, resetting the
       // transient form state; the displayed value must come from the (now
-      // rotated) key object, not a stale pre-rotation value (issue #733).
+      // rotated) key object, not a stale pre-rotation value.
       component.ngOnChanges({
         visible: new SimpleChange(false, true, false),
         key: new SimpleChange(null, key, false),

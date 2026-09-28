@@ -13,6 +13,12 @@
       @if (laneCount > 0) {
         <span class="chip chip--info">{{ activeLanes }} active / {{ loadedLanes }} loaded / {{ laneCount }} total lanes</span>
       }
+      @if (workerUptimeLabel) {
+        <span class="chip chip--info">worker uptime {{ workerUptimeLabel }}</span>
+      }
+      @if (wsUptimeLabel) {
+        <span class="chip chip--info">ws uptime {{ wsUptimeLabel }}</span>
+      }
       @if (canCalibrate) {
         <button
           class="btn-calibrate"
@@ -20,6 +26,15 @@
           (click)="handleCalibrateUncalibrated()"
         >
           {{ calibrateState().kind === 'loading' ? 'Calibrating…' : 'Calibrate uncalibrated' }}
+        </button>
+      }
+      @if (canStop) {
+        <button
+          class="btn-stop"
+          [disabled]="stopState().kind === 'loading'"
+          (click)="handleStopCalibration()"
+        >
+          {{ stopState().kind === 'loading' ? 'Stopping…' : 'Stop calibration' }}
         </button>
       }
     </div>
@@ -30,6 +45,14 @@
     }
     @if (calibrateState().kind === 'error') {
       <div class="action-error">{{ $any(calibrateState()).message }}</div>
+    }
+
+    <!-- Stop feedback -->
+    @if (stopState().kind === 'success') {
+      <div class="action-success">{{ $any(stopState()).message }}</div>
+    }
+    @if (stopState().kind === 'error') {
+      <div class="action-error">{{ $any(stopState()).message }}</div>
     }
 
     <!-- GPU cards -->
@@ -95,34 +118,6 @@
             </div>
           </div>
           <div class="synthetic-free">{{ formatMb(syntheticFreeMb()) }} free</div>
-        </div>
-      }
-
-      <!-- Host RAM — the machine-level pool next to the per-GPU cards: sleeping
-           lanes park their weights here and the tmpfs model cache draws from it,
-           so it is the axis a VRAM-to-RAM sleep actually competes on. -->
-      @if (hasHostRam()) {
-        <div class="gpu-card">
-          <div class="gpu-card-header">
-            <div class="gpu-title">
-              <span class="gpu-index">Host</span>
-              <span class="gpu-name">RAM</span>
-            </div>
-          </div>
-
-          <div class="gpu-bars">
-            <div class="bar-section">
-              <div class="bar-header">
-                <span class="bar-label">Memory</span>
-                <span class="bar-value">{{ formatMb(hostRamUsedMb()) }} / {{ formatMb(hostRamTotalMb()) }} ({{ hostRamPct() | number: '1.0-0' }}%)</span>
-              </div>
-              <div class="bar-track">
-                <div class="bar-fill bar-fill--ram" [style.width.%]="hostRamPct()"></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="synthetic-free">{{ formatMb(hostRamFreeMb()) }} available</div>
         </div>
       }
     </div>

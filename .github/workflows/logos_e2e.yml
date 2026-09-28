@@ -1,0 +1,222 @@
+---
+name: Logos - E2E
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "logos/**"
+      - "shared/**"
+      - ".github/workflows/logos_e2e.yml"
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - "logos/**"
+      - "shared/**"
+      - ".github/workflows/logos_e2e.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# This workflow builds and executes pull-request code (docker build, pytest,
+# Playwright). No job here writes to the repository, so the token is narrowed to
+# read and the checkouts do not leave credentials on disk for that code to find.
+permissions:
+  contents: read
+
+jobs:
+  # Tier 1: the real worker driven against simulated GPUs. No Docker, no
+  # network — this is the fast gate, and it is where the GPU-compatibility
+  # regressions land.
+  gpu-sim:
+    name: GPU simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python -e .
+          uv pip install --python .venv/bin/python -r ../logos-workernode/requirements.txt
+        working-directory: logos/e2e
+
+      - name: Run Tier 1
+        run: .venv/bin/python -m pytest tests/gpu -v --timeout=120
+        working-directory: logos/e2e
+
+      - name: Upload simulator artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-sim-failure
+          path: |
+            /tmp/logos-vllm-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Tiers 2 and 3: the compose stack — real orchestrator, real database, real
+  # worker nodes on simulated hardware.
+  stack:
+    name: Stack (inter-node + client)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python -e .
+        working-directory: logos/e2e
+
+      # The orchestrator image builds from the repo root because it depends on
+      # shared/; the same link the unit-test workflow creates.
+      - name: Link shared dependency
+        run: ln -s ../../shared logos/logos-orchestrator/shared || true
+
+      - name: Start the stack
+        run: .venv/bin/python -m harness.stack.compose up
+        working-directory: logos/e2e
+
+      - name: Run Tier 2 (inter-node)
+        run: .venv/bin/python -m pytest tests/node -v --timeout=180
+        working-directory: logos/e2e
+
+      - name: Run Tier 3 (client)
+        run: .venv/bin/python -m pytest tests/client -v --timeout=180
+        working-directory: logos/e2e
+
+      # A red E2E has to be diagnosable without reproducing it locally, so the
+      # whole stack's logs are collected — not just the failing test's output.
+      - name: Collect stack logs
+        if: always()
+        run: |
+          mkdir -p /tmp/e2e-logs
+          for service in logos-db migrate seed logos-orchestrator node-l40s node-2080ti; do
+            .venv/bin/python -m harness.stack.compose logs "$service" > "/tmp/e2e-logs/$service.log" 2>&1 || true
+          done
+        working-directory: logos/e2e
+
+      - name: Upload stack logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-stack-logs
+          path: /tmp/e2e-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: .venv/bin/python -m harness.stack.compose down
+        working-directory: logos/e2e
+
+  # The browser tier. Separate from `stack` because it needs Keycloak, the
+  # webservice and an Angular production build on top — roughly triple the
+  # startup cost, for assertions the SDK tier cannot make.
+  browser:
+    name: Browser (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: logos/logos-ui/package-lock.json
+
+      - name: Install stack dependencies
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python -e .
+        working-directory: logos/e2e
+
+      - name: Link shared dependency
+        run: ln -s ../../shared logos/logos-orchestrator/shared || true
+
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: logos/logos-ui
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: logos/logos-ui
+
+      - name: Start the stack with the UI profile
+        run: .venv/bin/python -m harness.stack.compose up --ui
+        working-directory: logos/e2e
+
+      - name: Run Playwright
+        run: npm run e2e
+        working-directory: logos/logos-ui
+
+      - name: Collect stack logs
+        if: always()
+        run: |
+          mkdir -p /tmp/e2e-ui-logs
+          for service in logos-orchestrator logos-webservice keycloak logos-ui traefik node-l40s; do
+            .venv/bin/python -m harness.stack.compose logs "$service" > "/tmp/e2e-ui-logs/$service.log" 2>&1 || true
+          done
+        working-directory: logos/e2e
+
+      # Traces, screenshots and videos are what make a browser failure
+      # diagnosable at all — a bare assertion message rarely is.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            logos/logos-ui/e2e/.playwright/report/
+            logos/logos-ui/e2e/.playwright/results/
+            /tmp/e2e-ui-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: .venv/bin/python -m harness.stack.compose down
+        working-directory: logos/e2e

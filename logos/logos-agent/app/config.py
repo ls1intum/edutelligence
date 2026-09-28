@@ -116,12 +116,15 @@ class Settings:
     # injects the model credential — the container sends none of its own.
     # The default is the compose service name of that gateway.
     session_model_url: str = os.getenv("LOGOS_AGENT_SESSION_MODEL_URL", "http://logos-agent-gateway")
+    # Shared orchestrator internal secret. Capacity reads present it instead
+    # of a Logos key: the scheduler_state payload carries cluster internals
+    # (queue depth, lane state) that a user key must not be able to read.
     internal_secret: str = os.getenv("LOGOS_INTERNAL_SECRET", "")
-    # The Logos key: the runner authenticates its capacity reads with it, and
-    # the session gateway injects it into the agent's model calls. It is what
-    # makes agent traffic ordinary, accounted Logos traffic — give it LOW
-    # priority and a token budget so agent work never outranks a user at the
-    # scheduler. It no longer enters a session container at all.
+    # The Logos key: the session gateway injects it into the agent's model
+    # calls. It is what makes agent traffic ordinary, accounted Logos
+    # traffic — give it LOW priority and a token budget so agent work never
+    # outranks a user at the scheduler. It no longer enters a session
+    # container at all.
     agent_api_key: str = os.getenv("LOGOS_AGENT_API_KEY", "")
     # Which model drives a session that does not name one. Optional: when it
     # is unset and the key reaches exactly one locally served model, that one
@@ -132,6 +135,9 @@ class Settings:
 
     # --- container execution ---------------------------------------------
     docker_socket: str = os.getenv("LOGOS_AGENT_DOCKER_SOCKET", "/var/run/docker.sock")
+    # Compose passes ${REGISTRY}/logos-agent-workspace:${IMAGE_TAG}; the
+    # fallback matches the compose default, the public GHCR mirror, so a
+    # runner started outside compose reaches the same image.
     workspace_image: str = os.getenv(
         "LOGOS_AGENT_WORKSPACE_IMAGE",
         "ghcr.io/ls1intum/edutelligence/logos-agent-workspace:latest",

@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,14 +56,26 @@ public class TeamService {
         this.membershipService = membershipService;
     }
 
+    /**
+     * Deterministic order for the team listings: without an explicit sort the
+     * backing query returns rows in database order, which changes as rows are
+     * added and removed, so the table's rows would jump around on every page
+     * load. Name (case-insensitive) with the id as a stable tiebreak.
+     */
+    private static final Comparator<Team> BY_NAME_THEN_ID = Comparator
+        .comparing(Team::getName, String.CASE_INSENSITIVE_ORDER)
+        .thenComparing(Team::getId);
+
     public List<TeamListResponseDTO> listAllTeams(Integer callerId) {
         return teamRepository.findAll().stream()
+            .sorted(BY_NAME_THEN_ID)
             .map(t -> toListDto(t, callerId, true))
             .toList();
     }
 
     public List<TeamListResponseDTO> listTeamsForUser(Integer userId) {
         return teamRepository.findTeamsForUser(userId).stream()
+            .sorted(BY_NAME_THEN_ID)
             .map(t -> toListDto(t, userId, false))
             .toList();
     }
@@ -91,6 +104,7 @@ public class TeamService {
             t.getDefaultCloudTpmLimit(),
             t.getDefaultLocalRpmLimit(),
             t.getDefaultLocalTpmLimit(),
+            t.getPriority(),
             isCallerOwner,
             t.getKeycloakGroup() != null
         );
@@ -201,6 +215,19 @@ public class TeamService {
         return teamRepository.findById(teamId).map(team -> {
             requireUnmanaged(team, "renamed");
             team.setName(name);
+            teamRepository.save(team);
+            return new TeamResponseDTO(team.getId(), team.getName());
+        });
+    }
+
+    /**
+     * Sets (or, with null, unsets) the queue priority of a team's traffic.
+     * The priority is a platform-level decision, so the endpoint is gated to
+     * logos_admin only. Null restores the policy-level priority behaviour.
+     */
+    public Optional<TeamResponseDTO> updateTeamPriority(Integer teamId, Integer priority) {
+        return teamRepository.findById(teamId).map(team -> {
+            team.setPriority(priority);
             teamRepository.save(team);
             return new TeamResponseDTO(team.getId(), team.getName());
         });

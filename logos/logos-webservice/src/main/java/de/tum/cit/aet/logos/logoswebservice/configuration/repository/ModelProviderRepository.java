@@ -21,6 +21,29 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
     List<ModelProvider> findByModelId(Integer modelId);
     List<ModelProvider> findByProviderId(Integer providerId);
 
+    /**
+     * All providers hosting the model, with how much traffic the model has
+     * actually seen on each of them (total requests, last request). Lets the
+     * access matrix answer "where can this model run, and is a grant used?"
+     */
+    @Query(value = """
+        SELECT p.id AS providerId,
+               p.name,
+               p.provider_type::text AS providerType,
+               p.privacy_level::text AS privacyLevel,
+               (SELECT COUNT(*) FROM log_entry le
+                WHERE le.model_id = mp.model_id AND le.provider_id = p.id
+               ) AS requestCount,
+               (SELECT MAX(le.timestamp_request) FROM log_entry le
+                WHERE le.model_id = mp.model_id AND le.provider_id = p.id
+               ) AS lastRequestAt
+        FROM model_provider mp
+        JOIN providers p ON p.id = mp.provider_id
+        WHERE mp.model_id = :modelId
+        ORDER BY p.id
+        """, nativeQuery = true)
+    List<ModelHostingProviderProjection> findHostingProvidersWithUsage(@Param("modelId") Integer modelId);
+
     @Query(value = """
         SELECT b.id,
                b.model_provider_id AS modelProviderId,

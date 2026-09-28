@@ -149,20 +149,10 @@ UNCHANGED = Unchanged()
 async def get_instructions() -> dict[str, Any] | None:
     """The standing instructions, or None when the row is missing."""
     async with sessionmaker()() as db:
-        row = (
-            (
-                await db.execute(
-                    text(
-                        """
+        row = (await db.execute(text("""
                         SELECT house_rules, environment_notes, updated_by, updated_at
                           FROM agent_instructions WHERE id = 1
-                        """
-                    )
-                )
-            )
-            .mappings()
-            .first()
-        )
+                        """))).mappings().first()
     return dict(row) if row else None
 
 
@@ -182,8 +172,7 @@ async def set_instructions(
     """
     async with sessionmaker()() as db:
         await db.execute(
-            text(
-                """
+            text("""
                 INSERT INTO agent_instructions (id, house_rules, environment_notes, updated_by, updated_at)
                 VALUES (1, :house_rules, :environment_notes, :updated_by, :now)
                 ON CONFLICT (id) DO UPDATE SET
@@ -193,8 +182,7 @@ async def set_instructions(
                         THEN :environment_notes ELSE agent_instructions.environment_notes END,
                     updated_by = :updated_by,
                     updated_at = :now
-                """
-            ),
+                """),
             {
                 # There is no row to keep on the insert path, so an untouched
                 # half starts out as no override at all.
@@ -215,21 +203,11 @@ async def set_instructions(
 async def get_controls() -> dict[str, Any] | None:
     """The one row of runtime controls, or None if it is missing."""
     async with sessionmaker()() as db:
-        row = (
-            (
-                await db.execute(
-                    text(
-                        """
+        row = (await db.execute(text("""
                     SELECT mode, mode_reason, max_parallel, comments_scanned_at,
                            updated_by, updated_at
                       FROM agent_controls WHERE id = 1
-                    """
-                    )
-                )
-            )
-            .mappings()
-            .first()
-        )
+                    """))).mappings().first()
     return dict(row) if row else None
 
 
@@ -249,8 +227,7 @@ async def set_controls(
     """
     async with sessionmaker()() as db:
         await db.execute(
-            text(
-                """
+            text("""
                 INSERT INTO agent_controls (id, mode, mode_reason, max_parallel, updated_by, updated_at)
                 VALUES (1, COALESCE(:mode, 'running'), :mode_reason,
                         CASE WHEN CAST(:clear AS BOOLEAN) THEN NULL
@@ -275,8 +252,7 @@ async def set_controls(
                     END,
                     updated_by = :updated_by,
                     updated_at = :now
-                """
-            ),
+                """),
             {
                 "mode": mode,
                 "mode_reason": mode_reason,
@@ -298,8 +274,7 @@ async def create_workspace(name: str, base_branch: str, created_by: str, *, ephe
         row = (
             (
                 await db.execute(
-                    text(
-                        """
+                    text("""
                     INSERT INTO agent_workspaces
                         (name, base_branch, volume_name, created_by, ephemeral)
                     VALUES (:name, :base_branch, :volume, :created_by, :ephemeral)
@@ -315,8 +290,7 @@ async def create_workspace(name: str, base_branch: str, created_by: str, *, ephe
                      WHERE agent_workspaces.archived_at IS NOT NULL
                     RETURNING id, name, base_branch, volume_name, created_by,
                               created_at, ephemeral
-                    """
-                    ),
+                    """),
                     {
                         "name": name,
                         "base_branch": base_branch,
@@ -340,8 +314,7 @@ async def list_workspaces() -> list[dict[str, Any]]:
         rows = (
             (
                 await db.execute(
-                    text(
-                        """
+                    text("""
                     SELECT w.id, w.name, w.base_branch, w.volume_name, w.created_by,
                            w.created_at, w.ephemeral,
                            COUNT(s.id) FILTER (WHERE s.status = ANY(:active)) AS active_sessions
@@ -350,8 +323,7 @@ async def list_workspaces() -> list[dict[str, Any]]:
                      WHERE w.archived_at IS NULL
                      GROUP BY w.id
                      ORDER BY w.created_at DESC
-                    """
-                    ),
+                    """),
                     {"active": [s.value for s in ACTIVE_STATUSES]},
                 )
             )
@@ -372,8 +344,7 @@ async def workspace_capacity() -> tuple[int, int]:
         row = (
             (
                 await db.execute(
-                    text(
-                        """
+                    text("""
                     SELECT COUNT(*) AS total,
                            COUNT(*) FILTER (
                                WHERE NOT EXISTS (
@@ -383,8 +354,7 @@ async def workspace_capacity() -> tuple[int, int]:
                                )
                            ) AS free
                       FROM agent_workspaces w
-                    """
-                    ),
+                    """),
                     {"active": [s.value for s in ACTIVE_STATUSES]},
                 )
             )
@@ -439,13 +409,11 @@ async def mark_comments_scanned(moment: datetime) -> None:
     """Remember that comments up to this point have been dealt with."""
     async with sessionmaker()() as db:
         await db.execute(
-            text(
-                """
+            text("""
                 INSERT INTO agent_controls (id, comments_scanned_at, updated_at)
                 VALUES (1, :moment, :now)
                 ON CONFLICT (id) DO UPDATE SET comments_scanned_at = :moment
-                """
-            ),
+                """),
             {"moment": moment, "now": _now()},
         )
         await db.commit()
@@ -471,8 +439,7 @@ async def disposable_workspaces(idle_before: datetime) -> list[dict[str, Any]]:
         rows = (
             (
                 await db.execute(
-                    text(
-                        """
+                    text("""
                     SELECT w.id, w.name, w.volume_name
                       FROM agent_workspaces w
                      WHERE w.ephemeral = TRUE
@@ -488,8 +455,7 @@ async def disposable_workspaces(idle_before: datetime) -> list[dict[str, Any]]:
                              w.created_at
                            ) < :idle_before
                      ORDER BY w.id
-                    """
-                    ),
+                    """),
                     {"idle_before": idle_before, "active": [s.value for s in ACTIVE_STATUSES]},
                 )
             )
@@ -525,12 +491,10 @@ async def archive_workspace(workspace_id: int) -> bool:
             return False
         active = (
             await db.execute(
-                text(
-                    """
+                text("""
                     SELECT COUNT(*) FROM agent_sessions
                      WHERE workspace_id = :id AND status = ANY(:active)
-                    """
-                ),
+                    """),
                 {"id": workspace_id, "active": [s.value for s in ACTIVE_STATUSES]},
             )
         ).scalar_one()
@@ -566,12 +530,10 @@ async def delete_workspace(workspace_id: int) -> bool:
             return False
         active = (
             await db.execute(
-                text(
-                    """
+                text("""
                     SELECT COUNT(*) FROM agent_sessions
                      WHERE workspace_id = :id AND status = ANY(:active)
-                    """
-                ),
+                    """),
                 {"id": workspace_id, "active": [s.value for s in ACTIVE_STATUSES]},
             )
         ).scalar_one()
@@ -622,8 +584,7 @@ async def create_session(
             raise ValueError(f"workspace {workspace_id} does not exist")
         session_id = (
             await db.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO agent_sessions
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
@@ -637,8 +598,7 @@ async def create_session(
                          :reaction_target,
                          :priority, :priority_reason)
                     RETURNING id
-                    """
-                ),
+                    """),
                 {
                     "workspace_id": workspace_id,
                     "task": task,
@@ -699,16 +659,14 @@ async def handled_trigger_refs(refs: Sequence[str]) -> set[str]:
     async with sessionmaker()() as db:
         rows = (
             await db.execute(
-                text(
-                    """
+                text("""
                     SELECT trigger_ref
                       FROM agent_sessions
                      WHERE trigger_ref = ANY(:refs)
                      GROUP BY trigger_ref
                     HAVING bool_or(status <> 'failed' OR started_at IS NOT NULL)
                         OR count(*) >= CAST(:attempts AS INTEGER)
-                    """
-                ),
+                    """),
                 {"refs": list(refs), "attempts": LAUNCH_ATTEMPTS},
             )
         ).all()
@@ -741,8 +699,7 @@ async def sessions_owing_a_reply(max_attempts: int) -> list[dict[str, Any]]:
         rows = (
             (
                 await db.execute(
-                    text(
-                        """
+                    text("""
                     SELECT id, reply_target, reply_attempts
                       FROM agent_sessions
                      WHERE reply_target IS NOT NULL
@@ -751,8 +708,7 @@ async def sessions_owing_a_reply(max_attempts: int) -> list[dict[str, Any]]:
                        AND status = ANY(:terminal)
                      ORDER BY id
                      LIMIT 20
-                    """
-                    ),
+                    """),
                     {"max_attempts": max_attempts, "terminal": [s.value for s in TERMINAL_STATUSES]},
                 )
             )
@@ -766,14 +722,12 @@ async def record_reply_attempt(session_id: int, *, delivered: bool) -> None:
     """Count an attempt, and stamp the delivery when it worked."""
     async with sessionmaker()() as db:
         await db.execute(
-            text(
-                """
+            text("""
                 UPDATE agent_sessions
                    SET reply_attempts = reply_attempts + 1,
                        reply_posted_at = CASE WHEN :delivered THEN :now ELSE reply_posted_at END
                  WHERE id = :id
-                """
-            ),
+                """),
             {"id": session_id, "delivered": delivered, "now": _now()},
         )
         await db.commit()
@@ -789,8 +743,7 @@ async def last_session_branch(workspace_id: int, *, before_session_id: int) -> s
     async with sessionmaker()() as db:
         return (
             await db.execute(
-                text(
-                    """
+                text("""
                     SELECT branch_name
                       FROM agent_sessions
                      WHERE workspace_id = :workspace_id
@@ -798,8 +751,7 @@ async def last_session_branch(workspace_id: int, *, before_session_id: int) -> s
                        AND branch_name IS NOT NULL
                      ORDER BY id DESC
                      LIMIT 1
-                    """
-                ),
+                    """),
                 {"workspace_id": workspace_id, "session_id": before_session_id},
             )
         ).scalar_one_or_none()
@@ -815,14 +767,12 @@ async def update_session_usage(session_id: int, *, tokens_in: int, tokens_out: i
     """
     async with sessionmaker()() as db:
         await db.execute(
-            text(
-                """
+            text("""
                 UPDATE agent_sessions
                    SET tokens_in = GREATEST(COALESCE(tokens_in, 0), CAST(:tokens_in AS INTEGER)),
                        tokens_out = GREATEST(COALESCE(tokens_out, 0), CAST(:tokens_out AS INTEGER))
                  WHERE id = :id
-                """
-            ),
+                """),
             {"id": session_id, "tokens_in": tokens_in, "tokens_out": tokens_out},
         )
         await db.commit()
@@ -858,12 +808,10 @@ async def count_active_trigger_sessions() -> int:
     async with sessionmaker()() as db:
         count = (
             await db.execute(
-                text(
-                    """
+                text("""
                     SELECT COUNT(*) FROM agent_sessions
                      WHERE trigger_ref IS NOT NULL AND status = ANY(:active)
-                    """
-                ),
+                    """),
                 {"active": [s.value for s in ACTIVE_STATUSES if s is not SessionStatus.QUEUED]},
             )
         ).scalar_one()
@@ -972,22 +920,12 @@ async def move_in_queue(session_id: int, move: str, *, by: str) -> dict[str, Any
     if move not in ("up", "down", "first"):
         raise ValueError(f"unknown move '{move}' (expected up, down or first)")
     async with sessionmaker()() as db:
-        rows = (
-            (
-                await db.execute(
-                    text(
-                        """
+        rows = (await db.execute(text("""
                     SELECT id, priority FROM agent_sessions
                      WHERE status = 'queued'
                      ORDER BY priority DESC, created_at, id
                      FOR UPDATE
-                    """
-                    )
-                )
-            )
-            .mappings()
-            .all()
-        )
+                    """))).mappings().all()
         order = [dict(row) for row in rows]
         at = next((index for index, row in enumerate(order) if row["id"] == session_id), None)
         if at is None:
@@ -1010,14 +948,12 @@ async def move_in_queue(session_id: int, move: str, *, by: str) -> dict[str, Any
         reason = f"moved in the queue by {by}"
         for position, row in enumerate(order):
             await db.execute(
-                text(
-                    """
+                text("""
                     UPDATE agent_sessions
                        SET priority = :priority,
                            priority_reason = CASE WHEN id = :moved THEN :reason ELSE priority_reason END
                      WHERE id = :id AND status = 'queued'
-                    """
-                ),
+                    """),
                 {"id": row["id"], "priority": row["priority"], "moved": session_id, "reason": reason},
             )
             del position
@@ -1053,8 +989,7 @@ async def next_queued_session(*, include_triggered: bool = True) -> dict[str, An
         row = (
             (
                 await db.execute(
-                    text(
-                        """
+                    text("""
                     SELECT s.id, s.model, s.workspace_id
                       FROM agent_sessions s
                      WHERE s.status = 'queued'
@@ -1080,8 +1015,7 @@ async def next_queued_session(*, include_triggered: bool = True) -> dict[str, An
                            )
                      ORDER BY s.priority DESC, s.created_at
                      LIMIT 1
-                    """
-                    ),
+                    """),
                     {
                         "include_triggered": include_triggered,
                         "occupying": [
@@ -1141,8 +1075,7 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
             )
         claimed = (
             await db.execute(
-                text(
-                    """
+                text("""
                     SELECT s.id FROM agent_sessions s
                      WHERE s.id = :session_id
                        AND s.status = 'queued'
@@ -1175,8 +1108,7 @@ async def claim_session(session_id: int, *, trigger_quota: int | None = None) ->
                                 ) < CAST(:trigger_quota AS INTEGER)
                            )
                      FOR UPDATE OF s SKIP LOCKED
-                    """
-                ),
+                    """),
                 {
                     "session_id": session_id,
                     "trigger_quota": trigger_quota,
@@ -1392,20 +1324,14 @@ async def sessions_awaiting_checks() -> list[dict[str, Any]]:
     and almost always empty.
     """
     async with sessionmaker()() as db:
-        rows = (
-            await db.execute(
-                text(
-                    """
+        rows = (await db.execute(text("""
                     SELECT id, workspace_id, task, model, branch_name, checks_sha,
                            trigger_kind, trigger_ref, reply_target, reaction_target,
                            priority, priority_reason, open_pull_request, finished_at
                       FROM agent_sessions
                      WHERE checks_watch = 'pending'
                      ORDER BY id
-                    """
-                )
-            )
-        ).mappings()
+                    """))).mappings()
         return [dict(row) for row in rows]
 
 
@@ -1429,8 +1355,7 @@ async def sessions_owing_a_replacement(*, max_attempts: int, since: datetime) ->
     async with sessionmaker()() as db:
         rows = (
             await db.execute(
-                text(
-                    """
+                text("""
                     SELECT s.id, s.workspace_id, s.task, s.model, s.branch_name,
                            s.trigger_kind, s.trigger_ref, s.reply_target, s.reaction_target,
                            s.priority, s.priority_reason, s.open_pull_request, s.error,
@@ -1450,8 +1375,7 @@ async def sessions_owing_a_replacement(*, max_attempts: int, since: datetime) ->
                               WHERE tried.trigger_ref = s.trigger_ref
                            ) < :max_attempts
                      ORDER BY s.id
-                    """
-                ),
+                    """),
                 {"since": since, "max_attempts": max_attempts},
             )
         ).mappings()
@@ -1552,12 +1476,10 @@ async def sessions_in_status(status: SessionStatus) -> list[dict[str, Any]]:
 async def add_event(session_id: int, kind: EventKind, payload: dict[str, Any]) -> None:
     async with sessionmaker()() as db:
         await db.execute(
-            text(
-                """
+            text("""
                 INSERT INTO agent_events (session_id, kind, payload)
                 VALUES (:sid, :kind, CAST(:payload AS jsonb))
-                """
-            ),
+                """),
             {"sid": session_id, "kind": kind.value, "payload": json.dumps(payload)},
         )
         await db.commit()
@@ -1571,15 +1493,13 @@ async def list_events(session_id: int, *, after_id: int = 0, limit: int = 500) -
         rows = (
             (
                 await db.execute(
-                    text(
-                        """
+                    text("""
                     SELECT id, session_id, ts, kind, payload
                       FROM agent_events
                      WHERE session_id = :sid AND id > :after
                      ORDER BY id
                      LIMIT :limit
-                    """
-                    ),
+                    """),
                     {"sid": session_id, "after": after_id, "limit": limit},
                 )
             )

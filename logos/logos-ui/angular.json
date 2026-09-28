@@ -33,7 +33,8 @@
             "styles": [
               "node_modules/primeicons/primeicons.css",
               "src/styles.scss",
-              "src/tailwind.css"
+              "src/tailwind.css",
+              "node_modules/@tumaet/ui-angular/styles.css"
             ],
             "stylePreprocessorOptions": {
               "includePaths": ["src"]

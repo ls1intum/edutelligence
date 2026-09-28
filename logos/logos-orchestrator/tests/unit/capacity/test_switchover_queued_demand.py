@@ -1,6 +1,6 @@
 """Sequential model switchover: a queued request must be able to evict a cooled-down idle lane.
 
-Issue #827: when requests for model A stop completely and model B is then
+when requests for model A stop completely and model B is then
 requested (sequentially — one request in flight at a time), the switchover
 never happened: A's lane stayed awake forever and B's requests timed out in
 the scheduler queue.
@@ -276,7 +276,7 @@ def _switchover_scenario(
 
 
 class TestSequentialSwitchover:
-    """Issue #827: A's benchmark ends, B is requested one-at-a-time.
+    """A's benchmark ends, B is requested one-at-a-time.
 
     The victim's demand has decayed below the load floor (cooled down) and
     exactly one B request waits in the scheduler queue. The planner must

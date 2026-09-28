@@ -15,7 +15,7 @@
   @include glass-surface;
   display: flex;
   flex-direction: column;
-  width: 220px;
+  width: 240px;
   border-right: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
   padding: 10px;
 }
@@ -117,9 +117,11 @@
 
   color: rgb(var(--nav-active-text));
 
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
 }
 
 .user-role {

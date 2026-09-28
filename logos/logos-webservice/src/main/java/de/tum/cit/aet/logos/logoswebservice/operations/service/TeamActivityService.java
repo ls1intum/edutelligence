@@ -20,7 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.ScopeOptionPro
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamActivityProjections;
 
 /**
- * The team-scoped activity view app administrators asked for (issue #776).
+ * The team-scoped activity view for app administrators.
  *
  * What is happening right now, what the team has spent, and the requests
  * behind both. Not a second statistics page: the VRAM curves, the lane health
@@ -49,6 +49,9 @@ public class TeamActivityService {
 
     /** Rows of the request list per page. */
     private static final int REQUEST_PAGE_SIZE = 20;
+
+    /** How many distinct questions the "Most Asked Questions" section shows. */
+    private static final int MOST_ASKED_QUESTIONS_LIMIT = 5;
 
     /**
      * Ceiling of one trace export. A consented team on a busy month can outrun
@@ -124,7 +127,7 @@ public class TeamActivityService {
         payload.put("since", since.toInstant().toString());
         // Whether any key of the team is opted into FULL logging, so the view
         // can say before an export is started that the download will hold no
-        // request or response content (issue #667).
+        // request or response content.
         payload.put("full_logging_enabled", hasFullLoggingKey(teamId));
         payload.put("live", live);
         payload.put("keys", keys);
@@ -136,16 +139,22 @@ public class TeamActivityService {
         // the picker, and narrowing it by the current pick would leave no way
         // back to the others.
         payload.put("requesters", toScopeOptions(logEntryRepository.findRequestersWithTraffic(
-            since, Timestamp.from(now), teamId)));
+            since, Timestamp.from(now), teamId, null, false)));
         payload.put("requests", requests.get("requests"));
         payload.put("requests_total", requests.get("total"));
         payload.put("requests_has_more", requests.get("has_more"));
         payload.put("requests_next_cursor", requests.get("next_cursor"));
+        payload.put("most_asked_questions", logEntryRepository
+                    .findMostAskedQuestions(since, Timestamp.from(now), teamId, MOST_ASKED_QUESTIONS_LIMIT)
+                    .stream()
+                    .map(p -> Map.of("question", p.getQuestion(), "count", p.getAskCount()))
+                    .toList()
+                );
         return payload;
     }
 
     /**
-     * The request traces of one team for the export (issue #667).
+     * The request traces of one team for the export.
      *
      * <p>Every request of the window comes out — the same slice the activity
      * list shows, so an export is never a mystery of which rows it skipped.

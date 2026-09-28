@@ -32,7 +32,7 @@ export class TeamActivityService {
   }
 
   /**
-   * The team's consent-based traces (issue #667): every request recorded at
+   * The team's consent-based traces: every request recorded at
    * FULL privacy inside the window, request and response content included.
    *
    * Same gate as {@link getActivity} — the team id is in the path, and the

@@ -43,7 +43,7 @@ export interface AgentSession {
   screenshot_count: number;
   /** Set when the runner queued this session itself: 'issue' or 'review'. */
   trigger_kind: string | null;
-  /** Which event it reacted to, e.g. 'issue-812'. */
+  /** Which event it reacted to, e.g. 'issue'.*/
   trigger_ref: string | null;
   /** How urgent the work is (higher runs first), and why. */
   priority: number;

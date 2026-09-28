@@ -16,7 +16,11 @@ import { DataTableComponent } from '../../shared/components/data-table/data-tabl
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { Router } from '@angular/router';
-import { daysSince, formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
+import {
+  daysSince,
+  formatLastUsedParts,
+  type LastUsedParts,
+} from '../../shared/utils/date';
 
 @Component({
   selector: 'app-models',
@@ -167,8 +171,8 @@ export class Models implements OnInit {
     this.lastUsedSort.update((dir) => (dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none'));
   }
 
-  formatLastUsed(iso: string | null | undefined): string {
-    return formatLastUsedLabel(iso);
+  formatLastUsed(iso: string | null | undefined): LastUsedParts {
+    return formatLastUsedParts(iso);
   }
 
   isStaleModel(iso: string | null | undefined): boolean {
@@ -182,8 +186,9 @@ export class Models implements OnInit {
     return `Not used for ${daysSince(iso)} days`;
   }
 
-  openReport(model: Model): void {
-    this.router.navigate(['/models', model.id, 'details']);
+  /** Model row click: the model details view, opened on the Access tab (hosting providers, team/key grant matrix). */
+  openModel(model: Model): void {
+    this.router.navigate(['/models', model.id, 'details'], { queryParams: { tab: 'access' } });
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

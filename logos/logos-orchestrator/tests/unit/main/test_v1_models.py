@@ -462,14 +462,14 @@ async def test_list_models_omits_every_context_field_when_unknown(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Historic maximum from the database — the all-workernodes-offline fallback (#829)
+# Historic maximum from the database — the all-workernodes-offline fallback
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_list_models_reports_historic_max_when_all_workernodes_offline(monkeypatch):
     """With no node connected, the historic maximum the database keeps is what
-    /v1/models can still promise (#829).
+    /v1/models can still promise.
 
     Only ``max_model_len_overall`` comes back: no lane is up that would make
     any of the current_* figures true, and claiming one would size the client

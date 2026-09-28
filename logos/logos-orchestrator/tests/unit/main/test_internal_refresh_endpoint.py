@@ -102,10 +102,13 @@ async def test_a_plain_refresh_does_not_rescrape_the_cloud_providers(monkeypatch
     monkeypatch.setattr(internal_mod, "refresh_pipeline_runtime_state", _fake_refresh)
     sync = MagicMock()
     monkeypatch.setattr(main_mod, "_cloud_model_sync", sync, raising=False)
+    azure_sync = MagicMock()
+    monkeypatch.setattr(main_mod, "_azure_deployment_sync", azure_sync, raising=False)
 
     await internal_mod.internal_refresh_pipeline(_make_data(False), _make_request("Bearer correct-secret"))
 
     sync.request_refresh.assert_not_called()
+    azure_sync.request_refresh.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -119,12 +122,15 @@ async def test_a_provider_change_rescrapes_the_cloud_providers(monkeypatch):
     monkeypatch.setattr(internal_mod, "refresh_pipeline_runtime_state", _fake_refresh)
     sync = MagicMock()
     monkeypatch.setattr(main_mod, "_cloud_model_sync", sync, raising=False)
+    azure_sync = MagicMock()
+    monkeypatch.setattr(main_mod, "_azure_deployment_sync", azure_sync, raising=False)
 
     data = main_mod.RefreshPipelineRequest(sync_cloud_models=True)
     result = await internal_mod.internal_refresh_pipeline(data, _make_request("Bearer correct-secret"))
 
     assert result == {"status": "ok"}
     sync.request_refresh.assert_called_once_with()
+    azure_sync.request_refresh.assert_called_once_with()
 
 
 @pytest.mark.asyncio

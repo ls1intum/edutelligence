@@ -1438,8 +1438,7 @@ class TestAgentPhaseIsolation:
         await sessions.manager._settle(7, exit_code=0, error=None)
 
         assert len(created) == 1
-        # The assigned issue's number, from the row — not the #948 the task
-        # merely points at.
+        # The assigned issue's number comes from the row, not the task text.
         assert created[0]["env"]["LOGOS_SESSION_CLOSES"] == "493"
 
     async def test_a_failed_agent_run_is_not_finalized(self, monkeypatch, tmp_path):

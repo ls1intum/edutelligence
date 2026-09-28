@@ -16,7 +16,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.TeamActivityService;
 
 /**
- * One team's live request counts and token spend (issue #776).
+ * One team's live request counts and token spend.
  *
  * App administrators wanted what the statistics page gives Logos admins,
  * narrowed to their own teams and cut down to the two questions they actually
@@ -67,7 +67,7 @@ public class TeamActivityController {
     }
 
     /**
-     * Download of the team's request traces (issue #667).
+     * Download of the team's request traces.
      *
      * Every request of the window comes back, the same slice the activity
      * view shows. The consented ones (recorded at FULL privacy) carry their

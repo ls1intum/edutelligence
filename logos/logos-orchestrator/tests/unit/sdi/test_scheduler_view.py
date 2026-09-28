@@ -382,6 +382,8 @@ def test_get_model_profiles_reads_timing_fields_from_snapshot(monkeypatch):
             "last_measured_epoch": 1710000100.0,
             "cold_load_time_s": 91.5,
             "wake_from_sleep_time_s": 12.25,
+            "host_ram_mb": 80_000.0,
+            "host_ram_residual_mb": 42_000.0,
         },
         "legacy-model": {
             "base_residency_mb": 3000.0,
@@ -397,12 +399,18 @@ def test_get_model_profiles_reads_timing_fields_from_snapshot(monkeypatch):
     qwen = profiles["qwen3:8b"]
     assert qwen.cold_load_time_s == 91.5
     assert qwen.wake_from_sleep_time_s == 12.25
+    assert qwen.host_ram_mb == 80_000.0
+    assert qwen.host_ram_residual_mb == 42_000.0
     # to_dict carries the fields for API consumers.
     assert qwen.to_dict()["cold_load_time_s"] == 91.5
     assert qwen.to_dict()["wake_from_sleep_time_s"] == 12.25
+    assert qwen.to_dict()["host_ram_mb"] == 80_000.0
+    assert qwen.to_dict()["host_ram_residual_mb"] == 42_000.0
     # A profile from a worker that predates the fields stays None.
     assert profiles["legacy-model"].cold_load_time_s is None
     assert profiles["legacy-model"].wake_from_sleep_time_s is None
+    assert profiles["legacy-model"].host_ram_mb is None
+    assert profiles["legacy-model"].host_ram_residual_mb is None
 
 
 def test_get_model_profiles_empty_when_no_profiles(monkeypatch):

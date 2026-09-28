@@ -1,5 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity;
 
+import static org.hamcrest.Matchers.contains;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -10,6 +12,7 @@ import static org.mockito.Mockito.when;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -51,6 +54,21 @@ class TeamControllerTest {
         mvc.perform(get("/teams").with(TestJwt.adminUser()))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$").isArray());
+    }
+
+    // The method-scoped fixture adds a case pair ("beta-team" id 2003,
+    // "Beta-Team" id 2004, inserted in the opposite order): equal names
+    // ignore case, so the assertion fails if the sort is case-sensitive or
+    // if the id tiebreak is missing (a stable sort would keep the physical
+    // row order).
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = "/sql/seed-team-ordering.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = "/sql/cleanup-team-ordering.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    void listTeams_is_sorted_by_name() throws Exception {
+        mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[*].name", contains("beta-team", "Beta-Team", "kc-team", "test-team")));
     }
 
     @Test
@@ -181,6 +199,76 @@ class TeamControllerTest {
                 .contentType("application/json")
                 .content("{\"is_owner\":false}"))
            .andExpect(status().isOk());
+    }
+
+    // Team queue priority is a platform-level decision, so only logos admins
+    // may set it; app admins (even team owners) and developers must not.
+
+    @Test
+    void updateTeamPriority_succeeds_for_logos_admin() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isOk());
+        mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.id == 2001)].priority").value(7));
+    }
+
+    @Test
+    void updateTeamPriority_forbidden_for_app_admin() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void updateTeamPriority_forbidden_for_developer() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void updateTeamPriority_rejects_out_of_range() throws Exception {
+        for (String value : new String[]{"0", "11", "-1"}) {
+            mvc.perform(patch("/teams/2001/priority")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"priority\":" + value + "}"))
+               .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    void updateTeamPriority_null_resets_to_unset() throws Exception {
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isOk());
+        mvc.perform(patch("/teams/2001/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":null}"))
+           .andExpect(status().isOk());
+        mvc.perform(get("/teams").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$[?(@.id == 2001)].priority").value((Object) null));
+    }
+
+    @Test
+    void updateTeamPriority_not_found_for_unknown_team() throws Exception {
+        mvc.perform(patch("/teams/9999/priority")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"priority\":7}"))
+           .andExpect(status().isNotFound());
     }
 
     // Owners must hold the app_admin or logos_admin role: the team-management

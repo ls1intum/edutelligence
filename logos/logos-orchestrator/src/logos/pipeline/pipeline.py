@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from logos import perf_trace
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
 from logos.dbutils.dbmodules import ThresholdLevel
@@ -55,32 +56,67 @@ def _privacy_ok(threshold: str, level: str) -> bool:
     return threshold_idx >= level_idx
 
 
-def resolve_queue_priority(default_priority: Optional[int], policy_priority: Optional[int]) -> int:
+def resolve_queue_priority(
+    default_priority: Optional[int],
+    team_priority: Optional[int],
+    policy_priority: Optional[int],
+) -> int:
     """
     Resolve the effective queue priority for a request.
 
-    The API key's ``default_priority`` (set per key, editable in the admin UI)
-    takes precedence over the policy-level ``priority``: a key that has a
-    priority set (non-zero) queues its requests at that priority regardless of
-    the policy, so a key owner's explicit choice is always honoured. A key
-    without a priority set (0, the default for newly created keys) falls back
-    to the policy's priority, preserving the historical policy-only behaviour.
+    Precedence: the API key's ``default_priority`` (set per key, editable in
+    the admin UI) beats the team's admin-set ``priority``, which beats the
+    policy-level ``priority``. A key owner's explicit choice is always
+    honoured; a key without a priority set (0, the default for newly created
+    keys) falls back to the team's priority; a team without one (0, the
+    default) falls back to the policy, preserving the historical
+    policy-only behaviour for untouched teams.
 
-    Both values use the same 1/5/10 scale consumed by ``Priority.from_int``
+    All values use the same 1/5/10 scale consumed by ``Priority.from_int``
     (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
 
     Args:
         default_priority: The requesting API key's default_priority, or 0/None
             when the key has none set.
+        team_priority: The Logos admin's priority for the key's team, or
+            0/None when unset.
         policy_priority: The policy's ``priority`` value (may be 0/None).
 
     Returns:
-        The effective integer priority for the request's queue entry.
+        The effective integer priority for the request's queue entry. When
+        nothing is set this is ``Priority.NORMAL`` (5) — not 0 — so the
+        entry's ``raw_priority`` matches the bucket ``from_int`` already
+        chooses for it. A raw 0 would still land in the NORMAL bucket but
+        rank below explicit NORMAL (5) traffic in that bucket, and the
+        role-rank tiebreak would never apply between the two.
     """
     if default_priority:
         return int(default_priority)
+    if team_priority:
+        return int(team_priority)
     if policy_priority:
         return int(policy_priority)
+    return int(Priority.NORMAL)
+
+
+def queue_role_rank(key_type: Optional[str], user_role: Optional[str]) -> int:
+    """
+    Queue tiebreak rank of a request's caller, within equal priority.
+
+    The default intra-team ordering is application > app admin > developer:
+    application keys (``key_type == 'application'``) rank highest, keys of
+    users holding an admin platform role rank in the middle, everything else
+    (developer keys, service keys, keys without a user) ranks lowest. Higher
+    rank dequeues first; equal ranks fall back to FIFO.
+
+    Unknown inputs deliberately rank 0 — internal or benchmark traffic that
+    does not carry a caller identity must never jump ahead of interactive
+    developer traffic.
+    """
+    if key_type == "application":
+        return 2
+    if user_role in ("app_admin", "logos_admin"):
+        return 1
     return 0
 
 
@@ -107,8 +143,15 @@ class PipelineRequest:
     required_provider_id: Optional[int] = None
     # The requesting API key's default_priority (see auth.AuthContext). The key
     # owner's queue-priority choice for their traffic. 0 means "not set": the
-    # policy-level priority applies instead (see resolve_queue_priority).
+    # team's, then the policy-level priority applies (see
+    # resolve_queue_priority).
     default_priority: int = 0
+    # The Logos admin's queue priority for the key's team (see
+    # auth.AuthContext). 0 = not set.
+    team_priority: int = 0
+    # Precomputed queue tiebreak rank of the caller (see queue_role_rank):
+    # application=2, app admin/logos admin=1, everyone else=0.
+    role_rank: int = 0
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
@@ -194,7 +237,8 @@ class RequestPipeline:
         # 1. Classification. PROXY mode still runs the policy + token stages
         # (so policy thresholds remain enforced) but skips Laura's heavy ML
         # ranking — the caller already named the model.
-        classification_result = self._classify(request)
+        with perf_trace.phase(request_id, "pipeline.classify"):
+            classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
                 request_id=request_id,
@@ -238,6 +282,7 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
+            role_rank=request.role_rank,
         )
 
         # Record enqueue
@@ -252,7 +297,8 @@ class RequestPipeline:
 
         schedule_start_s = time.perf_counter()
         try:
-            scheduling_result = await self._scheduler.schedule(scheduling_request)
+            with perf_trace.phase(request_id, "pipeline.schedule"):
+                scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
             logger.warning("Request %s timed out waiting in queue", request_id)
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
@@ -348,13 +394,15 @@ class RequestPipeline:
         # 3. Resolve execution context (with authorization check)
         #    For logosnode providers, the lane may be starting (not yet ready to
         #    accept requests). Retry with backoff instead of failing immediately.
-        ctx_result = await self._resolve_context_with_retry(
-            scheduling_result=scheduling_result,
-            classification_result=classification_result,
-            request_path=request.request_path,
-            request_id=request_id,
-            schedule_start_s=schedule_start_s,
-        )
+        with perf_trace.phase(request_id, "pipeline.context"):
+            ctx_result = await self._resolve_context_with_retry(
+                scheduling_result=scheduling_result,
+                classification_result=classification_result,
+                request_path=request.request_path,
+                request_id=request_id,
+                schedule_start_s=schedule_start_s,
+                deployment_info=self._scheduled_deployment(request, scheduling_result),
+            )
         if not ctx_result.success:
             return ctx_result
 
@@ -391,6 +439,24 @@ class RequestPipeline:
     _CONTEXT_RESOLVE_TIMEOUT_S = global_timeout_s(600.0)
     _CONTEXT_RESOLVE_INTERVAL_S = 2.0
 
+    @staticmethod
+    def _scheduled_deployment(request: "PipelineRequest", scheduling_result) -> Optional[Dict[str, Any]]:
+        """The scheduled entry from the key's already-fetched deployment list.
+
+        The context resolver uses it to skip its database roundtrip for
+        logosnode targets ; callers without a deployment list (async
+        jobs) yield ``None`` and take the DB path.
+        """
+        return next(
+            (
+                d
+                for d in request.deployments
+                if d.get("model_id") == scheduling_result.model_id
+                and d.get("provider_id") == scheduling_result.provider_id
+            ),
+            None,
+        )
+
     async def _resolve_context_with_retry(
         self,
         scheduling_result,
@@ -398,6 +464,7 @@ class RequestPipeline:
         request_id: str,
         request_path: Optional[str] = None,
         schedule_start_s: Optional[float] = None,
+        deployment_info: Optional[Dict[str, Any]] = None,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
         deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
@@ -409,6 +476,8 @@ class RequestPipeline:
                     model_id=scheduling_result.model_id,
                     provider_id=scheduling_result.provider_id,
                     request_path=request_path,
+                    request_id=request_id,
+                    deployment_info=deployment_info,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
@@ -542,10 +611,13 @@ class RequestPipeline:
         )
 
         # The classifier bakes the policy's priority into every candidate, but
-        # the key owner's default_priority takes precedence: resolve the
-        # effective priority here so all downstream consumers (schedulers,
-        # queueing, monitoring, log stats) agree on it.
-        effective_priority = resolve_queue_priority(request.default_priority, policy.get("priority"))
+        # the key owner's default_priority — then the team's admin-set
+        # priority — takes precedence: resolve the effective priority here so
+        # all downstream consumers (schedulers, queueing, monitoring, log
+        # stats) agree on it.
+        effective_priority = resolve_queue_priority(
+            request.default_priority, request.team_priority, policy.get("priority")
+        )
         if candidates:
             candidates = [(model_id, weight, effective_priority) for model_id, weight, _ in candidates]
 
@@ -629,9 +701,44 @@ class RequestPipeline:
             usage_tokens=usage_tokens,
         )
 
+    def settle_completion(
+        self,
+        request_id: str,
+        result_status: str,
+        error_message: Optional[str] = None,
+        cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """Terminal accounting on this (event-loop) thread; returns the write's fields.
+
+        The request path calls this and hands the dict to ``write_completion``
+        on the write-behind queue thread — the recorder's shared state must
+        never be mutated off the event loop.
+        """
+        return self._monitoring.settle_and_take(
+            request_id=request_id,
+            result_status=result_status,
+            error_message=error_message,
+            cold_start=cold_start,
+            usage_tokens=usage_tokens,
+        )
+
+    def write_completion(self, request_id: str, fields: Dict[str, Any]) -> None:
+        """Terminal metrics write for a ``settle_completion`` result (any thread)."""
+        self._monitoring.write_completion(request_id, fields)
+
     def discard_request(self, request_id: str, result_status: str) -> None:
         """Close out a request whose terminal log row was written elsewhere."""
         self._monitoring.discard(request_id, result_status)
+
+    def take_monitoring_buffer(self, request_id: str) -> Dict[str, Any]:
+        """Drain the lifecycle fields buffered for a request .
+
+        Failure paths that persist the log row themselves call this before
+        ``discard_request`` and merge the fields into their own metrics
+        UPDATE, keeping the row identical to the sequential-write era.
+        """
+        return self._monitoring.take_buffer(request_id)
 
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist the limiter's admission decision on the request's log row."""

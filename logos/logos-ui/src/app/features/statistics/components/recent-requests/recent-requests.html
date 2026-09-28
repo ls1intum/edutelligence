@@ -80,9 +80,14 @@
                   <i class="pi pi-users" aria-hidden="true"></i>{{ item.team_name }}
                 </span>
               }
-              @if (requesterOf(item)) {
+              @if (showRequester(item)) {
                 <span class="rr-card__requester" title="Requesting user">
                   <i class="pi pi-user" aria-hidden="true"></i>{{ requesterOf(item) }}
+                </span>
+              }
+              @if (keyChipOf(item)) {
+                <span class="rr-card__key" title="API key environment">
+                  <i class="pi pi-key" aria-hidden="true"></i>{{ keyChipOf(item) }}
                 </span>
               }
             </div>

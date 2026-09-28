@@ -11,6 +11,7 @@ from logos.dbutils.dbmanager import DBManager
 from logos.logosnode_snapshot import _logosnode_snapshot_is_connected
 from logos.main import _PROMETHEUS_API_KEY
 from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
+from logos.responses import get_client_ip
 
 logger = logging.getLogger("LogosLogger")
 
@@ -18,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("/health", tags=["monitoring"])
-async def health():
+async def health(request: Request):
     """Report overall health plus a breakdown of what is serveable.
 
     Serving local inference is the core function of the orchestrator, so the
@@ -36,7 +37,17 @@ async def health():
     router on the secure entrypoint, and liveness probes call it), so it must
     not carry the model catalogue. The per-model view applications need lives
     on the secret-gated /internal/model_health endpoint instead.
+
+    It is also reachable without any credential, and every call runs the
+    database query below, so it is rate limited per source IP — generous
+    enough for monitoring probes, bounded against anyone else.
     """
+    # Local import: see the matching comment in logos.auth.authenticate_api_key
+    # for why logos.rate_limiter must not be imported at module scope here.
+    from logos.rate_limiter import PUBLIC_ENDPOINT_RPM, enforce_ip_rate_limit
+
+    enforce_ip_rate_limit(get_client_ip(request), "health", PUBLIC_ENDPOINT_RPM)
+
     local_ok = False
     cloud_ok = False
     try:

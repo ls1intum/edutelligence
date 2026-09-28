@@ -1,4 +1,4 @@
-"""Tests for the planner's per-(provider, model) engine-cache metric refresh (issue 819).
+"""Tests for the planner's per-(provider, model) engine-cache metric refresh.
 
 The planner aggregates the workers' lane backend metrics into
 ``(model, provider, prefix_cache_hit_rate, mtp_acceptance_rate)`` entries and

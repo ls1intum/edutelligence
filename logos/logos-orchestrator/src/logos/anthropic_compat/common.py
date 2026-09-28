@@ -1,5 +1,5 @@
 # src/logos/anthropic_compat/common.py
-"""Pieces shared by both Anthropic Messages translations.
+"""Pieces shared by the translations in this package.
 
 Claude Code reaches Logos through the Anthropic Messages API
 (``POST /v1/messages``). vLLM serves that surface itself, so a request that
@@ -7,12 +7,14 @@ ends on a workernode is forwarded verbatim and nothing in this package runs.
 Cloud upstreams are the exception: Azure OpenAI and every other OpenAI-shaped
 resource expose ``chat/completions`` and ``responses`` and have no Messages
 route at all, so forwarding the path like-for-like returns 404 before the
-model sees anything.
+model sees anything. A Claude deployment is the same problem mirrored — it
+serves only the Messages API, and an inbound ``chat/completions`` has nowhere
+OpenAI-shaped to go.
 
-This module holds what both target dialects need: which upstream speaks which
-dialect, how an Anthropic content block maps onto an OpenAI one, and the SSE
-plumbing — a parser for the upstream event stream and a writer that emits a
-protocol-correct Anthropic one.
+This module holds what those translations share: which surface an inbound path
+addresses, how a content block and a stop reason map in either direction, and
+the SSE plumbing — a parser for the upstream event stream and a writer that
+emits a protocol-correct Anthropic one.
 """
 
 from __future__ import annotations
@@ -24,11 +26,13 @@ import secrets
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-# The single inbound path this package translates. ``/v1/messages`` is what the
-# Anthropic SDKs (and therefore Claude Code) post to; Logos also serves the
-# ``/openai`` prefix, which the route layer has already rewritten to ``v1/...``
-# by the time a path reaches here.
+# The two inbound paths this package translates between. ``/v1/messages`` is
+# what the Anthropic SDKs (and therefore Claude Code) post to, and
+# ``/v1/chat/completions`` is what every OpenAI SDK posts to; Logos also serves
+# the ``/openai`` prefix, which the route layer has already rewritten to
+# ``v1/...`` by the time a path reaches here.
 MESSAGES_PATH = "v1/messages"
+CHAT_COMPLETIONS_PATH = "v1/chat/completions"
 
 # OpenAI's reasoning families — the o-series and gpt-5 — under both their bare
 # names and any vendor prefix ("openai/gpt-5.1"). They take a different
@@ -56,6 +60,19 @@ def is_messages_path(request_path: Optional[str]) -> bool:
         return False
     path = request_path.split("?", 1)[0].strip("/")
     return path == MESSAGES_PATH
+
+
+def is_chat_completions_path(request_path: Optional[str]) -> bool:
+    """Whether an inbound request path addresses the OpenAI chat API.
+
+    Both API versions Logos serves count: ``/v2`` is the same surface under a
+    second prefix, and a client reaching a Claude model through it expects the
+    same OpenAI-shaped answer as one on ``/v1``.
+    """
+    if not request_path:
+        return False
+    path = request_path.split("?", 1)[0].strip("/")
+    return path in {CHAT_COMPLETIONS_PATH, CHAT_COMPLETIONS_PATH.replace("v1/", "v2/", 1)}
 
 
 def is_reasoning_model(model_name: Optional[str]) -> bool:
@@ -93,6 +110,21 @@ def new_message_id(upstream_id: Any) -> str:
         return raw
     suffix = raw or secrets.token_hex(12)
     return f"msg_{suffix}"
+
+
+def new_completion_id(upstream_id: Any) -> str:
+    """A chat/completions-shaped id, derived from the upstream one.
+
+    The mirror of :func:`new_message_id`: OpenAI ids start with ``chatcmpl-``
+    and some clients assert on the prefix. An Anthropic ``msg_`` id keeps its
+    distinctive part as the suffix, so the id the client logs still leads back
+    to the same upstream request.
+    """
+    raw = str(upstream_id or "").strip()
+    if raw.startswith("chatcmpl-"):
+        return raw
+    suffix = raw[len("msg_") :] if raw.startswith("msg_") else raw
+    return f"chatcmpl-{suffix or secrets.token_hex(12)}"
 
 
 # ── content blocks ──────────────────────────────────────────────────────────
@@ -302,6 +334,38 @@ def stop_reason(finish_reason: Any, *, saw_tool_call: bool = False) -> Optional[
     return "tool_use" if saw_tool_call and mapped == "end_turn" else mapped
 
 
+# Anthropic stop_reason -> OpenAI finish_reason, the direction a Messages
+# upstream's answer travels. "refusal" is the one value with a genuinely
+# different meaning on each side: OpenAI reports a model that declined through
+# "content_filter", which is the closest a chat/completions client can read.
+# An unknown reason becomes "stop" — the turn did end, and inventing a
+# terminal condition the client then branches on would be worse than saying so
+# plainly.
+_FINISH_REASONS = {
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "pause_turn": "stop",
+    "max_tokens": "length",
+    "model_context_window_exceeded": "length",
+    "tool_use": "tool_calls",
+    "refusal": "content_filter",
+}
+
+
+def finish_reason(anthropic_stop_reason: Any, *, saw_tool_call: bool = False) -> Optional[str]:
+    """Map an Anthropic stop reason onto an OpenAI finish reason.
+
+    ``saw_tool_call`` mirrors the guard :func:`stop_reason` applies in the
+    other direction: a turn that produced a tool call has to report
+    ``tool_calls``, or an OpenAI client reads ``stop`` and never runs the tool
+    it was just handed.
+    """
+    if anthropic_stop_reason is None:
+        return "tool_calls" if saw_tool_call else None
+    mapped = _FINISH_REASONS.get(str(anthropic_stop_reason), "stop")
+    return "tool_calls" if saw_tool_call and mapped == "stop" else mapped
+
+
 # Usage keys Logos adds to a cloud response after the fact — the priced cost of
 # the request. Not part of either API, but the native Messages path surfaces
 # them, so the translated path has to as well or a cloud model's cost silently
@@ -331,6 +395,39 @@ def usage_block(input_tokens: int, output_tokens: int, cached_tokens: int = 0) -
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": max(int(cached_tokens or 0), 0),
     }
+
+
+def openai_usage_block(usage: Any) -> Dict[str, Any]:
+    """An Anthropic ``usage`` object as a chat/completions one.
+
+    The two APIs count the prompt differently, and the difference is the whole
+    reason this is not a rename. Anthropic reports the tokens it had to read
+    fresh in ``input_tokens`` and states the cached ones *alongside* it, while
+    OpenAI's ``prompt_tokens`` is the whole prompt with ``cached_tokens`` named
+    as a subset of it. Carrying ``input_tokens`` over unchanged would therefore
+    under-report every cached turn — and ``total_tokens`` is what a client
+    bills its own users on.
+    """
+    usage = usage if isinstance(usage, dict) else {}
+
+    def _count(key: str) -> int:
+        try:
+            return max(int(usage.get(key) or 0), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    cached = _count("cache_read_input_tokens")
+    prompt = _count("input_tokens") + _count("cache_creation_input_tokens") + cached
+    completion = _count("output_tokens")
+    block: Dict[str, Any] = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+    if cached:
+        block["prompt_tokens_details"] = {"cached_tokens": cached}
+    block.update(usage_extras(usage))
+    return block
 
 
 def error_body(message: str, error_type: str = "api_error") -> Dict[str, Any]:

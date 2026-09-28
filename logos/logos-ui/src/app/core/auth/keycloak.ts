@@ -5,7 +5,7 @@ export const KEYCLOAK = new InjectionToken<Keycloak>('KEYCLOAK');
 
 let instance: Keycloak | null = null;
 
-/** Passkey config served by /api/info (#632). Empty => fall back to hostname/"Logos". */
+/** Passkey config served by /api/info. Empty => fall back to hostname/"Logos".*/
 export interface PasskeyConfig { rpId?: string; rpName?: string; }
 let passkeyConfig: PasskeyConfig = {};
 
@@ -15,7 +15,7 @@ export function getKeycloak(): Keycloak {
   return instance;
 }
 
-/** WebAuthn RP id/name from /api/info; both optional (see #632). */
+/** WebAuthn RP id/name from /api/info; both optional.*/
 export function getPasskeyConfig(): PasskeyConfig {
   return passkeyConfig;
 }
@@ -52,7 +52,7 @@ export async function initKeycloak(): Promise<Keycloak> {
   if (!issuer || !clientId) {
     throw new Error('Server /api/info response missing keycloak.issuer or keycloak.client_id');
   }
-  // #632: shared TUM Keycloak serves the parent-domain RP id so passkeys work
+  // Shared TUM Keycloak serves the parent-domain RP id so passkeys work
   // across *.aet.cit.tum.de. Blank => the ceremony falls back to the hostname.
   passkeyConfig = {
     rpId: data.keycloak?.passkey_rp_id || undefined,

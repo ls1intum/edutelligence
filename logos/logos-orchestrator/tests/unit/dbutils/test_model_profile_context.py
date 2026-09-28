@@ -1,4 +1,4 @@
-"""The historic context high-water mark of model_profiles (#829).
+"""The historic context high-water mark of model_profiles.
 
 The orchestrator's view of a model's context used to live only in the live
 worker runtime snapshots: with every workernode offline, /v1/models carried
@@ -41,8 +41,8 @@ def test_manual_override_is_the_length():
 
 
 def test_calibrated_cap_counts_on_its_own():
-    """The #829 root cause: when a calibration caps --max-model-len to fit the
-    pinned KV budget and records no wider KV point, that cap is the only
+    """A calibration cap counts as the reported context when it is the only
+    available context value. When no wider KV point is recorded, that cap is the
     context the profile reports. Ignoring it is exactly what made the model
     look context-unknown while its worker sat connected and ready to serve
     it at that width."""

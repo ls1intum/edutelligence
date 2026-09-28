@@ -575,7 +575,14 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_status_revision_advances_on_active_request_change() -> None:
+async def test_status_revision_no_longer_advances_on_active_request_change() -> None:
+    """W3: counting a request is not a lifecycle change. Bumping the
+    STATUS revision per request woke the bridge refresh loop into a full-node
+    status build (all lanes, all probes) next to the relay — the worker's
+    biggest per-request cost. Count changes bump the separate COUNT revision
+    instead: the loop reacts with an in-memory patch of the last payload (no
+    probes), so the orchestrator still gets a per-request status push to
+    reset its per-snapshot forward budget."""
     manager = LaneManager(WorkerConfig(), lane_port_start=15060, lane_port_end=15070)
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
@@ -589,13 +596,23 @@ async def test_status_revision_advances_on_active_request_change() -> None:
     manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
 
     initial = manager.status_revision
+    initial_count = manager.count_revision
     await manager.increment_active_requests(lane_id)
-    after_inc = await manager.wait_for_status_revision(initial, timeout=0.01)
-    assert after_inc > initial
+    # The status revision is untouched: no full rebuild on the request path.
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    # ...but the count revision advances and wakes the combined wait
+    # immediately (not on the next ~1s tick).
+    assert manager.count_revision == initial_count + 1
+    assert await manager.wait_for_status_or_count_revision(initial, initial_count, timeout=0.01) == (
+        initial,
+        initial_count + 1,
+    )
+    assert await manager.total_active_requests() == 1
 
     await manager.decrement_active_requests(lane_id)
-    after_dec = await manager.wait_for_status_revision(after_inc, timeout=0.01)
-    assert after_dec > after_inc
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    assert manager.count_revision == initial_count + 2
+    assert await manager.total_active_requests() == 0
 
 
 def test_auto_tp_keeps_tp1_when_model_fits() -> None:
@@ -794,7 +811,7 @@ def test_auto_tp_non_calibrated_tp1_falls_through_to_heuristic() -> None:
 
 
 def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> None:
-    """Issue #616: a calibrated tp=1 must not be escalated by the size heuristic.
+    """a calibrated tp=1 must not be escalated by the size heuristic.
 
     The calibrated base_residency is the FULL awake footprint (weights + KV),
     which on a 2-GPU Ada node is most of a single card — the heuristic would
@@ -829,7 +846,7 @@ def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> N
 
 
 def test_auto_tp_calibrated_tp1_overrides_incoming_tp() -> None:
-    """Issue #616: the calibrated TP wins over a stale/re-inferred TP from upstream.
+    """the calibrated TP wins over a stale/re-inferred TP from upstream.
 
     The orchestrator's size-vs-VRAM inference sent tp=2 for a model the
     calibrator decided fits at tp=1 — the worker must not serve it at tp=2
@@ -2898,7 +2915,7 @@ def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Calibration GPU-slice guard (issue #592)
+# Calibration GPU-slice guard
 # ---------------------------------------------------------------------------
 
 
@@ -2917,6 +2934,28 @@ def test_begin_end_calibration_session_holds_power_of_two_slice() -> None:
 def test_calibration_session_slice_on_power_of_two_node_holds_all_gpus() -> None:
     manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 4)
     assert manager.begin_calibration_session() == frozenset({0, 1, 2, 3})
+
+
+def test_begin_calibration_session_prefers_idle_gpus_over_busy_ones() -> None:
+    """3 GPUs, a lane already running on GPU 0: hold the idle [1, 2] slice
+    instead of the naive [0, 1] — GPU 0 keeps serving, nothing on it is
+    killed for calibration when an idle slice of the same size exists."""
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 3, lane_port_start=15211, lane_port_end=15220)
+    manager._handles["a"] = _StubHandle(LaneConfig(model="m", vllm=True, gpu_devices="0"))  # noqa: SLF001
+
+    assert manager.begin_calibration_session() == frozenset({1, 2})
+
+
+def test_begin_calibration_session_falls_back_when_idle_gpus_insufficient() -> None:
+    """3 GPUs, lanes on GPU 0 AND 1: only GPU 2 is idle — not enough for a
+    2-GPU slice on its own, so the idle GPU is kept and only the missing
+    slot comes from the busy set ([2, 0]), instead of the naive [0, 1]
+    slice that would kill both lanes when sparing one was possible."""
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 3, lane_port_start=15221, lane_port_end=15230)
+    manager._handles["a"] = _StubHandle(LaneConfig(model="m1", vllm=True, gpu_devices="0"))  # noqa: SLF001
+    manager._handles["b"] = _StubHandle(LaneConfig(model="m2", vllm=True, gpu_devices="1"))  # noqa: SLF001
+
+    assert manager.begin_calibration_session() == frozenset({0, 2})
 
 
 def test_lane_gpu_set_parses_selectors() -> None:
@@ -3014,7 +3053,7 @@ def _placement_manager(snapshot, n_gpus: int) -> LaneManager:
 @pytest.mark.asyncio
 async def test_auto_place_excludes_calibrating_slice() -> None:
     """GPUs 0,1 are the emptiest but held by a calibration — a tp=1 lane must
-    land on the leftover GPU 2 instead (#592)."""
+    land on the leftover GPU 2 instead."""
 
     async def _snapshot() -> DeviceSummary:
         return _snapshot_3gpu({0: 20000.0, 1: 19000.0, 2: 13000.0})

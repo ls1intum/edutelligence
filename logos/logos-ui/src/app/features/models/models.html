@@ -32,7 +32,7 @@
   ]"
   [gridCols]="
     role() === 'logos_admin'
-      ? '200fr 240fr 140fr 160fr 200fr 120fr 170fr 72px'
+      ? '200fr 220fr 130fr 150fr 110fr 140fr 170fr 72px'
       : '220fr 260fr 220fr'
   "
   [loading]="loading()"
@@ -51,7 +51,7 @@
           <button
             type="button"
             class="model-name"
-            (click)="openReport(model)"
+            (click)="openModel(model)"
           >
             {{ model.name }}
           </button>
@@ -182,13 +182,18 @@
           role="cell"
           data-label="Last used"
         >
-          <span
-            class="last-used"
-            [class.last-used--stale]="isStaleModel(model.last_used_at)"
-            [attr.title]="lastUsedTooltip(model.last_used_at)"
-          >
-            {{ formatLastUsed(model.last_used_at) }}
-          </span>
+          @if (formatLastUsed(model.last_used_at); as lastUsed) {
+            <span
+              class="last-used"
+              [class.last-used--stale]="isStaleModel(model.last_used_at)"
+              [attr.title]="lastUsedTooltip(model.last_used_at)"
+            >
+              <span class="last-used__primary">{{ lastUsed.primary }}</span>
+              @if (lastUsed.age) {
+                <span class="last-used__age">{{ lastUsed.age }}</span>
+              }
+            </span>
+          }
         </div>
       }
 

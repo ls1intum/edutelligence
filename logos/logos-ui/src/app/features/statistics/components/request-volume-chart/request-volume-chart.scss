@@ -77,18 +77,14 @@
   &:hover {
     opacity: 1;
   }
-}
 
-// ── Total request line ────────────────────────────────────────────────────────
-// Stroke color is bound inline via [attr.stroke]="totalLineColor" (CHART_ROLE.total)
-// so it always matches its own legend swatch instead of coincidentally matching Cloud's.
-.rv-total-line {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  opacity: var(--opacity-chart-minor);
-  pointer-events: none;
+  &--dimmed {
+    opacity: var(--opacity-dimmed);
+  }
+
+  &--highlight {
+    opacity: 1;
+  }
 }
 
 // ── Zoom selection rectangle ──────────────────────────────────────────────────
@@ -148,6 +144,14 @@
   transition: opacity 0.15s;
 
   &--off {
+    opacity: var(--opacity-dimmed);
+  }
+
+  &--hovered {
+    color: rgb(var(--color-typography-100));
+  }
+
+  &--dimmed {
     opacity: var(--opacity-dimmed);
   }
 }

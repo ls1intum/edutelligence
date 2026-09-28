@@ -1,0 +1,8 @@
+{
+  "name": "NVIDIA A100-SXM4-80GB",
+  "compute_cap": "8.0",
+  "memory_total_mb": 81920,
+  "idle_power_w": 62.0,
+  "idle_temp_c": 32.0,
+  "fan_speed": "[N/A]"
+}

@@ -35,8 +35,8 @@ CI (GitHub Actions)                    Mac (native)
 │    no runtime          │            │   → ~/logos-workernode-mlx      │
 │                        │            │  install-macos.sh               │
 │ ghcr.io/ls1intum/      │            │   → ~/.venv-vllm-metal          │
-│  logos-workernode-mlx  │            │  launchctl bootstrap            │
-│                        │            │                                 │
+│  edutelligence/        │            │  launchctl bootstrap            │
+│  logos-workernode-mlx  │            │                                 │
 └────────────────────────┘            │ logos_worker_node.main          │
                                       │  ├── outbound WS → orchestrator │
                                       │  └── subprocess: vllm serve     │
@@ -146,7 +146,7 @@ Environment variables set by the plist or your shell override the file.
 | Variable | Default | Purpose |
 |---|---|---|
 | `LOGOS_MLX_HOME` | `~/logos-workernode-mlx` | install root |
-| `LOGOS_MLX_IMAGE` | `ghcr.io/ls1intum/logos-workernode-mlx:latest` | image to pull |
+| `LOGOS_MLX_IMAGE` | `ghcr.io/ls1intum/edutelligence/logos-workernode-mlx:latest` | image to pull |
 | `LOGOS_METAL_VENV` | `~/.venv-vllm-metal` | vllm-metal venv — read by the installer *and* the runtime resolvers (vllm binary, telemetry interpreter); bootstrap passes it to the launchd agent. Upstream's installer always creates `~/.venv-vllm-metal`, so a custom path must be populated by you (e.g. upstream's editable install) |
 | `LOGOS_METAL_PYTHON` | resolved from the venv | interpreter for the MLX telemetry probe |
 | `LOGOS_WORKER_BACKEND` | auto (`darwin` → metal) | force `metal` or `cuda` |
@@ -452,18 +452,25 @@ and restarting them instead. No capability is lost, only the mechanism differs.
 
 ### Calibration
 
-`calibration.py` measures against `nvidia-smi` and samples `/proc/meminfo`,
-neither of which exists on macOS. Calibration is therefore unavailable on the
-Metal backend *by construction* — no flag to set: the worker refuses
-server-driven calibration sessions automatically (the refusal carries
-`reason_code=metal-backend`), and its startup calibration path skips itself.
-Provide `model_profile_overrides` by hand instead; a profile with
-`residency_source="override"` counts as valid, so the model is advertised
-normally. `config.example.mlx.yml` has worked examples.
+`calibration.py`'s CUDA path (TP escalation, the KV-cache sweep, sleep/wake
+measurement) does not run on Metal — none of that hardware exists here.
+Server-driven calibration sessions instead use `calibration_metal.py`: a
+single-point probe that loads the model with no explicit memory-fraction
+override (letting vllm-metal size itself, same as a production lane),
+warms it up, and reads the memory delta via `vm_stat`. No KV sweep (there
+is no per-request KV-size flag to search over on this backend, only the
+whole-process `VLLM_METAL_MEMORY_FRACTION`), no TP (single GPU), no sleep
+(see above). The result still lands in `model_profiles.yml` with
+`residency_source="calibrated"` — nightly ticks and the "Calibrate
+uncalibrated" admin action both work on Metal nodes now.
 
-To measure `base_residency_mb`: start the lane, let it idle, then read
-`used_memory_mb` from `GET /runtime`. Round up — underestimating makes the
-planner over-subscribe the node.
+`model_profile_overrides` remains available as a manual fallback (e.g. to
+pin a number before the automatic probe has run, or to work around a
+model that fails the probe) — a profile with `residency_source="override"`
+still counts as valid. `config.example.mlx.yml` has worked examples. To
+measure `base_residency_mb` by hand: start the lane, let it idle, then
+read `used_memory_mb` from `GET /runtime`. Round up — underestimating
+makes the planner over-subscribe the node.
 
 ---
 
@@ -532,7 +539,7 @@ quantization, or raise `iogpu.wired_limit_mb`.
 pulls anonymously, which only works while the GHCR package is public (Package
 settings → Change visibility). For a private package, fetch the token with
 credentials instead:
-`curl -u <user>:$GITHUB_TOKEN "https://ghcr.io/token?scope=repository:ls1intum/logos-workernode-mlx:pull"`
+`curl -u <user>:$GITHUB_TOKEN "https://ghcr.io/token?scope=repository:ls1intum/edutelligence/logos-workernode-mlx:pull"`
 
 ---
 

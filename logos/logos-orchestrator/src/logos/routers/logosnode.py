@@ -216,6 +216,10 @@ def _logosnode_insecure_dev_mode_enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _central_hf_token() -> str:
+    return os.getenv("HF_TOKEN", "").strip()
+
+
 def _is_tls_request(request: Request) -> bool:
     if _logosnode_insecure_dev_mode_enabled():
         return True
@@ -228,9 +232,20 @@ def _is_tls_request(request: Request) -> bool:
 
 def _require_tls_request(request: Request) -> None:
     if not _is_tls_request(request):
+        # Name what actually arrived. A worker that dials https:// and still
+        # lands here was stripped of its TLS signal somewhere in the proxy
+        # chain (an untrusted hop rewrites X-Forwarded-Proto to the plain
+        # scheme of its own entrypoint), and without these two values the
+        # rejection is indistinguishable from a genuinely cleartext caller.
         raise HTTPException(
             status_code=400,
-            detail="TLS is required for logosnode auth/session endpoints",
+            detail=(
+                "TLS is required for logosnode auth/session endpoints "
+                f"(request arrived with scheme={request.url.scheme!r}, "
+                f"x-forwarded-proto={request.headers.get('x-forwarded-proto', '')!r}; "
+                "if the caller used https, a reverse-proxy hop is dropping the "
+                "forwarded headers)"
+            ),
         )
 
 
@@ -274,6 +289,12 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
             auth_name="",
             auth_format="{}",
             provider_type="logosnode",
+            # add_provider rejects a missing privacy_level outright, so omitting
+            # it made this endpoint return 400 for every request. The caller
+            # states the level (required and validated on the request model) —
+            # assuming LOCAL here would hand the most trusted tier to any worker
+            # that self-registers, rented hardware included.
+            privacy_level=data.privacy_level,
         )
 
     if code != 200:
@@ -341,6 +362,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         "ws_url": _build_logosnode_ws_url(request, token),
         "worker_id": worker_id,
         "expires_in_seconds": 60,
+        "hf_token": _central_hf_token(),
     }
 
 
@@ -584,3 +606,53 @@ async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
         "count": len(models),
         "models": models,
     }
+
+
+@router.post("/logosdb/providers/logosnode/stop_calibration", tags=["logosnode"])
+async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
+    """Cancel a worker's in-progress calibration session, if any.
+
+    The worker owns the teardown via cancel_event; nothing partial is
+    written for the model in progress — it's just left uncalibrated for
+    a later session.
+    """
+    _require_root_access(data.logos_key)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        result = await _main._logosnode_registry.send_command(
+            data.provider_id,
+            "stop_calibration_session",
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Admin stop-calibration: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning(
+            "Admin stop-calibration: stop_calibration_session failed on provider=%s: %s",
+            pname,
+            exc,
+        )
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    was_active = bool(result.get("was_active", False))
+    current_model = result.get("current_model")
+    logger.info(
+        "Admin stop-calibration: provider=%s was_active=%s current_model=%s",
+        pname,
+        was_active,
+        current_model or "<none>",
+    )
+    return JSONResponse(
+        content={
+            "message": (
+                f"Calibration session on {pname} cancelled (was calibrating {current_model})"
+                if was_active
+                else f"No calibration session was running on {pname}"
+            ),
+            "was_active": was_active,
+            "current_model": current_model,
+        }
+    )

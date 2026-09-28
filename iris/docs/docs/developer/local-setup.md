@@ -10,7 +10,7 @@ This guide walks you through setting up Iris for local development. By the end, 
 
 | Requirement                 | Version       | Notes                                                              |
 | --------------------------- | ------------- | ------------------------------------------------------------------ |
-| **Python**                  | 3.12+         | `python --version` to verify                                       |
+| **Python**                  | 3.13+         | `python --version` to verify                                       |
 | **Poetry**                  | 2.x           | [Installation guide](https://python-poetry.org/docs/#installation) |
 | **Docker & Docker Compose** | Latest stable | Required for Weaviate                                              |
 | **Git**                     | Any recent    | For cloning and pre-commit hooks                                   |

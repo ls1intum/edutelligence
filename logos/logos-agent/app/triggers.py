@@ -32,7 +32,7 @@ The trade is minutes of latency for work whose whole premise is "when the
 GPUs are idle anyway".
 
 **Remembered by reference, forever.** Every reaction is recorded on the
-session as the thing it reacted to — `issue-812`, `pr-772-assigned`,
+session as the thing it reacted to — `<issue-id>`, `pr-<number>-assigned`,
 `pr-772-review-5085681761`, `thread-772-3910035243`. A reference that
 already has a session is never queued again, so an issue that stays assigned
 does not produce a second pull request next week, and an answered question
@@ -110,7 +110,7 @@ def workspace_name(kind: str, number: int, title: str) -> str:
 
     The name is not decoration: it becomes part of the branch a session
     pushes (`logos/agent/<workspace>/session-42`) and the first column of
-    the workspace list. `auto-2` tells nobody anything; `issue-812-oom-on-
+    the workspace list. `auto-2` tells nobody anything; `<issue-id>-oom-on-
     startup` says what the checkout is for, in the branch as well as in the
     UI.
 
@@ -1182,7 +1182,7 @@ class TriggerPoller:
             # about something: asked on a pull request, the answer is about
             # that pull request's code, and it used to be written from a
             # checkout of the default branch by an agent that had never
-            # seen the diff. Its title was `#882` for the same reason.
+            # seen the diff. Its title was `` for the same reason.
             other = None if pull else await self._pull_request(number)
             title = pull["title"] if pull else str((other or {}).get("title") or f"#{number}")
             # About a pull request's code when it is one this runner

@@ -58,6 +58,28 @@
   }
 }
 
+.btn-stop {
+  margin-left: 8px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-warning));
+  background: transparent;
+  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
+  border-radius: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-warning) / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
 // ── Action feedback banners ───────────────────────────────────────────────────
 .action-success {
   background: rgb(var(--color-success)  / var(--opacity-soft));

@@ -81,6 +81,48 @@ class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
         raise NotImplementedError(f"The LLM {str(self)} does not support embeddings")
 
 
+class RerankItem(BaseModel):
+    """One scored document, identified by its index into the ``documents`` list
+    that was passed to :meth:`RerankModel.rerank`."""
+
+    index: int
+    relevance_score: float
+
+
+class RerankResponse(BaseModel):
+    """Provider-neutral rerank result.
+
+    Every reranker normalises its provider's response to this shape, so the
+    model configured behind a reranker role can be swapped (Cohere <-> a
+    vLLM-served cross-encoder) without touching any call site.
+    """
+
+    results: list[RerankItem]
+
+
+class RerankModel(LanguageModel, metaclass=ABCMeta):
+    """Abstract class for the llm reranker wrappers"""
+
+    cost_per_1k_requests: float = 0
+    # Whether THIS configured model's score distribution matches
+    # settings.global_search_rerank_floor's calibration (Qwen3-Reranker-8B; see
+    # that field's own description). Defaults to False: a transport wrapper
+    # like VllmRerankModel can serve ANY vLLM-hosted cross-encoder, so
+    # calibration is a property of the specific model behind a config entry,
+    # not of the client class, and must be declared explicitly per entry
+    # rather than inferred from isinstance.
+    rerank_floor_calibrated: bool = False
+
+    @classmethod
+    def __subclasshook__(cls, subclass) -> bool:
+        return hasattr(subclass, "rerank") and callable(subclass.rerank)
+
+    @abstractmethod
+    def rerank(self, query: str, documents: list[str], top_n: int) -> RerankResponse:
+        """Score the documents against the query"""
+        raise NotImplementedError(f"The LLM {str(self)} does not support reranking")
+
+
 class ImageGenerationModel(LanguageModel, metaclass=ABCMeta):
     """Abstract class for the llm image generation wrappers"""
 
