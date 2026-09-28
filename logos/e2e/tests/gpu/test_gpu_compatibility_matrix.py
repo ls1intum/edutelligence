@@ -230,3 +230,18 @@ async def test_pinned_device_order_decides_which_card_the_lane_uses(spawned):
         assert env.used_mb(0) == 0.0, "the 2080 Ti was allocated against despite being second in the pin"
     finally:
         await ctx.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("profile_key", sorted(BACKEND_BY_PROFILE))
+async def test_compute_capability_is_reported_in_worker_telemetry(profile_key, gpu_sim):
+    from logos_worker_node.gpu import GpuMetricsCollector
+
+    gpu_sim(GpuScenario.homogeneous(profile_key, 1))
+    collector = GpuMetricsCollector()
+    await collector.start()
+    try:
+        snapshot = await collector.get_snapshot()
+        assert snapshot.devices[0].extra["compute_capability"] == GpuProfile.load(profile_key).compute_cap
+        assert snapshot.total_memory_mb > 0
+    finally:
+        await collector.stop()
