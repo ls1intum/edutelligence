@@ -33,7 +33,7 @@
          log_entry against the logos-orchestrator, which keeps writing to this
          table while logos-webservice is redeployed (same rationale as
          012/014/027/028/035/036). -->
-    <changeSet id="041-log-entry-gateway-in-flight-index" author="logos" runInTransaction="false">
+    <changeSet id="042-log-entry-gateway-in-flight-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_gateway_in_flight"/></not>
         </preConditions>

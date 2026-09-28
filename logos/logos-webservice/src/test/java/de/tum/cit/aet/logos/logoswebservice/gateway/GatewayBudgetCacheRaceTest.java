@@ -21,16 +21,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.ResultSetExtractor;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 
 /**
- * Regression for the budget-cache race: a {@link GatewayBudgetService#noteReservation}
- * that lands while {@code cached()} is reloading must not be discarded when the
- * reload installs.
+ * Regression for budget-cache races around {@link GatewayBudgetService#noteReservation}
+ * and concurrent snapshot refreshes.
  */
 class GatewayBudgetCacheRaceTest {
 
@@ -55,12 +53,8 @@ class GatewayBudgetCacheRaceTest {
         budget = new GatewayBudgetService(jdbc, TTL_SECONDS, clock);
         executor = Executors.newFixedThreadPool(2);
 
-        when(jdbc.query(anyString(), any(MapSqlParameterSource.class), any(ResultSetExtractor.class)))
-            .thenAnswer(invocation -> {
-                ResultSetExtractor<Object> extractor = invocation.getArgument(2);
-                // Limit lookup: return a high budget so enforce never 402s on limit alone.
-                return 1_000_000_000L;
-            });
+        when(jdbc.query(anyString(), any(MapSqlParameterSource.class), any(org.springframework.jdbc.core.ResultSetExtractor.class)))
+            .thenAnswer(invocation -> 1_000_000_000L);
 
         when(jdbc.queryForObject(anyString(), any(MapSqlParameterSource.class), eq(Long.class)))
             .thenAnswer(invocation -> {
@@ -82,50 +76,44 @@ class GatewayBudgetCacheRaceTest {
     }
 
     @Test
-    void noteReservationDuringRefresh_isMergedIntoInstalledSnapshot() throws Exception {
+    void noteReservationDuringRefresh_isMergedWhenLoadMissedTheRow() throws Exception {
         GatewayKey key = applicationKey(KEY_ID);
 
-        // Prime a fresh usage snapshot.
         budget.enforceCloudBudget(key);
         String usageKey = usageCacheKey(KEY_ID);
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(100L);
 
-        // Expire the snapshot and block the reload so noteReservation can race it.
         clock.advanceMillis(TTL_SECONDS * 1000L + 1);
         blockUsageLoad = new CountDownLatch(1);
         usageLoadStarted = new CountDownLatch(1);
-        usageFromDb.set(100L); // DB has not yet observed the new reservation
+        usageFromDb.set(100L);
 
         Future<?> refresh = executor.submit(() -> budget.enforceCloudBudget(key));
         assertThat(usageLoadStarted.await(5, TimeUnit.SECONDS)).isTrue();
 
         budget.noteReservation(key, 50L);
-
-        // Live entry still shows the bump for concurrent readers.
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
 
         blockUsageLoad.countDown();
         refresh.get(5, TimeUnit.SECONDS);
 
-        // Reload must keep the reservation — not reinstall the stale 100.
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
     }
 
     @Test
-    void noteReservationBeforeRefreshRegisters_isPreservedByInstall() throws Exception {
+    void nextRefreshReplacesInflatedValueWithDatabaseTotal() {
         GatewayKey key = applicationKey(KEY_ID);
         budget.enforceCloudBudget(key);
         String usageKey = usageCacheKey(KEY_ID);
 
-        clock.advanceMillis(TTL_SECONDS * 1000L + 1);
-        // Bump the expired entry before any refresh claims inflight.
         budget.noteReservation(key, 50L);
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
 
-        usageFromDb.set(100L); // concurrent SELECT would miss an uncommitted row
+        clock.advanceMillis(TTL_SECONDS * 1000L + 1);
+        usageFromDb.set(120L);
         budget.enforceCloudBudget(key);
 
-        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
+        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(120L);
     }
 
     private static String usageCacheKey(int apiKeyId) {
@@ -138,7 +126,6 @@ class GatewayBudgetCacheRaceTest {
             null, null, "test", false, null, 0, "BILLING");
     }
 
-    /** Clock that tests can advance without sleeping. */
     private static final class MutableClock extends Clock {
         private final ZoneOffset zone = ZoneOffset.UTC;
         private volatile Instant instant;

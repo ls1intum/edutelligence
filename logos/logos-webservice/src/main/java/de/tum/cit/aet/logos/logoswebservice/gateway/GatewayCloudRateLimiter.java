@@ -38,6 +38,7 @@ public class GatewayCloudRateLimiter {
     private static final String ADMIT_SCRIPT = """
         local rpm_key = KEYS[1]
         local tpm_key = KEYS[2]
+        local tpm_sum_key = KEYS[3]
         -- Redis server time so skewed replica clocks cannot prune each other early.
         local redis_time = redis.call('TIME')
         local now = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
@@ -49,7 +50,25 @@ public class GatewayCloudRateLimiter {
         local cutoff = now - window_ms
 
         redis.call('ZREMRANGEBYSCORE', rpm_key, '-inf', cutoff)
-        redis.call('ZREMRANGEBYSCORE', tpm_key, '-inf', cutoff)
+
+        -- Drop expired TPM claims and subtract them from the running total
+        -- so admission does not rescan the whole window on every request.
+        if tpm_limit > 0 then
+          local expired = redis.call('ZRANGEBYSCORE', tpm_key, '-inf', cutoff)
+          local expired_sum = 0
+          for _, entry in ipairs(expired) do
+            local sep = string.find(entry, ':', 1, true)
+            if sep then
+              expired_sum = expired_sum + tonumber(string.sub(entry, sep + 1))
+            end
+          end
+          if expired_sum > 0 then
+            redis.call('DECRBY', tpm_sum_key, expired_sum)
+          end
+          redis.call('ZREMRANGEBYSCORE', tpm_key, '-inf', cutoff)
+        else
+          redis.call('ZREMRANGEBYSCORE', tpm_key, '-inf', cutoff)
+        end
 
         if rpm_limit > 0 then
           local rpm = redis.call('ZCARD', rpm_key)
@@ -59,13 +78,10 @@ public class GatewayCloudRateLimiter {
         end
 
         if tpm_limit > 0 then
-          local entries = redis.call('ZRANGE', tpm_key, 0, -1)
-          local sum = 0
-          for _, entry in ipairs(entries) do
-            local sep = string.find(entry, ':', 1, true)
-            if sep then
-              sum = sum + tonumber(string.sub(entry, sep + 1))
-            end
+          local sum = tonumber(redis.call('GET', tpm_sum_key) or '0')
+          if sum < 0 then
+            sum = 0
+            redis.call('SET', tpm_sum_key, '0')
           end
           if sum + tokens > tpm_limit then
             return -1
@@ -74,6 +90,10 @@ public class GatewayCloudRateLimiter {
 
         redis.call('ZADD', rpm_key, now, member)
         redis.call('ZADD', tpm_key, now, member .. ':' .. tokens)
+        if tpm_limit > 0 then
+          redis.call('INCRBY', tpm_sum_key, tokens)
+          redis.call('PEXPIRE', tpm_sum_key, window_ms)
+        end
         redis.call('PEXPIRE', rpm_key, window_ms)
         redis.call('PEXPIRE', tpm_key, window_ms)
         return 1
@@ -112,12 +132,13 @@ public class GatewayCloudRateLimiter {
         String member = UUID.randomUUID().toString();
         String rpmKey = "gw:rpm:" + key.id();
         String tpmKey = "gw:tpm:" + key.id();
+        String tpmSumKey = "gw:tpm:sum:" + key.id();
 
         Long result;
         try {
             result = redis.execute(
                 admitScript,
-                List.of(rpmKey, tpmKey),
+                List.of(rpmKey, tpmKey, tpmSumKey),
                 Long.toString(windowMs),
                 Integer.toString(checkRpm ? limits.rpm() : 0),
                 Integer.toString(checkTpm ? limits.tpm() : 0),

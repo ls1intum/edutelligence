@@ -49,11 +49,14 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * breach, plus one reservation per request admitted on other instances in
  * that window. Lower the TTL to tighten the bound at the cost of more DB load.
  *
- * <p>Nothing here serializes requests: the snapshot is refreshed at most once
- * per TTL per key (concurrent misses share one load), and a refresh is the
- * only query whose cost grows with the key's month of traffic. Reservations
- * noted while a refresh is in flight are merged into the new snapshot so a
- * reload cannot discard them. The bound is the price of that. Trading it for
+ * <p>Nothing here serializes admissions on the budget check itself: the
+ * snapshot is refreshed at most once per TTL per key (concurrent misses share
+ * one load), and a refresh is the only query whose cost grows with the key's
+ * month of traffic. Reservations noted while a refresh is in flight are queued
+ * and merged into the new snapshot so a reload cannot discard them; if the load
+ * already counted the same row, the merge double-counts until the next TTL
+ * (refuse-more), and the following refresh installs the database total without
+ * preserving the inflated value. The bound is the price of that. Trading it for
  * exactness — a per-key lock around check-and-reserve, or a snapshot reload
  * per request — makes every request on a key wait for a full re-pricing of
  * that key's month, so admission time grows with the log; do not.
@@ -72,25 +75,31 @@ public class GatewayBudgetService {
     private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     /**
-     * Per-key reservation increments that land while a usage snapshot refresh
-     * is in flight. Applied when the refresh installs so a concurrent
-     * {@link #noteReservation} cannot be overwritten by a stale load.
+     * Reservation increments noted while a usage refresh is in flight. Merged
+     * on install; if the load already counted the same row this double-counts
+     * until the next TTL (refuse-more). The next refresh installs the database
+     * total and does not preserve the inflated value.
      */
     private final ConcurrentHashMap<String, LongAdder> pendingUsageIncrements = new ConcurrentHashMap<>();
 
     /** Single-flight usage/limit loads: concurrent misses share one refresh. */
     private final ConcurrentHashMap<String, CompletableFuture<CacheEntry>> inflight = new ConcurrentHashMap<>();
 
-    /**
-     * Per-cache-key monitors. {@link #addToCachedUsage} and the drain/install
-     * half of {@link #refresh} share one critical section so a bump cannot
-     * observe a half-finished refresh (or leave an orphan pending increment).
-     */
-    private final ConcurrentHashMap<String, Object> keyMonitors = new ConcurrentHashMap<>();
+    /** Bounded monitors: same stripe serializes bump vs install for a given key. */
+    private static final int MONITOR_STRIPES = 64;
+    private final Object[] monitorStripes = new Object[MONITOR_STRIPES];
+
+    {
+        for (int i = 0; i < MONITOR_STRIPES; i++) {
+            monitorStripes[i] = new Object();
+        }
+    }
 
     private Object monitorFor(String cacheKey) {
-        return keyMonitors.computeIfAbsent(cacheKey, ignored -> new Object());
+        int h = cacheKey.hashCode();
+        return monitorStripes[(h ^ (h >>> 16)) & (MONITOR_STRIPES - 1)];
     }
+
     @Autowired
     public GatewayBudgetService(
             NamedParameterJdbcTemplate jdbc,
@@ -267,8 +276,11 @@ public class GatewayBudgetService {
      * Until then the snapshot may over-count a request that has already
      * settled, which errs towards refusing, never towards overspend.
      *
-     * <p>If a refresh of this key is in flight, the increment is also queued
-     * and merged into the new snapshot so the reload cannot discard it.
+     * <p>If a refresh of this key is in flight, the increment is queued and
+     * merged into the new snapshot so the reload cannot discard it. A load that
+     * already counted the row can double-count until the next TTL; the next
+     * refresh installs the database total and does not preserve the inflated
+     * value ({@code Math.max} with a stale entry is intentionally avoided).
      *
      * <p>The team snapshot counts developer-key spend only, so only a
      * developer key's reservation is added to it. A snapshot that is not
@@ -294,9 +306,8 @@ public class GatewayBudgetService {
                     return null;
                 }
                 long current = entry.value instanceof Long l ? l : 0L;
-                return new CacheEntry(current + microCents, entry.loadedAtMs);
+                return new CacheEntry(current + microCents, entry.loadedAtMs, entry.loadStartedAtMs);
             });
-            // Queue while a refresh may overwrite this entry; install merges it.
             if (inflight.containsKey(cacheKey)) {
                 pendingUsageIncrements.computeIfAbsent(cacheKey, ignored -> new LongAdder()).add(microCents);
             }
@@ -314,7 +325,6 @@ public class GatewayBudgetService {
             return (T) entry.value;
         }
         CacheEntry loaded = refresh(key, loader, now);
-        // Soft bound: drop expired entries opportunistically when the map grows.
         if (cache.size() > 4096) {
             long t = clock.millis();
             cache.entrySet().removeIf(e -> t - e.getValue().loadedAtMs >= ttlMillis);
@@ -324,8 +334,8 @@ public class GatewayBudgetService {
 
     /**
      * Load a fresh snapshot for {@code key}, sharing the work among concurrent
-     * misses. Usage increments noted while the load runs are merged on install
-     * so they cannot be overwritten by a stale put.
+     * misses. Pending reservation bumps are added to the database total on
+     * install; the previous entry is never preserved via {@code Math.max}.
      */
     @SuppressWarnings("unchecked")
     private <T> CacheEntry refresh(String key, Loader<T> loader, long refreshStartedAtMs) {
@@ -334,58 +344,46 @@ public class GatewayBudgetService {
         if (winner != created) {
             return join(winner);
         }
+        Object monitor = monitorFor(key);
+        final long[] loadStartedAtMs = { clock.millis() };
         try {
-            synchronized (monitorFor(key)) {
-                // Re-check under the single-flight claim: another thread may have
-                // installed a fresh entry before we registered.
+            synchronized (monitor) {
                 CacheEntry latest = cache.get(key);
                 long now = clock.millis();
                 if (latest != null && now - latest.loadedAtMs < ttlMillis) {
-                    LongAdder pending = pendingUsageIncrements.remove(key);
-                    if (pending != null && latest.value instanceof Long current) {
-                        long extra = pending.sum();
-                        if (extra > 0L) {
-                            latest = new CacheEntry(current + extra, latest.loadedAtMs);
-                            cache.put(key, latest);
-                        }
-                    }
                     created.complete(latest);
                     inflight.remove(key, created);
                     return latest;
                 }
+                loadStartedAtMs[0] = clock.millis();
             }
 
             T value = loader.load();
             long loadedAt = clock.millis();
 
-            synchronized (monitorFor(key)) {
+            synchronized (monitor) {
                 LongAdder pending = value instanceof Long ? pendingUsageIncrements.remove(key) : null;
                 long extra = pending == null ? 0L : pending.sum();
 
                 CacheEntry installed = cache.compute(key, (k, existing) -> {
-                    // A fresher snapshot won the race; keep it and fold pending bumps in.
                     if (existing != null
                             && existing.loadedAtMs >= refreshStartedAtMs
                             && loadedAt - existing.loadedAtMs < ttlMillis) {
                         if (extra > 0L && existing.value instanceof Long current) {
-                            return new CacheEntry(current + extra, existing.loadedAtMs);
+                            return new CacheEntry(current + extra, existing.loadedAtMs, existing.loadStartedAtMs);
                         }
                         return existing;
                     }
+                    Object toStore = value;
                     if (value instanceof Long loaded) {
-                        // pending: bumps during this load. max with existing: a
-                        // pre-inflight bump that lost the containsKey race.
-                        long merged = loaded + extra;
-                        if (existing != null && existing.value instanceof Long bumped) {
-                            merged = Math.max(merged, bumped);
-                        }
-                        return new CacheEntry(merged, loadedAt);
+                        // DB total + bumps noted during this load. Do not
+                        // Math.max with the previous entry — that made a
+                        // one-TTL double-count sticky across refreshes.
+                        toStore = loaded + extra;
                     }
-                    return new CacheEntry(value, loadedAt);
+                    return new CacheEntry(toStore, loadedAt, loadStartedAtMs[0]);
                 });
                 created.complete(installed);
-                // Drop inflight before releasing the monitor so a bump cannot
-                // queue against a refresh that will never drain again.
                 inflight.remove(key, created);
                 return installed;
             }
@@ -420,7 +418,10 @@ public class GatewayBudgetService {
         T load();
     }
 
-    record CacheEntry(Object value, long loadedAtMs) {
+    record CacheEntry(Object value, long loadedAtMs, long loadStartedAtMs) {
+        CacheEntry(Object value, long loadedAtMs) {
+            this(value, loadedAtMs, loadedAtMs);
+        }
     }
 
     /** Visible for tests. */
