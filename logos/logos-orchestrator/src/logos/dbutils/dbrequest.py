@@ -2,9 +2,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from logos.dbutils.dbmodules import ThresholdLevel
-
 from logos.benchmarks.configuration import BenchmarkBatch, BenchmarkSettings
+from logos.dbutils.dbmodules import ThresholdLevel
 
 
 class LogosKeyModel(BaseModel):
