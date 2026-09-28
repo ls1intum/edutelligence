@@ -33,14 +33,18 @@
   @include glass-surface;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
   margin-bottom: 14px;
   margin-top: 4px;
 }
 
-.key-value-left { min-width: 0; }
+// The value side grows into the free space so the action buttons stay
+// grouped at the right edge instead of being spread across the row.
+.key-value-left {
+  flex: 1;
+  min-width: 0;
+}
 
 .kv-label {
   font-size: var(--font-size-2xs);
