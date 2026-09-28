@@ -128,7 +128,8 @@ public class InferenceGatewayController {
                     body,
                     copyHeaders(request),
                     ctx.key().logsFullPayloads(),
-                    result -> cloudAccounting.settleSuccess(logId, result.usage(), result.responseBody()),
+                    result -> cloudAccounting.settleSuccess(
+                        logId, result.usage(), result.responseBody(), result.serviceTier()),
                     err -> cloudAccounting.settleFailure(logId, err));
             }
             log.debug("Orchestrator proxy {} {} reason={}",

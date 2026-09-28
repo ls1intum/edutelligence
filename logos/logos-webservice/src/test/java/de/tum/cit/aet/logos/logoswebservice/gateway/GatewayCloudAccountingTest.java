@@ -76,7 +76,7 @@ class GatewayCloudAccountingTest {
         assertThat(settledCost(logId)).isEqualTo(RESERVATION);
 
         accounting.settleSuccess(logId, Map.of(
-            "prompt_tokens", 1000L, "completion_tokens", 300L, "total_tokens", 1300L), null);
+            "prompt_tokens", 1000L, "completion_tokens", 300L, "total_tokens", 1300L), null, null);
 
         // 1000 * 20000/1000 + 300 * 120000/1000 — the same computation the
         // orchestrator path settles with, not the flat reservation.
@@ -97,10 +97,52 @@ class GatewayCloudAccountingTest {
         int logId = admit(f);
 
         accounting.settleSuccess(logId, Map.of(
-            "prompt_tokens", 1000L, "prompt_cached_tokens", 800L, "completion_tokens", 300L), null);
+            "prompt_tokens", 1000L, "prompt_cached_tokens", 800L, "completion_tokens", 300L), null, null);
 
         // 200 uncached at 20000 + 800 cached at 2000 + 300 output at 120000.
         assertThat(cost(logId)).isEqualTo(4_000L + 1_600L + 36_000L);
+    }
+
+    @Test
+    void settleSuccess_storesTheServiceTierTheResponseReported() {
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        accounting.settleSuccess(logId, USAGE, null, "flex");
+
+        assertThat(serviceTier(logId)).isEqualTo("flex");
+    }
+
+    @Test
+    void settleSuccess_billsTheReportedTierAtItsOwnRate() {
+        // The discounted rows exist for the tier the response echoes; losing
+        // the tier would bill this row at the default rate.
+        Fixture f = seedPricedDeployment();
+        seedPrice(f.modelId(), f.providerId(), "billed_input_uncached", 10000, "flex");
+        seedPrice(f.modelId(), f.providerId(), "billed_output_text", 60000, "flex");
+        int logId = admit(f);
+
+        accounting.settleSuccess(logId, Map.of(
+            "prompt_tokens", 1000L, "completion_tokens", 300L), null, "flex");
+
+        assertThat(serviceTier(logId)).isEqualTo("flex");
+        // 1000 * 10000/1000 + 300 * 60000/1000 — the flex rows, not the defaults.
+        assertThat(cost(logId)).isEqualTo(10_000L + 18_000L);
+    }
+
+    @Test
+    void settleSuccess_withoutTierPricesAtTheDefaultRate() {
+        Fixture f = seedPricedDeployment();
+        seedPrice(f.modelId(), f.providerId(), "billed_input_uncached", 10000, "flex");
+        seedPrice(f.modelId(), f.providerId(), "billed_output_text", 60000, "flex");
+        int logId = admit(f);
+
+        accounting.settleSuccess(logId, Map.of(
+            "prompt_tokens", 1000L, "completion_tokens", 300L), null, null);
+
+        assertThat(serviceTier(logId)).isNull();
+        // The flex rows must not be picked up without the tier to select them.
+        assertThat(cost(logId)).isEqualTo(20_000L + 36_000L);
     }
 
     @Test
@@ -109,7 +151,7 @@ class GatewayCloudAccountingTest {
         Fixture f = seedPricedDeployment();
         int logId = admit(f);
 
-        accounting.settleSuccess(logId, Map.of(), null);
+        accounting.settleSuccess(logId, Map.of(), null, null);
 
         assertThat(settledCost(logId)).isEqualTo(RESERVATION);
         assertThat(cost(logId)).isEqualTo(RESERVATION);
@@ -122,9 +164,9 @@ class GatewayCloudAccountingTest {
         Fixture f = seedPricedDeployment();
         int logId = admit(f);
 
-        accounting.settleSuccess(logId, Map.of("prompt_tokens", 100L), null);
+        accounting.settleSuccess(logId, Map.of("prompt_tokens", 100L), null, null);
         Long afterFirst = cost(logId);
-        accounting.settleSuccess(logId, Map.of("prompt_tokens", 999L), null);
+        accounting.settleSuccess(logId, Map.of("prompt_tokens", 999L), null, null);
 
         // The row is claimed once; a repeat settle cannot re-bill it.
         assertThat(cost(logId)).isEqualTo(afterFirst);
@@ -138,7 +180,7 @@ class GatewayCloudAccountingTest {
         jdbc.update("UPDATE log_entry SET timestamp_request = NOW() - INTERVAL '2 hours' WHERE id = ?", logId);
         accounting.reconcileStale();
 
-        accounting.settleSuccess(logId, Map.of("prompt_tokens", 500L), null);
+        accounting.settleSuccess(logId, Map.of("prompt_tokens", 500L), null, null);
 
         assertThat(status(logId)).isEqualTo("error");
         assertThat(settledCost(logId)).isZero();
@@ -161,7 +203,7 @@ class GatewayCloudAccountingTest {
         Fixture f = seedPricedDeployment();
         int logId = admit(f);
 
-        accounting.settleSuccess(logId, Map.of("prompt_tokens", 100L, "citation_tokens", 7L), null);
+        accounting.settleSuccess(logId, Map.of("prompt_tokens", 100L, "citation_tokens", 7L), null, null);
 
         assertThat(usageTokens(logId)).containsEntry("citation_tokens", 7);
     }
@@ -174,7 +216,7 @@ class GatewayCloudAccountingTest {
         Fixture f = seedUnpricedDeployment();
         int logId = admit(f);
 
-        accounting.settleSuccess(logId, USAGE, null);
+        accounting.settleSuccess(logId, USAGE, null, null);
 
         assertThat(cost(logId)).isEqualTo(RESERVATION);
         assertThat(settledCost(logId)).isEqualTo(RESERVATION);
@@ -189,7 +231,7 @@ class GatewayCloudAccountingTest {
         Fixture f = seedPricedDeployment();
         int logId = admit(f);
 
-        accounting.settleSuccess(logId, Map.of("total_tokens", 1300L), null);
+        accounting.settleSuccess(logId, Map.of("total_tokens", 1300L), null, null);
 
         assertThat(cost(logId)).isEqualTo(RESERVATION);
     }
@@ -202,7 +244,7 @@ class GatewayCloudAccountingTest {
         seedPrice(f.modelId(), f.providerId(), "billed_output_text", 120000);
         int logId = admit(f);
 
-        accounting.settleSuccess(logId, USAGE, null);
+        accounting.settleSuccess(logId, USAGE, null, null);
 
         assertThat(cost(logId)).isEqualTo(36_000L);
     }
@@ -229,7 +271,7 @@ class GatewayCloudAccountingTest {
         int logId = admit(f);
 
         accounting.settleSuccess(logId, Map.of("prompt_tokens", 10L),
-            "{\"leaked\":true}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            "{\"leaked\":true}".getBytes(java.nio.charset.StandardCharsets.UTF_8), null);
 
         assertThat(responsePayload(logId)).isNull();
     }
@@ -240,7 +282,7 @@ class GatewayCloudAccountingTest {
         int logId = admit(f);
 
         accounting.settleSuccess(logId, Map.of("prompt_tokens", 10L),
-            "}{ not json".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            "}{ not json".getBytes(java.nio.charset.StandardCharsets.UTF_8), null);
 
         assertThat(responsePayload(logId)).isNull();
         assertThat(status(logId)).isEqualTo("success");
@@ -321,13 +363,18 @@ class GatewayCloudAccountingTest {
     }
 
     private void seedPrice(int modelId, int providerId, String typeName, long pricePerKUnit) {
+        seedPrice(modelId, providerId, typeName, pricePerKUnit, "default");
+    }
+
+    private void seedPrice(int modelId, int providerId, String typeName,
+                           long pricePerKUnit, String serviceTier) {
         jdbc.update("INSERT INTO token_types (name) VALUES (?) ON CONFLICT (name) DO NOTHING", typeName);
         jdbc.update(
             "INSERT INTO token_prices (type_id, model_id, provider_id, unit, min_context_tokens, "
             + "service_tier, valid_from, price_per_k_unit) VALUES "
-            + "((SELECT id FROM token_types WHERE name = ?), ?, ?, 'token', 0, 'default', "
+            + "((SELECT id FROM token_types WHERE name = ?), ?, ?, 'token', 0, ?, "
             + "'2020-01-01T00:00:00Z'::timestamptz, ?)",
-            typeName, modelId, providerId, pricePerKUnit);
+            typeName, modelId, providerId, serviceTier, pricePerKUnit);
     }
 
     /** What the request is actually billed, through the same view budgets read. */
@@ -344,6 +391,11 @@ class GatewayCloudAccountingTest {
     private String status(int logEntryId) {
         return jdbc.queryForObject(
             "SELECT result_status::text FROM log_entry WHERE id = ?", String.class, logEntryId);
+    }
+
+    private String serviceTier(int logEntryId) {
+        return jdbc.queryForObject(
+            "SELECT service_tier FROM log_entry WHERE id = ?", String.class, logEntryId);
     }
 
     /** One field of the stored request payload; jsonb round-trips, so compare parsed. */

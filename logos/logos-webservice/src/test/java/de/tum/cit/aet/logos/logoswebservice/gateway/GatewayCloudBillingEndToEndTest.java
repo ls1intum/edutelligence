@@ -166,6 +166,27 @@ class GatewayCloudBillingEndToEndTest {
         assertThat(usageTokens(logId)).containsEntry("prompt_cached_tokens", 800);
     }
 
+    @Test
+    void flexResponse_isStoredWithItsTierAndBilledAtTheFlexRate() throws Exception {
+        // The provider echoes the tier it served. Pricing must prefer the flex
+        // rows, or the client pays full price for a request the provider
+        // discounted.
+        responseBody = """
+            {"usage":{"prompt_tokens":1000,"completion_tokens":300},
+             "service_tier":"flex"}""";
+        Fixture f = seedPricedDeployment();
+        seedPrice(f.modelId(), f.providerId(), "billed_input_uncached", 10000, "flex");
+        seedPrice(f.modelId(), f.providerId(), "billed_output_text", 60000, "flex");
+        int logId = admit(f);
+
+        runForward(f, requestBody(false));
+
+        assertThat(serviceTier(logId)).isEqualTo("flex");
+        assertThat(cost(logId)).isEqualTo(10_000L + 18_000L);
+        // The default rows stay available as fallback, but must not be picked.
+        assertThat(cost(logId)).isNotEqualTo(20_000L + 36_000L);
+    }
+
     // ---------------------------------------------------------- streaming
 
     @Test
@@ -235,6 +256,25 @@ class GatewayCloudBillingEndToEndTest {
 
         assertThat(MAPPER.readTree(seenRequestBody.get()).has("stream_options")).isFalse();
         assertThat(cost(logId)).isEqualTo(64L * 20_000 / 1000 + 12L * 120_000 / 1000);
+    }
+
+    @Test
+    void responsesStream_withFlexTier_isBilledAtTheFlexRate() throws Exception {
+        // The tier rides in the terminal event, nested where the usage is.
+        responseContentType = "text/event-stream";
+        responseBody = """
+            data: {"type":"response.completed","response":{"service_tier":"flex","usage":{"input_tokens":64,"output_tokens":12}}}
+
+            """;
+        Fixture f = seedPricedDeployment();
+        seedPrice(f.modelId(), f.providerId(), "billed_input_uncached", 10000, "flex");
+        seedPrice(f.modelId(), f.providerId(), "billed_output_text", 60000, "flex");
+        int logId = admit(f);
+
+        runForward(f, requestBody(true), "/v1/responses");
+
+        assertThat(serviceTier(logId)).isEqualTo("flex");
+        assertThat(cost(logId)).isEqualTo(64L * 10_000 / 1000 + 12L * 60_000 / 1000);
     }
 
     @Test
@@ -435,7 +475,8 @@ class GatewayCloudBillingEndToEndTest {
             f.deployment(), path, null, "POST", body,
             Map.of("content-type", List.of("application/json")),
             f.key().logsFullPayloads(),
-            result -> accounting.settleSuccess(logId, result.usage(), result.responseBody()),
+            result -> accounting.settleSuccess(
+                logId, result.usage(), result.responseBody(), result.serviceTier()),
             err -> accounting.settleFailure(logId, err));
     }
 
@@ -494,13 +535,18 @@ class GatewayCloudBillingEndToEndTest {
     }
 
     private void seedPrice(int modelId, int providerId, String typeName, long pricePerKUnit) {
+        seedPrice(modelId, providerId, typeName, pricePerKUnit, "default");
+    }
+
+    private void seedPrice(int modelId, int providerId, String typeName,
+                           long pricePerKUnit, String serviceTier) {
         jdbc.update("INSERT INTO token_types (name) VALUES (?) ON CONFLICT (name) DO NOTHING", typeName);
         jdbc.update(
             "INSERT INTO token_prices (type_id, model_id, provider_id, unit, min_context_tokens, "
             + "service_tier, valid_from, price_per_k_unit) VALUES "
-            + "((SELECT id FROM token_types WHERE name = ?), ?, ?, 'token', 0, 'default', "
+            + "((SELECT id FROM token_types WHERE name = ?), ?, ?, 'token', 0, ?, "
             + "'2020-01-01T00:00:00Z'::timestamptz, ?)",
-            typeName, modelId, providerId, pricePerKUnit);
+            typeName, modelId, providerId, serviceTier, pricePerKUnit);
     }
 
     private Long cost(int logEntryId) {
@@ -516,6 +562,11 @@ class GatewayCloudBillingEndToEndTest {
     private String status(int logEntryId) {
         return jdbc.queryForObject(
             "SELECT result_status::text FROM log_entry WHERE id = ?", String.class, logEntryId);
+    }
+
+    private String serviceTier(int logEntryId) {
+        return jdbc.queryForObject(
+            "SELECT service_tier FROM log_entry WHERE id = ?", String.class, logEntryId);
     }
 
     private String privacyLevel(int logEntryId) {

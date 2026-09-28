@@ -172,7 +172,8 @@ public class GatewayCloudForwarder {
             }
             if (upstreamOk) {
                 if (onSuccess != null) {
-                    onSuccess.accept(new GatewayForwardResult(capture.usage(), capture.capturedBody()));
+                    onSuccess.accept(new GatewayForwardResult(
+                        capture.usage(), capture.capturedBody(), capture.serviceTier()));
                 }
             } else if (onFailure != null) {
                 onFailure.accept("Upstream HTTP " + status);
