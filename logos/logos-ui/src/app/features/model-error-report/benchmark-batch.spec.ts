@@ -47,3 +47,10 @@ describe('Benchmark batch plan', () => {
     expect(() => buildBatch(DEFAULT_BENCHMARK_SETTINGS, 5, [sweep('seed', '1,2')], 6000, null, false)).toThrow(/10,000/);
   });
 });
+
+
+it('rejects backend sweeps that inherit an incompatible TurboQuant cache', () => {
+  const limits = { gpu_count: 2, gpu_memory_bytes: null, current: { kv_cache_dtype: 'turboquant_k8v4' } };
+  const backend = [{ key: 'attention_backend', mode: 'values' as const, values: 'FLASH_ATTN,TRITON_ATTN', start: 0, end: 0, step: 1 }];
+  expect(() => buildBatch(DEFAULT_BENCHMARK_SETTINGS, 5, backend, 1, limits, true)).toThrow(/TurboQuant KV cache requires/);
+});

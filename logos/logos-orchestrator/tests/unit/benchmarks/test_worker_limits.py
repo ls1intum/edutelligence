@@ -163,3 +163,14 @@ def test_attention_restrictions_respect_selected_gpus_and_current_backend():
         validate_worker_overrides(ServingOverrides(tensor_parallel_size=1), limits)
     with pytest.raises(ValueError, match="requires Ampere"):
         validate_worker_overrides(ServingOverrides(), limits)
+
+
+@pytest.mark.parametrize("backend", ["FLASHINFER", "FLASH_ATTN", "TRITON_ATTN", "FLEX_ATTENTION"])
+def test_turboquant_cache_rejects_other_explicit_backends(backend):
+    limits = worker_limits(snapshot(), "m")
+    limits["current"]["kv_cache_dtype"] = "turboquant_k8v4"
+    with pytest.raises(ValueError, match="TurboQuant KV cache requires"):
+        validate_worker_overrides(ServingOverrides(attention_backend=backend), limits)
+    limits["current"] = {"attention_backend": backend}
+    with pytest.raises(ValueError, match="TurboQuant KV cache requires"):
+        validate_worker_overrides(ServingOverrides(kv_cache_dtype="turboquant_k8v4"), limits)

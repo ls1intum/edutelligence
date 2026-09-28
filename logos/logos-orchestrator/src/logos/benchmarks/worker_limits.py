@@ -66,6 +66,10 @@ def validate_worker_overrides(overrides: ServingOverrides, limits: dict) -> None
         "turboquant_"
     ):
         raise ValueError("TURBOQUANT requires a turboquant KV cache dtype. Select a compatible KV cache dtype first.")
+    if backend and backend != "TURBOQUANT" and str(effective.get("kv_cache_dtype", "")).startswith("turboquant_"):
+        raise ValueError(
+            "TurboQuant KV cache requires the TURBOQUANT attention backend; choose another KV cache dtype."
+        )
     tp = int(effective.get("tensor_parallel_size") or 1)
     pp = int(effective.get("pipeline_parallel_size") or 1)
     if tp * pp > count:

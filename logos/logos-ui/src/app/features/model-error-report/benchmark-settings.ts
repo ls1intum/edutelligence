@@ -126,6 +126,9 @@ export function servingValidationErrors(settings: BenchmarkSettings, limits: Ben
   if (effective['attention_backend'] === 'TURBOQUANT' && !String(effective['kv_cache_dtype'] ?? '').startsWith('turboquant_')) {
     errors.push('TURBOQUANT requires a turboquant KV cache dtype. Select a compatible KV cache dtype first.');
   }
+  if (effective['attention_backend'] && effective['attention_backend'] !== 'TURBOQUANT' && String(effective['kv_cache_dtype'] ?? '').startsWith('turboquant_')) {
+    errors.push('TurboQuant KV cache requires the TURBOQUANT attention backend; choose another KV cache dtype.');
+  }
   const tp = Number(effective['tensor_parallel_size'] ?? 1);
   const pp = Number(effective['pipeline_parallel_size'] ?? 1);
   if (tp * pp > limits.gpu_count) errors.push(`TP ${tp} × PP ${pp} requires ${tp * pp} GPUs; this worker provides ${limits.gpu_count} for this model.`);
