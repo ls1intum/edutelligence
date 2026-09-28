@@ -49,8 +49,12 @@ def _compose_file() -> Path:
 
 
 def _webservice_containers(compose_file: Path) -> List[str]:
+    # --status=running, not every container compose knows about: a replica
+    # that crashed and is waiting on `restart: unless-stopped` still shows up
+    # in a plain `ps -q`, and killing "one of two" would then take out the
+    # only replica actually serving.
     out = subprocess.run(
-        ["docker", "compose", "-f", str(compose_file), "ps", "-q", "logos-webservice"],
+        ["docker", "compose", "-f", str(compose_file), "ps", "-q", "--status=running", "logos-webservice"],
         cwd=str(_REPO_LOGOS),
         capture_output=True,
         text=True,
@@ -84,7 +88,7 @@ async def run() -> Dict[str, Any]:
     containers = _webservice_containers(compose_file)
     if len(containers) < 2:
         raise RuntimeError(
-            f"need >=2 logos-webservice replicas running under {compose_file} (found {len(containers)}). "
+            f"need >=2 running logos-webservice replicas under {compose_file} (found {len(containers)}). "
             f"Start with: docker compose -f {compose_file} up -d --scale logos-webservice=2"
         )
     kill_target = containers[0]

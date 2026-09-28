@@ -58,7 +58,7 @@ jobs:
           docker compose -f docker-compose.dev.yaml config -q
         working-directory: logos
 
-      - name: Bring up the webservice stack (2 replicas)
+      - name: Bring up the webservice stack (one replica)
         # Only the services the gateway path needs, plus their own
         # dependencies (Traefik, Postgres, Keycloak) — not the full dev
         # stack (UI, agent runner, orchestrator). logos-rate-gateway IS
@@ -69,9 +69,11 @@ jobs:
         # to the gateway at all, no matter how ready webservice is. Liquibase
         # runs on webservice startup (spring.liquibase.change-log), no
         # separate migration step needed.
+        #
+        # One replica on purpose: the second one joins only once this one
+        # has migrated — see the scale step below.
         run: |
           docker compose -f docker-compose.dev.yaml up -d --build \
-            --scale logos-webservice=2 \
             traefik logos-rate-gateway logos-db keycloak logos-webservice
         working-directory: logos
 
@@ -97,6 +99,36 @@ jobs:
           echo "gateway did not come up" >&2
           docker compose -f docker-compose.dev.yaml logs logos-webservice logos-db keycloak traefik
           exit 1
+        working-directory: logos
+
+      - name: Scale the webservice to 2 replicas
+        # Only now, with the schema migrated: two replicas started together
+        # against an empty database both run Spring's Liquibase at once, both
+        # try to CREATE TABLE public.databasechangelog, and the loser dies
+        # with `relation "databasechangelog" already exists` — the changelog
+        # lock lives in a table Liquibase has to create first, so it cannot
+        # cover its own creation. `restart: unless-stopped` does bring the
+        # loser back (the table exists by then), but ~20 s later, and the
+        # failover leg counts containers, not live replicas — it would
+        # happily kill the only healthy one inside that window.
+        run: |
+          docker compose -f docker-compose.dev.yaml up -d             --scale logos-webservice=2 logos-webservice
+          for cid in $(docker compose -f docker-compose.dev.yaml ps -q logos-webservice); do
+            up=""
+            for i in $(seq 1 90); do
+              if docker logs "$cid" 2>&1 | grep -q "Started LogosWebserviceApplication"; then
+                up="yes"
+                break
+              fi
+              sleep 2
+            done
+            if [ -z "$up" ]; then
+              echo "replica $cid did not finish starting" >&2
+              docker logs "$cid" >&2
+              exit 1
+            fi
+            echo "replica $cid up"
+          done
         working-directory: logos
 
       - name: Seed benchmark data

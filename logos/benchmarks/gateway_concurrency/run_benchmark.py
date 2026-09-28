@@ -70,6 +70,16 @@ def _check_gateway_reachable(*, attempts: int = 15, delay_s: float = 2.0) -> Non
     booting + migrating) — a "< 500" check would mistake that transient 404
     for a real webservice response.
 
+    Deliberately unauthenticated. `/v1/models` is a listing path, and the
+    gateway hands every listing path to the orchestrator once the key checks
+    out (InferenceGatewayController.handle) — so a probe carrying the bench
+    key gets a 500 from the proxy's own ConnectException in any stack
+    without an orchestrator, which is exactly the stack this benchmark
+    needs (it drives the direct-cloud path to the fake upstream instead).
+    Without a key the request is rejected by the gateway's own auth before
+    it reaches the proxy, which is what makes 401 the signal here: the
+    webservice itself answered.
+
     Retries rather than failing on the first bad response: a 502 shortly
     after startup (two JVM replicas plus Postgres and Keycloak all warming up
     on the same runner) has been observed even seconds after the CI wait
@@ -83,7 +93,7 @@ def _check_gateway_reachable(*, attempts: int = 15, delay_s: float = 2.0) -> Non
     for attempt in range(1, attempts + 1):
         try:
             with httpx.Client() as probe:
-                resp = probe.get(url, headers=gw.gateway_headers(), timeout=10.0)
+                resp = probe.get(url, timeout=10.0)
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
         else:
@@ -101,7 +111,7 @@ def _check_gateway_reachable(*, attempts: int = 15, delay_s: float = 2.0) -> Non
         ) from last_exc
     raise RuntimeError(
         f"gateway at {gw.gateway_url()} answered HTTP {last_status} after {attempts} attempts, not a "
-        f"webservice response (200/401/403) — is the stack fully up and seeded?"
+        f"webservice response (200/401/403) — is every webservice replica fully up?"
     )
 
 
