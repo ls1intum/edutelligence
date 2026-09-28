@@ -21,6 +21,7 @@ from logos.anthropic_compat import (
     is_chat_completions_path,
     is_messages_path,
     serves_only_messages,
+    strip_billing_header_from_payload,
     to_messages,
     translate_request,
 )
@@ -380,6 +381,14 @@ class ContextResolver:
         headers.update(getattr(context, "protocol_headers", None) or {})
         if context.auth_header and context.auth_value:
             headers[context.auth_header] = context.auth_value
+
+        # Claude Code's billing/telemetry marker on the system prompt varies
+        # by CLI version, subagent and cron run, fragmenting an upstream's
+        # prefix cache on every value change — done here, before dialect
+        # translation, so it also reaches the NATIVE/verbatim forward (a
+        # vLLM lane, another Logos instance), which never runs the
+        # translation below. See strip_billing_header_from_payload.
+        payload = strip_billing_header_from_payload(payload)
 
         # An inbound Anthropic Messages request bound for an upstream without a
         # Messages route becomes a chat/completions or Responses request here.
