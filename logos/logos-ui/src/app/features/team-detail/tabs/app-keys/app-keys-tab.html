@@ -40,8 +40,6 @@
         <!-- The row and its expanded panel share one draggable wrapper, so an
              open row keeps its permissions visible while being moved. -->
         <div class="key-drag" cdkDrag [cdkDragDisabled]="!canEdit">
-          <div class="drag-placeholder" *cdkDragPlaceholder></div>
-
           <!-- Main row -->
           <div
             class="table-row table-row--clickable"

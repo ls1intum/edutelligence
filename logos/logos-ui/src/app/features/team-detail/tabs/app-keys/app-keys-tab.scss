@@ -520,10 +520,11 @@
   text-overflow: ellipsis;
 }
 
-// Gap left behind while a row is dragged, sized like a collapsed row.
-.drag-placeholder {
-  height: 52px;
-  background: rgb(var(--color-primary-400) / var(--nav-active-fill-opacity));
+// Gap left behind while a row is dragged. The default placeholder is a clone
+// of the row, so it keeps the right height in both the table and the card
+// layout without a hardcoded one.
+.cdk-drag-placeholder {
+  opacity: 0.4;
 }
 
 .cdk-drag-preview {
@@ -543,10 +544,20 @@
 }
 
 @media (max-width: 768px) {
-  // The table collapses to cards, where a drag handle in a floating control
-  // column has nowhere sensible to sit and dragging fights the page scroll.
+  // The table collapses to cards, so the handle joins the chevron in the card's
+  // floating top-left corner rather than disappearing: reordering a key, and
+  // with it moving a key between SLA tiers, has to stay reachable here too.
+  // The drag starts from the handle alone, so the rest of the card still
+  // scrolls normally.
   .col-drag {
-    display: none;
+    position: absolute;
+    top: 8px;
+    left: 10px;
+    padding: 0;
+  }
+
+  .table-row > .col-chevron {
+    left: 42px;
   }
 
   .key-drag {
@@ -555,9 +566,5 @@
 
   .table-row--tier-start {
     border-top: none;
-  }
-
-  .drag-placeholder {
-    display: none;
   }
 }

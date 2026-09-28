@@ -19,7 +19,6 @@ import {
   CdkDrag,
   CdkDragDrop,
   CdkDragHandle,
-  CdkDragPlaceholder,
   CdkDropList,
   moveItemInArray,
 } from '@angular/cdk/drag-drop';
@@ -53,14 +52,20 @@ const MICRO = 100_000_000;
     CdkDropList,
     CdkDrag,
     CdkDragHandle,
-    CdkDragPlaceholder,
   ],
   templateUrl: './app-keys-tab.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './app-keys-tab.scss',
 })
 export class AppKeysTabComponent {
-  @Input() apiKeys: TeamApiKey[] = [];
+  private apiKeysSignal = signal<TeamApiKey[]>([]);
+
+  /** Signal-backed so `appKeys` — and the `orderedKeys` derived from it —
+   *  recompute when the parent replaces the list after a create or delete. */
+  @Input() set apiKeys(value: TeamApiKey[]) {
+    this.apiKeysSignal.set(value ?? []);
+  }
+
   @Input() canEdit = false;
   @Input() team: TeamDetail | null = null;
 
@@ -77,7 +82,7 @@ export class AppKeysTabComponent {
 
   private svc = inject(TeamManagementService);
 
-  appKeys = computed(() => this.apiKeys.filter((k) => k.key_type !== 'developer'));
+  appKeys = computed(() => this.apiKeysSignal().filter((k) => k.key_type !== 'developer'));
 
   @Output() refresh = new EventEmitter<void>();
 
@@ -145,16 +150,6 @@ export class AppKeysTabComponent {
     }
   }
 
-  /**
-   * A row dropped between two tiers joins the one above it, so dragging a key
-   * upwards past a tier boundary raises its SLA and dragging it down lowers it.
-   */
-  private slaAtDropTarget(list: TeamApiKey[], index: number): KeySla {
-    const above = index > 0 ? this.slaOf(list[index - 1]) : null;
-    const below = index < list.length - 1 ? this.slaOf(list[index + 1]) : null;
-    return above ?? below ?? this.slaOf(list[index]);
-  }
-
   onDrop(event: CdkDragDrop<TeamApiKey[]>): Promise<void> {
     return this.moveTo(event.previousIndex, event.currentIndex);
   }
@@ -174,10 +169,16 @@ export class AppKeysTabComponent {
   private async moveTo(from: number, to: number): Promise<void> {
     const list = [...this.orderedKeys()];
     if (!this.canEdit || from === to || to < 0 || to >= list.length) return;
-    moveItemInArray(list, from, to);
-    const moved = list[to];
-    const target = this.slaAtDropTarget(list, to);
 
+    // The tier of the row being displaced, read before the move: a key takes
+    // over the position it was dropped on, so that row's tier is the one the
+    // person aimed at. Reading the moved key's neighbours afterwards instead
+    // would raise a key to the tier above whenever it is dropped directly
+    // below a stricter tier, even when both rows share a tier.
+    const moved = list[from];
+    const target = this.slaOf(list[to]);
+
+    moveItemInArray(list, from, to);
     const ids = list.map((k) => k.id);
     this.manualOrder.set(ids);
     saveKeyOrder(this.teamId, ids);
