@@ -295,9 +295,9 @@ short-TTL budget cache are the remaining per-instance state (see
 Optional `.env` knobs:
 
 - `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count for the
-  core `docker-compose.yaml`. Cloud RPM is enforced shared across replicas;
-  cloud TPM estimates remain per-replica — keep this at `1` when tight per-key
-  TPM matters.
+  core `docker-compose.yaml`. Cloud RPM and TPM are both enforced shared
+  across replicas (recent `gw-*` log rows and their admission-time token
+  estimates).
 - `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
   accepts the public paths but proxies every request to the orchestrator after
   API-key auth.

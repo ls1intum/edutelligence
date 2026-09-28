@@ -1,29 +1,23 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.concurrent.ConcurrentHashMap;
-
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Per-key cloud RPM/TPM admission for the direct-cloud path.
+ * Per-key cloud RPM/TPM limit resolution for the direct-cloud path.
  *
  * <p>Mirrors the orchestrator's {@code InMemoryRateLimiter} window (60s) and
  * the resolution order in {@code main.py}: key {@code cloud_*_limit}, then
  * generic {@code rpm_limit}/{@code tpm_limit}, then team defaults.
  *
- * <p><b>RPM</b> is enforced shared across webservice replicas via
- * {@link GatewayCloudAccounting#admitAndReserve}, which counts the key's
- * {@code gw-*} log rows from the last window (an indexed range on the key's own
- * rows, no lock). <b>TPM</b> remains process-local here (token estimates are
- * not durable); Traefik is still the cluster-wide brake.
- * Prefer {@code LOGOS_WEBSERVICE_REPLICAS=1} when tight per-key TPM matters.
+ * <p>Both <b>RPM</b> and <b>TPM</b> are enforced shared across webservice
+ * replicas in {@link GatewayCloudAccounting#admitAndReserve}: recent
+ * {@code gw-*} log rows are counted (RPM) and their
+ * {@code gateway_estimated_tokens} summed (TPM). This class only resolves the
+ * limits and estimates the tokens a request will consume before usage lands —
+ * it holds no process-local admission state.
  */
 @Service
 public class GatewayCloudRateLimiter {
@@ -33,7 +27,6 @@ public class GatewayCloudRateLimiter {
 
     private final ObjectMapper objectMapper;
     private final GatewayDeploymentRepository deploymentRepository;
-    private final ConcurrentHashMap<String, Deque<long[]>> tokenWindows = new ConcurrentHashMap<>();
 
     public GatewayCloudRateLimiter(ObjectMapper objectMapper, GatewayDeploymentRepository deploymentRepository) {
         this.objectMapper = objectMapper;
@@ -45,35 +38,9 @@ public class GatewayCloudRateLimiter {
         return resolveLimits(key).rpm();
     }
 
-    /**
-     * Enforce process-local TPM for a direct-cloud request or throw 429.
-     */
-    public void enforceTpm(GatewayKey key, byte[] body) {
-        Limits limits = resolveLimits(key);
-        if (limits.tpm() == null) {
-            return;
-        }
-        int estimatedTokens = estimateTokens(body);
-        String bucket = "cloud:" + key.id();
-        long now = System.currentTimeMillis();
-        long cutoff = now - WINDOW_SECONDS * 1000L;
-
-        synchronized (this) {
-            Deque<long[]> tok = tokenWindows.computeIfAbsent(bucket, k -> new ArrayDeque<>());
-            pruneTokens(tok, cutoff);
-            long total = 0;
-            for (long[] entry : tok) {
-                total += entry[1];
-            }
-            if (total + estimatedTokens > limits.tpm()) {
-                throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS,
-                    "TPM limit reached (" + limits.tpm() + "/" + WINDOW_SECONDS + "s)");
-            }
-            if (estimatedTokens > 0) {
-                tok.addLast(new long[] {now, estimatedTokens});
-            }
-        }
+    /** Resolved cloud TPM limit for shared (cross-replica) enforcement, or null. */
+    public Integer cloudTpmLimit(GatewayKey key) {
+        return resolveLimits(key).tpm();
     }
 
     private Limits resolveLimits(GatewayKey key) {
@@ -142,12 +109,6 @@ public class GatewayCloudRateLimiter {
             return 0;
         }
         return Math.max(1, body.length / 4);
-    }
-
-    private static void pruneTokens(Deque<long[]> dq, long cutoff) {
-        while (!dq.isEmpty() && dq.peekFirst()[0] < cutoff) {
-            dq.removeFirst();
-        }
     }
 
     private record Limits(Integer rpm, Integer tpm) {

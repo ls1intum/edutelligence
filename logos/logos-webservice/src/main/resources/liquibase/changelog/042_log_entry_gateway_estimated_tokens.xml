@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Cross-replica cloud TPM for the inference gateway.
+
+         Direct-cloud admission already counts recent gw-* log_entry rows for
+         RPM. TPM needs the same shared window, but against an estimate of the
+         request's tokens (body length / 4) that is known before usage lands.
+         This column holds that estimate on each gateway row so every replica
+         can SUM it for the last 60 s. NULL for rows that are not gateway
+         admissions (orchestrator path) or that predate this migration. -->
+    <changeSet id="042-log-entry-gateway-estimated-tokens" author="logos">
+        <addColumn tableName="log_entry">
+            <column name="gateway_estimated_tokens" type="INTEGER">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="log_entry" columnName="gateway_estimated_tokens"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

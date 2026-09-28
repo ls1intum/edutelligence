@@ -33,7 +33,6 @@ import jakarta.servlet.http.HttpServletRequest;
  * <p><b>Remaining process state</b> (gateway is otherwise stateless per request):
  * <ul>
  *   <li>{@link GatewayBudgetService}'s short-TTL budget usage/limit cache</li>
- *   <li>{@link GatewayCloudRateLimiter}'s process-local TPM windows</li>
  *   <li>JDK {@link java.net.http.HttpClient} connection pools in the forwarders</li>
  * </ul>
  *
@@ -113,9 +112,13 @@ public class InferenceGatewayController {
                 ctx.deploymentsForModel(), request, modelName);
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
-                cloudRateLimiter.enforceTpm(ctx.key(), body);
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), cloudRateLimiter.cloudRpmLimit(ctx.key()), body);
+                    ctx.key(),
+                    decision.deployment(),
+                    cloudRateLimiter.cloudRpmLimit(ctx.key()),
+                    cloudRateLimiter.cloudTpmLimit(ctx.key()),
+                    GatewayCloudRateLimiter.estimateTokens(body),
+                    body);
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
