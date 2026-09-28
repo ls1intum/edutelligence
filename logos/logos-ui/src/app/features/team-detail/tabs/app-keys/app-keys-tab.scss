@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 .app-keys {
   padding-top: 4px;
 }
@@ -415,5 +417,162 @@
   .expand-inner {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+// ── SLA tier & drag-and-drop ordering ─────────────────────────────────────
+// Each row plus its expanded permissions panel is wrapped in one draggable
+// element, so the row is no longer the table card's own last child and has to
+// carry its separator itself.
+.key-drag {
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  .table-row {
+    border-bottom: none;
+  }
+}
+
+// First row of an SLA tier: a stronger rule marks the group boundary.
+.table-row--tier-start {
+  border-top: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+}
+
+.key-drag:first-child .table-row--tier-start {
+  border-top: none;
+}
+
+.col-drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.table-row > .col-drag {
+  padding: 0 4px;
+}
+
+.btn-drag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  font-size: var(--font-size-sm);
+  cursor: grab;
+  transition: color 0.12s ease;
+
+  &:hover {
+    color: rgb(var(--color-text-accent));
+  }
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.cell-sla {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sla-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+
+  &--high {
+    background: rgb(var(--color-error));
+  }
+
+  &--medium {
+    background: rgb(var(--color-primary-500));
+  }
+
+  &--low {
+    background: rgb(var(--color-typography-700));
+  }
+
+  &--inherit {
+    background: transparent;
+    border: 1px solid rgb(var(--color-typography-700));
+  }
+}
+
+.sla-select {
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.sla-static {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sla-raw {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  color: rgb(var(--color-text-accent));
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+// Gap left behind while a row is dragged, sized like a collapsed row.
+.drag-placeholder {
+  height: 52px;
+  background: rgb(var(--color-primary-400) / var(--nav-active-fill-opacity));
+}
+
+.cdk-drag-preview {
+  @include glass-surface;
+  box-sizing: border-box;
+  border-radius: 12px;
+  opacity: 0.95;
+
+  .expand-row {
+    display: none;
+  }
+}
+
+.cdk-drag-animating,
+.cdk-drop-list-dragging .key-drag:not(.cdk-drag-placeholder) {
+  transition: transform 220ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+@media (max-width: 768px) {
+  // The table collapses to cards, where a drag handle in a floating control
+  // column has nowhere sensible to sit and dragging fights the page scroll.
+  .col-drag {
+    display: none;
+  }
+
+  .key-drag {
+    border-bottom: none;
+  }
+
+  .table-row--tier-start {
+    border-top: none;
+  }
+
+  .drag-placeholder {
+    display: none;
   }
 }
