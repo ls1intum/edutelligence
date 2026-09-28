@@ -29,38 +29,14 @@ import asyncio
 import os
 import subprocess
 import time
-from pathlib import Path
 from typing import Any, Dict, List
 
 import gateway_client as gw
 import httpx
 
-_HERE = Path(__file__).resolve().parent
-_REPO_LOGOS = _HERE.parents[1]  # .../logos
-
 
 def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
-
-
-def _compose_file() -> Path:
-    rel = os.environ.get("LOGOS_BENCH_COMPOSE_FILE", "docker-compose.dev.yaml")
-    return (_REPO_LOGOS / rel).resolve()
-
-
-def _webservice_containers(compose_file: Path) -> List[str]:
-    # --status=running, not every container compose knows about: a replica
-    # that crashed and is waiting on `restart: unless-stopped` still shows up
-    # in a plain `ps -q`, and killing "one of two" would then take out the
-    # only replica actually serving.
-    out = subprocess.run(
-        ["docker", "compose", "-f", str(compose_file), "ps", "-q", "--status=running", "logos-webservice"],
-        cwd=str(_REPO_LOGOS),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
 
 def _classify(results: List[gw.RequestResult]) -> Dict[str, Any]:
@@ -84,8 +60,8 @@ async def _worker(client: httpx.AsyncClient, url: str, headers: Dict[str, str], 
 
 
 async def run() -> Dict[str, Any]:
-    compose_file = _compose_file()
-    containers = _webservice_containers(compose_file)
+    compose_file = gw.compose_file()
+    containers = gw.webservice_containers(compose_file)
     if len(containers) < 2:
         raise RuntimeError(
             f"need >=2 running logos-webservice replicas under {compose_file} (found {len(containers)}). "
@@ -125,7 +101,12 @@ async def run() -> Dict[str, Any]:
     summary["concurrency"] = concurrency
     summary["duration_s"] = duration_s
     summary["kill_after_s"] = kill_after_s
-    summary["no_visible_impact"] = summary["connectivity_failures"] == 0
+    # Both counts, not just connectivity: this leg calls any non-2xx a failed
+    # client request, and a 4xx under a seeded, valid key is a real bug rather
+    # than a failover artefact — reporting "no visible impact" while the run
+    # produced authorization, routing or throttling errors would hide exactly
+    # the kind of finding the leg exists to surface.
+    summary["no_visible_impact"] = summary["connectivity_failures"] == 0 and summary["other_failures"] == 0
     print(
         f"  [failover] total={summary['total']} ok={summary['ok']} "
         f"connectivity_failures={summary['connectivity_failures']} other_failures={summary['other_failures']}"

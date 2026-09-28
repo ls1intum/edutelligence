@@ -33,7 +33,8 @@ def build_markdown(result: Dict[str, Any]) -> str:
             f"Onset of failures (>{conc['fail_threshold']:.0%} of a step): **{onset_str}** concurrent streams. "
             f"Configured ceiling: `max-size`={ceiling['spring_task_execution_pool_max_size']} + "
             f"`queue-capacity`={ceiling['spring_task_execution_pool_queue_capacity']} "
-            f"(≈{ceiling['approx_admission_ceiling']})."
+            f"(≈{ceiling['approx_admission_ceiling_per_replica']} per replica) "
+            f"x {ceiling['replicas']} replica(s) = ≈{ceiling['approx_admission_ceiling']}."
         )
         lines.append("")
         lines.append("| Concurrency | OK | Failed | Fail rate | TTFB p50 | TTFB p95 | Total p50 |")
