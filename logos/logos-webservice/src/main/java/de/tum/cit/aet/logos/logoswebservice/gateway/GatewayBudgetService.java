@@ -5,7 +5,10 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.LongAdder;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,8 +50,10 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * that window. Lower the TTL to tighten the bound at the cost of more DB load.
  *
  * <p>Nothing here serializes requests: the snapshot is refreshed at most once
- * per TTL per key, and a refresh is the only query whose cost grows with the
- * key's month of traffic. The bound is the price of that. Trading it for
+ * per TTL per key (concurrent misses share one load), and a refresh is the
+ * only query whose cost grows with the key's month of traffic. Reservations
+ * noted while a refresh is in flight are merged into the new snapshot so a
+ * reload cannot discard them. The bound is the price of that. Trading it for
  * exactness — a per-key lock around check-and-reserve, or a snapshot reload
  * per request — makes every request on a key wait for a full re-pricing of
  * that key's month, so admission time grows with the log; do not.
@@ -65,6 +70,16 @@ public class GatewayBudgetService {
      * this map and the JDK HttpClient connection pools in the forwarders).
      */
     private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
+
+    /**
+     * Per-key reservation increments that land while a usage snapshot refresh
+     * is in flight. Applied when the refresh installs so a concurrent
+     * {@link #noteReservation} cannot be overwritten by a stale load.
+     */
+    private final ConcurrentHashMap<String, LongAdder> pendingUsageIncrements = new ConcurrentHashMap<>();
+
+    /** Single-flight usage/limit loads: concurrent misses share one refresh. */
+    private final ConcurrentHashMap<String, CompletableFuture<CacheEntry>> inflight = new ConcurrentHashMap<>();
 
     @Autowired
     public GatewayBudgetService(
@@ -242,6 +257,9 @@ public class GatewayBudgetService {
      * Until then the snapshot may over-count a request that has already
      * settled, which errs towards refusing, never towards overspend.
      *
+     * <p>If a refresh of this key is in flight, the increment is also queued
+     * and merged into the new snapshot so the reload cannot discard it.
+     *
      * <p>The team snapshot counts developer-key spend only, so only a
      * developer key's reservation is added to it. A snapshot that is not
      * cached needs nothing: its next load reads the row from the database.
@@ -260,10 +278,17 @@ public class GatewayBudgetService {
     }
 
     private void addToCachedUsage(String cacheKey, long microCents) {
-        cache.computeIfPresent(cacheKey, (k, entry) -> {
+        cache.compute(cacheKey, (k, entry) -> {
+            if (entry == null) {
+                return null;
+            }
             long current = entry.value instanceof Long l ? l : 0L;
             return new CacheEntry(current + microCents, entry.loadedAtMs);
         });
+        // Queue while a refresh may overwrite this entry; install merges it.
+        if (inflight.containsKey(cacheKey)) {
+            pendingUsageIncrements.computeIfAbsent(cacheKey, ignored -> new LongAdder()).add(microCents);
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -276,13 +301,85 @@ public class GatewayBudgetService {
         if (entry != null && now - entry.loadedAtMs < ttlMillis) {
             return (T) entry.value;
         }
-        T value = loader.load();
-        cache.put(key, new CacheEntry(value, now));
+        CacheEntry loaded = refresh(key, loader, now);
         // Soft bound: drop expired entries opportunistically when the map grows.
         if (cache.size() > 4096) {
-            cache.entrySet().removeIf(e -> now - e.getValue().loadedAtMs >= ttlMillis);
+            long t = clock.millis();
+            cache.entrySet().removeIf(e -> t - e.getValue().loadedAtMs >= ttlMillis);
         }
-        return value;
+        return (T) loaded.value;
+    }
+
+    /**
+     * Load a fresh snapshot for {@code key}, sharing the work among concurrent
+     * misses. Usage increments noted while the load runs are merged on install
+     * so they cannot be overwritten by a stale put.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> CacheEntry refresh(String key, Loader<T> loader, long refreshStartedAtMs) {
+        CompletableFuture<CacheEntry> created = new CompletableFuture<>();
+        CompletableFuture<CacheEntry> winner = inflight.computeIfAbsent(key, k -> created);
+        if (winner != created) {
+            return join(winner);
+        }
+        try {
+            // Re-check under the single-flight claim: another thread may have
+            // installed a fresh entry before we registered.
+            CacheEntry latest = cache.get(key);
+            long now = clock.millis();
+            if (latest != null && now - latest.loadedAtMs < ttlMillis) {
+                created.complete(latest);
+                return latest;
+            }
+
+            T value = loader.load();
+            long loadedAt = clock.millis();
+            Object toStore = value;
+            if (value instanceof Long loaded) {
+                // Bumps from noteReservation while this load ran (also applied to
+                // the live entry for concurrent readers). DB may already include
+                // the same reservation — double-count errs towards refusing.
+                LongAdder pending = pendingUsageIncrements.remove(key);
+                long extra = pending == null ? 0L : pending.sum();
+                toStore = loaded + extra;
+            }
+
+            Object installedValue = toStore;
+            CacheEntry installed = cache.compute(key, (k, existing) -> {
+                // A fresher snapshot won the race; keep it (and its bumps).
+                if (existing != null
+                        && existing.loadedAtMs >= refreshStartedAtMs
+                        && loadedAt - existing.loadedAtMs < ttlMillis) {
+                    return existing;
+                }
+                return new CacheEntry(installedValue, loadedAt);
+            });
+            created.complete(installed);
+            return installed;
+        } catch (RuntimeException | Error e) {
+            created.completeExceptionally(e);
+            throw e;
+        } finally {
+            inflight.remove(key, created);
+        }
+    }
+
+    private static CacheEntry join(CompletableFuture<CacheEntry> future) {
+        try {
+            return future.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted waiting for budget cache refresh", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException re) {
+                throw re;
+            }
+            if (cause instanceof Error err) {
+                throw err;
+            }
+            throw new IllegalStateException("Budget cache refresh failed", cause);
+        }
     }
 
     @FunctionalInterface
@@ -290,7 +387,7 @@ public class GatewayBudgetService {
         T load();
     }
 
-    private record CacheEntry(Object value, long loadedAtMs) {
+    record CacheEntry(Object value, long loadedAtMs) {
     }
 
     /** Visible for tests. */
