@@ -55,6 +55,9 @@ type CalibrationStatus =
 
 interface ErrorScope {
   readonly nodes?: readonly string[];
+  // Percentage denominator: a tp=1 node never has a Multi-GPU
+  // Coordination stage, so it must not count against that row.
+  readonly totalApplicable?: number;
 }
 
 interface ChecklistItem {
@@ -506,13 +509,6 @@ function lookupReason(
 // FALLBACK path only (successful nodes, legacy data, a worker not yet
 // upgraded); a worker-supplied `stages` array is always preferred when
 // present (see buildProbeResultFromBackendStages).
-//
-// One difference from the Python source of truth: `requires: 'multi_gpu'`
-// can't be evaluated here (the frontend has no per-attempt
-// tensor_parallel_size), so multiGpuCoordination is always included in
-// this fallback path — for a real tp=1 deployment it will typically just
-// show as an (inferred) success, which is a harmless overstatement, not
-// a wrong failure.
 //
 // Extending this: add a CalibrationDomain entry here AND a matching
 // domain= tag on the relevant entry in UNSUPPORTED_REASON_DESCRIPTIONS /
@@ -1535,7 +1531,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       return '';
     }
 
-    const totalNodes = this.availableLogs().length;
+    const totalNodes = scope.totalApplicable ?? this.availableLogs().length;
 
     if (totalNodes === 0) {
       return 'scope-badge--danger';
@@ -1570,7 +1566,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       return '';
     }
 
-    const totalNodes = this.availableLogs().length;
+    const totalNodes = scope.totalApplicable ?? this.availableLogs().length;
 
     if (totalNodes === 0) {
       return '0%';
@@ -1747,6 +1743,19 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     };
   }
 
+  // Mirrors _domain_applies in calibration.py: the worker never even
+  // attempts Multi-GPU Coordination for a single-GPU run, so counting
+  // or claiming it for that node would overstate what actually happened.
+  private applicableCalibrationDomains(
+    tensorParallelSize: number | null
+  ): readonly CalibrationDomainDef[] {
+    return CALIBRATION_DOMAINS.filter(
+      domain =>
+        domain.id !== DOMAIN_MULTI_GPU_COORDINATION ||
+        (tensorParallelSize ?? 1) > 1
+    );
+  }
+
   // Success sends log_text=null and stages=null (see
   // BackendCalibrationLog) — nothing to parse. Without this,
   // getCalibrationChecklistItems() sees `probes: []` and the node
@@ -1754,14 +1763,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   private buildSyntheticSuccessProbe(
     tensorParallelSize: number | null
   ): CalibrationProbeResult {
-    // Mirrors _domain_applies in calibration.py: the worker never even
-    // attempts Multi-GPU Coordination for a single-GPU run, so claiming
-    // it succeeded here would overstate what actually happened.
-    const domains = CALIBRATION_DOMAINS.filter(
-      domain =>
-        domain.id !== DOMAIN_MULTI_GPU_COORDINATION ||
-        (tensorParallelSize ?? 1) > 1
-    );
+    const domains = this.applicableCalibrationDomains(tensorParallelSize);
     return {
       probe: 1,
       status: 'success',
@@ -1881,7 +1883,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           index + 1,
           block,
           success,
-          authoritativeReason
+          authoritativeReason,
+          tensorParallelSize
         )
     );
 
@@ -1918,29 +1921,32 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     probeNumber: number,
     block: string,
     success: boolean,
-    authoritativeReason?: AuthoritativeReason
+    authoritativeReason?: AuthoritativeReason,
+    tensorParallelSize: number | null = null
   ): CalibrationProbeResult {
+    const domains = this.applicableCalibrationDomains(tensorParallelSize);
+
     // A domain with no completion pattern of its own (Node Preflight,
     // Multi-GPU Coordination) is inferred complete once a LATER domain's
     // pattern matches — ports calibration.py's _classify_calibration_stages
     // algorithm 1:1.
-    const completed = CALIBRATION_DOMAINS.map(domain =>
+    const completed = domains.map(domain =>
       domain.completionPatterns.some(pattern => pattern.test(block))
     );
-    for (let index = 0; index < CALIBRATION_DOMAINS.length; index++) {
-      if (CALIBRATION_DOMAINS[index].completionPatterns.length === 0) {
+    for (let index = 0; index < domains.length; index++) {
+      if (domains[index].completionPatterns.length === 0) {
         completed[index] = completed.slice(index + 1).some(Boolean);
       }
     }
 
-    const stages: CalibrationStageResult[] = CALIBRATION_DOMAINS.map(
+    const stages: CalibrationStageResult[] = domains.map(
       (domain, index) => ({
         name: domain.label,
         status: completed[index] ? 'success' : 'unknown',
       })
     );
 
-    const serverStartDomain = CALIBRATION_DOMAINS[CALIBRATION_DOMAINS.length - 1];
+    const serverStartDomain = domains[domains.length - 1];
     const deploymentSuccessful =
       success &&
       serverStartDomain.completionPatterns.some(pattern => pattern.test(block));
@@ -1959,7 +1965,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     // heuristic (correct for errors like CUDA OOM that can occur at
     // more than one point — see CALIBRATION_DOMAINS' module note).
     const mappedIndex = authoritativeReason?.domain
-      ? CALIBRATION_DOMAINS.findIndex(
+      ? domains.findIndex(
           domain => domain.id === authoritativeReason.domain
         )
       : -1;
@@ -1968,7 +1974,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     // last domain rather than leaving no stage marked as the failure.
     const notDoneIndex = completed.findIndex(done => !done);
     const firstIncompleteIndex =
-      notDoneIndex !== -1 ? notDoneIndex : CALIBRATION_DOMAINS.length - 1;
+      notDoneIndex !== -1 ? notDoneIndex : domains.length - 1;
     const effectiveIndex =
       mappedIndex !== -1 ? mappedIndex : firstIncompleteIndex;
 
@@ -1985,7 +1991,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         ? lookupReason(
             authoritativeReason.kind,
             authoritativeReason.code,
-            CALIBRATION_DOMAINS[effectiveIndex]?.id
+            domains[effectiveIndex]?.id
           )
         : undefined;
 
@@ -2092,6 +2098,9 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     for (const stage of CALIBRATION_DOMAINS) {
       const successfulNodes: string[] = [];
       const failedNodes: string[] = [];
+      // 'unknown' still counts: the worker emits it for applicable
+      // domains a failed attempt never reached, and omits the rest.
+      const applicableNodes: string[] = [];
       const failures = new Map<
         string,
         {
@@ -2118,6 +2127,10 @@ export class ModelErrorReport implements OnInit, OnDestroy {
               ): item is CalibrationStageResult =>
                 !!item
             );
+
+        if (stageResults.length > 0) {
+          applicableNodes.push(result.node);
+        }
 
         const successful =
           stageResults.some(
@@ -2165,6 +2178,8 @@ export class ModelErrorReport implements OnInit, OnDestroy {
         ...new Set(failedNodes),
       ];
 
+      const totalApplicable = new Set(applicableNodes).size;
+
       if (uniqueFailedNodes.length > 0) {
         const [firstError, firstEntry] =
           [...failures.entries()][0] ?? [];
@@ -2193,6 +2208,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           status: 'failure',
           scope: {
             nodes: uniqueFailedNodes,
+            totalApplicable,
           },
           errorMessage: firstError ?? 'Unknown calibration error',
           errorDetail: firstEntry?.detail,
@@ -2213,6 +2229,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
           status: 'success',
           scope: {
             nodes: uniqueSuccessfulNodes,
+            totalApplicable,
           },
         });
       }
