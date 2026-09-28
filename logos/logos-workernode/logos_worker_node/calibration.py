@@ -819,10 +819,10 @@ _CALIBRATION_DOMAINS: tuple[CalibrationDomain, ...] = (
     CalibrationDomain(
         id=_DOMAIN_KV_CACHE_FIT,
         label="KV-Cache Memory Fit",
-        # Verified against vllm-project/vllm v0.29.0/v0.30.0 and main —
-        # the old "reserved .* memory for KV Cache" text matches nothing
-        # vLLM actually prints (gpu_worker.py logs this line instead).
-        completion_patterns=(re.compile(r"Available KV cache memory"),),
+        # Calibration always sets kv_cache_memory_bytes, which skips vLLM's
+        # profiling path ("Available KV cache memory" never appears). This
+        # line is logged once the KV cache is sized, on either path.
+        completion_patterns=(re.compile(r"GPU KV cache size:"),),
     ),
     CalibrationDomain(
         id=_DOMAIN_SERVER_START,

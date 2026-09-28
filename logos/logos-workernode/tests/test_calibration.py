@@ -2402,13 +2402,17 @@ def test_calibrate_model_skips_when_on_unsupported_list(tmp_path: Path):
 
 
 def test_kv_cache_fit_domain_matches_real_vllm_log_line():
-    """Verified against vllm-project/vllm v0.29.0/v0.30.0/main — the old
-    "reserved .* memory for KV Cache" text never matched anything vLLM
-    actually prints (gpu_worker.py logs "Available KV cache memory")."""
+    """Lines from a real calibration log on hochbruegge (vLLM v0.30.0)."""
     domain = next(d for d in _CALIBRATION_DOMAINS if d.id == _DOMAIN_KV_CACHE_FIT)
     (pattern,) = domain.completion_patterns
-    assert pattern.search("Available KV cache memory: 12.34 GiB")
-    assert not pattern.search("reserved 4096 MB memory for KV Cache")
+    assert pattern.search(
+        "(EngineCore pid=123838) INFO 09-28 20:02:56 [kv_cache_utils.py:2395] GPU KV cache size: "
+        "87,376 tokens, Maximum concurrency for 32,768 tokens per request: 2.67x"
+    )
+    assert not pattern.search(
+        "(EngineCore pid=123838) INFO 09-28 20:02:56 [gpu_worker.py:559] Initial free memory 15.3 GiB, "
+        "reserved 1.0 GiB memory for KV Cache as specified by kv_cache_memory_bytes config"
+    )
 
 
 def test_node_transient_classifier_matches_eio():

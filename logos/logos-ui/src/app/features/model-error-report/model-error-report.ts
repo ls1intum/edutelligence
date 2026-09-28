@@ -566,9 +566,8 @@ const CALIBRATION_DOMAINS: readonly CalibrationDomainDef[] = [
   {
     id: DOMAIN_KV_CACHE_FIT,
     label: 'KV-Cache Memory Fit',
-    // Verified against vllm-project/vllm v0.29.0/v0.30.0/main (2026-09-26)
-    // — matches calibration.py's own fix, see that file for the source.
-    completionPatterns: [/Available KV cache memory/],
+    // Same pattern as calibration.py — see the reason there.
+    completionPatterns: [/GPU KV cache size:/],
   },
   {
     id: DOMAIN_SERVER_START,
