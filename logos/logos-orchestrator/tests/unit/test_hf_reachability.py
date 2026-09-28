@@ -68,13 +68,23 @@ async def test_malformed_repo_id_is_rejected_before_asking_the_hub(fake_api, mon
 
 
 async def test_hub_failure_is_unknown_not_a_verdict(fake_api):
-    fake_api.raises = httpx.ConnectError("no route to host")
+    fake_api.raises = httpx.ConnectError("proxy.internal.example:3128 refused")
 
     result = await hf_reachability.check_hf_reachability("org/model")
 
     assert result.status == hf_reachability.STATUS_UNKNOWN
     assert result.reason_code is None
-    assert "no route to host" in result.detail
+    assert "proxy.internal" not in result.detail
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("7.5", 7.5), ("", 15.0), ("abc", 15.0), ("0", 15.0), ("-3", 15.0), ("nan", 15.0), ("inf", 15.0)],
+)
+def test_timeout_env_falls_back_to_default_when_invalid(monkeypatch, raw, expected):
+    monkeypatch.setenv("LOGOS_HF_REACHABILITY_TIMEOUT_S", raw)
+
+    assert hf_reachability._timeout_from_env() == expected
 
 
 async def test_slow_hub_times_out_as_unknown(fake_api, monkeypatch):

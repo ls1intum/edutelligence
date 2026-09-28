@@ -7,6 +7,7 @@ a node could serve the model. Reason codes match the worker's HF precheck.
 import asyncio
 import datetime
 import logging
+import math
 import os
 from dataclasses import dataclass
 
@@ -20,7 +21,24 @@ REASON_INVALID_REPO_ID = "invalid-repo-id"
 REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED = "model-not-found-or-unauthorized"
 REASON_MODEL_GATED = "model-gated"
 
-_TIMEOUT_S = float(os.getenv("LOGOS_HF_REACHABILITY_TIMEOUT_S", "15"))
+_DEFAULT_TIMEOUT_S = 15.0
+
+
+def _timeout_from_env() -> float:
+    # Read at import time by the router, so a bad value must not raise.
+    raw = os.getenv("LOGOS_HF_REACHABILITY_TIMEOUT_S", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if not math.isfinite(value) or value <= 0:
+        if raw:
+            logger.warning("Ignoring invalid LOGOS_HF_REACHABILITY_TIMEOUT_S=%r", raw)
+        return _DEFAULT_TIMEOUT_S
+    return value
+
+
+_TIMEOUT_S = _timeout_from_env()
 
 
 @dataclass(frozen=True)
@@ -42,8 +60,8 @@ def _check_sync(hf_repo_id: str, token: str | None) -> tuple[str, str | None, st
         validate_repo_id(hf_repo_id)
         # False, not None: None would fall back to a token cached on disk.
         HfApi().auth_check(hf_repo_id, token=token or False)
-    except HFValidationError as exc:
-        return STATUS_REJECTED, REASON_INVALID_REPO_ID, str(exc)
+    except HFValidationError:
+        return STATUS_REJECTED, REASON_INVALID_REPO_ID, "Not a valid Hugging Face repository id."
     # GatedRepoError subclasses RepositoryNotFoundError, so it must come first.
     except GatedRepoError:
         return STATUS_REJECTED, REASON_MODEL_GATED, "Repository access requires an authorized HF_TOKEN."
@@ -54,9 +72,10 @@ def _check_sync(hf_repo_id: str, token: str | None) -> tuple[str, str | None, st
             REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
             "Repository does not exist or is not visible to the configured HF_TOKEN.",
         )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("HF reachability check failed for %s: %s", hf_repo_id, exc)
-        return STATUS_UNKNOWN, None, str(exc)
+    except Exception:  # noqa: BLE001
+        # Library/network errors can name internal hosts or proxies; log only.
+        logger.warning("HF reachability check failed for %s", hf_repo_id, exc_info=True)
+        return STATUS_UNKNOWN, None, "Hugging Face Hub could not be reached."
     return STATUS_REACHABLE, None, None
 
 
