@@ -48,6 +48,17 @@ The older Process/Profile hierarchy (`process`, `profiles`, `profile_model_permi
 - **Every PR that changes the UI must include full-page desktop AND mobile screenshots** in the PR description (never committed to the repo). The exact capture/hosting procedure is the `ui-screenshots` skill (see below).
 - **Every PR that changes how a documented page looks** must also refresh the matching committed role-guide PNGs under `docs/static/img/roles/` in that same PR (layout, chrome, empty/error states, sidebar — anything a reader would notice). Follow `docs/AGENTS.md`: one shot per distinct UI state (tabs / steps / modals), no near-duplicate per-role pages, every PNG explained in the flow with UI-consistent names.
 
+### Shared branches (MANDATORY)
+
+A branch that another active session (human or agent) is using to resolve open review findings is **frozen for you**:
+
+- No reverts, no "restore" or "answer the question" commits, no rebases of the branch.
+- No force pushes, no branch deletion.
+- If a change on that branch is needed: do not push it — comment on the PR or the tracking issue and wait for the active session to apply it.
+- The authoritative state is always the latest commit of the active session. When in doubt whether a commit is wanted: do nothing.
+
+Conflicting pushes force manual merge/revert cycles and full CI re-runs, and can leave the PR head in exactly the state a reviewer just rejected.
+
 ### Conventions
 
 - Avoid the imprecise terms `frontend` and `backend` in comments and documentation — name the actual component (user interface, web application, application server, feature service, data service, infrastructure service).
