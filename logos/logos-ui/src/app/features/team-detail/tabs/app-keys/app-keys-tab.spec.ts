@@ -32,27 +32,27 @@ describe('AppKeysTabComponent reordering', () => {
   });
 
   /**
-   * A high row above two mediums — the shape that exposes a wrong tier rule,
-   * since the second medium ends up directly below the high row after a
-   * same-tier swap. Rebuilt per test: a successful SLA change writes through
-   * to the key object.
+   * One ux-critical row above two ux-high-prio rows — the shape that exposes a
+   * wrong tier rule, since the lower of the two ends up directly below the
+   * critical row after a same-tier swap. Rebuilt per test: a successful SLA
+   * change writes through to the key object.
    */
   function setup(): {
     component: AppKeysTabComponent;
-    high: TeamApiKey;
-    mediumA: TeamApiKey;
-    mediumB: TeamApiKey;
+    critical: TeamApiKey;
+    highPrioA: TeamApiKey;
+    highPrioB: TeamApiKey;
   } {
-    const high = makeKey(1, SLA_PRIORITY.high);
-    const mediumA = makeKey(2, SLA_PRIORITY.medium);
-    const mediumB = makeKey(3, SLA_PRIORITY.medium);
+    const critical = makeKey(1, SLA_PRIORITY['ux-critical']);
+    const highPrioA = makeKey(2, SLA_PRIORITY['ux-high-prio']);
+    const highPrioB = makeKey(3, SLA_PRIORITY['ux-high-prio']);
 
     const component = TestBed.runInInjectionContext(() => new AppKeysTabComponent());
     component.canEdit = true;
     component.teamId = 7;
-    component.apiKeys = [high, mediumA, mediumB];
+    component.apiKeys = [critical, highPrioA, highPrioB];
 
-    return { component, high, mediumA, mediumB };
+    return { component, critical, highPrioA, highPrioB };
   }
 
   const drop = (previousIndex: number, currentIndex: number) =>
@@ -72,65 +72,66 @@ describe('AppKeysTabComponent reordering', () => {
   afterEach(() => localStorage.clear());
 
   it('sorts by tier first and by the manual order only within a tier', () => {
-    const { component, high, mediumA, mediumB } = setup();
-    expect(ids(component)).toEqual([high.id, mediumA.id, mediumB.id]);
+    const { component, critical, highPrioA, highPrioB } = setup();
+    expect(ids(component)).toEqual([critical.id, highPrioA.id, highPrioB.id]);
   });
 
   it('leaves the tier alone when two rows of the same tier swap', async () => {
-    const { component, high, mediumA, mediumB } = setup();
-    // Drag mediumB onto mediumA's position. The moved row then sits directly
-    // below the high row, which must not promote it: the person reordered two
-    // mediums and nothing else.
+    const { component, critical, highPrioA, highPrioB } = setup();
+    // Drag highPrioB onto highPrioA's position. The moved row then sits
+    // directly below the ux-critical row, which must not promote it: the
+    // person reordered two ux-high-prio keys and nothing else.
     await component.onDrop(drop(2, 1));
 
-    expect(component.slaOf(mediumB)).toBe('medium');
+    expect(component.slaOf(highPrioB)).toBe('ux-high-prio');
     expect(updateApiKey).not.toHaveBeenCalled();
-    expect(ids(component)).toEqual([high.id, mediumB.id, mediumA.id]);
+    expect(ids(component)).toEqual([critical.id, highPrioB.id, highPrioA.id]);
   });
 
   it('adopts the tier of the row a key is dropped onto', async () => {
-    const { component, mediumA } = setup();
+    const { component, highPrioA } = setup();
+    // Dropping a ux-high-prio row onto the ux-critical row takes over its tier.
     await component.onDrop(drop(1, 0));
 
-    expect(component.slaOf(mediumA)).toBe('high');
-    expect(updateApiKey).toHaveBeenCalledWith(mediumA.id, {
-      default_priority: SLA_PRIORITY.high,
+    expect(component.slaOf(highPrioA)).toBe('ux-critical');
+    expect(updateApiKey).toHaveBeenCalledWith(highPrioA.id, {
+      default_priority: SLA_PRIORITY['ux-critical'],
     });
   });
 
   it('lowers a key dragged down onto a weaker tier', async () => {
-    const { component, high } = setup();
+    const { component, critical } = setup();
     await component.onDrop(drop(0, 2));
 
-    expect(component.slaOf(high)).toBe('medium');
-    expect(updateApiKey).toHaveBeenCalledWith(high.id, {
-      default_priority: SLA_PRIORITY.medium,
+    expect(component.slaOf(critical)).toBe('ux-high-prio');
+    expect(updateApiKey).toHaveBeenCalledWith(critical.id, {
+      default_priority: SLA_PRIORITY['ux-high-prio'],
     });
   });
 
   it('recomputes the list when the parent replaces the keys', () => {
-    const { component, high } = setup();
-    component.apiKeys = [high];
+    const { component, critical } = setup();
+    component.apiKeys = [critical];
 
-    expect(ids(component)).toEqual([high.id]);
+    expect(ids(component)).toEqual([critical.id]);
   });
 
   it('ignores a move when the caller may not edit', async () => {
-    const { component, high, mediumA, mediumB } = setup();
+    const { component, critical, highPrioA, highPrioB } = setup();
     component.canEdit = false;
     await component.onDrop(drop(2, 0));
 
     expect(updateApiKey).not.toHaveBeenCalled();
-    expect(ids(component)).toEqual([high.id, mediumA.id, mediumB.id]);
+    expect(ids(component)).toEqual([critical.id, highPrioA.id, highPrioB.id]);
   });
 
   it('restores the previous tier when saving the SLA fails', async () => {
-    const { component, mediumA } = setup();
+    const { component, highPrioA } = setup();
     updateApiKey.mockRejectedValue(new Error('nope'));
 
     await component.onDrop(drop(1, 0));
 
-    expect(component.slaOf(mediumA)).toBe('medium');
-    expect(component.slaError()).toContain(mediumA.name);
+    expect(component.slaOf(highPrioA)).toBe('ux-high-prio');
+    expect(component.slaError()).toContain(highPrioA.name);
   });
 });

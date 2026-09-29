@@ -87,6 +87,15 @@ export class AppKeysTabComponent {
   @Output() refresh = new EventEmitter<void>();
 
   // ── SLA tier & manual order ────────────────────────────────────────────────
+  /**
+   * Column track sizes for the key table. Held here rather than inline in the
+   * template because it is needed twice: `app-data-table` publishes it as
+   * `--data-table-grid` on its own host element, and each draggable row
+   * repeats it, since CDK lifts the drag preview out to `<body>` where that
+   * host is no longer an ancestor and the variable would not inherit.
+   */
+  readonly gridCols = '34px 40px 1fr 100px 165px 160px 90px 90px 90px 90px 72px';
+
   readonly slaOptions = SLA_OPTIONS;
   readonly slaLabel = slaLabel;
   readonly slaHint = slaHint;

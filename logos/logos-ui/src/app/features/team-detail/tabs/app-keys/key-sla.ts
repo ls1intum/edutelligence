@@ -7,17 +7,17 @@
  * are exactly three tiers, and they carry the values the orchestrator's
  * `Priority` enum maps to its queue buckets.
  */
-export type KeySla = 'high' | 'medium' | 'low';
+export type KeySla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
 
 /** The `default_priority` written for each tier. */
 export const SLA_PRIORITY: Record<KeySla, number> = {
-  high: 10,
-  medium: 5,
-  low: 1,
+  'ux-critical': 10,
+  'ux-high-prio': 5,
+  'ux-background': 1,
 };
 
 /** The tier a key gets when nobody has chosen one. */
-export const DEFAULT_SLA: KeySla = 'medium';
+export const DEFAULT_SLA: KeySla = 'ux-high-prio';
 
 export interface SlaOption {
   value: KeySla;
@@ -28,19 +28,19 @@ export interface SlaOption {
 
 export const SLA_OPTIONS: readonly SlaOption[] = [
   {
-    value: 'high',
-    label: 'High Priority',
-    hint: 'Requests on this key are always served, ahead of every other tier.',
+    value: 'ux-critical',
+    label: 'ux-critical',
+    hint: 'A user is waiting — the model is kept warm and the request is always served.',
   },
   {
-    value: 'medium',
-    label: 'Medium Priority',
-    hint: 'Requests are served normally, but queue behind high-priority traffic while that is pending.',
+    value: 'ux-high-prio',
+    label: 'ux-high-prio',
+    hint: 'Asynchronous work — minutes are fine, but it should not wait on idle capacity.',
   },
   {
-    value: 'low',
-    label: 'Low Priority',
-    hint: 'Requests are served whenever there is spare capacity; a delay of hours is acceptable.',
+    value: 'ux-background',
+    label: 'ux-background',
+    hint: 'Overnight work — runs whenever there are idle GPUs to fill.',
   },
 ] as const;
 
@@ -54,8 +54,8 @@ export const SLA_OPTIONS: readonly SlaOption[] = [
  * which is NORMAL unless an admin set something else.
  */
 export function slaOfPriority(priority: number | null | undefined): KeySla {
-  if (priority === SLA_PRIORITY.high) return 'high';
-  if (priority === SLA_PRIORITY.low) return 'low';
+  if (priority === SLA_PRIORITY['ux-critical']) return 'ux-critical';
+  if (priority === SLA_PRIORITY['ux-background']) return 'ux-background';
   return DEFAULT_SLA;
 }
 

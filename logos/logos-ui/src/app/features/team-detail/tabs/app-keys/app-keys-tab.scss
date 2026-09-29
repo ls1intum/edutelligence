@@ -34,6 +34,28 @@
   font-weight: var(--font-weight-bold);
 }
 
+// Sits in the `.form-field` flex column, which already provides the gap.
+.field-hint {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  line-height: 1.35;
+}
+
+.section-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+
+  i {
+    flex-shrink: 0;
+    font-size: var(--font-size-xs);
+    color: rgb(var(--color-typography-700));
+  }
+}
+
 .cell-name {
   display: flex;
   align-items: center;
@@ -491,15 +513,15 @@
   height: 8px;
   border-radius: 50%;
 
-  &--high {
+  &--critical {
     background: rgb(var(--color-error));
   }
 
-  &--medium {
+  &--high-prio {
     background: rgb(var(--color-primary-500));
   }
 
-  &--low {
+  &--background {
     background: rgb(var(--color-typography-700));
   }
 }
@@ -527,11 +549,20 @@
   opacity: 0.4;
 }
 
+// The preview is a clone CDK moves to <body>, outside the app-data-table host
+// that publishes --data-table-grid. Each row repeats the variable so the
+// clone's grid keeps its columns instead of collapsing to a single stacked
+// one; the rules below only restate the surface the row loses along with its
+// table card.
 .cdk-drag-preview {
   @include glass-surface;
   box-sizing: border-box;
   border-radius: 12px;
   opacity: 0.95;
+
+  .table-row {
+    border: none;
+  }
 
   .expand-row {
     display: none;

@@ -10,15 +10,19 @@ import { DEFAULT_SLA, SLA_OPTIONS, SLA_PRIORITY, slaOfPriority, slaRank } from '
  * a tier the queue never gives it, which is the one thing an SLA must not do.
  */
 describe('key SLA tiers', () => {
-  it('offers exactly three tiers, with medium as the default', () => {
-    expect(SLA_OPTIONS.map((o) => o.value)).toEqual(['high', 'medium', 'low']);
-    expect(DEFAULT_SLA).toBe('medium');
+  it('offers exactly three tiers, with ux-high-prio as the default', () => {
+    expect(SLA_OPTIONS.map((o) => o.value)).toEqual([
+      'ux-critical',
+      'ux-high-prio',
+      'ux-background',
+    ]);
+    expect(DEFAULT_SLA).toBe('ux-high-prio');
   });
 
   it('maps each tier to the priority the queue buckets it as', () => {
-    expect(slaOfPriority(SLA_PRIORITY.high)).toBe('high');
-    expect(slaOfPriority(SLA_PRIORITY.medium)).toBe('medium');
-    expect(slaOfPriority(SLA_PRIORITY.low)).toBe('low');
+    expect(slaOfPriority(SLA_PRIORITY['ux-critical'])).toBe('ux-critical');
+    expect(slaOfPriority(SLA_PRIORITY['ux-high-prio'])).toBe('ux-high-prio');
+    expect(slaOfPriority(SLA_PRIORITY['ux-background'])).toBe('ux-background');
   });
 
   it('reads a key with no priority chosen yet as the default tier', () => {
@@ -27,15 +31,15 @@ describe('key SLA tiers', () => {
     expect(slaOfPriority(undefined)).toBe(DEFAULT_SLA);
   });
 
-  it('reads a non-canonical priority as medium, matching the NORMAL bucket', () => {
+  it('reads a non-canonical priority as the default tier, matching the NORMAL bucket', () => {
     // 2..9 except 5 all fall back to NORMAL in Priority.from_int.
     for (const raw of [2, 3, 4, 6, 7, 8, 9]) {
-      expect(slaOfPriority(raw)).toBe('medium');
+      expect(slaOfPriority(raw)).toBe(DEFAULT_SLA);
     }
   });
 
   it('ranks the strictest tier first', () => {
-    expect(slaRank('high')).toBeLessThan(slaRank('medium'));
-    expect(slaRank('medium')).toBeLessThan(slaRank('low'));
+    expect(slaRank('ux-critical')).toBeLessThan(slaRank('ux-high-prio'));
+    expect(slaRank('ux-high-prio')).toBeLessThan(slaRank('ux-background'));
   });
 });
