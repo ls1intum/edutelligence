@@ -41,9 +41,7 @@ def _planner(*, metal: bool):
     facade.get_provider_name.return_value = "worker"
 
     registry = MagicMock()
-    registry.peek_runtime_snapshot.return_value = {
-        "runtime": {"devices": {"mode": "metal" if metal else "cuda"}}
-    }
+    registry.peek_runtime_snapshot.return_value = {"runtime": {"devices": {"mode": "metal" if metal else "cuda"}}}
 
     demand = MagicMock()
     demand.get_score.return_value = 0.0
