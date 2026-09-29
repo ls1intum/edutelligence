@@ -66,10 +66,15 @@ h2 = ">=4.4.1"
 python-dotenv = ">=1.2.2"
 setuptools = ">=83.0.0"
 virtualenv = ">=20.36.1"
-torch = ">=2.13.0"
+
+[tool.poetry.group.train]
+optional = true
 
 [tool.poetry.group.train.dependencies]
 setfit = "^1.2.0"
+# Keep the security floor for model training without installing CUDA wheels in
+# the CPU-only runtime image (`poetry install --only main --no-root`).
+torch = ">=2.13.0"
 # optimum[onnxruntime] is intentionally NOT declared here. It pulls in
 # optimum-onnx, which still requires transformers <4.58.0 and so pinned the
 # whole lock -- including the transformers that ships in the runtime image --
