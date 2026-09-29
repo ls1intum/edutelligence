@@ -386,3 +386,21 @@ def test_record_rate_limit_admission_persists_the_flag_both_ways(monkeypatch):
 
     flags = {call["request_id"]: call["rate_limit_admitted"] for call in calls}
     assert flags == {"req-rl-admitted": True, "req-rl-rejected": False}
+
+
+def test_record_provider_call_rides_the_completion_write(monkeypatch):
+    """The statistics page splits a finished request's wall time at the
+    provider call, not at scheduling — the value must land on the same
+    completion UPDATE that carries the other lifecycle fields, and it must
+    not cost the hot path its own write while the request is still running."""
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    recorder.record_provider_call("req-pc")
+    assert calls == [], "buffered fields must not hit the DB mid-flight"
+
+    recorder.record_complete("req-pc", result_status="success")
+
+    assert len(calls) == 1
+    assert "timestamp_provider_call" in calls[0]
+    assert calls[0]["result_status"] == "success"

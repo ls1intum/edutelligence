@@ -374,6 +374,23 @@ class MonitoringRecorder:
         """Attach provider_id once it is resolved (after scheduling)."""
         self._buffer(request_id, provider_id=provider_id)
 
+    def record_provider_call(self, request_id: str) -> None:
+        """Stamp the instant the request is handed to the upstream provider.
+
+        ``timestamp_forwarding`` (``record_scheduled``) is set when the
+        scheduler picks the provider — for cloud requests long before the
+        provider call, because the rate-limit and budget checks run in
+        between. The statistics page splits a finished request's wall time at
+        this instant instead: the queue figure then covers everything logos
+        made the request wait for, and the exec figure is the provider's own
+        time.
+
+        Buffered like the other pre-execution fields: the split only matters
+        once the request is finished, so the value rides the completion
+        UPDATE rather than costing the hot path its own write.
+        """
+        self._buffer(request_id, timestamp_provider_call=datetime.datetime.now(datetime.timezone.utc))
+
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist whether this key's rate limiter admitted the request.
 

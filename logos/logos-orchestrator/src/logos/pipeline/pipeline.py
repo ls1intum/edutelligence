@@ -744,6 +744,10 @@ class RequestPipeline:
         """Persist the limiter's admission decision on the request's log row."""
         self._monitoring.record_rate_limit_admission(request_id, admitted)
 
+    def record_provider_call(self, request_id: str) -> None:
+        """Stamp the instant the request is handed to the upstream provider."""
+        self._monitoring.record_provider_call(request_id)
+
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.

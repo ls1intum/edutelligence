@@ -2976,6 +2976,14 @@ async def _execute_resource_mode(
 
     # Execute and Respond
     try:
+        # Every gate logos controls has been passed — scheduler queue,
+        # rate limit, monthly budget — so from here the remaining wall time
+        # is the provider's own. The statistics page splits a finished
+        # request's queue and exec at this instant, not at scheduling:
+        # counting the budget check's wait as provider execution is what
+        # made a slow billing lookup read as a slow provider.
+        if request_id:
+            _pipeline.record_provider_call(request_id)
         if is_async_job:
             # Async jobs are always non-streaming - use helper
             return await _sync_response(

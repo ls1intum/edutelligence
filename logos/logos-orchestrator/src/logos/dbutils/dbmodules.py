@@ -204,6 +204,11 @@ class LogEntry(Base):
     id = Column(Integer, primary_key=True)
     timestamp_request = Column(TIMESTAMP(timezone=True))
     timestamp_forwarding = Column(TIMESTAMP(timezone=True))
+    # When the request was handed to the upstream provider — after every gate
+    # logos controls (scheduler queue, rate limit, budget), not at scheduling.
+    # The statistics page splits a finished request's wall time here: queue is
+    # everything the request waited for, exec is the provider's own time.
+    timestamp_provider_call = Column(TIMESTAMP(timezone=True))
     timestamp_response = Column(TIMESTAMP(timezone=True))
     time_at_first_token = Column(TIMESTAMP(timezone=True))
 
