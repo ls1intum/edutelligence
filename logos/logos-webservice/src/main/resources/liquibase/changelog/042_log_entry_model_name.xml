@@ -93,14 +93,14 @@
             SET search_path = public, pg_catalog
             AS $$
             BEGIN
-                UPDATE log_entry SET model_name = OLD.name WHERE model_id = OLD.id;
-
-                -- The update's updated_at stamp only reaches the rollup pass
-                -- while this delete stays shorter than the pass's write lag
-                -- (see the file header). Enqueue the affected hours as well,
-                -- in this same transaction: logos_stats_rollup_pass (042)
-                -- re-rolls whatever it finds there, and the queue rows
-                -- commit together with the rows behind them.
+                -- One scan: the data-modifying CTE stamps the captured name
+                -- on every row of the model and, from the same update,
+                -- enqueues the affected hours for the rollup. The update's
+                -- updated_at stamp only reaches the pass while this delete
+                -- stays shorter than the pass's write lag (see the file
+                -- header); the queue rows commit together with the rows
+                -- behind them, so logos_stats_rollup_pass (042) re-rolls the
+                -- hours either way.
                 WITH updated AS (
                     UPDATE log_entry SET model_name = OLD.name WHERE model_id = OLD.id
                     RETURNING timestamp_forwarding, timestamp_request,
@@ -356,10 +356,11 @@
             <!-- Restore the old function before touching the index: re-applying
                  with it first collapses the per-name orphan buckets back into
                  the old grain, so the index swap cannot hit a duplicate key.
-                 (Rollbacks run in reverse changeset order, so this happens
-                 before changeSet three's re-apply is reached in the opposite
-                 direction only if this file is rolled back wholesale - the
-                 sequence inside this block is what keeps it consistent.) -->
+                 The re-apply is a full-history one on purpose: rolling back
+                 is the one moment the rollup rows and the apply function
+                 disagree about the grain, and the incremental passes only
+                 know how to fix hours someone dirtied - not hours the
+                 migration itself just re-shaped. -->
             <sql splitStatements="false"><![CDATA[
                 CREATE OR REPLACE FUNCTION logos_stats_rollup_apply(p_hours timestamptz[])
                 RETURNS bigint
@@ -450,37 +451,12 @@
         </rollback>
     </changeSet>
 
-    <!-- The grain changed, so every already-rolled hour would otherwise keep
-         serving orphan buckets without names. Re-apply the whole closed
-         history once - the same one-shot the 035 initialisation did - and let
-         the incremental passes pick up from here. -->
-    <changeSet id="042-rollup-backfill" author="logos">
-        <sql splitStatements="false"><![CDATA[
-            SELECT logos_stats_rollup_apply(ARRAY(
-                SELECT DISTINCT date_trunc('hour', COALESCE(le.timestamp_forwarding,
-                                                            le.timestamp_request,
-                                                            le.timestamp_response))
-                FROM log_entry le
-                WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
-                      < date_trunc('hour', now())
-            ));
-
-            ANALYZE log_entry_hourly_stats;
-        ]]></sql>
-        <rollback>
-            <sql splitStatements="false"><![CDATA[
-                SELECT logos_stats_rollup_apply(ARRAY(
-                    SELECT DISTINCT date_trunc('hour', COALESCE(le.timestamp_forwarding,
-                                                                le.timestamp_request,
-                                                                le.timestamp_response))
-                    FROM log_entry le
-                    WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
-                          < date_trunc('hour', now())
-                ));
-
-                ANALYZE log_entry_hourly_stats;
-            ]]></sql>
-        </rollback>
-    </changeSet>
+    <!-- Deliberately no backfill changeset: model_name is NULL on every
+         preexisting usage and rollup row, so the new grain changes no
+         historical bucket - a full-history re-apply during deployment would
+         rebuild hours that cannot differ. A deleted model's hours are
+         re-rolled incrementally instead: the trigger's updated_at stamp
+         covers deletes shorter than the write lag, and the dirty-hour queue
+         covers the rest. -->
 
 </databaseChangeLog>
