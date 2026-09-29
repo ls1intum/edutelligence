@@ -320,15 +320,33 @@ describe('formatBucketRange', () => {
  */
 describe('modelSeriesKey', () => {
   it('keys a live model by its id, ignoring the name', () => {
-    expect(modelSeriesKey(42, 'gpt-4')).toBe('42');
+    expect(modelSeriesKey(42, 'gpt-4')).toBe('model-42');
   });
 
   it('keys a deleted model by its captured name', () => {
-    expect(modelSeriesKey(null, 'gpt-4')).toBe('gpt-4');
+    expect(modelSeriesKey(null, 'gpt-4')).toBe('deleted-gpt-4');
+  });
+
+  it('keeps a deleted model that re-took a live id out of the live series', () => {
+    // Without the distinct prefixes a deleted model named "42" would share
+    // its key with live model id 42 and merge into its usage.
+    expect(modelSeriesKey(null, '42')).not.toBe(modelSeriesKey(42, '42'));
+  });
+
+  it('never yields a key that resolves to an inherited object property', () => {
+    // The chart keeps its series in plain objects; a raw name like
+    // "constructor" would read an inherited property instead of the entry.
+    for (const name of ['constructor', '__proto__', 'toString']) {
+      const key = modelSeriesKey(null, name);
+      const map: Record<string, number> = {};
+      map[key] = 1;
+      expect(Object.hasOwn(map, key)).toBe(true);
+      expect(map[key]).toBe(1);
+    }
   });
 
   it('falls back to a single shared bucket when neither id nor name survived', () => {
-    expect(modelSeriesKey(null, null)).toBe('deleted-model');
-    expect(modelSeriesKey(null, '   ')).toBe('deleted-model');
+    expect(modelSeriesKey(null, null)).toBe('deleted-unknown');
+    expect(modelSeriesKey(null, '   ')).toBe('deleted-unknown');
   });
 });

@@ -258,9 +258,16 @@ WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = v.name);
 -- so the statistics page shows the usage as a trash-marked deleted-model
 -- entry. Catalog-only on purpose (no providers, no permissions): it never
 -- appears in the model list or in routing.
+--
+-- The description carries the [docs-role-screenshots] marker. On a shared
+-- development database a real model may already use the name gpt-4o-mini
+-- (perhaps with no provider link yet); the marker is what scopes the usage
+-- insert and the delete below to the row this seed run created, so an
+-- existing model of the same name is neither polluted with demo usage nor
+-- removed.
 INSERT INTO models (name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
 SELECT 'gpt-4o-mini', 0, 0, 0, 0, 'chat',
-       'Fast general-purpose model.'
+       'Fast general-purpose model. [docs-role-screenshots]'
 WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = 'gpt-4o-mini');
 
 INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning)
@@ -468,16 +475,19 @@ SELECT
 FROM generate_series(1, 12) AS g(n)
 JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
 JOIN models m ON m.name = 'gpt-4o-mini'
+             AND m.description LIKE '%[docs-role-screenshots]'
 JOIN providers p ON p.name = 'Docs Local Worker';
 
 -- Retire the demo model. The BEFORE DELETE trigger stamps the model name onto
 -- every usage row before the foreign key nulls the id, so the statistics
 -- page keeps showing the usage under the model's former name — flagged
--- deleted. The provider guard keeps a shared development database safe: a
--- real model somebody still routes to always has a provider link.
+-- deleted. The marker (not just the name, and not just a missing provider
+-- link, which the schema does not guarantee) scopes the delete to the row
+-- this seed run created, so a real model of the same name on a shared
+-- development database is never removed.
 DELETE FROM models m
 WHERE m.name = 'gpt-4o-mini'
-  AND NOT EXISTS (SELECT 1 FROM model_provider mp WHERE mp.model_id = m.id);
+  AND m.description LIKE '%[docs-role-screenshots]';
 
 INSERT INTO usage_tokens (type_id, log_entry_id, token_count)
 SELECT tt.id, le.id, 350 + (le.id % 200)

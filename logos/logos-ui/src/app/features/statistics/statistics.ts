@@ -677,12 +677,18 @@ export class Statistics implements OnInit, OnDestroy {
 
   readonly modelLabelById = computed<Record<string, string>>(() => {
     const nameByKey: Record<string, string> = {};
+    const idByKey: Record<string, number | null> = {};
     for (const m of this.stats()?.modelBreakdown ?? []) {
-      nameByKey[modelSeriesKey(m.modelId, m.modelName)] = m.modelName;
+      const key = modelSeriesKey(m.modelId, m.modelName);
+      nameByKey[key] = m.modelName;
+      idByKey[key] = m.modelId;
     }
     for (const e of this.stats()?.modelTimeSeries ?? []) {
       const key = modelSeriesKey(e.modelId, e.modelName);
-      if (!(key in nameByKey)) nameByKey[key] = e.modelName;
+      if (!(key in nameByKey)) {
+        nameByKey[key] = e.modelName;
+        idByKey[key] = e.modelId;
+      }
     }
     const nameCount: Record<string, number> = {};
     for (const name of Object.values(nameByKey)) {
@@ -690,9 +696,13 @@ export class Statistics implements OnInit, OnDestroy {
     }
     const labels: Record<string, string> = {};
     for (const [key, name] of Object.entries(nameByKey)) {
-      // A deleted model's key is its name, so the disambiguating suffix would
-      // read "name (name)" — the trash marker carries the distinction instead.
-      labels[key] = (nameCount[name] || 0) > 1 && key !== name ? `${name} (${key})` : name;
+      // The name is shared by more than one series — a live model that
+      // re-took the name of a deleted one. Suffix the live entry with its id;
+      // the deleted entry is already recognized by its trash icon (legend)
+      // and its "(deleted)" suffix (model share donut), so it stays bare.
+      labels[key] = (nameCount[name] || 0) > 1 && idByKey[key] != null
+        ? `${name} (${idByKey[key]})`
+        : name;
     }
     return labels;
   });
