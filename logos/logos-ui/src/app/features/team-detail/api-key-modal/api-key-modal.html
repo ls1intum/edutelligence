@@ -205,16 +205,22 @@
 
         <div class="form-row-2">
           <div class="form-field">
-            <label class="field-label" for="km-priority">Queue Priority</label>
-            <input
-              id="km-priority"
+            <label class="field-label" for="km-sla">SLA</label>
+            <select
+              id="km-sla"
               class="field-input"
-              type="number"
-              min="0"
-              [value]="fPriority()"
-              (input)="fPriority.set($any($event.target).value)"
+              [title]="slaHint(fSla())"
+              [value]="fSla()"
+              (change)="fSla.set($any($event.target).value)"
               [disabled]="saveLoading()"
-            />
+            >
+              @for (option of slaOptions; track option.value) {
+                <option [value]="option.value" [selected]="option.value === fSla()">
+                  {{ option.label }}
+                </option>
+              }
+            </select>
+            <span class="field-hint">{{ slaHint(fSla()) }}</span>
           </div>
           <div class="form-field">
             <label class="field-label">Log Level</label>

@@ -4,7 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { TeamApiKey } from '../../../../shared/models/team.model';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { AppKeysTabComponent } from './app-keys-tab';
-import { SLA_PRIORITY } from './key-sla';
+import { SLA_PRIORITY } from '../key-sla';
 
 /**
  * Reordering application keys.
@@ -123,6 +123,27 @@ describe('AppKeysTabComponent reordering', () => {
 
     expect(updateApiKey).not.toHaveBeenCalled();
     expect(ids(component)).toEqual([critical.id, highPrioA.id, highPrioB.id]);
+  });
+
+  it('pins the default tier on a key that has no priority of its own', async () => {
+    const { component } = setup();
+    // 0 reads as the default tier, so picking that tier looks like a no-op —
+    // but it is the only way to stop the key following the team's priority.
+    const unset = makeKey(4, 0);
+    component.apiKeys = [unset];
+
+    await component.changeSla(unset, 'ux-high-prio');
+
+    expect(updateApiKey).toHaveBeenCalledWith(unset.id, {
+      default_priority: SLA_PRIORITY['ux-high-prio'],
+    });
+  });
+
+  it('does not write again when the stored priority already matches the tier', async () => {
+    const { component, highPrioA } = setup();
+    await component.changeSla(highPrioA, 'ux-high-prio');
+
+    expect(updateApiKey).not.toHaveBeenCalled();
   });
 
   it('restores the previous tier when saving the SLA fails', async () => {

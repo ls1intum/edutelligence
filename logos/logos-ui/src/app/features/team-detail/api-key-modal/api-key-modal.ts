@@ -16,6 +16,7 @@ import { TeamApiKey, TeamDetail, ApiKeyUpdatePayload } from '../../../shared/mod
 import { TeamManagementService } from '../../../core/services/team-management.service';
 import { SearchInputComponent } from '../../../shared/components/search-input/search-input';
 import { ErrorMessageComponent } from '../../../shared/components/error-message/error-message';
+import { KeySla, SLA_OPTIONS, SLA_PRIORITY, slaHint, slaOfPriority } from '../tabs/key-sla';
 
 const MICRO = 100_000_000;
 
@@ -61,7 +62,12 @@ export class ApiKeyModalComponent implements OnChanges {
   fLocalRpm = signal('');
   fLocalTpm = signal('');
   fEnv = signal('');
-  fPriority = signal('0');
+  fSla = signal<KeySla>(slaOfPriority(0));
+  /** The tier the key was showing when the dialog opened. A key that has no
+   *  priority of its own reads as the default tier, so the SLA is only sent
+   *  when this changes — otherwise merely saving a budget here would convert
+   *  an inherited priority into an explicit one. */
+  private initialSla: KeySla = slaOfPriority(0);
   fLog = signal<'BILLING' | 'FULL'>('BILLING');
   fCustom = signal(false);
 
@@ -123,7 +129,8 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fLocalRpm.set(s.local_rpm_limit && s.local_rpm_limit > 0 ? String(s.local_rpm_limit) : '');
     this.fLocalTpm.set(s.local_tpm_limit && s.local_tpm_limit > 0 ? String(s.local_tpm_limit) : '');
     this.fEnv.set(key.environment ?? '');
-    this.fPriority.set(String(key.default_priority ?? 0));
+    this.initialSla = slaOfPriority(key.default_priority);
+    this.fSla.set(this.initialSla);
     this.fLog.set(key.log ?? 'BILLING');
     this.fCustom.set(!!key.use_custom_permissions);
     this.saveError.set('');
@@ -267,6 +274,9 @@ export class ApiKeyModalComponent implements OnChanges {
     );
   }
 
+  readonly slaOptions = SLA_OPTIONS;
+  readonly slaHint = slaHint;
+
   dollarsToMc = dollarsToMc;
 
   get dialogHeader(): string {
@@ -287,7 +297,6 @@ export class ApiKeyModalComponent implements OnChanges {
 
     const payload: ApiKeyUpdatePayload = {
       environment: key.key_type === 'developer' ? '' : this.fEnv().trim(),
-      default_priority: parseInt(this.fPriority(), 10) || 0,
       log: this.fLog(),
       use_custom_permissions: this.fCustom(),
       budget_limit_micro_cents: this.fBudget().trim() ? (dollarsToMc(this.fBudget()) ?? -1) : -1,
@@ -296,6 +305,10 @@ export class ApiKeyModalComponent implements OnChanges {
       local_rpm_limit: intOrMinus1(this.fLocalRpm()),
       local_tpm_limit: intOrMinus1(this.fLocalTpm()),
     };
+
+    if (this.fSla() !== this.initialSla) {
+      payload.default_priority = SLA_PRIORITY[this.fSla()];
+    }
 
     const ops: Promise<unknown>[] = [this.svc.updateApiKey(key.id, payload)];
 

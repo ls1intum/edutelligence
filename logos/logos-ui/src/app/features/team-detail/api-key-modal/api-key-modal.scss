@@ -208,6 +208,12 @@
   margin-bottom: 5px;
 }
 
+.field-hint {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  line-height: 1.35;
+}
+
 .field-input {
   width: 100%;
   padding: 7px 11px;

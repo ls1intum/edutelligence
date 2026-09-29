@@ -34,7 +34,7 @@ import {
   slaLabel,
   slaOfPriority,
   slaRank,
-} from './key-sla';
+} from '../key-sla';
 import { loadKeyOrder, orderRank, saveKeyOrder } from './key-order';
 
 const MICRO = 100_000_000;
@@ -132,8 +132,17 @@ export class AppKeysTabComponent {
     return index === 0 || this.slaOf(keys[index - 1]) !== this.slaOf(keys[index]);
   }
 
+  /**
+   * Persist an SLA the person picked.
+   *
+   * A key that has no priority of its own reads as the default tier, so
+   * picking that tier looks like a no-op but is a real choice: it pins the
+   * key instead of leaving it to follow the team's or the policy's priority.
+   * The guard therefore compares the stored value, not just the tier.
+   */
   async changeSla(key: TeamApiKey, sla: KeySla): Promise<void> {
-    if (!this.canEdit || this.slaSaving().has(key.id) || this.slaOf(key) === sla) return;
+    if (!this.canEdit || this.slaSaving().has(key.id)) return;
+    if (this.slaOf(key) === sla && key.default_priority === SLA_PRIORITY[sla]) return;
     const previous = this.slaOverrides().get(key.id);
     this.slaError.set('');
     this.slaOverrides.update((m) => new Map(m).set(key.id, sla));
@@ -192,7 +201,7 @@ export class AppKeysTabComponent {
     this.manualOrder.set(ids);
     saveKeyOrder(this.teamId, ids);
 
-    await this.changeSla(moved, target);
+    if (target !== this.slaOf(moved)) await this.changeSla(moved, target);
   }
 
   // ── Create dialog ──────────────────────────────────────────────────────────
