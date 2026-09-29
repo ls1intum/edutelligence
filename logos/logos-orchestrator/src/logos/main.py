@@ -1763,6 +1763,10 @@ async def _streaming_response(
             }
 
         def _new_logosnode_chunk_iter():
+            # The stamp lands on the actual WebSocket send, not here: session
+            # acquisition and the send lock run before it, and a pre-token
+            # retry calls this again, so each attempt re-stamps and the final
+            # attempt's send is what the request keeps.
             return _logosnode_registry.send_stream_command(
                 provider_id=provider_id,
                 action="infer_stream",
@@ -1772,6 +1776,7 @@ async def _streaming_response(
                     "request_path": request_path,
                 },
                 timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+                on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
             )
 
         async def logosnode_streamer():
@@ -1791,12 +1796,6 @@ async def _streaming_response(
             # the clients that left *before* the first token.
             stream_completed = False
             try:
-                # LogosNode streams dispatch lazily: this body only runs when
-                # the response generator is consumed, which is the actual hand
-                # to the worker. Stamping here (not at scheduling) is what keeps
-                # the deferred-dispatch wait out of the provider's exec figure.
-                if request_id:
-                    _pipeline.record_provider_call(request_id)
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
                     produced = False
@@ -1844,16 +1843,18 @@ async def _streaming_response(
                             await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
                             continue
                         error_message = str(e)
+                        # The worker stream failed; this is when the provider's
+                        # (error) response ended, before the unwind below.
+                        if request_id:
+                            _pipeline.record_provider_response(request_id)
                         raise e
+                    # The worker stream completed — the provider's last byte,
+                    # before the finally's billing/persistence runs.
+                    if request_id:
+                        _pipeline.record_provider_response(request_id)
                     stream_completed = True
                     break  # stream completed without raising
             finally:
-                # The worker stream has ended, so the provider's response is
-                # complete; billing/persistence runs from here. Stamp it now so
-                # the exec figure ends at the provider's last byte, not after
-                # logos' post-provider work.
-                if request_id:
-                    _pipeline.record_provider_response(request_id)
                 if not stream_completed and error_message is None:
                     error_message = (
                         "Client disconnected mid-stream; upstream generation cancelled "
@@ -2033,6 +2034,12 @@ async def _streaming_response(
                             db.set_time_at_first_token(log_id)
                     _record_ettft_accuracy(scheduling_stats)
                     ttft_recorded = True
+            # The upstream stream is exhausted — the provider's last byte,
+            # before any enrichment (the cost lookup for cloud SSE) or
+            # terminal-frame delivery. Ending the exec figure here keeps that
+            # logos-side work out of the provider's numbers.
+            if request_id:
+                _pipeline.record_provider_response(request_id)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2060,6 +2067,10 @@ async def _streaming_response(
                     yield client_chunk
         except Exception as exc:
             error_message = str(exc)
+            # The upstream failed; this is when the provider's (error) response
+            # ended, before the recovery frames below.
+            if request_id:
+                _pipeline.record_provider_response(request_id)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2082,12 +2093,6 @@ async def _streaming_response(
                 yield f"data: {_json.dumps(error_body)}\n\n".encode()
                 yield b"data: [DONE]\n\n"
         finally:
-            # The upstream stream has ended (last chunk or failure), so the
-            # provider's response is complete; logos' own billing/persistence
-            # runs from here. Stamp it now, before that post-provider work, so
-            # the exec figure ends at the provider's last byte.
-            if request_id:
-                _pipeline.record_provider_response(request_id)
             _live_streams.finish(request_id)
             if error_message is None:
                 error_message = stream_status.error
@@ -2236,14 +2241,11 @@ async def _sync_response(
         )
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, upstream_payload)
-
-        # Preparation succeeded, so the only logos-side work left is the
-        # dispatch below — stamp the provider call now, not at scheduling, so
-        # the queue/exec split excludes the rate-limit and budget checks that
-        # ran in between. A preparation failure above never reaches this line,
-        # so a request that never reached the provider carries no stamp.
-        if request_id:
-            _pipeline.record_provider_call(request_id)
+        # The provider-call stamp is taken at the actual dispatch below — after
+        # preparation, and for LogosNode after session acquisition and the
+        # send lock — so the queue/exec split excludes the rate-limit and
+        # budget checks that ran in between. A preparation failure never
+        # reaches the dispatch, so a request that never went out carries no stamp.
 
         timed_out = False
         error_message = None
@@ -2253,6 +2255,8 @@ async def _sync_response(
             sync_payload = force_non_streaming_payload(prepared_payload)
             try:
                 with perf_trace.phase(request_id, "rpc.send_command"):
+                    # Stamp on the actual WebSocket send, after session
+                    # acquisition and the send lock (see send_command).
                     rpc_result = await _logosnode_registry.send_command(
                         provider_id=provider_id,
                         action="infer",
@@ -2262,6 +2266,7 @@ async def _sync_response(
                             "request_path": request_path,
                         },
                         timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
+                        on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
                     )
                 # The worker returns its own (LOGOS_WORKER_PERF_TRACE-gated)
                 # phase breakdown inside the command result; merge it under
@@ -2338,6 +2343,10 @@ async def _sync_response(
                     headers=None,
                 )
         else:
+            # For a cloud sync the dispatch is the HTTP request itself, so the
+            # stamp goes immediately before it.
+            if request_id:
+                _pipeline.record_provider_call(request_id)
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
         response_at = datetime.datetime.now(datetime.timezone.utc)
         # The provider's full response has arrived; logos' own post-provider
