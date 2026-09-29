@@ -288,7 +288,17 @@ _make_submodule(
 # ---------------------------------------------------------------------------
 
 _hf = _make_module("huggingface_hub")
-_make_submodule(_hf, "utils", {"disable_progress_bars": _noop, "validate_repo_id": _noop})
+_make_submodule(
+    _hf,
+    "utils",
+    {
+        "disable_progress_bars": _noop,
+        "validate_repo_id": _noop,
+        "build_hf_headers": lambda *, token=None, **_: {"authorization": f"Bearer {token}"} if token else {},
+        "hf_raise_for_status": lambda response, endpoint_name=None: response.raise_for_status(),
+    },
+)
+_make_submodule(_hf, "constants", {"ENDPOINT": "https://huggingface.co"})
 
 
 class _HfRepositoryNotFoundError(Exception):
@@ -297,11 +307,6 @@ class _HfRepositoryNotFoundError(Exception):
 
 class _HfGatedRepoError(_HfRepositoryNotFoundError):
     pass
-
-
-class _HfApi:
-    def auth_check(self, repo_id, *, token=None):
-        raise NotImplementedError("tests must replace huggingface_hub.HfApi")
 
 
 _make_submodule(
@@ -313,8 +318,7 @@ _make_submodule(
         "GatedRepoError": _HfGatedRepoError,
     },
 )
-if not hasattr(_hf, "HfApi"):
-    _hf.HfApi = _HfApi
+
 
 _transformers = _make_module("transformers")
 _transformers_utils = _make_submodule(_transformers, "utils")

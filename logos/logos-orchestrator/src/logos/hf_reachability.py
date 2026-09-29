@@ -4,12 +4,13 @@ Answers only whether the central HF_TOKEN can see the repository, never whether
 a node could serve the model. Reason codes match the worker's HF precheck.
 """
 
-import asyncio
 import datetime
 import logging
 import math
 import os
 from dataclasses import dataclass
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +51,27 @@ class HfReachability:
     checked_at: str
 
 
-def _check_sync(hf_repo_id: str, token: str | None) -> tuple[str, str | None, str | None]:
-    from huggingface_hub import HfApi
+def _new_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=_TIMEOUT_S)
+
+
+async def _check(hf_repo_id: str, token: str | None) -> tuple[str, str | None, str | None]:
+    from huggingface_hub import constants
     from huggingface_hub.errors import GatedRepoError, HFValidationError, RepositoryNotFoundError
-    from huggingface_hub.utils import validate_repo_id
+    from huggingface_hub.utils import build_hf_headers, hf_raise_for_status, validate_repo_id
 
     try:
-        # auth_check doesn't validate the id; a malformed one would 404.
+        # auth-check doesn't validate the id; a malformed one would 404.
         validate_repo_id(hf_repo_id)
-        # False, not None: None would fall back to a token cached on disk.
-        HfApi().auth_check(hf_repo_id, token=token or False)
+        # HfApi.auth_check's shared client has no timeout, so the same request
+        # is made here with a bounded one; the Hub's answer is mapped as there.
+        async with _new_client() as client:
+            response = await client.get(
+                f"{constants.ENDPOINT}/api/models/{hf_repo_id}/auth-check",
+                # False, not None: None would fall back to a token cached on disk.
+                headers=build_hf_headers(token=token or False),
+            )
+        hf_raise_for_status(response)
     except HFValidationError:
         return STATUS_REJECTED, REASON_INVALID_REPO_ID, "Not a valid Hugging Face repository id."
     # GatedRepoError subclasses RepositoryNotFoundError, so it must come first.
@@ -72,6 +84,8 @@ def _check_sync(hf_repo_id: str, token: str | None) -> tuple[str, str | None, st
             REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
             "Repository does not exist or is not visible to the configured HF_TOKEN.",
         )
+    except httpx.TimeoutException:
+        return STATUS_UNKNOWN, None, f"Hugging Face Hub did not answer within {_TIMEOUT_S:g}s."
     except Exception:  # noqa: BLE001
         # Library/network errors can name internal hosts or proxies; log only.
         logger.warning("HF reachability check failed for %s", hf_repo_id, exc_info=True)
@@ -87,12 +101,7 @@ async def check_hf_reachability(hf_repo_id: str) -> HfReachability:
     """
     repo_id = hf_repo_id.strip()
     token = os.getenv("HF_TOKEN", "").strip() or None
-    try:
-        status, reason_code, detail = await asyncio.wait_for(
-            asyncio.to_thread(_check_sync, repo_id, token), timeout=_TIMEOUT_S
-        )
-    except asyncio.TimeoutError:
-        status, reason_code, detail = STATUS_UNKNOWN, None, f"Hugging Face Hub did not answer within {_TIMEOUT_S:g}s."
+    status, reason_code, detail = await _check(repo_id, token)
     return HfReachability(
         hf_repo_id=repo_id,
         status=status,

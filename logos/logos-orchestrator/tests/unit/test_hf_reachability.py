@@ -1,5 +1,4 @@
 import importlib
-import time
 
 import httpx
 import pytest
@@ -10,43 +9,67 @@ from logos import hf_reachability
 from logos.dbutils.dbrequest import HfReachabilityRequest
 
 
-class _FakeApi:
-    raises: Exception | None = None
-    calls: list[tuple[str, object]] = []
-
-    def auth_check(self, repo_id, *, token=None):
-        _FakeApi.calls.append((repo_id, token))
-        if _FakeApi.raises is not None:
-            raise _FakeApi.raises
-
-
 @pytest.fixture
-def fake_api(monkeypatch):
-    _FakeApi.raises = None
-    _FakeApi.calls = []
-    monkeypatch.setattr("huggingface_hub.HfApi", _FakeApi)
+def hub(monkeypatch):
+    """Serve the auth-check request from ``hub.handler``; record each request."""
+
+    class _Hub:
+        requests: list[httpx.Request] = []
+        timeouts: list[httpx.Timeout] = []
+
+        @staticmethod
+        def handler(request):
+            return httpx.Response(200, json={})
+
+    def _client():
+        client = httpx.AsyncClient(
+            timeout=hf_reachability._TIMEOUT_S,
+            transport=httpx.MockTransport(lambda request: _Hub.requests.append(request) or _Hub.handler(request)),
+        )
+        _Hub.timeouts.append(client.timeout)
+        return client
+
+    monkeypatch.setattr(hf_reachability, "_new_client", _client)
     monkeypatch.delenv("HF_TOKEN", raising=False)
-    return _FakeApi
+    return _Hub
 
 
-async def test_reachable_repository(fake_api):
+def _raise_for(error):
+    def _raise(response, endpoint_name=None):
+        if response.status_code >= 400:
+            raise error
+
+    return _raise
+
+
+async def test_reachable_repository(hub):
     result = await hf_reachability.check_hf_reachability("  org/model ")
 
     assert result.hf_repo_id == "org/model"
     assert result.status == hf_reachability.STATUS_REACHABLE
     assert result.reason_code is None
-    assert fake_api.calls == [("org/model", False)]
+    assert [str(r.url) for r in hub.requests] == ["https://huggingface.co/api/models/org/model/auth-check"]
+    assert "authorization" not in hub.requests[0].headers
+
+
+async def test_request_is_bounded_by_the_configured_timeout(hub, monkeypatch):
+    monkeypatch.setattr(hf_reachability, "_TIMEOUT_S", 3.0)
+
+    await hf_reachability.check_hf_reachability("org/model")
+
+    assert hub.timeouts[0].read == 3.0
 
 
 @pytest.mark.parametrize(
-    ("error", "reason_code"),
+    ("status_code", "error", "reason_code"),
     [
-        (GatedRepoError("gated"), hf_reachability.REASON_MODEL_GATED),
-        (RepositoryNotFoundError("missing"), hf_reachability.REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED),
+        (403, GatedRepoError("gated"), hf_reachability.REASON_MODEL_GATED),
+        (401, RepositoryNotFoundError("missing"), hf_reachability.REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED),
     ],
 )
-async def test_rejections_use_the_worker_reason_codes(fake_api, error, reason_code):
-    fake_api.raises = error
+async def test_rejections_use_the_worker_reason_codes(hub, monkeypatch, status_code, error, reason_code):
+    hub.handler = staticmethod(lambda request: httpx.Response(status_code))
+    monkeypatch.setattr("huggingface_hub.utils.hf_raise_for_status", _raise_for(error))
 
     result = await hf_reachability.check_hf_reachability("org/model")
 
@@ -54,7 +77,7 @@ async def test_rejections_use_the_worker_reason_codes(fake_api, error, reason_co
     assert result.reason_code == reason_code
 
 
-async def test_malformed_repo_id_is_rejected_before_asking_the_hub(fake_api, monkeypatch):
+async def test_malformed_repo_id_is_rejected_before_asking_the_hub(hub, monkeypatch):
     def _invalid(repo_id):
         raise HFValidationError(f"bad id {repo_id}")
 
@@ -64,17 +87,40 @@ async def test_malformed_repo_id_is_rejected_before_asking_the_hub(fake_api, mon
 
     assert result.status == hf_reachability.STATUS_REJECTED
     assert result.reason_code == hf_reachability.REASON_INVALID_REPO_ID
-    assert fake_api.calls == []
+    assert hub.requests == []
 
 
-async def test_hub_failure_is_unknown_not_a_verdict(fake_api):
-    fake_api.raises = httpx.ConnectError("proxy.internal.example:3128 refused")
+async def test_hub_failure_is_unknown_not_a_verdict(hub):
+    def _refuse(request):
+        raise httpx.ConnectError("proxy.internal.example:3128 refused", request=request)
+
+    hub.handler = staticmethod(_refuse)
 
     result = await hf_reachability.check_hf_reachability("org/model")
 
     assert result.status == hf_reachability.STATUS_UNKNOWN
     assert result.reason_code is None
     assert "proxy.internal" not in result.detail
+
+
+async def test_slow_hub_times_out_as_unknown(hub):
+    def _slow(request):
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    hub.handler = staticmethod(_slow)
+
+    result = await hf_reachability.check_hf_reachability("org/model")
+
+    assert result.status == hf_reachability.STATUS_UNKNOWN
+    assert "did not answer" in result.detail
+
+
+async def test_central_hf_token_is_used(hub, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", " hf_secret ")
+
+    await hf_reachability.check_hf_reachability("org/model")
+
+    assert hub.requests[0].headers["authorization"] == "Bearer hf_secret"
 
 
 @pytest.mark.parametrize(
@@ -85,24 +131,6 @@ def test_timeout_env_falls_back_to_default_when_invalid(monkeypatch, raw, expect
     monkeypatch.setenv("LOGOS_HF_REACHABILITY_TIMEOUT_S", raw)
 
     assert hf_reachability._timeout_from_env() == expected
-
-
-async def test_slow_hub_times_out_as_unknown(fake_api, monkeypatch):
-    monkeypatch.setattr(hf_reachability, "_TIMEOUT_S", 0.05)
-    monkeypatch.setattr(_FakeApi, "auth_check", lambda self, repo_id, token=None: time.sleep(0.5))
-
-    result = await hf_reachability.check_hf_reachability("org/model")
-
-    assert result.status == hf_reachability.STATUS_UNKNOWN
-    assert "did not answer" in result.detail
-
-
-async def test_central_hf_token_is_used(fake_api, monkeypatch):
-    monkeypatch.setenv("HF_TOKEN", " hf_secret ")
-
-    await hf_reachability.check_hf_reachability("org/model")
-
-    assert fake_api.calls == [("org/model", "hf_secret")]
 
 
 async def test_endpoint_requires_the_internal_secret(monkeypatch):
@@ -117,10 +145,11 @@ async def test_endpoint_requires_the_internal_secret(monkeypatch):
     assert error.value.status_code == 401
 
 
-async def test_endpoint_returns_the_check_result(fake_api, monkeypatch):
+async def test_endpoint_returns_the_check_result(hub, monkeypatch):
     internal = importlib.import_module("logos.routers.internal")
     monkeypatch.setattr(internal, "_require_internal_secret", lambda _: None)
-    fake_api.raises = GatedRepoError("gated")
+    hub.handler = staticmethod(lambda request: httpx.Response(403))
+    monkeypatch.setattr("huggingface_hub.utils.hf_raise_for_status", _raise_for(GatedRepoError("gated")))
 
     response = await internal.internal_hf_reachability(HfReachabilityRequest(hf_repo_id="org/model"), object())
 
