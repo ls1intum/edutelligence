@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import secrets
+from dataclasses import asdict
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
@@ -34,6 +35,7 @@ from logos.dbutils.dbrequest import (
     BenchmarkLimitsRequest,
     DatasetMetadataRequest,
     DatasetSearchRequest,
+    HfReachabilityRequest,
     InternalAddLaneRequest,
     InternalBenchmarkRequest,
     InternalCalibrateRequest,
@@ -46,6 +48,7 @@ from logos.dbutils.dbrequest import (
     RefreshPipelineRequest,
 )
 from logos.dbutils.types import Deployment
+from logos.hf_reachability import check_hf_reachability
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 from logos.logosnode_snapshot import _logosnode_snapshot_is_connected
 from logos.main import (
@@ -304,6 +307,19 @@ async def internal_model_context_windows(request: Request):
         "windows": {model: entry["current_min"] for model, entry in stats.items() if "current_min" in entry},
         "stats": stats,
     }
+
+
+@router.post("/internal/hf_reachability", tags=["admin"])
+async def internal_hf_reachability(data: HfReachabilityRequest, request: Request):
+    """Whether the central HF_TOKEN can see a Hugging Face repository.
+
+    Provider-independent, so it needs no connected worker. ``status`` is
+    ``reachable``, ``rejected`` (with ``reason_code``) or ``unknown`` when the
+    Hub could not be asked; an ``unknown`` result is not a verdict to store.
+    """
+    _require_internal_secret(request)
+    result = await check_hf_reachability(data.hf_repo_id)
+    return JSONResponse(content=asdict(result))
 
 
 def _require_internal_secret(request: Request, disabled_detail: str = "Internal endpoint disabled") -> None:

@@ -288,7 +288,37 @@ _make_submodule(
 # ---------------------------------------------------------------------------
 
 _hf = _make_module("huggingface_hub")
-_make_submodule(_hf, "utils", {"disable_progress_bars": _noop})
+_make_submodule(
+    _hf,
+    "utils",
+    {
+        "disable_progress_bars": _noop,
+        "validate_repo_id": _noop,
+        "build_hf_headers": lambda *, token=None, **_: {"authorization": f"Bearer {token}"} if token else {},
+        "hf_raise_for_status": lambda response, endpoint_name=None: response.raise_for_status(),
+    },
+)
+_make_submodule(_hf, "constants", {"ENDPOINT": "https://huggingface.co"})
+
+
+class _HfRepositoryNotFoundError(Exception):
+    pass
+
+
+class _HfGatedRepoError(_HfRepositoryNotFoundError):
+    pass
+
+
+_make_submodule(
+    _hf,
+    "errors",
+    {
+        "HFValidationError": type("HFValidationError", (ValueError,), {}),
+        "RepositoryNotFoundError": _HfRepositoryNotFoundError,
+        "GatedRepoError": _HfGatedRepoError,
+    },
+)
+
 
 _transformers = _make_module("transformers")
 _transformers_utils = _make_submodule(_transformers, "utils")
