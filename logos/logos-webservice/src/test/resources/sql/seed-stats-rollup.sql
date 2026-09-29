@@ -18,6 +18,9 @@
 -- seeded after this line is dirty, which is what lets the tests read a "before
 -- the pass" baseline.
 DELETE FROM log_entry_hourly_stats;
+-- The dirty-hour queue is part of the rollup's state too: a leftover entry
+-- would make the first pass re-roll an hour this seed knows nothing about.
+DELETE FROM log_entry_rollup_dirty_hours;
 -- Dated back rather than to now(): an @Sql script runs in one transaction,
 -- so now() is frozen across it and rows seeded below would carry exactly the
 -- watermark rather than a later stamp, leaving the first pass nothing to do.
