@@ -59,6 +59,8 @@ A branch that another active session (human or agent) is using to resolve open r
 
 Conflicting pushes force manual merge/revert cycles and full CI re-runs, and can leave the PR head in exactly the state a reviewer just rejected.
 
+This section is a behavioral rule, not a technical control — the repository cannot block force pushes or branch deletions on its own. The matching technical enforcement (force pushes and deletion disabled, optionally push access via the rule's `restrictions` field) must be set per branch in the branch-protection settings.
+
 ### Conventions
 
 - Avoid the imprecise terms `frontend` and `backend` in comments and documentation — name the actual component (user interface, web application, application server, feature service, data service, infrastructure service).
