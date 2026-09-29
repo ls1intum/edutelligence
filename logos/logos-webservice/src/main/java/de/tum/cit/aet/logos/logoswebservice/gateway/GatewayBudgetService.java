@@ -351,6 +351,11 @@ public class GatewayBudgetService {
                 CacheEntry latest = cache.get(key);
                 long now = clock.millis();
                 if (latest != null && now - latest.loadedAtMs < ttlMillis) {
+                    // Another caller installed a fresh entry after we registered
+                    // inflight. Drop any increments queued against that spurious
+                    // flight — noteReservation already bumped the live entry, and
+                    // leaving them pending would double-count on the next refresh.
+                    pendingUsageIncrements.remove(key);
                     created.complete(latest);
                     inflight.remove(key, created);
                     return latest;

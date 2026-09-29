@@ -7,10 +7,14 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.YearMonth;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -114,6 +118,59 @@ class GatewayBudgetCacheRaceTest {
         budget.enforceCloudBudget(key);
 
         assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(120L);
+    }
+
+    /**
+     * A late refresh can register {@code inflight} after another caller already
+     * installed a fresh entry. {@code noteReservation} then queues pending; the
+     * early-return path must drop it or the next refresh double-counts.
+     */
+    @Test
+    void freshEntryEarlyReturn_doesNotDoubleCountReservationOnNextRefresh() throws Exception {
+        GatewayKey key = applicationKey(KEY_ID);
+        budget.enforceCloudBudget(key);
+        String usageKey = usageCacheKey(KEY_ID);
+
+        var inflightField = GatewayBudgetService.class.getDeclaredField("inflight");
+        inflightField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var inflight = (ConcurrentHashMap<String, CompletableFuture<?>>) inflightField.get(budget);
+        inflight.put(usageKey, new CompletableFuture<>());
+
+        budget.noteReservation(key, 50L);
+        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
+
+        // Drop the planted flight so refresh can become the winner; pending stays.
+        inflight.remove(usageKey);
+
+        Class<?> loaderClass = null;
+        for (Class<?> nested : GatewayBudgetService.class.getDeclaredClasses()) {
+            if (nested.getSimpleName().equals("Loader")) {
+                loaderClass = nested;
+                break;
+            }
+        }
+        assertThat(loaderClass).isNotNull();
+        Object loader = Proxy.newProxyInstance(
+            loaderClass.getClassLoader(),
+            new Class<?>[] { loaderClass },
+            (proxy, method, args) -> {
+                if ("load".equals(method.getName())) {
+                    throw new AssertionError("early-return path must not load from the database");
+                }
+                throw new UnsupportedOperationException(method.getName());
+            });
+
+        Method refresh = GatewayBudgetService.class.getDeclaredMethod(
+            "refresh", String.class, loaderClass, long.class);
+        refresh.setAccessible(true);
+        refresh.invoke(budget, usageKey, loader, clock.millis());
+
+        clock.advanceMillis(TTL_SECONDS * 1000L + 1);
+        usageFromDb.set(150L);
+        budget.enforceCloudBudget(key);
+
+        assertThat(budget.cacheView().get(usageKey).value()).isEqualTo(150L);
     }
 
     private static String usageCacheKey(int apiKeyId) {
