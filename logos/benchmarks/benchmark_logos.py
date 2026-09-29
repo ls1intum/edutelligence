@@ -1126,6 +1126,18 @@ async def _dispatch(
 
             async for raw in resp.aiter_lines():
                 line = raw.strip()
+                if line.startswith(": logos-schedule"):
+                    # A streaming request commits its response before the
+                    # scheduling decision is known, so the ETTFT/warmth values
+                    # ride in the stream as a comment (they no longer appear in
+                    # the response headers).
+                    for kv in line.split()[1:]:
+                        name, _, value = kv.partition("=")
+                        if name == "x-logos-warmth-state":
+                            warmth_state = _parse_int_or_none(value)
+                        elif name == "x-logos-ettft-ms":
+                            ettft_ms = _parse_float_or_none(value)
+                    continue
                 if not line.startswith("data:"):
                     continue
                 data = line[5:].strip()

@@ -198,3 +198,61 @@ async def test_whisper_stream_requests_keep_the_sync_guard(monkeypatch):
 
     assert result == "guarded"
     assert len(guarded) == 1
+
+
+@pytest.mark.asyncio
+async def test_whisper_alias_stream_requests_keep_the_sync_guard(monkeypatch):
+    """A logical alias that resolves to Whisper keeps the synchronous path even
+    though the requested name does not mention Whisper."""
+    guarded = []
+
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
+        auth = MagicMock()
+        auth.api_key_id = 88
+        auth.resolved_proxy_model = (7, "whisper-1")  # the alias resolves to Whisper
+        return {}, auth, {"stream": True, "model": "transcription-production"}, "127.0.0.1", None, [{"model_id": 1}]
+
+    async def fake_filter(deployments, payload=None):
+        return deployments
+
+    async def fake_guard(request, **kwargs):
+        guarded.append(kwargs)
+        return "guarded"
+
+    monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
+    monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", fake_guard)
+
+    result = await main.handle_sync_request("chat/completions", _Client(leaves=False))
+
+    assert result == "guarded"
+    assert len(guarded) == 1
+
+
+@pytest.mark.asyncio
+async def test_audio_upload_stream_requests_keep_the_sync_guard(monkeypatch):
+    """An audio transcription ignores stream and keeps its upstream content
+    type, so it must stay on the synchronous path even on the audio route."""
+    guarded = []
+
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
+        auth = MagicMock()
+        auth.api_key_id = 88
+        return {}, auth, {"stream": True, "model": "whisper-1"}, "127.0.0.1", None, [{"model_id": 1}]
+
+    async def fake_filter(deployments, payload=None):
+        return deployments
+
+    async def fake_guard(request, **kwargs):
+        guarded.append(kwargs)
+        return "guarded"
+
+    monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
+    monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", fake_guard)
+
+    # The audio upload path, not the chat path.
+    result = await main.handle_sync_request("audio/transcriptions", _Client(leaves=False))
+
+    assert result == "guarded"
+    assert len(guarded) == 1

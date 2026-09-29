@@ -3505,6 +3505,39 @@ def _instream_sync_frames(response: Response, path: str) -> list:
     return [raw] if raw else []
 
 
+def _resolves_to_whisper(body: dict, path: str, auth: "AuthContext") -> bool:
+    """Whether a request will be answered synchronously by a Whisper model.
+
+    Whisper ignores ``stream`` and keeps its upstream content type, so such a
+    request must not commit an SSE keepalive response — it would hand the
+    transcription back as a raw JSON body under ``text/event-stream``. The
+    check covers the requested name, the audio upload path, and the resolved
+    model, because a logical alias (e.g. ``transcription-production``) can
+    point at ``whisper-1`` even though the requested text does not say so.
+    """
+    if is_whisper_payload(body) or is_audio_upload_path(path):
+        return True
+    resolved = getattr(auth, "resolved_proxy_model", None)
+    model_name = resolved[1] if isinstance(resolved, (tuple, list)) else resolved
+    return "whisper" in str(model_name or "").lower()
+
+
+def _scheduling_comment(headers) -> Optional[bytes]:
+    """The scheduling decision as an SSE comment, or None if it carried none.
+
+    The ETTFT estimate and warmth state are only known once the pipeline has
+    run — after the keepalive response is committed, so they cannot ride the
+    response headers. The benchmark client correlates the scheduler's view with
+    the observed TTFT, so the values travel in the stream as a comment (ignored
+    by every other client) under the same names the headers used.
+    """
+    names = ("x-logos-ettft-ms", "x-logos-ettft-tier", "x-logos-warmth-state")
+    parts = [f"{name}={headers[name]}" for name in names if headers.get(name) is not None]
+    if not parts:
+        return None
+    return (": " + " ".join(["logos-schedule"] + parts) + "\n\n").encode()
+
+
 async def _keepalive_producer(inner_iterator, queue: "asyncio.Queue") -> None:
     """Feed the content streamer's chunks into ``queue``.
 
@@ -3579,6 +3612,12 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
                             request_id,
                             "Client disconnected before the response was ready; upstream request cancelled.",
                         )
+                        # The response may have been produced in this same tick:
+                        # on the HTTP path its first chunk is already peeked, so
+                        # the upstream connection is open. Close it (and let the
+                        # scheduler slot release) instead of leaving it to the
+                        # client that is already gone.
+                        await _discard_response(await _settle(work))
                         return
                     if work in done:
                         response = work.result()
@@ -3594,6 +3633,13 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
             watcher.cancel()
 
             if isinstance(response, StreamingResponse):
+                # The scheduling decision (ETTFT estimate, warmth) was only
+                # known once the pipeline ran — too late for the committed
+                # headers — so it rides in the stream as a comment for the
+                # benchmark client that correlates it with the observed TTFT.
+                comment = _scheduling_comment(response.headers)
+                if comment:
+                    yield comment
                 # Phase 2 — the content stream, keepaliving across the
                 # upstream's pre-token silence.
                 inner_iterator = response.body_iterator
@@ -3721,9 +3767,10 @@ async def handle_sync_request(path: str, request: Request):
         # with keepalives while it is processed: the scheduling wait and the
         # upstream's pre-token silence otherwise sit behind zero bytes and a
         # proxy's respond timeout (Traefik's default 180 s) 504s the client
-        # before the first token. Whisper ignores stream, so it keeps the
-        # synchronous path and its upstream content type.
-        if payload_requests_streaming(body) and not is_whisper_payload(body):
+        # before the first token. A request the pipeline answers synchronously
+        # (Whisper ignores stream) keeps the synchronous path and its upstream
+        # content type.
+        if payload_requests_streaming(body) and not _resolves_to_whisper(body, path, auth):
             response = await _keepalive_streaming_response(request, **execute_kwargs)
             return response
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)

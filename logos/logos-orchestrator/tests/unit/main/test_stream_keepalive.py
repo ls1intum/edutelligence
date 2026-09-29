@@ -211,6 +211,63 @@ async def test_a_sync_200_answer_is_carried_through(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scheduling_decision_rides_in_the_stream(monkeypatch):
+    """The ETTFT estimate and warmth state are only known once the pipeline has
+    run — after the keepalive response is committed — so they cannot ride the
+    response headers. The wrapper emits them as an SSE comment (under the same
+    names the headers used) for the benchmark client that correlates the
+    scheduler's view with the observed TTFT."""
+
+    async def fast_stream():
+        yield b"data: hello\n\n"
+
+    response_obj = StreamingResponse(
+        fast_stream(),
+        media_type="text/event-stream",
+        headers={"X-Logos-ETTFT-Ms": "123", "X-Logos-Warmth-State": "1"},
+    )
+
+    async def fake_route_and_execute(**kwargs):
+        return response_obj
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+
+    response = await main._keepalive_streaming_response(
+        _Client(leaves=False), log_id=1, request_id="req-9", path="chat/completions"
+    )
+    raw = await _collect(response)
+
+    assert b": logos-schedule" in raw
+    assert b"x-logos-ettft-ms=123" in raw
+    assert b"x-logos-warmth-state=1" in raw
+    # The scheduling comment precedes the content.
+    assert raw.index(b"logos-schedule") < raw.index(b"data: hello")
+
+
+@pytest.mark.asyncio
+async def test_no_scheduling_comment_without_scheduling_headers(monkeypatch):
+    """A response that carries no scheduling values emits no comment."""
+
+    async def fast_stream():
+        yield b"data: hello\n\n"
+
+    response_obj = StreamingResponse(fast_stream(), media_type="text/event-stream")
+
+    async def fake_route_and_execute(**kwargs):
+        return response_obj
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+
+    response = await main._keepalive_streaming_response(
+        _Client(leaves=False), log_id=1, request_id="req-10", path="chat/completions"
+    )
+    raw = await _collect(response)
+
+    assert b"logos-schedule" not in raw
+    assert b"data: hello" in raw
+
+
+@pytest.mark.asyncio
 async def test_disconnect_cancels_the_pipeline_work(monkeypatch):
     """A client that is already gone must not leave the pipeline running: the
     watcher fires, the work is cancelled, and no content is delivered."""
