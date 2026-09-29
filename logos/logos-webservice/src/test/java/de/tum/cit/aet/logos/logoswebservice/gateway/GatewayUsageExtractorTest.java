@@ -196,4 +196,49 @@ class GatewayUsageExtractorTest {
         assertThat(GatewayUsageExtractor.fromSseDataLine(mapper, ": keep-alive")).isEmpty();
         assertThat(GatewayUsageExtractor.fromSseDataLine(mapper, "")).isEmpty();
     }
+
+    @Test
+    void serviceTier_readTopLevelAndNormalised() throws Exception {
+        assertThat(serviceTierOf("{\"service_tier\":\"Flex\",\"usage\":{}}")).isEqualTo("flex");
+        assertThat(serviceTierOf("{\"service_tier\":\"  PRIORITY  \"}")).isEqualTo("priority");
+    }
+
+    @Test
+    void serviceTier_readOffTheResponsesEnvelope() throws Exception {
+        assertThat(serviceTierOf(
+            "{\"type\":\"response.completed\",\"response\":{\"service_tier\":\"flex\"}}"))
+            .isEqualTo("flex");
+    }
+
+    @Test
+    void serviceTier_unusableRootTierFallsBackToTheEnvelope() throws Exception {
+        // A present-but-null root tier must not shadow a usable nested one.
+        assertThat(serviceTierOf(
+            "{\"service_tier\":null,\"response\":{\"service_tier\":\"flex\"}}"))
+            .isEqualTo("flex");
+    }
+
+    @Test
+    void serviceTier_absentOrMalformedYieldsNothing() throws Exception {
+        assertThat(serviceTierOf("{\"usage\":{}}")).isNull();
+        assertThat(serviceTierOf("{\"service_tier\":null}")).isNull();
+        assertThat(serviceTierOf("{\"service_tier\":3}")).isNull();
+        assertThat(serviceTierOf("{\"service_tier\":\"\"}")).isNull();
+        assertThat(serviceTierOf("{\"service_tier\":\" \"}")).isNull();
+        assertThat(GatewayUsageExtractor.serviceTier(null)).isNull();
+    }
+
+    @Test
+    void serviceTierFromSseLine_followsTheEventEnvelope() {
+        assertThat(GatewayUsageExtractor.serviceTier(GatewayUsageExtractor.parseSseDataLine(mapper,
+            "data: {\"response\":{\"service_tier\":\"Flex\"}}")))
+            .isEqualTo("flex");
+        assertThat(GatewayUsageExtractor.serviceTier(GatewayUsageExtractor.parseSseDataLine(mapper,
+            "data: [DONE]")))
+            .isNull();
+    }
+
+    private String serviceTierOf(String json) throws Exception {
+        return GatewayUsageExtractor.serviceTier(mapper.readTree(json));
+    }
 }

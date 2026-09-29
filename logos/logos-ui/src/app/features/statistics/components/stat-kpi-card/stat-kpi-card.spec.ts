@@ -1,9 +1,13 @@
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import kpiCardStyles from './stat-kpi-card.scss?raw';
-import statisticsStyles from '../../statistics.scss?raw';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { StatKpiCardComponent } from './stat-kpi-card';
 import { SparklineComponent } from '../sparkline/sparkline';
+
+const kpiCardStyles = readStyleSheet('stat-kpi-card.scss');
+const statisticsStyles = readStyleSheet('../../statistics.scss');
 
 /**
  * The card as the statistics page uses it: a value, the projected right
@@ -60,6 +64,15 @@ describe('right-slot sizing contract', () => {
     expect(ruleBody(statisticsStyles, '.stats-lane-bars')).toMatch(/overflow:\s*hidden/);
   });
 });
+
+/**
+ * Reads a stylesheet from the spec's directory as raw text. The unit-test
+ * builder's pipeline cannot resolve `?raw` imports, and the environment
+ * applies no layout — the specs pin CSS declarations as text instead.
+ */
+function readStyleSheet(file: string): string {
+  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), file), 'utf8');
+}
 
 /**
  * The declaration block of a top-level rule, so the assertions above read
