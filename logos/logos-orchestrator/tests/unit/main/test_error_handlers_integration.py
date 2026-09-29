@@ -430,8 +430,13 @@ class TestUpstreamErrorForwarding:
 
 
 class TestStreamingErrors:
-    def test_upstream_4xx_pre_stream_returns_json_response(self, client, _stub_pipeline):
-        """Upstream 4xx before any SSE chunks → JSONResponse with correct status."""
+    def test_upstream_4xx_pre_stream_becomes_instream_error(self, client, _stub_pipeline):
+        """Upstream 4xx before any SSE chunks → carried in the committed stream.
+
+        A streaming request commits its keepalive response immediately, so a
+        pre-stream failure can no longer be an HTTP status — it rides in the
+        stream as an OpenAI error frame, the way a mid-stream failure does.
+        """
 
         async def error_streaming(*a, **k) -> AsyncIterator[bytes]:
             raise UpstreamStreamError(
@@ -480,8 +485,10 @@ class TestStreamingErrors:
             headers={"logos_key": "test-key"},
         )
 
-        # The response must NOT be HTTP 200 for a pre-stream 4xx
-        assert resp.status_code == 429
-        body = resp.json()
-        _assert_openai_error_shape(body)
-        assert body["error"]["type"] == "rate_limit_error"
+        # The committed keepalive response: 200, SSE content type.
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        # The failure rides in the stream as an OpenAI error frame.
+        assert "rate limit exceeded" in resp.text
+        assert "rate_limit_error" in resp.text
+        assert "data: [DONE]" in resp.text

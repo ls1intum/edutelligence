@@ -144,14 +144,44 @@ async def test_errors_from_the_pipeline_still_propagate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_streaming_requests_are_guarded_too(monkeypatch):
-    """Resource mode can resolve to Whisper and answer synchronously even for stream: true."""
-    guarded = []
+async def test_streaming_requests_take_the_keepalive_path(monkeypatch):
+    """A stream request commits early and keepalives while it is processed; the
+    disconnect guard now lives in the keepalive wrapper rather than the plain
+    execution guard."""
+    keepalive = []
 
     async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock()
         auth.api_key_id = 88
         return {}, auth, {"stream": True}, "127.0.0.1", None, [{"model_id": 1}]
+
+    async def fake_filter(deployments, payload=None):
+        return deployments
+
+    async def fake_keepalive(request, **kwargs):
+        keepalive.append(kwargs)
+        return "keepalive-guarded"
+
+    monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
+    monkeypatch.setattr(main, "_keepalive_streaming_response", fake_keepalive)
+
+    result = await main.handle_sync_request("chat/completions", _Client(leaves=False))
+
+    assert result == "keepalive-guarded"
+    assert len(keepalive) == 1
+
+
+@pytest.mark.asyncio
+async def test_whisper_stream_requests_keep_the_sync_guard(monkeypatch):
+    """Whisper ignores ``stream`` and keeps the upstream content type, so it must
+    stay on the synchronous path instead of committing a keepalive SSE stream."""
+    guarded = []
+
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
+        auth = MagicMock()
+        auth.api_key_id = 88
+        return {}, auth, {"stream": True, "model": "whisper-1"}, "127.0.0.1", None, [{"model_id": 1}]
 
     async def fake_filter(deployments, payload=None):
         return deployments

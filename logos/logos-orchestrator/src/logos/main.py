@@ -29,10 +29,12 @@ from logos.anthropic_compat import (
     MessagesStreamTranslator,
     UpstreamDialect,
     from_message,
+    is_messages_path,
     stream_translator,
     translate_error,
     translate_response,
 )
+from logos.anthropic_compat.common import sse
 from logos.auth import AuthContext, authenticate_api_key
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
 from logos.batch_local import local_batch_runner_loop
@@ -3441,6 +3443,198 @@ async def _wait_for_worker_connect(
     return deployments
 
 
+# ── Keepalives while a streaming request is still being processed ──────────
+#
+# A streaming client sees no bytes until the first token: the scheduling wait,
+# the context resolution, and the upstream's pre-token silence all happen
+# before a single byte is on the wire. A reverse proxy in front of Logos (the
+# deployment's Traefik defaults to a 180 s respond timeout) gives up with a 504
+# long before a queued or cold-loading request produces its first token, and the
+# client reports a network failure. Committing the response early and dribbling
+# keepalive bytes keeps the connection alive through the whole wait.
+
+# How often a keepalive goes out when nothing else is. Well under the 180 s the
+# proxy allows, so a single dropped keepalive cannot open the 504 window.
+_KEEPALIVE_INTERVAL_S = float(os.getenv("LOGOS_STREAM_KEEPALIVE_S", "15"))
+# An SSE comment: a valid, ignorable line in every SSE stream (Anthropic and
+# OpenAI alike), and safe to send before the upstream dialect is even known.
+_KEEPALIVE_BYTES = b": keepalive\n\n"
+# Marks the end of the content stream in the keepalive queue.
+_KEEPALIVE_DONE = object()
+
+
+def _error_frames(path: str, status: int, body: Any) -> list:
+    """A failure as SSE frames in the dialect the client speaks.
+
+    Once the keepalive response has committed (200, text/event-stream), a
+    failure can no longer ride a proper HTTP status — it has to travel in the
+    stream, the way a mid-stream failure already does. The frame shape follows
+    the inbound path: a Messages client gets an ``error`` event, a chat
+    client an OpenAI ``data:`` error frame plus ``[DONE]``.
+    """
+    _, openai_body = coerce_upstream_error(status, body)
+    if is_messages_path(path):
+        return [sse("error", translate_error(openai_body))]
+    return [b"\n\n", f"data: {json.dumps(openai_body)}\n\n".encode(), b"data: [DONE]\n\n"]
+
+
+def _instream_error_frames(path: str, exc: Exception) -> list:
+    """An exception from the execution path as in-stream error frames."""
+    if isinstance(exc, HTTPException):
+        return _error_frames(path, exc.status_code, {"error": str(exc.detail)})
+    return _error_frames(path, 500, {"error": str(exc)})
+
+
+def _instream_sync_frames(response: Response, path: str) -> list:
+    """A synchronous response that the keepalive response has to carry.
+
+    ``route_and_execute`` can answer a ``stream: true`` request without a
+    stream — a pre-stream error, or a request the pipeline resolved to a
+    non-streaming answer (Whisper ignores ``stream``). The keepalive response
+    is already committed, so the answer rides in the stream: an error becomes
+    an error frame, and a 200 body is handed over as-is.
+    """
+    status = getattr(response, "status_code", 200)
+    raw = getattr(response, "body", b"")
+    if status != 200:
+        try:
+            body = json.loads(raw) if raw else {"error": "request failed"}
+        except (ValueError, TypeError):
+            body = {"error": raw.decode(errors="replace") if raw else "request failed"}
+        return _error_frames(path, status, body)
+    return [raw] if raw else []
+
+
+async def _keepalive_producer(inner_iterator, queue: "asyncio.Queue") -> None:
+    """Feed the content streamer's chunks into ``queue``.
+
+    A producer task (rather than awaiting the streamer inline) keeps the drain
+    robust under cancellation: when the client walks away, cancelling this task
+    unwinds the ``aclosing`` context, which closes the inner streamer and runs
+    its cleanup — the worker cancel, the scheduler release — promptly, instead
+    of leaving the streamer to the async-generator GC hook.
+    """
+    try:
+        async with aclosing(inner_iterator):
+            async for chunk in inner_iterator:
+                await queue.put(chunk)
+        await queue.put(_KEEPALIVE_DONE)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        with suppress(asyncio.CancelledError):
+            await queue.put(exc)
+
+
+async def _keepalive_streaming_response(request: Request, **execute_kwargs):
+    """Answer a streaming request with a response that stays alive while it works.
+
+    Returns a ``StreamingResponse`` immediately, so the headers — and thus the
+    first bytes — reach the client (and any proxy) within milliseconds, well
+    inside the proxy's respond timeout. The generator then runs the usual
+    execution path and dribbles a keepalive byte whenever the gap since the
+    last real byte exceeds ``_KEEPALIVE_INTERVAL_S``.
+
+    Two phases, because both can sit behind a long silence:
+
+    * **Pipeline** — ``route_and_execute`` schedules, resolves the context and
+      (on the HTTP path) peeks the upstream's first chunk. All of it runs
+      before any token exists, and it is what can take minutes.
+    * **Content** — the resolved stream's body, drained through a queue so the
+      keepalives keep flowing across the upstream's own pre-token silence.
+
+    A keepalive is yielded by this wrapper, not by the streamer, so it never
+    reaches the logging, billing or translation that the streamer performs on
+    real content. Failures that used to be an HTTP status (a scheduling
+    timeout, a context error, a pre-stream non-2xx) become in-stream error
+    events once the response has committed; the no-deployment 404 is raised
+    before this point and keeps its status.
+    """
+    request_id = execute_kwargs.get("request_id")
+    log_id = execute_kwargs.get("log_id")
+    path = execute_kwargs.get("path")
+    headers = {"X-Request-ID": request_id} if request_id else None
+
+    async def gen():
+        work = asyncio.create_task(route_and_execute(**execute_kwargs))
+        watcher = asyncio.create_task(_wait_for_client_disconnect(request))
+        producer: Optional[asyncio.Task] = None
+        inner_iterator = None
+        try:
+            # Phase 1 — the pipeline, keepaliving across its silence.
+            response: Optional[Response] = None
+            try:
+                while True:
+                    done, _ = await asyncio.wait({work, watcher}, timeout=_KEEPALIVE_INTERVAL_S)
+                    # The watcher's probe consumes the http.disconnect message,
+                    # so a disconnect that lands in the same tick as a finished
+                    # task wins: streaming into a closed socket would be lost
+                    # either way.
+                    if watcher in done:
+                        logger.info(
+                            "Cancelled request %s: client disconnected before the response was ready", request_id
+                        )
+                        _record_log_failure(
+                            log_id,
+                            request_id,
+                            "Client disconnected before the response was ready; upstream request cancelled.",
+                        )
+                        return
+                    if work in done:
+                        response = work.result()
+                        break
+                    yield _KEEPALIVE_BYTES
+            except Exception as exc:
+                for frame in _instream_error_frames(path, exc):
+                    yield frame
+                return
+
+            # The response is ready; Starlette's own watcher takes over the
+            # disconnect for the body phase.
+            watcher.cancel()
+
+            if isinstance(response, StreamingResponse):
+                # Phase 2 — the content stream, keepaliving across the
+                # upstream's pre-token silence.
+                inner_iterator = response.body_iterator
+                queue: "asyncio.Queue" = asyncio.Queue(maxsize=1024)
+                producer = asyncio.create_task(_keepalive_producer(inner_iterator, queue))
+                while True:
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_INTERVAL_S)
+                    except asyncio.TimeoutError:
+                        yield _KEEPALIVE_BYTES
+                        continue
+                    if item is _KEEPALIVE_DONE:
+                        break
+                    if isinstance(item, Exception):
+                        for frame in _instream_error_frames(path, item):
+                            yield frame
+                        break
+                    yield item
+            else:
+                for frame in _instream_sync_frames(response, path):
+                    yield frame
+        finally:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await watcher
+            if not work.done():
+                work.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await work
+            if producer is not None:
+                if not producer.done():
+                    producer.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await producer
+            if inner_iterator is not None:
+                with suppress(Exception):
+                    await inner_iterator.aclose()
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -3523,6 +3717,15 @@ async def handle_sync_request(path: str, request: Request):
             request_id=request_id,
             required_provider_id=required_provider_id,
         )
+        # A streaming request commits its response immediately and stays alive
+        # with keepalives while it is processed: the scheduling wait and the
+        # upstream's pre-token silence otherwise sit behind zero bytes and a
+        # proxy's respond timeout (Traefik's default 180 s) 504s the client
+        # before the first token. Whisper ignores stream, so it keeps the
+        # synchronous path and its upstream content type.
+        if payload_requests_streaming(body) and not is_whisper_payload(body):
+            response = await _keepalive_streaming_response(request, **execute_kwargs)
+            return response
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
         return response
     finally:
