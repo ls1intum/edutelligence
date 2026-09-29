@@ -368,4 +368,51 @@ class RequestLogStatsRollupTest {
         assertThat(rollupRowCount()).isEqualTo(afterFirst);
         assertThat(stats(query(24, null, null)).get("totals")).isEqualTo(once.get("totals"));
     }
+
+    @Test
+    void deleting_a_model_moves_its_usage_to_a_named_orphan_bucket() {
+        // The delete must not drop the usage from the per-model views: the
+        // BEFORE DELETE trigger stamps the captured name on every row of the
+        // model before the FK drops the id, the rows go dirty, and the next
+        // pass re-rolls their hours into the (no id, name) grain. Deleting
+        // before the rollup is populated keeps the "live" side of this class's
+        // invariant a pure log_entry read.
+        assertRollupIsEmpty();
+        jdbc.update("DELETE FROM models WHERE id = 5001");
+
+        // The trigger ran before the FK nulled the id: every row of the model
+        // carries the name now, and none carries the id any more.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry WHERE model_id IS NULL AND model_name = 'gpt-4'",
+                Integer.class)).isEqualTo(7);
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry WHERE model_id IS NOT NULL AND model_name IS NOT NULL",
+                Integer.class)).isZero();
+
+        Map<String, Object> live = stats(query(24, null, null));
+
+        populateRollup();
+        Map<String, Object> merged = stats(query(24, null, null));
+
+        assertThat(merged.get("modelBreakdown")).isEqualTo(live.get("modelBreakdown"));
+        assertThat(merged.get("modelTimeSeries")).isEqualTo(live.get("modelTimeSeries"));
+
+        // The rollup holds the orphan bucket, named - not one anonymous
+        // no-model bucket that every deleted model would share.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry_hourly_stats"
+                + " WHERE model_id IS NULL AND model_name = 'gpt-4'",
+                Integer.class)).isGreaterThan(0);
+
+        List<Map<String, Object>> breakdown = (List<Map<String, Object>>) merged.get("modelBreakdown");
+        assertThat(breakdown).hasSize(1);
+        Map<String, Object> entry = breakdown.get(0);
+        assertThat(entry.get("modelId")).isNull();
+        assertThat(entry.get("modelName")).isEqualTo("gpt-4");
+        assertThat((Boolean) entry.get("modelDeleted")).isTrue();
+        assertThat(((Number) entry.get("requestCount")).longValue()).isEqualTo(7L);
+    }
 }

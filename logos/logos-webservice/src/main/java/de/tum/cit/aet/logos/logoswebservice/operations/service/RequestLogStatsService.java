@@ -179,8 +179,11 @@ public class RequestLogStatsService {
         return logEntryRepository.findModelBreakdown(start, end, userId, teamId, providerId, errorsOnly).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
-                m.put("modelId", p.getModelId() != null ? p.getModelId() : -1);
+                // null modelId is a deleted model: its usage survives under the
+                // captured name, and the UI marks the entry as deleted.
+                m.put("modelId", p.getModelId());
                 m.put("modelName", p.getModelName());
+                m.put("modelDeleted", p.getModelId() == null);
                 m.put("requestCount", p.getRequestCount());
                 m.put("avgQueueSeconds", p.getAvgQueueSeconds());
                 m.put("avgRunSeconds", p.getAvgRunSeconds());

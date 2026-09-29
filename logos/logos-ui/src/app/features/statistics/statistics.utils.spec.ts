@@ -4,6 +4,7 @@ import {
   formatPercent,
   formatTokenCount,
   formatUptime,
+  modelSeriesKey,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -309,5 +310,25 @@ describe('formatBucketRange', () => {
   it('formats a daily bucket as a single calendar day', () => {
     const start = new Date(2026, 8, 1, 0, 0, 0).getTime();
     expect(formatBucketRange(start, 86_400_000)).toBe('Sep 1');
+  });
+});
+
+/**
+ * The per-model chart series are keyed by this, not by the model id alone:
+ * a deleted model's id is gone from the feed, so its usage would otherwise
+ * lose its series (and its legend entry) along with it.
+ */
+describe('modelSeriesKey', () => {
+  it('keys a live model by its id, ignoring the name', () => {
+    expect(modelSeriesKey(42, 'gpt-4')).toBe('42');
+  });
+
+  it('keys a deleted model by its captured name', () => {
+    expect(modelSeriesKey(null, 'gpt-4')).toBe('gpt-4');
+  });
+
+  it('falls back to a single shared bucket when neither id nor name survived', () => {
+    expect(modelSeriesKey(null, null)).toBe('deleted-model');
+    expect(modelSeriesKey(null, '   ')).toBe('deleted-model');
   });
 });

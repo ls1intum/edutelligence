@@ -15,7 +15,10 @@ The UI shows the role badge "Logos Admin" in the header menu.
 ## Statistics
 
 Platform-wide usage: request volume, token counts, and latency over time,
-with live updates over the WebSocket statistics feed.
+with live updates over the WebSocket statistics feed. Deleting a model does
+not drop its usage from these views: the historical requests keep showing
+under the model's former name, marked with a trash icon so the entry is
+recognizable as deleted.
 
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 

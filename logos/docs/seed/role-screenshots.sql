@@ -253,6 +253,16 @@ FROM (VALUES
 ) AS v(name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
 WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = v.name);
 
+-- Retired demo model: created here, given usage below, then deleted at the
+-- end of the seed. The delete trigger stamps its name onto the usage rows,
+-- so the statistics page shows the usage as a trash-marked deleted-model
+-- entry. Catalog-only on purpose (no providers, no permissions): it never
+-- appears in the model list or in routing.
+INSERT INTO models (name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
+SELECT 'gpt-4o-mini', 0, 0, 0, 0, 'chat',
+       'Fast general-purpose model.'
+WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = 'gpt-4o-mini');
+
 INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning)
 SELECT m.id,
        true,
@@ -432,6 +442,43 @@ JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
 JOIN models m ON m.name = 'mistral-small-3.2-24b'
 JOIN providers p ON p.name = 'Docs Cloud (EU)';
 
+-- Usage on the model this seed retires: spread across the last ten days so
+-- the statistics page's default window shows a deleted-model entry.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-retired-' || g.n,
+    k.id, m.id, p.id, 'success',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval,
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '1 second',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '1.2 seconds',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '2 seconds',
+    (g.n % 12 = 0),
+    0,
+    k.user_id,
+    k.team_id,
+    'docs-role-screenshots',
+    true,
+    true,
+    60000 + (g.n * 9000)
+FROM generate_series(1, 12) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
+JOIN models m ON m.name = 'gpt-4o-mini'
+JOIN providers p ON p.name = 'Docs Local Worker';
+
+-- Retire the demo model. The BEFORE DELETE trigger stamps the model name onto
+-- every usage row before the foreign key nulls the id, so the statistics
+-- page keeps showing the usage under the model's former name — flagged
+-- deleted. The provider guard keeps a shared development database safe: a
+-- real model somebody still routes to always has a provider link.
+DELETE FROM models m
+WHERE m.name = 'gpt-4o-mini'
+  AND NOT EXISTS (SELECT 1 FROM model_provider mp WHERE mp.model_id = m.id);
+
 INSERT INTO usage_tokens (type_id, log_entry_id, token_count)
 SELECT tt.id, le.id, 350 + (le.id % 200)
 FROM log_entry le
@@ -531,5 +578,8 @@ SELECT 'docs role-screenshots seed applied' AS status,
        )) AS models,
        (SELECT count(*) FROM policies WHERE name LIKE 'Docs — %') AS policies,
        (SELECT count(*) FROM log_entry WHERE environment = 'docs-role-screenshots') AS log_entries,
+       (SELECT count(*) FROM log_entry
+        WHERE environment = 'docs-role-screenshots'
+          AND model_id IS NULL AND model_name = 'gpt-4o-mini') AS deleted_model_entries,
        (SELECT count(*) FROM batch_objects WHERE upstream_id LIKE 'batch_docs_%') AS batches,
        (SELECT count(*) FROM agent_sessions WHERE created_by = 'docs-role-screenshots') AS agent_sessions;
