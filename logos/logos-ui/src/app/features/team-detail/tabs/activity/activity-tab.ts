@@ -11,11 +11,12 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
+import { HttpResponse } from '@angular/common/http';
 import { AppSelectOption, SelectComponent } from '../../../../shared/components/select/select';
 import { RequestItem } from '../../../statistics/statistics.models';
 import { deriveStage, formatTimeAgo, formatTokenCount } from '../../../statistics/statistics.utils';
 import { TeamActivityService } from './activity-tab.service';
-import { RequestCursor, TeamActivityPayload, TraceExport, TraceExportItem } from './activity-tab.models';
+import { RequestCursor, TeamActivityPayload } from './activity-tab.models';
 import { MostAskedQuestions } from './most-asked-questions';
 
 /** How often the live counts are refreshed while the tab is open. */
@@ -64,6 +65,13 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   readonly exportFormat = signal<'json' | 'csv'>('json');
   readonly exporting = signal(false);
   readonly exportError = signal<string | null>(null);
+  /**
+   * What the last download covered: the server caps one export, so a file
+   * that holds fewer requests than the window did must say so — a capped
+   * download that reads as a complete one is a data-loss story waiting to
+   * happen.
+   */
+  readonly exportNotice = signal<string | null>(null);
 
   readonly exportFormatOptions: AppSelectOption[] = [
     { value: 'json', label: 'JSON' },
@@ -198,9 +206,9 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   /**
    * Download the team's request traces as the picked file format: every
    * request of the selected window, and for the consented (FULL-logging)
-   * ones the stored request and response content with it. The server answers
-   * the JSON envelope; the CSV is cut from it here, the same way the import
-   * credentials file is cut from the upload result.
+   * ones the stored request and response content with it. Both formats are
+   * cut on the application server and arrive as a file — the view only names
+   * it, saves it, and says what it holds.
    */
   async exportTraces(): Promise<void> {
     if (!this.teamId || this.exporting()) return;
@@ -209,22 +217,30 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     // mid-flight, and relabeling one team's data under another's id would be
     // worse than a stale number.
     const teamId = this.teamId;
+    const days = this.days();
+    const format = this.exportFormat();
     this.exporting.set(true);
     this.exportError.set(null);
     try {
-      const payload = await this.activityService.getTraceExport(
+      const response = await this.activityService.getTraceExport(
         teamId,
-        this.days(),
+        days,
         this.filterUserId(),
+        format,
       );
-      const format = this.exportFormat();
-      this.downloadFile(
-        `logos-traces-team-${teamId}-${payload.days}d.${format}`,
-        format === 'csv' ? tracesToCsv(payload) : JSON.stringify(payload, null, 2),
-        format === 'csv' ? 'text/csv' : 'application/json',
+      this.downloadFile(response, `logos-traces-team-${teamId}-${days}d.${format}`);
+      // The headers are set before the first byte, so they are the same facts
+      // the file carries — and the only ones the view can read back.
+      const total = Number(response.headers.get('X-Logos-Export-Total') ?? '0');
+      const count = Number(response.headers.get('X-Logos-Export-Count') ?? '0');
+      this.exportNotice.set(
+        response.headers.get('X-Logos-Export-Truncated') === 'true'
+          ? `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — narrow the period or the requester filter for the rest.`
+          : null,
       );
     } catch {
       this.exportError.set('Could not export the traces.');
+      this.exportNotice.set(null);
     } finally {
       this.exporting.set(false);
     }
@@ -310,6 +326,10 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   private resetToFirstPage(): void {
     this.pageIndex.set(0);
     this.cursorForPage = [null];
+    // A notice about the last download describes the window and filter it
+    // was cut from; a new scope would leave it describing something that is
+    // not on screen anymore.
+    this.exportNotice.set(null);
   }
 
   private async load(): Promise<void> {
@@ -345,79 +365,25 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     }
   }
 
-  private downloadFile(filename: string, content: string, mimeType: string): void {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
+  private downloadFile(response: HttpResponse<Blob>, fallbackName: string): void {
+    const body = response.body;
+    if (!body) return;
+    const url = URL.createObjectURL(body);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = this.fileNameFrom(response, fallbackName);
     a.click();
     URL.revokeObjectURL(url);
   }
-}
 
-// ── Trace export helpers  ────────────────────────────────────────
-
-/** Column order of the CSV export; the JSON envelope is the reference. */
-export const TRACE_CSV_COLUMNS: (keyof TraceExportItem)[] = [
-  'request_id',
-  'timestamp_request',
-  'timestamp_forwarding',
-  'timestamp_response',
-  'time_at_first_token',
-  'privacy_level',
-  'model_name',
-  'provider_type',
-  'environment',
-  'api_key_id',
-  'api_key_name',
-  'username',
-  'full_name',
-  'team_name',
-  'client_ip',
-  'status',
-  'error_message',
-  'priority',
-  'initial_priority',
-  'priority_when_scheduled',
-  'queue_depth_at_enqueue',
-  'queue_depth_at_schedule',
-  'queue_depth_at_arrival',
-  'timeout_s',
-  'utilization_at_arrival',
-  'queue_wait_ms',
-  'was_cold_start',
-  'load_duration_ms',
-  'available_vram_mb',
-  'prompt_tokens',
-  'completion_tokens',
-  'total_tokens',
-  'cost_microcents',
-  'classification_statistics',
-  'input_payload',
-  'headers',
-  'response_payload',
-];
-
-/**
- * The CSV version of a trace export. Structured fields go out as compact
- * JSON so a trace stays one row; quoting follows the same rules as the import
- * credentials file — escape what breaks a table, because a payload is one
- * comma away from breaking it.
- */
-export function tracesToCsv(payload: TraceExport): string {
-  const rows = payload.traces.map((trace) =>
-    TRACE_CSV_COLUMNS.map((column) => traceCsvCell(trace[column])).join(','),
-  );
-  return [TRACE_CSV_COLUMNS.join(','), ...rows].join('\n');
-}
-
-export function traceCsvCell(value: unknown): string {
-  const text =
-    value === null || value === undefined
-      ? ''
-      : typeof value === 'string'
-        ? value
-        : JSON.stringify(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  /**
+   * The file name the server picked for the download, out of the
+   * Content-Disposition header — the header is the file's own name, and the
+   * fallback keeps a download that lost its headers under a sane one.
+   */
+  private fileNameFrom(response: HttpResponse<Blob>, fallback: string): string {
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const named = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+    return named?.[1] ?? fallback;
+  }
 }

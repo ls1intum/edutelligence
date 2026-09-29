@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Team tab / activity view load time.
+
+         The team-scoped activity view (live counts, per-key usage, requester
+         picker, request page, most asked questions) refreshes every five
+         seconds per open tab, and the trace export re-reads the same table.
+         Every one of those queries is scoped to one team plus a time window,
+         and none of the existing indexes carries that shape:
+
+           * idx_log_entry_team_id (000) is the only team index, and it is
+             single-column, so a team slice degrades to a scan of EVERY row
+             the team ever logged, filtered afterwards.
+           * idx_log_entry_timestamp_request (012) is platform-wide: a
+             team-scoped request page or export walks the whole platform's
+             time range backwards and filters down to the team.
+           * idx_log_entry_effective_ts (035) indexes the COALESCE the
+             aggregate queries range on, but without team_id, so a team slice
+             cannot seek into it either.
+
+         The live counts were the worst of it: their predicate
+         `timestamp_response IS NULL OR timestamp_response >= :since` selects
+         the team's entire stranded history (rows that never gained a
+         response), of any age, on every five-second poll — the 30-minute
+         in-flight horizon sat only inside the COUNT FILTERs.
+
+         The four indexes below make every one of those reads a seek:
+
+           (team_id, timestamp_request DESC)   request page, the per-poll
+                                               range count, the export's
+                                               newest-first ordering, and the
+                                               queued live count
+           (team_id, timestamp_response)       finished/failed live counts
+           (team_id, timestamp_forwarding)
+               WHERE timestamp_response IS NULL
+                                               running live count; the partial
+                                               predicate keeps the index to the
+                                               rows that can still be in
+                                               flight
+           (team_id, COALESCE(forwarding, request, response))
+                                               per-key usage, requester
+                                               picker, and the most-asked
+                                               prefilter, which ranges on the
+                                               COALESCE and orders by it
+
+         As with 012/014/027/028/035/036 each build runs outside a
+         transaction so CONCURRENTLY does not lock log_entry against the
+         logos-orchestrator, which keeps writing to this table while
+         logos-webservice is redeployed. -->
+
+    <changeSet id="042-log-entry-team-timestamp-request-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_ts_request"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_team_ts_request
+                ON log_entry (team_id, timestamp_request DESC);
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_team_ts_request;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="042-log-entry-team-timestamp-response-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_ts_response"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_team_ts_response
+                ON log_entry (team_id, timestamp_response);
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_team_ts_response;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="042-log-entry-team-in-flight-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_in_flight"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_team_in_flight
+                ON log_entry (team_id, timestamp_forwarding)
+                WHERE timestamp_response IS NULL;
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_team_in_flight;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="042-log-entry-team-effective-ts-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_effective_ts"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_team_effective_ts
+                ON log_entry (team_id, (COALESCE(timestamp_forwarding, timestamp_request, timestamp_response)));
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_team_effective_ts;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -58,20 +58,39 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * over a day old, which a live view would have reported as a queue backing
      * up right now. Nothing older than the request timeout can still be
      * running, so anything past it is wreckage, not work.
+     *
+     * Each stage is its own index-ranged subquery instead of one shared scan:
+     * the old shape selected the team's entire response-NULL history of any
+     * age just to keep the in-flight horizons in range, and re-read that
+     * wreckage on every poll. Ranged per stage, each count seeks its horizon
+     * (idx_log_entry_team_ts_request / _in_flight / _ts_response, 042) and
+     * never looks at rows past it. The predicates are the old FILTERs verbatim
+     * — the old outer WHERE was implied by them, not the other way round.
      */
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NULL AND le.timestamp_response IS NULL
-                                  AND le.timestamp_request >= :inFlightSince) AS queued,
-               COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NULL
-                                  AND le.timestamp_forwarding >= :inFlightSince) AS running,
-               COUNT(*) FILTER (WHERE le.timestamp_response IS NOT NULL AND le.timestamp_response >= :since) AS finished,
-               COUNT(*) FILTER (WHERE le.timestamp_response IS NOT NULL AND le.timestamp_response >= :since
-                                  AND (le.result_status IS DISTINCT FROM 'success'
-                                       OR (le.error_message IS NOT NULL AND le.error_message != ''))) AS failed
-        FROM log_entry le
-        WHERE le.team_id = :teamId
-          AND (le.timestamp_response IS NULL OR le.timestamp_response >= :since)
+        SELECT (SELECT COUNT(*)
+                   FROM log_entry le
+                   WHERE le.team_id = :teamId
+                     AND le.timestamp_forwarding IS NULL
+                     AND le.timestamp_response IS NULL
+                     AND le.timestamp_request >= :inFlightSince) AS queued,
+               (SELECT COUNT(*)
+                   FROM log_entry le
+                   WHERE le.team_id = :teamId
+                     AND le.timestamp_forwarding IS NOT NULL
+                     AND le.timestamp_response IS NULL
+                     AND le.timestamp_forwarding >= :inFlightSince) AS running,
+               (SELECT COUNT(*)
+                   FROM log_entry le
+                   WHERE le.team_id = :teamId
+                     AND le.timestamp_response >= :since) AS finished,
+               (SELECT COUNT(*)
+                   FROM log_entry le
+                   WHERE le.team_id = :teamId
+                     AND le.timestamp_response >= :since
+                     AND (le.result_status IS DISTINCT FROM 'success'
+                          OR (le.error_message IS NOT NULL AND le.error_message != ''))) AS failed
         """, nativeQuery = true)
     TeamActivityProjections.LiveCountsProjection findTeamLiveCounts(
         @Param("teamId") int teamId,
@@ -466,7 +485,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("requestIds") List<String> requestIds);
 
     /**
-     * The request traces of one team for the export.
+     * The request traces of one team for the export, one keyset page at a
+     * time.
      *
      * Every request of the window comes out — the export must describe the
      * same slice of traffic the activity list above shows, and a download that
@@ -480,6 +500,13 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * the feed can never disagree. Newest first, with the primary key as tie
      * break: the export is capped, and the rows kept must be a stable,
      * explainable slice of the window rather than an arbitrary one.
+     *
+     * Paged by the same (timestamp_request, id) keyset the feed uses: the
+     * export streams row by row into the download, so it must be able to hold
+     * one chunk of the window in memory rather than the whole capped slice.
+     * A null cursor starts at the newest row; the ORDER BY is what
+     * idx_log_entry_team_ts_request (042) walks backwards, so a page costs the
+     * same at the start of the window as at the cap.
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -539,10 +566,69 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         WHERE le.team_id = :teamId
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
+               OR (le.timestamp_request, le.id)
+                  < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
         ORDER BY le.timestamp_request DESC, le.id DESC
         LIMIT :limitN
         """, nativeQuery = true)
     List<LogExportProjection> findTracesForExport(
+        @Param("teamId") int teamId,
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId,
+        @Param("cursorTs") Timestamp cursorTs,
+        @Param("cursorId") Integer cursorId,
+        @Param("limitN") int limitN);
+
+    /**
+     * How many requests the export window holds under the same narrowing the
+     * export itself applies — the number the download's truncation notice is
+     * measured against. Ranged on timestamp_request with the team as the
+     * leading index column (042), so it stays a count over the window's index
+     * entries even when the window is ninety days of a busy team.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM log_entry le
+        WHERE le.team_id = :teamId
+          AND le.timestamp_request BETWEEN :startTs AND :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+        """, nativeQuery = true)
+    Long countTracesForExport(
+        @Param("teamId") int teamId,
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId);
+
+    /**
+     * How many of the rows the export keeps were recorded at FULL privacy.
+     *
+     * The envelope's note turns on whether not a single row of the file
+     * carries content, and "the file" is the capped newest slice, not the
+     * whole window: a team that consented last month and not this week has
+     * full-logging traffic in the window and none in the download. So the
+     * count is taken over exactly the slice {@link #findTracesForExport}
+     * keeps — the same ordering and cap, then the privacy filter on the ids.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        WITH slice AS (
+            SELECT le.id
+            FROM log_entry le
+            WHERE le.team_id = :teamId
+              AND le.timestamp_request BETWEEN :startTs AND :endTs
+              AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+            ORDER BY le.timestamp_request DESC, le.id DESC
+            LIMIT :limitN
+        )
+        SELECT COUNT(*)
+        FROM log_entry le
+        WHERE le.privacy_level = 'FULL'
+          AND le.id IN (SELECT id FROM slice)
+        """, nativeQuery = true)
+    Long countConsentedInExportSlice(
         @Param("teamId") int teamId,
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
@@ -996,11 +1082,35 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("providerId") Integer providerId,
         @Param("errorsOnly") Boolean errorsOnly);
 
+    /**
+     * The team's most repeated questions.
+     *
+     * Extracting the last user message of a request means parsing the stored
+     * JSONB of that request, and the extraction runs once per row. Over a
+     * ninety-day window of a busy team that is what turns this section into
+     * the tab that no longer loads, so the rows the parser ever sees are
+     * bounded: {@code recent} holds the newest {@code scanLimit} consented
+     * rows of the window — a bounded walk of
+     * idx_log_entry_team_effective_ts (042) — and the grouping works on that
+     * sample. The sample is documented at the caller rather than pretended
+     * to be the whole window: which questions a team is asking is a now-ish
+     * question, and the cap is the difference between answering it in
+     * milliseconds and never answering it.
+     */
     @Transactional(readOnly = true)
     @Query(value = """
+        WITH recent AS (
+            SELECT le.id, le.input_payload
+            FROM log_entry le
+            WHERE le.privacy_level = 'FULL'
+              AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+              AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+            ORDER BY COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) DESC
+            LIMIT :scanLimit
+        )
         SELECT q.content AS question,
             COUNT(*) AS askCount
-        FROM log_entry le
+        FROM recent r
         CROSS JOIN LATERAL (
             SELECT CASE jsonb_typeof(elem -> 'content')
                        WHEN 'string' THEN elem ->> 'content'
@@ -1012,13 +1122,13 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                        ELSE NULL
                    END AS content
             FROM jsonb_array_elements(
-                CASE WHEN jsonb_typeof(le.input_payload -> 'messages') = 'array'
-                     THEN le.input_payload -> 'messages'
-                     WHEN jsonb_typeof(le.input_payload -> 'input') = 'array'
-                     THEN le.input_payload -> 'input'
-                     WHEN jsonb_typeof(le.input_payload -> 'input') = 'string'
+                CASE WHEN jsonb_typeof(r.input_payload -> 'messages') = 'array'
+                     THEN r.input_payload -> 'messages'
+                     WHEN jsonb_typeof(r.input_payload -> 'input') = 'array'
+                     THEN r.input_payload -> 'input'
+                     WHEN jsonb_typeof(r.input_payload -> 'input') = 'string'
                      THEN jsonb_build_array(
-                         jsonb_build_object('role', 'user', 'content', le.input_payload -> 'input')
+                         jsonb_build_object('role', 'user', 'content', r.input_payload -> 'input')
                      )
                      ELSE '[]'::jsonb
                 END
@@ -1027,10 +1137,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             ORDER BY ord DESC
             LIMIT 1
         ) q
-        WHERE le.privacy_level = 'FULL'
-        AND COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
-        AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
-        AND q.content IS NOT NULL
+        WHERE q.content IS NOT NULL
         GROUP BY q.content
         ORDER BY askCount DESC, q.content ASC
         LIMIT :limitN
@@ -1039,5 +1146,6 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("start") Timestamp start,
         @Param("end") Timestamp end,
         @Param("teamId") Integer teamId,
+        @Param("scanLimit") int scanLimit,
         @Param("limitN") int limitN);
 }

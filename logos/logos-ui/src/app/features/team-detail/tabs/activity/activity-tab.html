@@ -177,6 +177,10 @@
       <p class="ac-note ac-note--quiet">{{ fullLoggingHint() }}</p>
     }
 
+    @if (exportNotice()) {
+      <p class="ac-note ac-note--export">{{ exportNotice() }}</p>
+    }
+
     @if (requests().length === 0) {
       <p class="ac-note ac-note--quiet">
         No requests match this filter in the selected period.

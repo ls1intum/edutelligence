@@ -115,6 +115,26 @@ class TeamActivityControllerTest {
     }
 
     @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = "/sql/seed-operations-live-counts.sql",
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void strandedRowsFallOutOfTheLiveCounts() throws Exception {
+        // A row without a response is only live while it could still be
+        // running: 9031 and 9032 are minutes old and count, 9030 and 9033 are
+        // beyond the in-flight horizon — a client or worker died mid-flight —
+        // and counting them would put days of dead traffic on every poll.
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.live.queued").value(1))
+           .andExpect(jsonPath("$.live.running").value(1))
+           .andExpect(jsonPath("$.live.finished").value(1))
+           .andExpect(jsonPath("$.live.failed").value(0));
+    }
+
+    @Test
     void itBreaksUsageDownByKey() throws Exception {
         mvc.perform(post("/logosdb/teams/2001/activity")
                 .with(TestJwt.adminUser())
