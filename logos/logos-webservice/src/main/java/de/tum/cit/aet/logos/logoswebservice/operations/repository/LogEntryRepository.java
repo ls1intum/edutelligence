@@ -587,6 +587,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * measured against. Ranged on timestamp_request with the team as the
      * leading index column (042), so it stays a count over the window's index
      * entries even when the window is ninety days of a busy team.
+     *
+     * <p>With a continuation cursor the count is what is left past it: the
+     * notice of a continued export measures the rest, not the window it was
+     * started from.
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -595,12 +599,17 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         WHERE le.team_id = :teamId
           AND le.timestamp_request BETWEEN :startTs AND :endTs
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
+               OR (le.timestamp_request, le.id)
+                  < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
         """, nativeQuery = true)
     Long countTracesForExport(
         @Param("teamId") int teamId,
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
-        @Param("userId") Integer userId);
+        @Param("userId") Integer userId,
+        @Param("cursorTs") Timestamp cursorTs,
+        @Param("cursorId") Integer cursorId);
 
     /**
      * How many of the rows the export keeps were recorded at FULL privacy.
@@ -611,6 +620,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * full-logging traffic in the window and none in the download. So the
      * count is taken over exactly the slice {@link #findTracesForExport}
      * keeps — the same ordering and cap, then the privacy filter on the ids.
+     * A continuation cursor shifts the slice to the next one, so the note
+     * keeps describing the file that is actually written.
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -620,6 +631,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             WHERE le.team_id = :teamId
               AND le.timestamp_request BETWEEN :startTs AND :endTs
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+              AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
+                   OR (le.timestamp_request, le.id)
+                      < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
             ORDER BY le.timestamp_request DESC, le.id DESC
             LIMIT :limitN
         )
@@ -633,7 +647,42 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("startTs") Timestamp startTs,
         @Param("endTs") Timestamp endTs,
         @Param("userId") Integer userId,
+        @Param("cursorTs") Timestamp cursorTs,
+        @Param("cursorId") Integer cursorId,
         @Param("limitN") int limitN);
+
+    /**
+     * The last row of the export's capped slice, as the cursor a continued
+     * export starts from.
+     *
+     * The row is only needed when the export is truncated — and then it has
+     * to be known before the first byte goes out, because the header that
+     * carries it cannot follow the body. Walking {@code offsetN + 1} index
+     * entries of the slice instead of fetching the slice's rows keeps that a
+     * timestamp-and-id read, no payloads, even though the slice itself can
+     * hold multi-megabyte consented rows.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.timestamp_request AS timestampRequest, le.id AS id
+        FROM log_entry le
+        WHERE le.team_id = :teamId
+          AND le.timestamp_request BETWEEN :startTs AND :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
+               OR (le.timestamp_request, le.id)
+                  < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
+        ORDER BY le.timestamp_request DESC, le.id DESC
+        LIMIT 1 OFFSET :offsetN
+        """, nativeQuery = true)
+    ExportSliceCursorProjection findExportSliceTail(
+        @Param("teamId") int teamId,
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId,
+        @Param("cursorTs") Timestamp cursorTs,
+        @Param("cursorId") Integer cursorId,
+        @Param("offsetN") int offsetN);
 
     @Transactional(readOnly = true)
     @Query(value = """

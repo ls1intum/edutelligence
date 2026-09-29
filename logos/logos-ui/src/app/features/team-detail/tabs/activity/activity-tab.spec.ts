@@ -217,6 +217,34 @@ describe('ActivityTabComponent', () => {
         'No questions recorded for this team in the selected period.',
       );
     });
+
+    /** The section head the ranking lives under, out of the other heads. */
+    const mostAskedHead = (): string => {
+      const heads = Array.from(
+        fixture.nativeElement.querySelectorAll('.ac-section-head'),
+      ) as Element[];
+      return heads.find((el) => (el.textContent ?? '').includes('Most Asked Questions'))
+        ?.textContent ?? '';
+    };
+
+    it('labels the ranking with the sample limit the server names', () => {
+      // The ranking is cut off the newest full-logging rows, and the section
+      // must say so — a question the sample does not cover cannot read as one
+      // the team never asked.
+      component.activity.set(makePayload({ most_asked_sample_limit: 10000 }));
+      fixture.detectChanges();
+
+      expect(mostAskedHead()).toContain(
+        `newest ${(10000).toLocaleString()} requests with full logging`,
+      );
+    });
+
+    it('says nothing about a sample when the server names no limit', () => {
+      component.activity.set(makePayload());
+      fixture.detectChanges();
+
+      expect(mostAskedHead()).not.toContain('requests with full logging');
+    });
   });
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -787,7 +815,8 @@ describe('ActivityTabComponent trace export', () => {
 
     await component.exportTraces();
 
-    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, 7, 'csv');
+    // No cursor yet: the first download starts at the newest row.
+    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, 7, 'csv', null);
   });
 
   it("saves the server's file under the name the server picked", async () => {
@@ -823,7 +852,7 @@ describe('ActivityTabComponent trace export', () => {
     resolveExport(makeExportResponse());
     await inFlight;
 
-    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, null, 'json');
+    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, null, 'json', null);
     expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
   });
 
@@ -845,16 +874,102 @@ describe('ActivityTabComponent trace export', () => {
 
     await component.exportTraces();
 
-    // The number formatting is the same call the component makes, so the
-    // expectation stays right whichever locale the test runs in. A numeric
-    // literal needs parentheses before a member access (10000. would lex as
-    // the number 10000.0).
+    // No continuation came back with the file, so the advice is the one the
+    // view can act on: narrow the scope. The number formatting is the same
+    // call the component makes, so the expectation stays right whichever
+    // locale the test runs in. A numeric literal needs parentheses before a
+    // member access (10000. would lex as the number 10000.0).
     const count = (10000).toLocaleString();
     const total = (12000).toLocaleString();
     expect(component.exportNotice()).toBe(
       `The export carries the ${count} newest requests of ${total} in the ` +
         'selected period — narrow the period or the requester filter for the rest.',
     );
+  });
+
+  it('hands the walk to the next, older slice when the file carries a cursor', async () => {
+    // The window outruns one file, and the server said where the file ended:
+    // the button keeps the cursor, and the next click sends it back so the
+    // download continues instead of starting over at the rows already held.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = '2026-08-26T12:00:00.000Z/9041';
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toEqual({ ts: '2026-08-26T12:00:00.000Z', id: 9041 });
+    expect(component.exportNotice()).toContain(
+      'press export again for the next, older slice',
+    );
+
+    await component.exportTraces();
+
+    expect(activityService.getTraceExport).toHaveBeenLastCalledWith(
+      42,
+      7,
+      null,
+      'json',
+      { ts: '2026-08-26T12:00:00.000Z', id: 9041 },
+    );
+  });
+
+  it('ends the walk when a slice arrives uncapped', async () => {
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = '2026-08-26T12:00:00.000Z/9041';
+    await component.exportTraces();
+    expect(component.exportCursor()).not.toBeNull();
+
+    // The last slice holds everything left: no truncation, no cursor — the
+    // button is the start of a fresh walk again.
+    exportHeaders['X-Logos-Export-Truncated'] = 'false';
+    delete exportHeaders['X-Logos-Export-Next-Cursor'];
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportNotice()).toBeNull();
+  });
+
+  it('falls back to narrowing advice when the cursor token is unreadable', async () => {
+    // A truncated file without a usable continuation must not promise a next
+    // slice the button cannot deliver.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = 'not-a-cursor';
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportNotice()).toContain('narrow the period');
+  });
+
+  it('keeps a late answer from resurfacing under the selection the tab moved on to', async () => {
+    // The whole race: the scope changes while the download is out. The file
+    // still gets saved under the name it was started with, but its notice and
+    // its cursor belong to the window that left the screen.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = '2026-08-26T12:00:00.000Z/9041';
+    let resolveExport: (value: HttpResponse<Blob>) => void = () => {};
+    activityService.getTraceExport.mockImplementation(
+      () =>
+        new Promise<HttpResponse<Blob>>((resolve) => {
+          resolveExport = resolve;
+        }),
+    );
+
+    const inFlight = component.exportTraces();
+    component.setDays('30');
+    resolveExport(makeExportResponse());
+    await inFlight;
+
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
+    expect(component.exportNotice()).toBeNull();
+    expect(component.exportCursor()).toBeNull();
   });
 
   it('has no notice to say when the file is the whole answer', async () => {

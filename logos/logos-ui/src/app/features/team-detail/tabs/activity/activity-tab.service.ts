@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import { RequestCursor, TeamActivityPayload } from './activity-tab.models';
+import { ExportCursor, RequestCursor, TeamActivityPayload } from './activity-tab.models';
 
 /** Narrowing of the request list. `null` means "do not narrow by it". */
 export interface ActivityFilter {
@@ -44,18 +44,25 @@ export class TeamActivityService {
    * caller needs to know about the file before the first byte — its name,
    * whether it is the whole answer — travels in the response headers, which
    * is why this returns the whole response rather than its body.
+   *
+   * A window that outruns one file is continued, not lost: `cursor` (the
+   * `X-Logos-Export-Next-Cursor` of an earlier slice) makes the server send
+   * the next, older one instead of the newest.
    */
   getTraceExport(
     teamId: number,
     days: number,
     userId: number | null,
     format: 'json' | 'csv',
+    cursor: ExportCursor | null = null,
   ): Promise<HttpResponse<Blob>> {
     return firstValueFrom(
       this.http.post(`/api/logosdb/teams/${teamId}/activity/export`, {
         days,
         user_id: userId,
         format,
+        cursor_ts: cursor?.ts ?? null,
+        cursor_id: cursor?.id ?? null,
       }, { responseType: 'blob', observe: 'response' }),
     );
   }

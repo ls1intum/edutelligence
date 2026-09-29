@@ -98,9 +98,17 @@
 
     <!-- ── Most Asked Questions ─────────────────────────────────────────────
          Distinct questions this team has asked, grouped by exact text and
-         ranked by how often they are asked. -->
+         ranked by how often they are asked — over the newest full-logging
+         requests of the window, and the note says how far back that reaches,
+         so a question the sample does not cover cannot read as one the team
+         never asked. -->
     <div class="ac-section-head ac-section-head--spaced">
       <h3 class="ac-section-title">Most Asked Questions</h3>
+      @if (activity()?.most_asked_sample_limit) {
+        <span class="ac-section-note">
+          newest {{ formatNumber(activity()?.most_asked_sample_limit) }} requests with full logging
+        </span>
+      }
     </div>
     <app-stats-most-asked-questions [questions]="activity()?.most_asked_questions ?? []" />
 
@@ -145,7 +153,9 @@
         <!-- Request trace export (issue #667): every request of the window
              comes back; the full-logging ones — the ones whose content was
              stored because the requester opted in — carry it with them.
-             Follows the period and requester filter above. -->
+             Follows the period and requester filter above. Once a window
+             outruns one file, the same button walks it slice by slice,
+             newest first. -->
         <span class="ac-export">
           <app-select
             class="ac-control"
@@ -160,8 +170,8 @@
             type="button"
             [disabled]="exporting()"
             (click)="exportTraces()"
-            title="Download this team's requests — the full-logging ones carry their stored content"
-            aria-label="Export request traces"
+            [title]="exportButtonTitle()"
+            [attr.aria-label]="exportButtonLabel()"
           >
             <i class="pi pi-download" aria-hidden="true"></i>
           </button>

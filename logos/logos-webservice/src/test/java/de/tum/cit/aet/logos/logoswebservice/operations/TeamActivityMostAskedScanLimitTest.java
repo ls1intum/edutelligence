@@ -64,6 +64,9 @@ class TeamActivityMostAskedScanLimitTest {
            .andExpect(jsonPath("$.most_asked_questions[0].count").value(1))
            .andExpect(jsonPath("$.most_asked_questions[1].question")
                .value("Which one is the newest question?"))
-           .andExpect(jsonPath("$.most_asked_questions[1].count").value(1));
+           .andExpect(jsonPath("$.most_asked_questions[1].count").value(1))
+           // The view labels the ranking with the limit that cut it — and
+           // that limit is the shrunk one, not the default.
+           .andExpect(jsonPath("$.most_asked_sample_limit").value(2));
     }
 }

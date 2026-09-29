@@ -50,6 +50,15 @@ export interface TeamMostAskedQuestion {
   count: number;
 }
 
+/**
+ * Where an export slice ends, and the next, older one continues from.
+ * Timestamp and id are the keyset the export walks newest first.
+ */
+export interface ExportCursor {
+  ts: string;
+  id: number;
+}
+
 export interface TeamActivityPayload {
   team_id: number;
   days: number;
@@ -66,6 +75,12 @@ export interface TeamActivityPayload {
   total_requests: number;
   requesters: TeamRequester[];
   most_asked_questions: TeamMostAskedQuestion[];
+  /**
+   * How many of the team's newest full-logging requests the ranking is cut
+   * from — the section is a sample of the window, and the number says how
+   * large.
+   */
+  most_asked_sample_limit?: number;
   requests: RequestItem[];
   requests_total: number;
   requests_has_more: boolean;

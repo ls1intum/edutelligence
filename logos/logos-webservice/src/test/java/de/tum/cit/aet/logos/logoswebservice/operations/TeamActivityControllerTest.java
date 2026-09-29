@@ -243,7 +243,11 @@ class TeamActivityControllerTest {
                .value("What is the capital of France?"))
            .andExpect(jsonPath("$.most_asked_questions[0].count").value(2))
            .andExpect(jsonPath("$.most_asked_questions[1].question").value("hello"))
-           .andExpect(jsonPath("$.most_asked_questions[1].count").value(1));
+           .andExpect(jsonPath("$.most_asked_questions[1].count").value(1))
+           // The ranking is a sample of the window, and the number that says
+           // how far back it reaches goes out with it, so the view can label
+           // it as one.
+           .andExpect(jsonPath("$.most_asked_sample_limit").value(10000));
     }
 
     @Test

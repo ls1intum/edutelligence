@@ -95,6 +95,13 @@ public class TeamActivityController {
      * the file before the first byte — its size, whether it is the whole
      * answer — goes out as response headers, and the JSON file carries the
      * same facts in itself for whoever opens it later.
+     *
+     * A window that outruns one file continues rather than truncating into
+     * silence: the body may carry {@code cursor_ts}/{@code cursor_id} (the
+     * last row an earlier download held, sent back as
+     * {@code X-Logos-Export-Next-Cursor}), and the answer then holds the
+     * next, older slice — its headers and, in the JSON file,
+     * {@code next_cursor} describing the rest the same way.
      */
     @PostMapping("/logosdb/teams/{teamId}/activity/export")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
@@ -115,8 +122,14 @@ public class TeamActivityController {
         Integer days = payload.get("days") instanceof Number n ? n.intValue() : null;
         Integer userId = payload.get("user_id") instanceof Number n ? n.intValue() : null;
         String format = payload.get("format") instanceof String s ? s : null;
+        String cursorTs = payload.get("cursor_ts") instanceof String s ? s : null;
+        Object cursorIdValue = payload.get("cursor_id");
+        String cursorId = cursorIdValue instanceof Number n
+            ? String.valueOf(n)
+            : (cursorIdValue instanceof String s ? s : null);
 
-        TeamActivityService.ExportPrep prep = teamActivityService.prepareExport(teamId, days, userId, format);
+        TeamActivityService.ExportPrep prep = teamActivityService.prepareExport(
+            teamId, days, userId, format, cursorTs, cursorId);
         response.setContentType(prep.format() == TeamActivityService.ExportFormat.CSV
             ? "text/csv; charset=utf-8"
             : "application/json");
@@ -124,6 +137,10 @@ public class TeamActivityController {
         response.setHeader("X-Logos-Export-Total", String.valueOf(prep.totalInWindow()));
         response.setHeader("X-Logos-Export-Truncated", String.valueOf(prep.truncated()));
         response.setHeader("X-Logos-Export-Count", String.valueOf(prep.count()));
+        String nextCursor = prep.nextCursor();
+        if (nextCursor != null) {
+            response.setHeader("X-Logos-Export-Next-Cursor", nextCursor);
+        }
         try (OutputStream out = response.getOutputStream()) {
             teamActivityService.writeExportFile(prep, out);
             out.flush();

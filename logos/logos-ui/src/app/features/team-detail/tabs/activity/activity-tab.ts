@@ -16,7 +16,7 @@ import { AppSelectOption, SelectComponent } from '../../../../shared/components/
 import { RequestItem } from '../../../statistics/statistics.models';
 import { deriveStage, formatTimeAgo, formatTokenCount } from '../../../statistics/statistics.utils';
 import { TeamActivityService } from './activity-tab.service';
-import { RequestCursor, TeamActivityPayload } from './activity-tab.models';
+import { ExportCursor, RequestCursor, TeamActivityPayload } from './activity-tab.models';
 import { MostAskedQuestions } from './most-asked-questions';
 
 /** How often the live counts are refreshed while the tab is open. */
@@ -72,6 +72,11 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
    * happen.
    */
   readonly exportNotice = signal<string | null>(null);
+  /**
+   * Where the last download's slice ended: a capped export hands the button
+   * over to the next, older slice instead of leaving its rows unreachable.
+   */
+  readonly exportCursor = signal<ExportCursor | null>(null);
 
   readonly exportFormatOptions: AppSelectOption[] = [
     { value: 'json', label: 'JSON' },
@@ -79,6 +84,19 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   ];
 
   readonly selectedExportFormatValue = computed(() => this.exportFormat());
+
+  /**
+   * The export button doubles as the continuation once a slice was capped,
+   * so its label says which of the two it is doing.
+   */
+  readonly exportButtonTitle = computed(() =>
+    this.exportCursor()
+      ? "Download the next, older slice of this team's requests"
+      : "Download this team's requests — the full-logging ones carry their stored content",
+  );
+  readonly exportButtonLabel = computed(() =>
+    this.exportCursor() ? 'Export the next older request traces' : 'Export request traces',
+  );
 
   /**
    * Cursor of each page already visited. Page 0 is always null (start at the
@@ -209,6 +227,11 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
    * ones the stored request and response content with it. Both formats are
    * cut on the application server and arrive as a file — the view only names
    * it, saves it, and says what it holds.
+   *
+   * A window the cap outruns is not a dead end: the first download carries
+   * the newest slice and the cursor behind it, and every following click
+   * carries the cursor back so the server sends the next, older slice —
+   * until a file arrives uncapped, which ends the walk.
    */
   async exportTraces(): Promise<void> {
     if (!this.teamId || this.exporting()) return;
@@ -218,25 +241,39 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     // worse than a stale number.
     const teamId = this.teamId;
     const days = this.days();
+    const userId = this.filterUserId();
     const format = this.exportFormat();
+    const cursor = this.exportCursor();
     this.exporting.set(true);
     this.exportError.set(null);
     try {
-      const response = await this.activityService.getTraceExport(
-        teamId,
-        days,
-        this.filterUserId(),
-        format,
-      );
+      const response = await this.activityService.getTraceExport(teamId, days, userId, format, cursor);
       this.downloadFile(response, `logos-traces-team-${teamId}-${days}d.${format}`);
+      // The scope may have moved while the download was out — the change
+      // already cleared the last notice and the cursor it belonged to, and a
+      // late answer must not put either back for a selection that is no
+      // longer on screen. The file itself still gets saved: it is a complete
+      // answer for the scope it was started with.
+      if (this.teamId !== teamId || this.days() !== days || this.filterUserId() !== userId) {
+        this.exportNotice.set(null);
+        this.exportCursor.set(null);
+        return;
+      }
       // The headers are set before the first byte, so they are the same facts
       // the file carries — and the only ones the view can read back.
       const total = Number(response.headers.get('X-Logos-Export-Total') ?? '0');
       const count = Number(response.headers.get('X-Logos-Export-Count') ?? '0');
+      if (response.headers.get('X-Logos-Export-Truncated') !== 'true') {
+        this.exportCursor.set(null);
+        this.exportNotice.set(null);
+        return;
+      }
+      const next = this.parseNextCursor(response.headers.get('X-Logos-Export-Next-Cursor') ?? '');
+      this.exportCursor.set(next);
       this.exportNotice.set(
-        response.headers.get('X-Logos-Export-Truncated') === 'true'
-          ? `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — narrow the period or the requester filter for the rest.`
-          : null,
+        next
+          ? `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — press export again for the next, older slice.`
+          : `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — narrow the period or the requester filter for the rest.`,
       );
     } catch {
       this.exportError.set('Could not export the traces.');
@@ -244,6 +281,20 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     } finally {
       this.exporting.set(false);
     }
+  }
+
+  /**
+   * The server's continuation token is one header value, `timestamp/id` —
+   * back to the two halves the next request sends separately. An empty or
+   * malformed token means the walk cannot continue, and the notice then says
+   * so with the narrowing advice instead of promising a next slice.
+   */
+  private parseNextCursor(token: string): ExportCursor | null {
+    const sep = token.lastIndexOf('/');
+    if (sep <= 0 || sep === token.length - 1) return null;
+    const id = Number(token.slice(sep + 1));
+    if (!Number.isInteger(id) || id <= 0) return null;
+    return { ts: token.slice(0, sep), id };
   }
 
   async nextPage(): Promise<void> {
@@ -328,8 +379,10 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     this.cursorForPage = [null];
     // A notice about the last download describes the window and filter it
     // was cut from; a new scope would leave it describing something that is
-    // not on screen anymore.
+    // not on screen anymore. The export cursor belongs to the same scope — a
+    // continuation started under one window must not fire under another.
     this.exportNotice.set(null);
+    this.exportCursor.set(null);
   }
 
   private async load(): Promise<void> {

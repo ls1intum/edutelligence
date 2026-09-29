@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,6 +26,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.ExportSliceCursorProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogExportProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ScopeOptionProjection;
@@ -118,7 +120,8 @@ public class TeamActivityService {
      * Ceiling of one trace export. A consented team on a busy month can outrun
      * a download that still fits in a spreadsheet; the export then keeps the
      * newest slice, says so in the file and in the response, and the caller
-     * narrows with a shorter window or the requester filter to get the rest.
+     * continues with the next, older slice — or narrows with a shorter window
+     * or the requester filter.
      */
     private final int exportMaxRows;
 
@@ -212,6 +215,11 @@ public class TeamActivityService {
         payload.put("requests_has_more", requests.get("has_more"));
         payload.put("requests_next_cursor", requests.get("next_cursor"));
         payload.put("most_asked_questions", period.mostAsked());
+        // How many of the newest consented rows the ranking is cut from, so
+        // the view can say it is a sample of the window, not the window
+        // itself — an older question the sample does not cover must not read
+        // as a question the team never asked.
+        payload.put("most_asked_sample_limit", mostAskedScanLimit);
         return payload;
     }
 
@@ -291,10 +299,23 @@ public class TeamActivityService {
         long count,
         boolean truncated,
         boolean fullLoggingEnabled,
-        String note
+        String note,
+        /** Where the file's rows start: the newest slice, or past the rows an earlier download already carried. */
+        Instant cursorTs,
+        Integer cursorId,
+        /** The last row the file holds — the cursor the next, older slice continues from. Null when the file is the whole answer. */
+        Instant nextCursorTs,
+        Integer nextCursorId
     ) {
         public String fileName() {
             return "logos-traces-team-" + teamId + "-" + days + "d." + (format == ExportFormat.CSV ? "csv" : "json");
+        }
+
+        /** The continuation cursor as one header-safe token, or null. */
+        public String nextCursor() {
+            return nextCursorTs != null && nextCursorId != null
+                ? nextCursorTs.toString() + "/" + nextCursorId
+                : null;
         }
     }
 
@@ -317,8 +338,16 @@ public class TeamActivityService {
      * carries content — a download without an explanation reads as a bug —
      * and it is computed over the slice the file keeps, not the whole window,
      * so "full logging is on" never contradicts "this file has no content".
+     *
+     * <p>A window that outruns the cap is not one the caller has to live
+     * with: {@code cursorTs}/{@code cursorId} (the last row an earlier
+     * download carried, as returned in {@code nextCursor}) continue the
+     * export with the next, older slice, and the returned
+     * {@code totalInWindow} and {@code nextCursor} then describe the rest
+     * and its end.
      */
-    public ExportPrep prepareExport(int teamId, Integer requestedDays, Integer userId, String format) {
+    public ExportPrep prepareExport(int teamId, Integer requestedDays, Integer userId, String format,
+                                    String cursorTs, String cursorId) {
         int days = clampDays(requestedDays);
         Instant now = Instant.now();
         Timestamp since = Timestamp.from(now.minus(Duration.ofDays(days)));
@@ -326,15 +355,35 @@ public class TeamActivityService {
 
         ExportFormat out = "csv".equalsIgnoreCase(format) ? ExportFormat.CSV : ExportFormat.JSON;
 
-        long totalInWindow = valueOrDefault(logEntryRepository.countTracesForExport(teamId, since, end, userId));
+        // A half cursor points at a row that does not exist, the same way the
+        // request list sees one — drop the id along with an unparseable
+        // timestamp rather than feed the query one half of a keyset.
+        Timestamp cursor = null;
+        Integer cursorRowId = null;
+        if (cursorTs != null && !cursorTs.isBlank()) {
+            try {
+                Instant at = Instant.parse(cursorTs);
+                if (cursorId != null && !cursorId.isBlank()) {
+                    cursor = Timestamp.from(at);
+                    cursorRowId = Integer.parseInt(cursorId);
+                }
+            } catch (DateTimeParseException | NumberFormatException e) {
+                cursor = null;
+                cursorRowId = null;
+            }
+        }
+
+        long totalInWindow = valueOrDefault(
+            logEntryRepository.countTracesForExport(teamId, since, end, userId, cursor, cursorRowId));
         boolean truncated = totalInWindow > exportMaxRows;
+        long count = Math.min(totalInWindow, exportMaxRows);
 
         String teamName = teamRepository.findById(teamId).map(Team::getName).orElse(null);
         boolean fullLoggingEnabled = hasFullLoggingKey(teamId);
 
         String note = null;
         if (valueOrDefault(logEntryRepository.countConsentedInExportSlice(
-                teamId, since, end, userId, exportMaxRows)) == 0) {
+                teamId, since, end, userId, cursor, cursorRowId, exportMaxRows)) == 0) {
             // The rows are there but the content is not: name the reason in
             // the file itself, because an administrator opening it later will
             // not remember which keys were consented at export time.
@@ -343,9 +392,24 @@ public class TeamActivityService {
                 : "Full logging is not activated for this team: request and response content was never stored, so it is empty in every row of this export.";
         }
 
+        // The next slice starts behind the last row this file carries. The
+        // header that names it goes out before the first byte, so the tail of
+        // the slice is walked as timestamps-and-ids, not fetched as rows.
+        Instant nextCursorTs = null;
+        Integer nextCursorId = null;
+        if (truncated) {
+            ExportSliceCursorProjection tail = logEntryRepository
+                .findExportSliceTail(teamId, since, end, userId, cursor, cursorRowId, (int) count - 1);
+            if (tail != null) {
+                nextCursorTs = tail.getTimestampRequest();
+                nextCursorId = tail.getId();
+            }
+        }
+
         return new ExportPrep(teamId, userId, teamName, days, since.toInstant(), now, out,
-                              totalInWindow, Math.min(totalInWindow, exportMaxRows), truncated,
-                              fullLoggingEnabled, note);
+                              totalInWindow, count, truncated, fullLoggingEnabled, note,
+                              cursor != null ? cursor.toInstant() : null, cursorRowId,
+                              nextCursorTs, nextCursorId);
     }
 
     /**
@@ -406,6 +470,12 @@ public class TeamActivityService {
         }
         gen.writeBooleanField("truncated", prep.truncated());
         gen.writeNumberField("total_in_window", prep.totalInWindow());
+        // Where to continue: the same token the response header carries, so a
+        // file opened later says how to reach the rows it does not hold.
+        String nextCursor = prep.nextCursor();
+        if (nextCursor != null) {
+            gen.writeStringField("next_cursor", nextCursor);
+        }
     }
 
     private void writeCsv(ExportPrep prep, Timestamp since, Timestamp end, OutputStream out) throws IOException {
@@ -429,13 +499,14 @@ public class TeamActivityService {
 
     /**
      * The shared walk of the export: chunks of rows, newest first, from the
-     * start of the window down to the cap or the end of it. The row consumer
-     * writes one row; the walk is what knows when to stop.
+     * start of the window — or past the rows an earlier slice already
+     * carried — down to the cap or the end of it. The row consumer writes one
+     * row; the walk is what knows when to stop.
      */
     private void streamRows(ExportPrep prep, Timestamp since, Timestamp end, RowWriter rowWriter) throws IOException {
         long written = 0;
-        Timestamp cursorTs = null;
-        Integer cursorId = null;
+        Timestamp cursorTs = prep.cursorTs() != null ? Timestamp.from(prep.cursorTs()) : null;
+        Integer cursorId = prep.cursorId();
         while (written < exportMaxRows) {
             List<LogExportProjection> chunk = logEntryRepository.findTracesForExport(
                 prep.teamId(), since, end, prep.userId(), cursorTs, cursorId, EXPORT_CHUNK_SIZE);
