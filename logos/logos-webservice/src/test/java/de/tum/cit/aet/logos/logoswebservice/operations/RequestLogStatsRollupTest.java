@@ -17,6 +17,8 @@ import org.springframework.test.context.jdbc.Sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.assertj.core.data.Offset;
+
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsRefreshService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
@@ -367,5 +369,79 @@ class RequestLogStatsRollupTest {
         assertThat(refreshService.refreshNow()).isTrue();
         assertThat(rollupRowCount()).isEqualTo(afterFirst);
         assertThat(stats(query(24, null, null)).get("totals")).isEqualTo(once.get("totals"));
+    }
+
+    @Test
+    void the_run_window_uses_the_provider_call_and_response_stamps_not_the_old_split() {
+        // The rest of this class's seed never sets timestamp_provider_call or
+        // timestamp_provider_response, so it only ever exercises the COALESCE
+        // fallback (the pre-migration split). This test drives the new path:
+        // rows whose provider-call / provider-response instants differ from
+        // both the forwarding and the completion instant, one in a completed
+        // hour (rollup branch) and one in the running hour (live tail).
+        //
+        // Both rows share the same deltas, so the scoped average is exact:
+        //   request -> forwarding   +5s   (scheduling wait)
+        //   forwarding -> call      +5s   (rate-limit / budget wait = queue)
+        //   call -> response(=resp) +4s   (the provider's own time = run)
+        //   response -> completion  +6s   (post-provider billing tail)
+        // The new split reads queue = call - request = 10s, run = resp - call
+        // = 4s. The old split would read queue = 5s, run = 15s — so asserting
+        // 10 / 4 proves the new columns, not the fallback, produced the figure.
+        jdbc.update("""
+            INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format)
+            VALUES (6901, 'rollup-provider-window', 'https://api.example.com', 'cloud',
+                    'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'Authorization', 'Bearer {}')
+            """);
+        try {
+            jdbc.update("""
+                INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                                       timestamp_request, timestamp_forwarding, timestamp_provider_call,
+                                       timestamp_provider_response, timestamp_response,
+                                       was_cold_start, user_id, team_id)
+                VALUES
+                  (9420, 'roll-win-closed', 3001, 5001, 6901, 'success',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '5 seconds',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '10 seconds',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '14 seconds',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '20 seconds',
+                   false, 1001, 2001),
+                  (9421, 'roll-win-live', 3001, 5001, 6901, 'success',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 5 seconds',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 10 seconds',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 14 seconds',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 20 seconds',
+                   false, 1001, 2001)
+                """);
+
+            // Scoped to provider 6901, so only these two rows count and the
+            // average is exact regardless of the rest of the seed.
+            Map<String, Object> live = stats(
+                statsService.getRequestLogStats(start(), end(), 24, null, null, 6901, false));
+            Map<String, Object> liveTotals = (Map<String, Object>) live.get("totals");
+            assertThat(((Number) liveTotals.get("requests")).longValue()).isEqualTo(2L);
+            assertThat((Double) liveTotals.get("avgQueueSeconds"))
+                .isCloseTo(10.0, Offset.offset(0.001));
+            assertThat((Double) liveTotals.get("avgRunSeconds"))
+                .isCloseTo(4.0, Offset.offset(0.001));
+
+            // The closed hour now comes from the rollup, the running hour from
+            // the live tail — and the two must agree on the new split.
+            populateRollup();
+            Map<String, Object> merged = stats(
+                statsService.getRequestLogStats(start(), end(), 24, null, null, 6901, false));
+            Map<String, Object> mergedTotals = (Map<String, Object>) merged.get("totals");
+            assertThat(((Number) mergedTotals.get("requests")).longValue()).isEqualTo(2L);
+            assertThat((Double) mergedTotals.get("avgQueueSeconds"))
+                .isCloseTo(10.0, Offset.offset(0.001));
+            assertThat((Double) mergedTotals.get("avgRunSeconds"))
+                .isCloseTo(4.0, Offset.offset(0.001));
+            assertThat(merged.get("totals")).isEqualTo(live.get("totals"));
+        } finally {
+            jdbc.update("DELETE FROM log_entry WHERE id IN (9420, 9421)");
+            jdbc.update("DELETE FROM providers WHERE id = 6901");
+        }
     }
 }

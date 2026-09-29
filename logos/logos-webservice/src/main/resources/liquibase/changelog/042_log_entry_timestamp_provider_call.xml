@@ -6,53 +6,66 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
     <!-- The statistics page splits a finished request's wall time into a
-         queue figure (everything the request waited for) and an exec figure
-         (the provider's own time), at the instant recorded in
-         timestamp_forwarding.
+         queue figure (everything the request waited for), an exec figure
+         (the provider's own time), and the leftover logos-side tail.
 
-         The orchestrator writes that column in record_scheduled() — when the
-         scheduler picks the provider, which for cloud requests is long before
-         the provider is actually called: the rate-limit check and the monthly
-         budget lookup run in between. When that billing lookup was slow, the
-         statistics page read the wait it caused as provider execution time —
-         a team whose requests actually took ~3 s upstream showed up with
-         several times that, and the queue figure next to it stayed near zero.
+         It used to cut at timestamp_forwarding, which the orchestrator writes
+         when the scheduler picks the provider. For cloud requests the
+         rate-limit check and the monthly budget lookup run in between, so that
+         logos-side wait read as provider execution — a team whose requests
+         actually took ~3 s upstream showed up with several times that, next to
+         a near-zero queue figure. And it ended the exec figure at
+         timestamp_response, which the orchestrator writes at completion, i.e.
+         after the post-provider cost lookup — so a slow billing lookup read as
+         provider time too.
 
-         timestamp_provider_call stamps the instant the request is handed to
-         the upstream provider, after every gate logos controls. The queue/exec
-         split below moves to it, and falls back to timestamp_forwarding for
-         rows it does not carry: everything written before this migration, and
-         requests that never reached the provider (a rate-limit or budget
-         reject), which keep the old, scheduling-based split.
+         Two new columns move the cut to the real provider window:
+           timestamp_provider_call     — the request is handed to the upstream
+                                         provider, after every gate logos
+                                         controls and after payload preparation.
+           timestamp_provider_response — the provider's full response has
+                                         arrived, before logos' own post-
+                                         provider work (notably the cost
+                                         lookup).
+         The queue figure spans timestamp_request to
+         timestamp_provider_call; the exec figure spans
+         timestamp_provider_call to timestamp_provider_response. Both fall back
+         to the old columns for rows they do not carry: everything written
+         before this migration, and requests that never reached the provider
+         (a rate-limit or budget reject), which keep the old, scheduling-based
+         split.
 
-         timestamp_forwarding itself is untouched on purpose: the /me/keys
-         usage window counts a key's admitted requests from it (see 027), the
-         hourly rollup buckets on it, and two indexes serve it. It means
-         "admitted", and that meaning is what those readers need. -->
+         timestamp_forwarding and timestamp_response are untouched on purpose:
+         the /me/keys usage window counts a key's admitted requests from
+         timestamp_forwarding (see 027), the hourly rollup buckets on it, and
+         two indexes serve it; timestamp_response remains the completion
+         instant the lifecycle and the live "total" figure read. -->
     <changeSet id="042-log-entry-timestamp-provider-call" author="logos">
         <addColumn tableName="log_entry">
             <column name="timestamp_provider_call" type="TIMESTAMP WITH TIME ZONE"/>
+            <column name="timestamp_provider_response" type="TIMESTAMP WITH TIME ZONE"/>
         </addColumn>
         <rollback>
             <dropColumn tableName="log_entry" columnName="timestamp_provider_call"/>
+            <dropColumn tableName="log_entry" columnName="timestamp_provider_response"/>
         </rollback>
     </changeSet>
 
     <!-- The queue/run split the rollup stores per hour is the definition the
          KPI strip's "avg run · queue" line answers, so it moves to the same
-         instant as the per-request feed above. One function shared by the
-         backfill and every incremental pass (see 035) — recreating it is what
-         applies the new definition, and the pass then keeps the table honest
-         on its own for everything after.
+         provider window as the per-request feed above. One function shared by
+         the backfill and every incremental pass (see 035) — recreating it is
+         what applies the new definition, and the pass then keeps the table
+         honest on its own for everything after.
 
-         Rows predating the column carry no timestamp_provider_call, so the
-         COALESCE reproduces the old split for them — except the hours already
-         rolled up under the old function, which would otherwise keep serving
-         the mislabeled averages indefinitely: a pass only recomputes hours
-         whose rows moved, and history does not move. The backfill below
-         recomputes every closed hour once, the same call 035 made to
-         establish the first watermark. Roughly a minute on production; every
-         pass after it touches only what moved. -->
+         Rows predating the columns carry no provider-call / provider-response
+         stamps, so the COALESCEs reproduce the old split for them — except the
+         hours already rolled up under the old function, which would otherwise
+         keep serving the mislabeled averages indefinitely: a pass only
+         recomputes hours whose rows moved, and history does not move. The
+         backfill below recomputes every closed hour once, the same call 035
+         made to establish the first watermark. Roughly a minute on production;
+         every pass after it touches only what moved. -->
     <changeSet id="042-stats-rollup-provider-call-split" author="logos">
         <preConditions onFail="MARK_RAN">
             <columnExists tableName="log_entry" columnName="timestamp_provider_call"/>
@@ -98,12 +111,12 @@
                     COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
                                        AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL),
                     SUM(CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                              AND le.timestamp_response IS NOT NULL
-                             THEN EXTRACT(EPOCH FROM (le.timestamp_response
+                              AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
                                                      - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)))
                         END),
                     COUNT(*) FILTER (WHERE COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
-                                       AND le.timestamp_response IS NOT NULL),
+                                       AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL),
                     COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
                                         OR (le.error_message IS NOT NULL
                                             AND le.error_message <> '')),

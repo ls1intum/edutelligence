@@ -229,6 +229,14 @@ def _make_pipeline(
             completion_calls.append(kwargs)
 
         @staticmethod
+        def record_provider_call(request_id):  # noqa: ARG004
+            return None
+
+        @staticmethod
+        def record_provider_response(request_id):  # noqa: ARG004
+            return None
+
+        @staticmethod
         def settle_completion(**kwargs):
             # The sync path settles on the event loop and defers only the DB
             # write (write_completion) to the queue — same recorded kwargs.

@@ -391,6 +391,23 @@ class MonitoringRecorder:
         """
         self._buffer(request_id, timestamp_provider_call=datetime.datetime.now(datetime.timezone.utc))
 
+    def record_provider_response(self, request_id: str) -> None:
+        """Stamp the instant the upstream provider's response has fully arrived.
+
+        ``timestamp_response`` (``record_complete``) is written at completion,
+        which for a finished request is *after* the post-provider work logos
+        still runs — most notably the synchronous cost/pricing lookup. Ending
+        the exec figure at ``timestamp_response`` therefore read that internal
+        billing wait as provider time. The statistics page ends the exec
+        figure at this instant instead: everything between the provider call
+        and the provider's last byte is the provider's own, and what logos
+        does after (billing, persistence) is neither queue nor exec.
+
+        Buffered like ``record_provider_call``: it only matters once the
+        request is finished, so it rides the completion UPDATE.
+        """
+        self._buffer(request_id, timestamp_provider_response=datetime.datetime.now(datetime.timezone.utc))
+
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist whether this key's rate limiter admitted the request.
 

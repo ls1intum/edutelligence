@@ -748,6 +748,10 @@ class RequestPipeline:
         """Stamp the instant the request is handed to the upstream provider."""
         self._monitoring.record_provider_call(request_id)
 
+    def record_provider_response(self, request_id: str) -> None:
+        """Stamp the instant the upstream provider's response has fully arrived."""
+        self._monitoring.record_provider_response(request_id)
+
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
         Update provider statistics (e.g. rate limits) from response headers.

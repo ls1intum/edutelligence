@@ -1791,6 +1791,12 @@ async def _streaming_response(
             # the clients that left *before* the first token.
             stream_completed = False
             try:
+                # LogosNode streams dispatch lazily: this body only runs when
+                # the response generator is consumed, which is the actual hand
+                # to the worker. Stamping here (not at scheduling) is what keeps
+                # the deferred-dispatch wait out of the provider's exec figure.
+                if request_id:
+                    _pipeline.record_provider_call(request_id)
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
                     produced = False
@@ -1842,6 +1848,12 @@ async def _streaming_response(
                     stream_completed = True
                     break  # stream completed without raising
             finally:
+                # The worker stream has ended, so the provider's response is
+                # complete; billing/persistence runs from here. Stamp it now so
+                # the exec figure ends at the provider's last byte, not after
+                # logos' post-provider work.
+                if request_id:
+                    _pipeline.record_provider_response(request_id)
                 if not stream_completed and error_message is None:
                     error_message = (
                         "Client disconnected mid-stream; upstream generation cancelled "
@@ -1913,6 +1925,10 @@ async def _streaming_response(
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
+    # Preparation succeeded and this is the actual dispatch to the upstream,
+    # so stamp the provider call here (see _sync_response for the reasoning).
+    if request_id:
+        _pipeline.record_provider_call(request_id)
     stream_status = StreamingExecutionStatus()
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
@@ -2066,6 +2082,12 @@ async def _streaming_response(
                 yield f"data: {_json.dumps(error_body)}\n\n".encode()
                 yield b"data: [DONE]\n\n"
         finally:
+            # The upstream stream has ended (last chunk or failure), so the
+            # provider's response is complete; logos' own billing/persistence
+            # runs from here. Stamp it now, before that post-provider work, so
+            # the exec figure ends at the provider's last byte.
+            if request_id:
+                _pipeline.record_provider_response(request_id)
             _live_streams.finish(request_id)
             if error_message is None:
                 error_message = stream_status.error
@@ -2215,6 +2237,14 @@ async def _sync_response(
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, upstream_payload)
 
+        # Preparation succeeded, so the only logos-side work left is the
+        # dispatch below — stamp the provider call now, not at scheduling, so
+        # the queue/exec split excludes the rate-limit and budget checks that
+        # ran in between. A preparation failure above never reaches this line,
+        # so a request that never reached the provider carries no stamp.
+        if request_id:
+            _pipeline.record_provider_call(request_id)
+
         timed_out = False
         error_message = None
         status_override = None
@@ -2310,6 +2340,12 @@ async def _sync_response(
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
         response_at = datetime.datetime.now(datetime.timezone.utc)
+        # The provider's full response has arrived; logos' own post-provider
+        # work (rate-limit header handling, the cost lookup) runs from here.
+        # Ending the exec figure at this instant keeps that internal time out
+        # of the provider's numbers.
+        if request_id:
+            _pipeline.record_provider_response(request_id)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -2975,15 +3011,14 @@ async def _execute_resource_mode(
                 raise
 
     # Execute and Respond
+    #
+    # The provider-call / provider-response timestamps are stamped inside the
+    # execution paths (_sync_response, _streaming_response) at the actual
+    # dispatch and response points — not here — because payload preparation
+    # and, for LogosNode streams, the deferred WebSocket dispatch happen in
+    # between. Stamping before them would count that logos-side work as
+    # provider time.
     try:
-        # Every gate logos controls has been passed — scheduler queue,
-        # rate limit, monthly budget — so from here the remaining wall time
-        # is the provider's own. The statistics page splits a finished
-        # request's queue and exec at this instant, not at scheduling:
-        # counting the budget check's wait as provider execution is what
-        # made a slow billing lookup read as a slow provider.
-        if request_id:
-            _pipeline.record_provider_call(request_id)
         if is_async_job:
             # Async jobs are always non-streaming - use helper
             return await _sync_response(

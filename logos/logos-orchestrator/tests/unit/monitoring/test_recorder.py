@@ -404,3 +404,25 @@ def test_record_provider_call_rides_the_completion_write(monkeypatch):
     assert len(calls) == 1
     assert "timestamp_provider_call" in calls[0]
     assert calls[0]["result_status"] == "success"
+
+
+def test_record_provider_response_rides_the_completion_write(monkeypatch):
+    """The statistics page ends a finished request's exec figure at the
+    provider's response, not at completion — completion is later, after
+    logos' own post-provider cost lookup. Like the provider-call stamp, the
+    value must ride the single completion UPDATE, not the hot path."""
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    recorder.record_provider_call("req-pr")
+    recorder.record_provider_response("req-pr")
+    assert calls == [], "buffered fields must not hit the DB mid-flight"
+
+    recorder.record_complete("req-pr", result_status="success")
+
+    assert len(calls) == 1
+    assert "timestamp_provider_call" in calls[0]
+    assert "timestamp_provider_response" in calls[0]
+    # The exec window is provider-call -> provider-response, both present.
+    assert calls[0]["timestamp_provider_response"] >= calls[0]["timestamp_provider_call"]
+    assert calls[0]["result_status"] == "success"
