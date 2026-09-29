@@ -1689,6 +1689,12 @@ async def _streaming_response(
 
     def _pre_stream_error_response(status_code: int, body: Any, error_message: str):
         """Record an error that occurred before a streaming response was committed."""
+        # The provider's (error) response is complete the moment this runs — it
+        # either sent an error status or the transport failed — so end the exec
+        # figure here. Without the stamp the exec window would fall back to the
+        # completion time, which adds the error handling and persistence below.
+        if request_id:
+            _pipeline.record_provider_response(request_id)
         corrected_sc, error_body = coerce_upstream_error(status_code, body)
         _release()
         if log_id:
@@ -1795,6 +1801,12 @@ async def _streaming_response(
             # also completes the disconnect count, which until now only saw
             # the clients that left *before* the first token.
             stream_completed = False
+            # The provider's last byte is the last chunk pulled off the worker
+            # stream. The response stamp below uses that chunk's arrival
+            # instant, not the moment the loop ends: by then the last chunk has
+            # already been yielded to the client, which under backpressure
+            # would push the exec figure past the provider's own window.
+            last_chunk_at = None
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
@@ -1811,6 +1823,7 @@ async def _streaming_response(
                         async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
                             async for chunk in chunk_iter:
                                 produced = True
+                                last_chunk_at = datetime.datetime.now(datetime.timezone.utc)
                                 # Parse before yielding: GuideLLM closes its HTTP
                                 # stream as soon as it receives [DONE]. If the
                                 # completion flag were set afterwards, that normal
@@ -1844,14 +1857,16 @@ async def _streaming_response(
                             continue
                         error_message = str(e)
                         # The worker stream failed; this is when the provider's
-                        # (error) response ended, before the unwind below.
+                        # (error) response ended, before the unwind below. With
+                        # no chunks produced the stamp falls back to now.
                         if request_id:
-                            _pipeline.record_provider_response(request_id)
+                            _pipeline.record_provider_response(request_id, at=last_chunk_at)
                         raise e
                     # The worker stream completed — the provider's last byte,
-                    # before the finally's billing/persistence runs.
+                    # stamped at that chunk's arrival (last_chunk_at), before
+                    # the finally's billing/persistence runs.
                     if request_id:
-                        _pipeline.record_provider_response(request_id)
+                        _pipeline.record_provider_response(request_id, at=last_chunk_at)
                     stream_completed = True
                     break  # stream completed without raising
             finally:
@@ -1964,6 +1979,10 @@ async def _streaming_response(
         )
         return _pre_stream_error_response(502, {"error": str(exc)}, str(exc))
 
+    # When the first upstream byte (or an immediately-empty stream) was
+    # observed. The http_streamer starts its last-byte tracker from this so an
+    # empty or single-chunk stream still stamps a real arrival instant.
+    stream_first_byte_at = datetime.datetime.now(datetime.timezone.utc)
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
@@ -1993,6 +2012,14 @@ async def _streaming_response(
             translated_stream = None
         error_message = None
         ttft_recorded = False
+        # The provider's last byte is the last chunk pulled off the upstream
+        # (or the empty-stream observation, for a stream with no body). The
+        # response stamp uses that chunk's arrival instant, not the moment the
+        # loop ends: by then the last chunk has already been yielded to the
+        # client and — on cloud SSE — its terminal frame has run the
+        # synchronous pricing lookup, both logos work that must stay out of the
+        # provider's window.
+        last_chunk_at = stream_first_byte_at
 
         def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
             return cost_enricher.feed(chunk) if cost_enricher else [chunk]
@@ -2024,6 +2051,7 @@ async def _streaming_response(
                     ttft_recorded = True
 
             async for chunk in chunk_iter:
+                last_chunk_at = datetime.datetime.now(datetime.timezone.utc)
                 for outgoing_chunk in enriched_chunks(chunk):
                     for client_chunk in client_chunks(outgoing_chunk):
                         yield client_chunk
@@ -2035,11 +2063,12 @@ async def _streaming_response(
                     _record_ettft_accuracy(scheduling_stats)
                     ttft_recorded = True
             # The upstream stream is exhausted — the provider's last byte,
-            # before any enrichment (the cost lookup for cloud SSE) or
-            # terminal-frame delivery. Ending the exec figure here keeps that
-            # logos-side work out of the provider's numbers.
+            # stamped at that chunk's arrival (last_chunk_at), before any
+            # enrichment (the cost lookup for cloud SSE) or terminal-frame
+            # delivery. Ending the exec figure here keeps that logos-side work
+            # out of the provider's numbers.
             if request_id:
-                _pipeline.record_provider_response(request_id)
+                _pipeline.record_provider_response(request_id, at=last_chunk_at)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2068,9 +2097,10 @@ async def _streaming_response(
         except Exception as exc:
             error_message = str(exc)
             # The upstream failed; this is when the provider's (error) response
-            # ended, before the recovery frames below.
+            # ended, before the recovery frames below. last_chunk_at holds the
+            # last byte that did arrive (or the empty-stream instant).
             if request_id:
-                _pipeline.record_provider_response(request_id)
+                _pipeline.record_provider_response(request_id, at=last_chunk_at)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):

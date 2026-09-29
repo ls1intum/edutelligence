@@ -391,7 +391,7 @@ class MonitoringRecorder:
         """
         self._buffer(request_id, timestamp_provider_call=datetime.datetime.now(datetime.timezone.utc))
 
-    def record_provider_response(self, request_id: str) -> None:
+    def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
         """Stamp the instant the upstream provider's response has fully arrived.
 
         ``timestamp_response`` (``record_complete``) is written at completion,
@@ -403,10 +403,20 @@ class MonitoringRecorder:
         and the provider's last byte is the provider's own, and what logos
         does after (billing, persistence) is neither queue nor exec.
 
+        ``at`` pins the instant the caller observed the provider's last byte.
+        The streaming paths pass the last chunk's arrival time rather than the
+        moment this call runs: by then the last chunk has already been yielded
+        downstream and — on cloud SSE — its terminal frame has run the
+        synchronous pricing lookup, both of which are logos work that must stay
+        out of the provider's window. Omitted (or None) stamps ``now()``.
+
         Buffered like ``record_provider_call``: it only matters once the
         request is finished, so it rides the completion UPDATE.
         """
-        self._buffer(request_id, timestamp_provider_response=datetime.datetime.now(datetime.timezone.utc))
+        self._buffer(
+            request_id,
+            timestamp_provider_response=at if at is not None else datetime.datetime.now(datetime.timezone.utc),
+        )
 
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist whether this key's rate limiter admitted the request.

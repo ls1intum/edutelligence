@@ -233,7 +233,7 @@ def _make_pipeline(
             return None
 
         @staticmethod
-        def record_provider_response(request_id):  # noqa: ARG004
+        def record_provider_response(request_id, at=None):  # noqa: ARG004
             return None
 
         @staticmethod

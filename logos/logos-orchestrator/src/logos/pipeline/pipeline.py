@@ -4,6 +4,7 @@ Main request pipeline orchestrating classification → scheduling → execution.
 """
 
 import asyncio
+import datetime
 import logging
 import time
 import uuid
@@ -748,9 +749,13 @@ class RequestPipeline:
         """Stamp the instant the request is handed to the upstream provider."""
         self._monitoring.record_provider_call(request_id)
 
-    def record_provider_response(self, request_id: str) -> None:
-        """Stamp the instant the upstream provider's response has fully arrived."""
-        self._monitoring.record_provider_response(request_id)
+    def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the upstream provider's response has fully arrived.
+
+        ``at`` pins the observed arrival instant (the streaming paths pass the
+        last chunk's arrival time); omitted it stamps now.
+        """
+        self._monitoring.record_provider_response(request_id, at=at)
 
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """

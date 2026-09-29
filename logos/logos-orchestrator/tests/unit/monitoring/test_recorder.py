@@ -1,3 +1,4 @@
+import datetime
 from types import SimpleNamespace
 
 from logos import MonitoringRecorder
@@ -426,3 +427,32 @@ def test_record_provider_response_rides_the_completion_write(monkeypatch):
     # The exec window is provider-call -> provider-response, both present.
     assert calls[0]["timestamp_provider_response"] >= calls[0]["timestamp_provider_call"]
     assert calls[0]["result_status"] == "success"
+
+
+def test_record_provider_response_uses_the_arrival_instant_when_given(monkeypatch):
+    """The streaming paths pass the last chunk's arrival instant, not now():
+    by the time the stamp is recorded the last chunk has already been yielded
+    downstream and (cloud SSE) its terminal frame has run the pricing lookup.
+    A fixed ``at`` must be persisted verbatim, and an omitted/None ``at`` must
+    fall back to now()."""
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    arrival = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
+    recorder.record_provider_call("req-at")
+    recorder.record_provider_response("req-at", at=arrival)
+    recorder.record_complete("req-at", result_status="success")
+
+    assert len(calls) == 1
+    # The exact arrival instant is persisted, not the (later) record time.
+    assert calls[0]["timestamp_provider_response"] == arrival
+
+    recorder2, calls2 = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+    recorder2.record_provider_call("req-at-none")
+    recorder2.record_provider_response("req-at-none", at=None)
+    recorder2.record_complete("req-at-none", result_status="success")
+    # at=None falls back to now(): a real, current instant.
+    assert calls2[0]["timestamp_provider_response"] >= datetime.datetime(
+        2026, 1, 1, tzinfo=datetime.timezone.utc
+    )
