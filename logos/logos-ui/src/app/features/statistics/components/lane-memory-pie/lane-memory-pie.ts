@@ -54,10 +54,17 @@ export class LaneMemoryPieComponent {
     if (this.metric === 'ram') {
       return typeof lane.host_ram_mb === 'number' ? lane.host_ram_mb : null;
     }
-    // 'vram' and 'unified' both key off the lane's model footprint: on
-    // unified-memory hardware effective_vram_mb is the lane's share of the
-    // single pool (its weights live in it), and per-lane host RAM is not
-    // measured there anyway.
+    if (this.metric === 'unified') {
+      // On unified-memory hardware the lane's VRAM fields are structurally
+      // zero — there is no discrete GPU to read — so the lane's measured
+      // process-tree host RAM is its actual share of the single pool. A
+      // worker that never reports it falls back to the VRAM figure, which
+      // reads 0 and keeps the lane out of the pie.
+      if (typeof lane.host_ram_mb === 'number' && lane.host_ram_mb > 0) {
+        return lane.host_ram_mb;
+      }
+      return lane.effective_vram_mb ?? null;
+    }
     return lane.effective_vram_mb ?? null;
   }
 
