@@ -1632,6 +1632,58 @@ def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
     return headers or None
 
 
+_STREAM_END = object()
+
+
+async def _chunks_with_arrival(source):
+    """Yield ``(chunk, arrival)`` pairs with arrival decoupled from delivery.
+
+    A background task pulls from ``source`` as fast as data arrives and records
+    each chunk's arrival instant. The consumer reads from a queue, so a slow
+    client's backpressure at the ``yield`` no longer delays the recorded
+    arrival — it reflects when the provider sent the byte, not when the client
+    was ready to take it. That is what the statistics page's exec figure needs:
+    the provider's own time, without logos' client-delivery wait.
+
+    The source is closed and the pump cancelled when this generator ends,
+    including on a client disconnect (GeneratorExit at the ``yield``). A source
+    exception is re-raised to the consumer once the in-flight chunks are
+    drained. The caller must close this generator (e.g. via ``aclosing``) so the
+    cleanup in the finally runs.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _pump() -> None:
+        try:
+            # The only suspension point is __anext__, so on cancellation the
+            # cancelled __anext__ runs the source's own cleanup (the worker
+            # cancellation, the httpx close) deterministically — no explicit
+            # aclose from this task, which would race the in-flight iteration.
+            async for chunk in source:
+                await queue.put((chunk, datetime.datetime.now(datetime.timezone.utc)))
+        except asyncio.CancelledError:
+            # Cancelled (client disconnect): the source is already cleaned up by
+            # the cancelled __anext__ and the consumer is gone, so queue nothing.
+            raise
+        except BaseException as exc:  # noqa: BLE001 - re-raised by the consumer
+            await queue.put(exc)
+        await queue.put(_STREAM_END)
+
+    pump = asyncio.get_running_loop().create_task(_pump())
+    try:
+        while True:
+            item = await queue.get()
+            if item is _STREAM_END:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        pump.cancel()
+        with suppress(asyncio.CancelledError):
+            await pump
+
+
 async def _streaming_response(
     context,
     payload,
@@ -1801,11 +1853,11 @@ async def _streaming_response(
             # also completes the disconnect count, which until now only saw
             # the clients that left *before* the first token.
             stream_completed = False
-            # The provider's last byte is the last chunk pulled off the worker
-            # stream. The response stamp below uses that chunk's arrival
-            # instant, not the moment the loop ends: by then the last chunk has
-            # already been yielded to the client, which under backpressure
-            # would push the exec figure past the provider's own window.
+            # The provider's last byte is the last chunk off the worker stream.
+            # _chunks_with_arrival captures each chunk's arrival on a
+            # background pump (independent of the client's pace), so this holds
+            # the last chunk's arrival — not the moment the loop ends, which
+            # under backpressure would be after the client already took it.
             last_chunk_at = None
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
@@ -1819,11 +1871,13 @@ async def _streaming_response(
                         # async-generator GC hook, so its cleanup (which is
                         # what sends the cancellation) would run at some
                         # unspecified later point. Closing it here runs that
-                        # cleanup while the disconnect is being handled.
-                        async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
-                            async for chunk in chunk_iter:
+                        # cleanup while the disconnect is being handled. The
+                        # chunks are read through _chunks_with_arrival so the
+                        # arrival instant is captured off the client's pace.
+                        async with aclosing(_chunks_with_arrival(_new_logosnode_chunk_iter())) as wrapped:
+                            async for chunk, arrival in wrapped:
                                 produced = True
-                                last_chunk_at = datetime.datetime.now(datetime.timezone.utc)
+                                last_chunk_at = arrival
                                 # Parse before yielding: GuideLLM closes its HTTP
                                 # stream as soon as it receives [DONE]. If the
                                 # completion flag were set afterwards, that normal
@@ -2012,12 +2066,12 @@ async def _streaming_response(
             translated_stream = None
         error_message = None
         ttft_recorded = False
-        # The provider's last byte is the last chunk pulled off the upstream
-        # (or the empty-stream observation, for a stream with no body). The
-        # response stamp uses that chunk's arrival instant, not the moment the
-        # loop ends: by then the last chunk has already been yielded to the
-        # client and — on cloud SSE — its terminal frame has run the
-        # synchronous pricing lookup, both logos work that must stay out of the
+        # The provider's last byte is the last chunk off the upstream (or the
+        # empty-stream observation, for a body-less stream). _chunks_with_arrival
+        # captures each chunk's arrival on a background pump — independent of the
+        # client's pace and of the loop's end — so this holds the last chunk's
+        # arrival, ahead of the cloud-SSE pricing lookup and terminal-frame
+        # delivery, both of which are logos work that must stay out of the
         # provider's window.
         last_chunk_at = stream_first_byte_at
 
@@ -2050,18 +2104,19 @@ async def _streaming_response(
                     _record_ettft_accuracy(scheduling_stats)
                     ttft_recorded = True
 
-            async for chunk in chunk_iter:
-                last_chunk_at = datetime.datetime.now(datetime.timezone.utc)
-                for outgoing_chunk in enriched_chunks(chunk):
-                    for client_chunk in client_chunks(outgoing_chunk):
-                        yield client_chunk
-                _live_streams.update(request_id, stream_log.streamed_tokens())
-                if chunk and not ttft_recorded:
-                    if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
-                    _record_ettft_accuracy(scheduling_stats)
-                    ttft_recorded = True
+            async with aclosing(_chunks_with_arrival(chunk_iter)) as wrapped:
+                async for chunk, arrival in wrapped:
+                    last_chunk_at = arrival
+                    for outgoing_chunk in enriched_chunks(chunk):
+                        for client_chunk in client_chunks(outgoing_chunk):
+                            yield client_chunk
+                    _live_streams.update(request_id, stream_log.streamed_tokens())
+                    if chunk and not ttft_recorded:
+                        if log_id:
+                            with DBManager() as db:
+                                db.set_time_at_first_token(log_id)
+                        _record_ettft_accuracy(scheduling_stats)
+                        ttft_recorded = True
             # The upstream stream is exhausted — the provider's last byte,
             # stamped at that chunk's arrival (last_chunk_at), before any
             # enrichment (the cost lookup for cloud SSE) or terminal-frame

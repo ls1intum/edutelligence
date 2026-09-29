@@ -453,6 +453,4 @@ def test_record_provider_response_uses_the_arrival_instant_when_given(monkeypatc
     recorder2.record_provider_response("req-at-none", at=None)
     recorder2.record_complete("req-at-none", result_status="success")
     # at=None falls back to now(): a real, current instant.
-    assert calls2[0]["timestamp_provider_response"] >= datetime.datetime(
-        2026, 1, 1, tzinfo=datetime.timezone.utc
-    )
+    assert calls2[0]["timestamp_provider_response"] >= datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)

@@ -274,6 +274,10 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
         try:
             yield b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'
             yield b'data: {"id":"c2","choices":[{"delta":{"content":" there"}}]}\n\n'
+            # Stay open like a real worker stream (which waits for stream_end)
+            # until the consumer closes it. Ending here would let the arrival
+            # pump exhaust it before the disconnect this test is about.
+            await asyncio.Event().wait()
         finally:
             # Stands in for the real cleanup, which sends `cancel_command`.
             closed.set()
@@ -362,6 +366,9 @@ async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkey
 
     body = response.body_iterator
     first = asyncio.ensure_future(body.__anext__())
+    # The consumer starts the arrival pump; give the pump a hop so it opens the
+    # worker stream (sends infer_stream) before we look for its cmd_id.
+    await asyncio.sleep(0)
     await asyncio.sleep(0)
     cmd_id = _sent_stream_cmd_id(websocket)
     await _feed(registry, cmd_id, {"type": "stream_chunk", "chunk": b"data: {}\n\n"})
