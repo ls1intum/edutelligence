@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -150,13 +151,38 @@ public class TeamActivityService {
         new ConcurrentHashMap<>();
 
     /**
-     * One monitor per (team, window). A TTL expiry that several open tabs
-     * poll at once must pay the three aggregates once, not once per tab —
-     * the first thread past the TTL loads under the key's lock, the rest
+     * One refresh lock per (team, window). A TTL expiry that several open
+     * tabs poll at once must pay the three aggregates once, not once per tab
+     * — the first thread past the TTL loads under the key's lock, the rest
      * wait on it and read the entry it leaves behind.
      */
-    private final ConcurrentHashMap<String, Object> aggregateRefreshLocks =
+    private final ConcurrentHashMap<String, RefreshLock> aggregateRefreshLocks =
         new ConcurrentHashMap<>();
+
+    /**
+     * One key's refresh lock: the monitor the polls funnel through, and how
+     * many of them are inside or waiting. The count is what keeps the lock
+     * stable through eviction — see {@link #acquireRefreshLock}.
+     */
+    private record RefreshLock(Object monitor, AtomicInteger holders) {}
+
+    /**
+     * The key's lock, with this poll counted as a holder. The increment
+     * happens inside the map's {@code merge}, so it is atomic with the
+     * eviction's removal: a lock the eviction drops is one nobody holds, and
+     * a lock this returns is the map's current one for as long as the count
+     * says someone is inside. Dropping a held monitor is exactly what must
+     * not happen — the next poll would take a fresh one and repeat the very
+     * load single-flight exists to pay once.
+     */
+    private RefreshLock acquireRefreshLock(String key) {
+        return aggregateRefreshLocks.merge(key,
+            new RefreshLock(new Object(), new AtomicInteger(1)),
+            (existing, unused) -> {
+                existing.holders().incrementAndGet();
+                return existing;
+            });
+    }
 
     public TeamActivityService(LogEntryRepository logEntryRepository,
                                RequestLogService requestLogService,
@@ -260,7 +286,9 @@ public class TeamActivityService {
      * single-purpose caches. A refresh is single-flighted per key: the moment
      * the entry expires, every tab that polls the window wants it at once,
      * and the lock funnels them through one load so the ninety-day
-     * aggregates run once per expiry, not once per tab.
+     * aggregates run once per expiry, not once per tab. The key's lock
+     * stays put for as long as anyone holds it, so an eviction that runs
+     * mid-refresh cannot split the waiters onto a second, concurrent load.
      */
     private PeriodAggregates periodAggregates(int teamId, int days, Timestamp since) {
         String key = teamId + "|" + days;
@@ -269,16 +297,21 @@ public class TeamActivityService {
             return cached.value();
         }
 
-        synchronized (aggregateRefreshLocks.computeIfAbsent(key, k -> new Object())) {
-            // The thread that held the lock first may have refreshed the very
-            // entry this poll is asking for; trust it before paying the
-            // queries a second time.
-            cached = aggregatesCache.get(key);
-            if (cached != null
-                    && System.currentTimeMillis() - cached.loadedAtMs() < aggregateCacheTtlMillis) {
-                return cached.value();
+        RefreshLock lock = acquireRefreshLock(key);
+        try {
+            synchronized (lock.monitor()) {
+                // The thread that held the lock first may have refreshed the
+                // very entry this poll is asking for; trust it before paying
+                // the queries a second time.
+                cached = aggregatesCache.get(key);
+                if (cached != null
+                        && System.currentTimeMillis() - cached.loadedAtMs() < aggregateCacheTtlMillis) {
+                    return cached.value();
+                }
+                return loadPeriodAggregates(key, teamId, since);
             }
-            return loadPeriodAggregates(key, teamId, since);
+        } finally {
+            lock.holders().decrementAndGet();
         }
     }
 
@@ -310,7 +343,12 @@ public class TeamActivityService {
         // keep entries for windows nobody polls any more.
         if (aggregatesCache.size() > 128) {
             aggregatesCache.entrySet().removeIf(e -> now - e.getValue().loadedAtMs() >= aggregateCacheTtlMillis);
-            aggregateRefreshLocks.keySet().removeIf(k -> !aggregatesCache.containsKey(k));
+            // The locks go with the entries, except the ones a refresh is
+            // still inside: dropping a held monitor would hand the next poll
+            // a different one and un-single-flight the very refresh it
+            // serves.
+            aggregateRefreshLocks.entrySet().removeIf(
+                e -> !aggregatesCache.containsKey(e.getKey()) && e.getValue().holders().get() == 0);
         }
         return value;
     }
