@@ -97,4 +97,22 @@ class RepoWorkflowScannerTest {
         assertThat(RepoWorkflowScanner.recommendSla("services/worker.py\nclient = OpenAI()\n"))
             .isEqualTo("ux-high-prio");
     }
+
+    @Test
+    void scanDirectory_capsDenseCallSites() throws Exception {
+        StringBuilder dense = new StringBuilder();
+        int repetitions = RepoWorkflowScanner.MAX_DETECTED_CALLS + 250;
+        for (int i = 0; i < repetitions; i++) {
+            dense.append("client = OpenAI()\n");
+        }
+        Files.writeString(tempDir.resolve("dense.py"), dense.toString());
+
+        RepoWorkflowScanner scanner = new RepoWorkflowScanner();
+        RepoWorkflowScanner.ScanResult result = scanner.scanDirectory(tempDir, null);
+
+        assertThat(result.calls()).hasSize(RepoWorkflowScanner.MAX_DETECTED_CALLS);
+        assertThat(result.calls().getFirst().startLine()).isEqualTo(1);
+        assertThat(result.calls().get(RepoWorkflowScanner.MAX_DETECTED_CALLS - 1).startLine())
+            .isEqualTo(RepoWorkflowScanner.MAX_DETECTED_CALLS);
+    }
 }

@@ -51,6 +51,8 @@ public class RepoWorkflowScanner {
     static final long MAX_DOWNLOAD_BYTES = 80L * 1024 * 1024;
     static final long MAX_EXTRACTED_BYTES = 200L * 1024 * 1024;
     static final int MAX_ZIP_ENTRIES = 50_000;
+    /** Cap recommendation work from dense synthetic sources. */
+    static final int MAX_DETECTED_CALLS = 500;
 
     private static final Set<String> TEXT_EXTENSIONS = Set.of(
         ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".kt", ".go", ".rs",
@@ -243,10 +245,25 @@ public class RepoWorkflowScanner {
             }
             String[] lines = content.split("\\R", -1);
             Matcher matcher = CALL_SITE.matcher(content);
+            int line = 1;
+            int scanPos = 0;
             while (matcher.find()) {
+                if (calls.size() >= MAX_DETECTED_CALLS) {
+                    break;
+                }
                 int startOffset = matcher.start();
-                int line = lineNumberAt(content, startOffset);
-                int endLine = lineNumberAt(content, matcher.end() - 1);
+                while (scanPos < startOffset) {
+                    if (content.charAt(scanPos) == '\n') {
+                        line++;
+                    }
+                    scanPos++;
+                }
+                int endLine = line;
+                for (int i = startOffset; i < matcher.end(); i++) {
+                    if (content.charAt(i) == '\n') {
+                        endLine++;
+                    }
+                }
                 String window = contextWindow(lines, line - 1, 12);
                 String pathAndWindow = relative + "\n" + window;
                 String sla = recommendSla(pathAndWindow);
@@ -256,6 +273,9 @@ public class RepoWorkflowScanner {
                 String justification = buildJustification(sla, kind, relative);
                 calls.add(new DetectedCall(
                     relative, line, Math.max(line, endLine), model, sla, confidence, justification));
+            }
+            if (calls.size() >= MAX_DETECTED_CALLS) {
+                break;
             }
         }
 
@@ -585,17 +605,6 @@ public class RepoWorkflowScanner {
             }
         }
         return false;
-    }
-
-    private static int lineNumberAt(String content, int offset) {
-        int line = 1;
-        int end = Math.min(offset, content.length());
-        for (int i = 0; i < end; i++) {
-            if (content.charAt(i) == '\n') {
-                line++;
-            }
-        }
-        return line;
     }
 
     private static String contextWindow(String[] lines, int centerZeroBased, int radius) {

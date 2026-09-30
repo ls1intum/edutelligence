@@ -20,12 +20,19 @@ class _Result:
     def scalar_one_or_none(self):
         return self._value
 
+    def mappings(self):
+        return self
+
+    def first(self):
+        return self._value
+
 
 class _Conn:
-    def __init__(self):
+    def __init__(self, *, link_slug: str = "acme/repo"):
         self.statements: list[tuple[str, dict]] = []
         self._next_analysis_id = 9
         self._next_workflow_id = 100
+        self.link_slug = link_slug
 
     async def __aenter__(self):
         return self
@@ -37,8 +44,8 @@ class _Conn:
         text_sql = " ".join(str(sql).split())
         params = params or {}
         self.statements.append((text_sql, params))
-        if "SELECT team_id FROM team_repositories" in text_sql:
-            return _Result(7)
+        if "FROM team_repositories" in text_sql and "SELECT" in text_sql:
+            return _Result({"team_id": 7, "repo_slug": self.link_slug})
         if "SELECT id FROM ai_workflow_analyses" in text_sql:
             return _Result(None)
         if "INSERT INTO ai_workflow_analyses" in text_sql:
@@ -112,12 +119,14 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
         session_id=5,
         team_repository_id=11,
         payload=payload,
+        session_repo_slug="acme/repo",
     )
     assert analysis_id == 9
 
     kinds = [sql for sql, _ in conn.statements]
     assert any("INSERT INTO ai_workflow_analyses" in sql for sql in kinds)
     assert any("INSERT INTO ai_workflows" in sql for sql in kinds)
+    assert any("FOR UPDATE" in sql for sql in kinds)
     rec = next(p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql)
     assert rec["file_path"] == "src/llm.py"
     assert rec["sla"] == "ux-critical"
@@ -127,8 +136,33 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
 
     conn2 = _Conn()
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn2))
-    await analysis_ingest.ingest_session({"id": 5, "team_repository_id": 11})
+    await analysis_ingest.ingest_session({"id": 5, "team_repository_id": 11, "repo_slug": "acme/repo"})
     assert any("INSERT INTO ai_workflows" in sql for sql, _ in conn2.statements)
+
+
+async def test_upsert_rejects_obsolete_slug_after_link_edit(tmp_path, monkeypatch, caplog):
+    _patch_artifact_root(monkeypatch, tmp_path)
+    session_dir = tmp_path / "42"
+    session_dir.mkdir()
+    payload = {
+        "commit_sha": "oldrepo",
+        "workflows": [
+            {"name": "chat", "trigger_summary": "x", "diagram_mermaid": "flowchart TD\n  A", "sort_order": 0}
+        ],
+        "recommendations": [],
+    }
+    (session_dir / "analysis.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    conn = _Conn(link_slug="acme/new")
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    with caplog.at_level("INFO"):
+        await analysis_ingest.ingest_session({"id": 42, "team_repository_id": 11, "repo_slug": "acme/old"})
+    assert "obsolete" in caplog.text
+    assert not any("INSERT INTO ai_workflow_analyses" in sql for sql, _ in conn.statements)
+    assert not any("INSERT INTO ai_workflows" in sql for sql, _ in conn.statements)
+    assert any(
+        "UPDATE ai_workflow_analyses" in sql and params.get("session_id") == 42 for sql, params in conn.statements
+    )
 
 
 async def test_ingest_rejects_non_object_json(tmp_path, monkeypatch, caplog):

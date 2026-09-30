@@ -117,10 +117,18 @@ async def ingest_session(session: dict[str, Any]) -> None:
             session_id=session_id,
             team_repository_id=int(team_repository_id),
             payload=payload,
+            session_repo_slug=session.get("repo_slug"),
         )
+    except ObsoleteLinkError as exc:
+        logger.info("analysis session %s obsolete after link edit: %s", session_id, exc)
+        await mark_analysis_failed(session_id, str(exc))
     except Exception as exc:
         logger.warning("analysis ingest for session %s failed: %s", session_id, exc)
         await mark_analysis_failed(session_id, str(exc))
+
+
+class ObsoleteLinkError(ValueError):
+    """Session analysed a repository the link no longer points at."""
 
 
 async def mark_analysis_failed(session_id: int, error: str) -> None:
@@ -149,6 +157,7 @@ async def upsert_analysis(
     session_id: int,
     team_repository_id: int,
     payload: dict[str, Any],
+    session_repo_slug: str | None = None,
 ) -> int:
     """Write workflows + recommendations for one agent analysis. Returns analysis id."""
     commit_sha = _str_or_none(payload.get("commit_sha"))
@@ -160,14 +169,30 @@ async def upsert_analysis(
         recommendations = []
 
     async with db.sessionmaker()() as conn:
-        team_id = (
-            await conn.execute(
-                text("SELECT team_id FROM team_repositories WHERE id = :id"),
-                {"id": team_repository_id},
+        # Serialize with TeamRepoLinkService slug edits (FOR UPDATE) and reject
+        # results whose session targeted a previous repository identity.
+        link = (
+            (
+                await conn.execute(
+                    text("""
+                    SELECT team_id, repo_slug
+                      FROM team_repositories
+                     WHERE id = :id
+                     FOR UPDATE
+                    """),
+                    {"id": team_repository_id},
+                )
             )
-        ).scalar_one_or_none()
-        if team_id is None:
+            .mappings()
+            .first()
+        )
+        if link is None:
             raise ValueError(f"team_repository {team_repository_id} does not exist")
+        team_id = int(link["team_id"])
+        current_slug = str(link["repo_slug"] or "").lower()
+        expected = str(session_repo_slug or "").strip().lower()
+        if expected and current_slug and expected != current_slug:
+            raise ObsoleteLinkError(f"session targeted {expected} but link now points at {current_slug}")
 
         analysis_id = (
             await conn.execute(
