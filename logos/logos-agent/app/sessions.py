@@ -1499,7 +1499,8 @@ class SessionManager:
             "LOGOS_SESSION_ID": str(session["id"]),
             "LOGOS_SESSION_BRANCH": branch,
             "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
-            "LOGOS_REPO_URL": settings.repo_url,
+            "LOGOS_REPO_URL": session.get("repo_url") or settings.repo_url,
+            "LOGOS_REPO_SLUG": session.get("repo_slug") or settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
             # The account the session's commits belong to. The helper
             # configures git with it, and the finalizer refuses to push if
@@ -1543,6 +1544,10 @@ class SessionManager:
             # without a push. "The work reached the repository" is true by
             # construction: there is nothing to land.
             logger.info("session %s is read-only; leaving the remote alone", session_id)
+            if str(session.get("trigger_kind") or "") == "analysis":
+                from . import analysis_ingest
+
+                await analysis_ingest.ingest_session(session)
             return True
         if not session.get("branch_name"):
             logger.warning("no branch recorded for session %s; cannot finalize", session_id)
@@ -1574,8 +1579,8 @@ class SessionManager:
             # request. The finalizer reads it rather than the task, for the
             # same reason it reads no_push and open_pull_request from the row.
             "LOGOS_SESSION_CLOSES": closes,
-            "LOGOS_REPO_URL": settings.repo_url,
-            "LOGOS_REPO_SLUG": settings.repo_slug,
+            "LOGOS_REPO_URL": session.get("repo_url") or settings.repo_url,
+            "LOGOS_REPO_SLUG": session.get("repo_slug") or settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
             "LOGOS_AGENT_GITHUB_LOGIN": settings.github_login,
             # Whether this session's work may include CI workflow files. With
@@ -1979,6 +1984,9 @@ class SessionManager:
                 reaction_target=session.get("reaction_target"),
                 priority=int(session.get("priority") or 50),
                 priority_reason=session.get("priority_reason"),
+                repo_url=session.get("repo_url"),
+                repo_slug=session.get("repo_slug"),
+                team_repository_id=session.get("team_repository_id"),
             )
         except Exception as exc:
             logger.warning("could not take session %s up again: %s", session.get("id"), exc)

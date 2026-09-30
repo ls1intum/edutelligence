@@ -12,6 +12,29 @@ WHERE id IN (3001, 3002, 3003, 3004)
            )
            OR lower(email) IN ('legacy-admin@test.com', 'fresh@tum.de', 'newbie@tum.de')
    );
+DELETE FROM ai_llm_call_recommendations
+WHERE team_id IN (2001, 2002)
+   OR team_id IN (SELECT id FROM teams WHERE name = 'repo-link-foreign')
+   OR analysis_id IN (
+        SELECT id FROM ai_workflow_analyses
+        WHERE team_id IN (2001, 2002)
+           OR team_id IN (SELECT id FROM teams WHERE name = 'repo-link-foreign')
+   );
+DELETE FROM ai_workflows
+WHERE analysis_id IN (
+        SELECT id FROM ai_workflow_analyses
+        WHERE team_id IN (2001, 2002)
+           OR team_id IN (SELECT id FROM teams WHERE name = 'repo-link-foreign')
+   );
+DELETE FROM ai_workflow_analyses
+WHERE team_id IN (2001, 2002)
+   OR team_id IN (SELECT id FROM teams WHERE name = 'repo-link-foreign');
+DELETE FROM team_repository_credentials
+WHERE team_repository_id IN (
+        SELECT id FROM team_repositories
+        WHERE team_id IN (2001, 2002)
+           OR team_id IN (SELECT id FROM teams WHERE name = 'repo-link-foreign')
+   );
 DELETE FROM team_repositories
 WHERE team_id IN (2001, 2002)
    OR team_id IN (

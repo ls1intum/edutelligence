@@ -18,10 +18,13 @@ import org.springframework.web.server.ResponseStatusException;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRepoLinkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRepoLinkRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.AiWorkflowAnalysis;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamRepoLink;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.AiWorkflowAnalysisRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepoLinkRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepositoryCredentialRepository;
 
 @Service
 public class TeamRepoLinkService {
@@ -39,13 +42,19 @@ public class TeamRepoLinkService {
     private final TeamRepoLinkRepository repoLinkRepository;
     private final TeamRepository teamRepository;
     private final TeamMemberRepository teamMemberRepository;
+    private final TeamRepositoryCredentialRepository credentialRepository;
+    private final AiWorkflowAnalysisRepository analysisRepository;
 
     public TeamRepoLinkService(TeamRepoLinkRepository repoLinkRepository,
                                TeamRepository teamRepository,
-                               TeamMemberRepository teamMemberRepository) {
+                               TeamMemberRepository teamMemberRepository,
+                               TeamRepositoryCredentialRepository credentialRepository,
+                               AiWorkflowAnalysisRepository analysisRepository) {
         this.repoLinkRepository = repoLinkRepository;
         this.teamRepository = teamRepository;
         this.teamMemberRepository = teamMemberRepository;
+        this.credentialRepository = credentialRepository;
+        this.analysisRepository = analysisRepository;
     }
 
     public boolean isTeamOwner(int teamId, int userId) {
@@ -238,6 +247,26 @@ public class TeamRepoLinkService {
         m.put("paths", link.getPaths());
         m.put("created_at", link.getCreatedAt() != null ? link.getCreatedAt().toString() : null);
         m.put("updated_at", link.getUpdatedAt() != null ? link.getUpdatedAt().toString() : null);
+        boolean hasCredentials = credentialRepository
+            .findByTeamRepositoryIdAndRevokedAtIsNull(link.getId())
+            .filter(c -> c.getEncryptedPrivateKey() != null && !c.getEncryptedPrivateKey().isBlank())
+            .isPresent();
+        m.put("has_credentials", hasCredentials);
+        Optional<AiWorkflowAnalysis> latest = analysisRepository
+            .findFirstByTeamRepositoryIdAndStatusOrderByFinishedAtDesc(link.getId(), "succeeded");
+        if (latest.isPresent()) {
+            AiWorkflowAnalysis a = latest.get();
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("id", a.getId());
+            summary.put("status", a.getStatus());
+            summary.put("source", a.getSource());
+            summary.put("commit_sha", a.getCommitSha());
+            summary.put("finished_at", a.getFinishedAt() != null ? a.getFinishedAt().toString() : null);
+            m.put("latest_analysis", summary);
+        }
+        else {
+            m.put("latest_analysis", null);
+        }
         return m;
     }
 }

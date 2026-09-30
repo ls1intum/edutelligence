@@ -17,10 +17,9 @@ import { TeamRepository } from '../../../../shared/models/team.model';
 /**
  * Team → Repositories.
  *
- * Links GitHub repositories to the team so a later LogosOSSAgent pass can
- * analyse AI workflows and recommend SLAs. This tab is only the link book:
- * public URL, branch, optional path filters — no credentials and no analysis
- * results yet.
+ * Links GitHub repositories for AI-workflow analysis. Owners can store a
+ * deploy key for private repos, run a heuristic scan, or queue an agent
+ * analysis session.
  */
 @Component({
   selector: 'app-repositories-tab',
@@ -60,7 +59,16 @@ export class RepositoriesTabComponent implements OnChanges {
   deleteLoading = signal(false);
   deleteError = signal(false);
 
-  readonly gridCols = 'minmax(10rem, 1.4fr) minmax(6rem, 0.7fr) minmax(8rem, 1fr) minmax(5rem, auto)';
+  credOpen = signal(false);
+  credTarget = signal<TeamRepository | null>(null);
+  credPem = signal('');
+  credLoading = signal(false);
+  credError = signal('');
+
+  busyLinkId = signal<number | null>(null);
+
+  readonly gridCols =
+    'minmax(10rem, 1.4fr) minmax(5rem, 0.6fr) minmax(6rem, 0.7fr) minmax(7rem, 0.9fr) minmax(5rem, 0.7fr) minmax(8rem, auto)';
 
   ngOnChanges(): void {
     if (this.teamId) {
@@ -120,8 +128,6 @@ export class RepositoriesTabComponent implements OnChanges {
         await this.teamService.updateTeamRepository(this.teamId, editing.id, {
           repo_url: url,
           branch,
-          // Empty must be [] so the service clears stored filters; null means
-          // "leave paths alone" on the PATCH contract.
           paths: paths ?? [],
         });
       } else {
@@ -164,9 +170,90 @@ export class RepositoriesTabComponent implements OnChanges {
     }
   }
 
+  openCredentials(repo: TeamRepository): void {
+    this.credTarget.set(repo);
+    this.credPem.set('');
+    this.credError.set('');
+    this.credOpen.set(true);
+  }
+
+  closeCredentials(): void {
+    if (this.credLoading()) return;
+    this.credOpen.set(false);
+  }
+
+  async submitCredentials(): Promise<void> {
+    const target = this.credTarget();
+    const pem = this.credPem().trim();
+    if (!target || !pem || this.credLoading()) return;
+    this.credLoading.set(true);
+    this.credError.set('');
+    this.actionError.set('');
+    try {
+      await this.teamService.storeRepositoryCredentials(this.teamId, target.id, {
+        private_key_pem: pem,
+      });
+      this.credOpen.set(false);
+      await this.load();
+    } catch (err: unknown) {
+      this.credError.set(extractDetail(err) || 'Failed to store deploy key, please try again.');
+    } finally {
+      this.credLoading.set(false);
+    }
+  }
+
+  async revokeCredentials(repo: TeamRepository): Promise<void> {
+    if (this.busyLinkId() != null) return;
+    this.busyLinkId.set(repo.id);
+    this.actionError.set('');
+    try {
+      await this.teamService.revokeRepositoryCredentials(this.teamId, repo.id);
+      await this.load();
+    } catch (err: unknown) {
+      this.actionError.set(extractDetail(err) || 'Failed to revoke credentials.');
+    } finally {
+      this.busyLinkId.set(null);
+    }
+  }
+
+  async analyzeHeuristic(repo: TeamRepository): Promise<void> {
+    if (this.busyLinkId() != null) return;
+    this.busyLinkId.set(repo.id);
+    this.actionError.set('');
+    try {
+      await this.teamService.analyzeRepositoryHeuristic(this.teamId, repo.id);
+      await this.load();
+    } catch (err: unknown) {
+      this.actionError.set(extractDetail(err) || 'Heuristic analysis failed.');
+    } finally {
+      this.busyLinkId.set(null);
+    }
+  }
+
+  async analyzeAgent(repo: TeamRepository): Promise<void> {
+    if (this.busyLinkId() != null) return;
+    this.busyLinkId.set(repo.id);
+    this.actionError.set('');
+    try {
+      await this.teamService.analyzeRepositoryAgent(this.teamId, repo.id);
+      await this.load();
+    } catch (err: unknown) {
+      this.actionError.set(extractDetail(err) || 'Failed to queue agent analysis.');
+    } finally {
+      this.busyLinkId.set(null);
+    }
+  }
+
   pathsLabel(repo: TeamRepository): string {
     if (!repo.paths || repo.paths.length === 0) return 'Entire repository';
     return repo.paths.join(', ');
+  }
+
+  analysisLabel(repo: TeamRepository): string {
+    const a = repo.latest_analysis;
+    if (!a) return 'None';
+    const sha = a.commit_sha ? a.commit_sha.slice(0, 7) : '';
+    return [a.status, a.source, sha].filter(Boolean).join(' · ');
   }
 }
 

@@ -23,6 +23,7 @@ import { OverviewTabComponent } from './tabs/overview/overview-tab';
 import { MembersTabComponent } from './tabs/members/members-tab';
 import { AppKeysTabComponent } from './tabs/app-keys/app-keys-tab';
 import { RepositoriesTabComponent } from './tabs/repositories/repositories-tab';
+import { WorkflowsTabComponent } from './tabs/workflows/workflows-tab';
 import { ProvidersTabComponent } from './tabs/providers/providers-tab';
 import { ModelsTabComponent } from './tabs/models/models-tab';
 import { SettingsTabComponent } from './tabs/settings/settings-tab';
@@ -35,6 +36,7 @@ export type Tab =
   | 'members'
   | 'application_keys'
   | 'repositories'
+  | 'workflows'
   | 'providers'
   | 'models'
   | 'settings'
@@ -53,6 +55,7 @@ export type Tab =
     MembersTabComponent,
     AppKeysTabComponent,
     RepositoriesTabComponent,
+    WorkflowsTabComponent,
     ProvidersTabComponent,
     ModelsTabComponent,
     SettingsTabComponent,
@@ -93,7 +96,7 @@ export class TeamDetail implements OnInit {
     const admin = this.isLogosAdmin();
     const owner = this.isCallerOwner();
     const tabs: Tab[] = ['overview', 'members'];
-    if (admin || owner) tabs.push('application_keys', 'repositories');
+    if (admin || owner) tabs.push('application_keys', 'repositories', 'workflows');
     if (admin) tabs.push('providers');
     // Activity before Cloud Usage: what the platform did, then what the cloud
     // providers billed for the part of it that ran off-site.
@@ -106,6 +109,7 @@ export class TeamDetail implements OnInit {
     members: 'Members',
     application_keys: 'Application Keys',
     repositories: 'Repositories',
+    workflows: 'Workflows',
     providers: 'Providers',
     models: 'Models',
     settings: 'Settings',

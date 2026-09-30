@@ -9,6 +9,10 @@ describe('RepositoriesTabComponent', () => {
   const createTeamRepository = vi.fn();
   const updateTeamRepository = vi.fn();
   const deleteTeamRepository = vi.fn();
+  const analyzeRepositoryHeuristic = vi.fn();
+  const analyzeRepositoryAgent = vi.fn();
+  const storeRepositoryCredentials = vi.fn();
+  const revokeRepositoryCredentials = vi.fn();
 
   const sample: TeamRepository = {
     id: 11,
@@ -17,6 +21,8 @@ describe('RepositoriesTabComponent', () => {
     repo_slug: 'ls1intum/edutelligence',
     branch: 'main',
     paths: ['logos'],
+    has_credentials: false,
+    latest_analysis: null,
   };
 
   beforeEach(() => {
@@ -25,6 +31,10 @@ describe('RepositoriesTabComponent', () => {
     createTeamRepository.mockResolvedValue(sample);
     updateTeamRepository.mockResolvedValue(sample);
     deleteTeamRepository.mockResolvedValue(undefined);
+    analyzeRepositoryHeuristic.mockResolvedValue({ id: 1, status: 'succeeded' });
+    analyzeRepositoryAgent.mockResolvedValue({ id: 2, status: 'queued' });
+    storeRepositoryCredentials.mockResolvedValue({ has_credentials: true });
+    revokeRepositoryCredentials.mockResolvedValue(undefined);
     TestBed.configureTestingModule({
       providers: [
         {
@@ -34,6 +44,10 @@ describe('RepositoriesTabComponent', () => {
             createTeamRepository,
             updateTeamRepository,
             deleteTeamRepository,
+            analyzeRepositoryHeuristic,
+            analyzeRepositoryAgent,
+            storeRepositoryCredentials,
+            revokeRepositoryCredentials,
           },
         },
       ],
@@ -112,5 +126,52 @@ describe('RepositoriesTabComponent', () => {
     await component.submitForm();
     expect(component.formError()).toContain('GitHub');
     expect(component.formOpen()).toBe(true);
+  });
+
+  it('runs heuristic analysis', async () => {
+    const component = setup();
+    await component.analyzeHeuristic(sample);
+    expect(analyzeRepositoryHeuristic).toHaveBeenCalledWith(7, 11);
+    expect(getTeamRepositories).toHaveBeenCalled();
+  });
+
+  it('queues agent analysis', async () => {
+    const component = setup();
+    await component.analyzeAgent(sample);
+    expect(analyzeRepositoryAgent).toHaveBeenCalledWith(7, 11);
+  });
+
+  it('stores a deploy key PEM', async () => {
+    const component = setup();
+    component.openCredentials(sample);
+    component.credPem.set('-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----');
+    await component.submitCredentials();
+    expect(storeRepositoryCredentials).toHaveBeenCalledWith(7, 11, {
+      private_key_pem: expect.stringContaining('BEGIN OPENSSH PRIVATE KEY'),
+    });
+    expect(component.credOpen()).toBe(false);
+  });
+
+  it('revokes credentials', async () => {
+    const component = setup();
+    await component.revokeCredentials({ ...sample, has_credentials: true });
+    expect(revokeRepositoryCredentials).toHaveBeenCalledWith(7, 11);
+  });
+
+  it('formats analysis labels', () => {
+    const component = setup();
+    expect(component.analysisLabel(sample)).toBe('None');
+    expect(
+      component.analysisLabel({
+        ...sample,
+        latest_analysis: {
+          id: 1,
+          status: 'succeeded',
+          source: 'heuristic',
+          commit_sha: 'abcdef0123',
+          finished_at: null,
+        },
+      }),
+    ).toBe('succeeded · heuristic · abcdef0');
   });
 });

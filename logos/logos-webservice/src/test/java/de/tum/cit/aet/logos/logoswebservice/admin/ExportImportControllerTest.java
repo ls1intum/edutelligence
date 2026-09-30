@@ -84,6 +84,8 @@ class ExportImportControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result.team_repositories.length()").value(1))
+           .andExpect(jsonPath("$.result.team_repositories[0].paths").isArray())
+           .andExpect(jsonPath("$.result.team_repositories[0].paths[0]").value("logos"))
            .andReturn();
 
         String exportBody = exportResult.getResponse().getContentAsString();

@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.admin.service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,17 +17,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class ExportImportService {
 
     private static final List<String> TABLES = List.of(
-        "users", "teams", "team_repositories", "team_members", "api_keys", "providers", "models",
+        "users", "teams", "team_repositories", "team_repository_credentials",
+        "team_members", "api_keys", "providers", "models",
         "model_provider", "team_model_permissions", "api_key_model_permissions",
         "team_provider_permissions", "api_key_provider_permissions", "policies",
+        "ai_workflow_analyses", "ai_workflows", "ai_llm_call_recommendations",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
     private static final Set<String> TABLE_WHITELIST = Set.copyOf(TABLES);
 
     private static final List<String> SEQUENCE_TABLES = List.of(
         "users", "teams", "team_repositories", "api_keys", "providers", "models",
-        "model_provider", "policies", "log_entry",
-        "token_types", "usage_tokens", "token_prices", "jobs"
+        "model_provider", "policies",
+        "ai_workflow_analyses", "ai_workflows", "ai_llm_call_recommendations",
+        "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
 
     private final JdbcTemplate jdbc;
@@ -47,9 +51,53 @@ public class ExportImportService {
     public Map<String, Object> export() {
         Map<String, Object> data = new LinkedHashMap<>();
         for (String table : TABLES) {
-            data.put(table, jdbc.queryForList("SELECT * FROM " + safeTable(table)));
+            List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM " + safeTable(table));
+            data.put(table, decodeJsonbColumns(rows));
         }
         return Map.of("result", data);
+    }
+
+    /**
+     * JDBC returns PostgreSQL {@code jsonb} as {@link PGobject}. Jackson would
+     * otherwise serialize {@code type}/{@code value} metadata and import would
+     * persist that object instead of the original array/document.
+     */
+    List<Map<String, Object>> decodeJsonbColumns(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> decoded = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> copy = new LinkedHashMap<>(row.size());
+            for (Map.Entry<String, Object> entry : row.entrySet()) {
+                copy.put(entry.getKey(), decodeJsonbValue(entry.getValue()));
+            }
+            decoded.add(copy);
+        }
+        return decoded;
+    }
+
+    /**
+     * JDBC returns PostgreSQL jsonb as {@code org.postgresql.util.PGobject}.
+     * Jackson would otherwise serialize {@code type}/{@code value} metadata and
+     * import would persist that object instead of the original array/document.
+     * Reflect over the driver type so compile does not depend on the runtime
+     * JDBC jar being on the compile classpath.
+     */
+    private Object decodeJsonbValue(Object value) {
+        if (value == null || !"org.postgresql.util.PGobject".equals(value.getClass().getName())) {
+            return value;
+        }
+        try {
+            String type = (String) value.getClass().getMethod("getType").invoke(value);
+            if (type == null || (!type.equalsIgnoreCase("json") && !type.equalsIgnoreCase("jsonb"))) {
+                return value;
+            }
+            String raw = (String) value.getClass().getMethod("getValue").invoke(value);
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            return objectMapper.readValue(raw, Object.class);
+        } catch (ReflectiveOperationException | JsonProcessingException e) {
+            throw new IllegalArgumentException("Failed to decode jsonb value: " + e.getMessage(), e);
+        }
     }
 
     @Transactional

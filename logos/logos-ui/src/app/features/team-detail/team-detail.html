@@ -82,6 +82,14 @@
         />
       }
 
+      @if (activeTab() === 'workflows') {
+        <app-workflows-tab
+          [teamId]="teamId()"
+          [canEdit]="canEdit()"
+          [apiKeys]="apiKeys()"
+        />
+      }
+
       @if (activeTab() === 'providers') {
         <app-providers-tab [teamId]="teamId()" [canEdit]="canEdit()" />
       }

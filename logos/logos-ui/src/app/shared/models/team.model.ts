@@ -141,12 +141,83 @@ export interface TeamRepository {
   paths: string[] | null;
   created_at?: string;
   updated_at?: string;
+  /** True when a non-revoked deploy key (or similar) is stored for this link. */
+  has_credentials?: boolean;
+  /** Latest succeeded analysis summary, if any. */
+  latest_analysis?: WorkflowAnalysisSummary | null;
 }
 
 export interface TeamRepositoryPayload {
   repo_url: string;
   branch?: string;
   paths?: string[] | null;
+}
+
+export interface WorkflowAnalysisSummary {
+  id: number;
+  status: string;
+  source?: string;
+  commit_sha?: string | null;
+  finished_at?: string | null;
+}
+
+export interface AiWorkflow {
+  id: number;
+  analysis_id: number;
+  name: string;
+  trigger_summary?: string | null;
+  diagram_mermaid: string;
+  sort_order: number;
+}
+
+export type RecommendedSla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
+
+export type RecommendationReviewStatus = 'pending' | 'accepted' | 'overridden' | 'rejected';
+
+export interface AiLlmCallRecommendation {
+  id: number;
+  analysis_id: number;
+  workflow_id?: number | null;
+  team_id: number;
+  file_path: string;
+  start_line?: number | null;
+  end_line?: number | null;
+  code_url?: string | null;
+  detected_model?: string | null;
+  api_key_id?: number | null;
+  recommended_sla: RecommendedSla;
+  confidence: number;
+  justification: string;
+  traffic_flags?: Record<string, unknown> | null;
+  review_status: RecommendationReviewStatus;
+  confirmed_sla?: RecommendedSla | null;
+  reviewed_by?: number | null;
+  reviewed_at?: string | null;
+}
+
+export interface TeamWorkflowsResponse {
+  team_id: number;
+  repositories: {
+    id: number;
+    repo_slug: string;
+    repo_url: string;
+    branch: string;
+    latest_analysis: WorkflowAnalysisSummary | null;
+    workflows: AiWorkflow[];
+    recommendations: AiLlmCallRecommendation[];
+  }[];
+  pending_recommendations: AiLlmCallRecommendation[];
+}
+
+export interface ReviewRecommendationPayload {
+  action: 'accept' | 'override' | 'reject';
+  confirmed_sla?: RecommendedSla;
+  api_key_id?: number;
+}
+
+export interface StoreDeployKeyPayload {
+  private_key_pem: string;
+  public_key_fingerprint?: string;
 }
 
 export interface MyTeam {

@@ -63,10 +63,23 @@ and set per-key limits / model permissions.
 
 ### Repositories
 
-Public GitHub repositories this team's applications live in. Owners link a
-repository URL, branch, and optional path filters so Logos can later map AI
-workflows and recommend SLAs. Linking does not start analysis and stores no
-credentials.
+GitHub repositories this team's applications live in. Owners link a repository
+URL, branch, and optional path filters; for private repos they can paste a
+read-only deploy key. From the same tab they can run a heuristic scan or queue
+a LogosOSSAgent analysis session. Linking alone does not start analysis.
+
+![Team detail — Repositories](/img/roles/team-detail-repositories.png)
+
+### Workflows
+
+Latest AI-workflow analyses for the team's linked repositories: Mermaid
+diagrams of detected flows and per-call SLA recommendations. Owners (and Logos
+Admins) can **Accept** a recommendation (optionally binding an application
+key), **Override** it with another SLA tier, or **Reject** it. Accepting or
+overriding can update that key's queue priority so the orchestrator serves
+traffic accordingly.
+
+![Team detail — Workflows](/img/roles/team-detail-workflows.png)
 
 ### Models {#team-models}
 

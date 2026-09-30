@@ -5,7 +5,8 @@ import {
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
   ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
-  TeamRepositoryPayload,
+  TeamRepositoryPayload, TeamWorkflowsResponse, ReviewRecommendationPayload,
+  StoreDeployKeyPayload, AiLlmCallRecommendation,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -79,6 +80,56 @@ export class TeamManagementService {
   deleteTeamRepository(teamId: number, linkId: number): Promise<void> {
     return firstValueFrom(
       this.http.delete<void>(`/api/admin/teams/${teamId}/repositories/${linkId}`),
+    );
+  }
+
+  getTeamWorkflows(teamId: number): Promise<TeamWorkflowsResponse> {
+    return firstValueFrom(
+      this.http.get<TeamWorkflowsResponse>(`/api/admin/teams/${teamId}/workflows`),
+    );
+  }
+
+  analyzeRepositoryHeuristic(teamId: number, linkId: number): Promise<unknown> {
+    return firstValueFrom(
+      this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze`, {}),
+    );
+  }
+
+  analyzeRepositoryAgent(teamId: number, linkId: number): Promise<unknown> {
+    return firstValueFrom(
+      this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze/agent`, {}),
+    );
+  }
+
+  reviewRecommendation(
+    teamId: number,
+    recId: number,
+    payload: ReviewRecommendationPayload,
+  ): Promise<AiLlmCallRecommendation> {
+    return firstValueFrom(
+      this.http.post<AiLlmCallRecommendation>(
+        `/api/admin/teams/${teamId}/recommendations/${recId}/review`,
+        payload,
+      ),
+    );
+  }
+
+  storeRepositoryCredentials(
+    teamId: number,
+    linkId: number,
+    payload: StoreDeployKeyPayload,
+  ): Promise<{ has_credentials: boolean; public_key_fingerprint?: string }> {
+    return firstValueFrom(
+      this.http.put<{ has_credentials: boolean; public_key_fingerprint?: string }>(
+        `/api/admin/teams/${teamId}/repositories/${linkId}/credentials`,
+        payload,
+      ),
+    );
+  }
+
+  revokeRepositoryCredentials(teamId: number, linkId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/repositories/${linkId}/credentials`),
     );
   }
 

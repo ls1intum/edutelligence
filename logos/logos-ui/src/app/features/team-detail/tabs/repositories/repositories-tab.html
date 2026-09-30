@@ -12,9 +12,9 @@
   </div>
 
   <p class="section-hint">
-    Public GitHub repositories this team's applications live in. Logos will use
-    them later to map AI workflows and recommend SLAs — linking does not start
-    analysis yet, and no credentials are stored.
+    GitHub repositories this team's applications live in. Run a heuristic scan
+    or queue LogosOSSAgent analysis; store a deploy key only for private repos
+    (read-only access).
   </p>
 
   @if (loadError()) {
@@ -31,7 +31,7 @@
     </div>
   } @else {
     <app-data-table
-      [columns]="['Repository', 'Branch', 'Paths', '']"
+      [columns]="['Repository', 'Branch', 'Paths', 'Credentials', 'Analysis', '']"
       [gridCols]="gridCols"
       [empty]="repositories().length === 0"
       emptyMessage="No repositories linked yet."
@@ -53,8 +53,59 @@
           <div class="cell-paths" role="cell" data-label="Paths">
             {{ pathsLabel(repo) }}
           </div>
+          <div class="cell-creds" role="cell" data-label="Credentials">
+            @if (repo.has_credentials) {
+              <span class="cred-badge cred-badge--ok">Deploy key</span>
+            } @else {
+              <span class="cred-badge">None</span>
+            }
+          </div>
+          <div class="cell-analysis" role="cell" data-label="Analysis">
+            {{ analysisLabel(repo) }}
+          </div>
           <div class="cell-actions" role="cell" data-label="">
             @if (canEdit) {
+              <button
+                type="button"
+                class="btn-icon"
+                title="Analyze (heuristic)"
+                aria-label="Analyze heuristically"
+                [disabled]="busyLinkId() === repo.id"
+                (click)="analyzeHeuristic(repo)"
+              >
+                <i class="pi pi-search" aria-hidden="true"></i>
+              </button>
+              <button
+                type="button"
+                class="btn-icon"
+                title="Queue agent analysis"
+                aria-label="Queue agent analysis"
+                [disabled]="busyLinkId() === repo.id"
+                (click)="analyzeAgent(repo)"
+              >
+                <i class="pi pi-bolt" aria-hidden="true"></i>
+              </button>
+              <button
+                type="button"
+                class="btn-icon"
+                title="Paste deploy key"
+                aria-label="Store deploy key"
+                (click)="openCredentials(repo)"
+              >
+                <i class="pi pi-key" aria-hidden="true"></i>
+              </button>
+              @if (repo.has_credentials) {
+                <button
+                  type="button"
+                  class="btn-icon btn-icon--danger"
+                  title="Revoke credentials"
+                  aria-label="Revoke credentials"
+                  [disabled]="busyLinkId() === repo.id"
+                  (click)="revokeCredentials(repo)"
+                >
+                  <i class="pi pi-ban" aria-hidden="true"></i>
+                </button>
+              }
               <button
                 type="button"
                 class="btn-icon"
@@ -101,7 +152,7 @@
         (input)="formUrl.set($any($event.target).value)"
         [disabled]="formLoading()"
       />
-      <p class="field-hint">GitHub HTTPS or SSH clone URL. Private-repo access comes later.</p>
+      <p class="field-hint">GitHub HTTPS or SSH clone URL.</p>
     </div>
     <div class="form-field">
       <label class="field-label" for="repo-branch">Branch</label>
@@ -144,6 +195,49 @@
     >
       @if (formLoading()) { <i class="pi pi-spin pi-spinner"></i> }
       {{ formEditing() ? 'Save' : 'Link' }}
+    </button>
+  </div>
+</app-modal-form>
+
+<app-modal-form
+  [visible]="credOpen()"
+  (visibleChange)="$event || closeCredentials()"
+  title="Store deploy key"
+>
+  <div class="dialog-body">
+    <p class="field-hint">
+      Paste a read-only deploy-key private PEM for
+      <strong>{{ credTarget()?.repo_slug }}</strong>. Logos encrypts it at rest
+      and never grants write access.
+    </p>
+    <div class="form-field">
+      <label class="field-label" for="deploy-pem">Private key PEM <span class="required">*</span></label>
+      <textarea
+        id="deploy-pem"
+        class="field-input field-textarea"
+        rows="8"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+        [value]="credPem()"
+        (input)="credPem.set($any($event.target).value)"
+        [disabled]="credLoading()"
+      ></textarea>
+    </div>
+    @if (credError()) {
+      <app-error-message [message]="credError()" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="credLoading()" (click)="closeCredentials()">Cancel</button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!credPem().trim() || credLoading()"
+      (click)="submitCredentials()"
+    >
+      @if (credLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+      Store
     </button>
   </div>
 </app-modal-form>
