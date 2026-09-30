@@ -769,11 +769,12 @@ describe('ActivityTabComponent trace export', () => {
 
   /**
    * The continuation token in the shape the server issues it: the window the
-   * walk started in, and the row behind the slice. Opaque to the view — it
-   * is held and sent back verbatim, never read.
+   * walk started in, the row behind the slice, and the team and requester
+   * the walk was started for. Opaque to the view — it is held and sent back
+   * verbatim, never read.
    */
   const exportCursorToken =
-    '2026-09-23T12:00:00Z/2026-09-30T12:00:00Z/2026-08-26T12:00:00.000Z/9041';
+    '2026-09-23T12:00:00Z/2026-09-30T12:00:00Z/2026-08-26T12:00:00.000Z/9041//42';
 
   beforeEach(async () => {
     activityService = {

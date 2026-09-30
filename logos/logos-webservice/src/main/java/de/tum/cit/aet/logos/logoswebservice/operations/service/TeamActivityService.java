@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.fasterxml.jackson.core.JsonGenerator;
@@ -69,6 +70,22 @@ public class TeamActivityService {
     /** Default reporting window, and the ceiling on what a caller may ask for. */
     private static final int DEFAULT_DAYS = 7;
     private static final int MAX_DAYS = 90;
+
+    /**
+     * How far past its own clock a continued export's window end may sit:
+     * the end is the moment the walk started on one instance, and the check
+     * runs on whatever instance answers the continuation.
+     */
+    private static final Duration CLOCK_SKEW = Duration.ofMinutes(5);
+
+    /**
+     * How long a walk may stay open before its token is stale: the window
+     * the token carries is frozen at the walk's start, so an unbounded age
+     * would let a forged token name a window arbitrarily far in the past. A
+     * walk is a sequence of user-paced downloads — one day is far more
+     * patience than it takes; a stale walk simply starts over.
+     */
+    private static final Duration MAX_WALK_AGE = Duration.ofDays(1);
 
     /** Rows of the request list per page. */
     private static final int REQUEST_PAGE_SIZE = 20;
@@ -347,39 +364,53 @@ public class TeamActivityService {
          * was counted over, so a row near the window's lower edge cannot age
          * out of a later slice's freshly recomputed window after the first
          * slice counted it — counted in one export's total, unreachable in
-         * every download. ISO-8601 instants never carry the separator, so
-         * the four parts stay unambiguous.
+         * every download. The team and the requester narrowing travel with
+         * it as well, so a token cannot be replayed against a different
+         * endpoint or filter. ISO-8601 instants never carry the separator,
+         * so the parts stay unambiguous.
          */
         public String cursorToken() {
             return nextCursorTs != null && nextCursorId != null
                 ? since.toString() + "/" + now.toString() + "/"
-                  + nextCursorTs.toString() + "/" + nextCursorId
+                  + nextCursorTs.toString() + "/" + nextCursorId + "/"
+                  + (userId == null ? "" : userId) + "/" + teamId
                 : null;
         }
     }
 
     /**
-     * One parsed export continuation: the window the walk started in and the
-     * row the next slice begins behind.
+     * One parsed export continuation: the window the walk started in, the row
+     * the next slice begins behind, and the (team, requester) walk the token
+     * was issued for.
      */
-    public record ExportCursor(Instant windowSince, Instant windowEnd, Instant cursorTs, Integer cursorId) {
+    public record ExportCursor(Instant windowSince, Instant windowEnd, Instant cursorTs, Integer cursorId,
+                               Integer userId, int teamId) {
         /**
          * The token back to facts. A token that is not blank but not parseable
          * was never issued by this service, and answering it would re-cut the
          * first slice — a row set that reads as duplicated downloads — so it
          * is refused rather than ignored.
+         *
+         * <p>The parts, in order: window since, window end, cursor timestamp,
+         * cursor row id, requester (empty for "all requesters" — the empty
+         * part sits mid-token, where {@code split} keeps it), team. A token
+         * the service issues for one team or requester therefore fails to
+         * parse against another, and the window it carries is the one
+         * checked in {@code prepareExport} rather than taken on trust.
          */
         public static ExportCursor parse(String token) {
             if (token == null || token.isBlank()) {
                 return null;
             }
             String[] parts = token.split("/");
-            if (parts.length != 4) {
+            if (parts.length != 6) {
                 throw new IllegalArgumentException("Malformed export cursor");
             }
             try {
                 return new ExportCursor(Instant.parse(parts[0]), Instant.parse(parts[1]),
-                                        Instant.parse(parts[2]), Integer.parseInt(parts[3]));
+                                        Instant.parse(parts[2]), Integer.parseInt(parts[3]),
+                                        parts[4].isEmpty() ? null : Integer.parseInt(parts[4]),
+                                        Integer.parseInt(parts[5]));
             } catch (DateTimeParseException | NumberFormatException e) {
                 throw new IllegalArgumentException("Malformed export cursor", e);
             }
@@ -413,7 +444,13 @@ public class TeamActivityService {
      * and its end. The token also carries the window the walk started in —
      * a continued export reuses it rather than recomputing one, because a
      * fresh window would let rows near the lower edge age out after the
-     * first slice counted them.
+     * first slice counted them — and the team and requester the walk was
+     * started for, so a token cannot be replayed against a different
+     * endpoint or filter. The carried window is checked, not trusted: the
+     * span must stay within the offered periods, the walk's start must stay
+     * within the walk's max age, and a token failing any of that is a
+     * {@link IllegalArgumentException} — a forged window must not reach
+     * further into the past than a fresh export can.
      */
     public ExportPrep prepareExport(int teamId, Integer requestedDays, Integer userId, String format,
                                     String cursorToken) {
@@ -425,6 +462,26 @@ public class TeamActivityService {
         Timestamp cursorTs = null;
         Integer cursorRowId = null;
         if (cursor != null) {
+            // The token is bound to the walk it continued: a token issued for
+            // another team's endpoint or another requester narrowing is a
+            // 400, not a slice of someone else's walk.
+            if (cursor.teamId() != teamId || !Objects.equals(cursor.userId(), userId)) {
+                throw new IllegalArgumentException("Malformed export cursor");
+            }
+            // The window is checked rather than trusted: a forged token must
+            // not widen the walk past the limits a fresh export obeys. The
+            // span stays within the offered periods; the end stays near the
+            // present, because the token's end is when the walk started and
+            // a walk left uncontinued past MAX_WALK_AGE is stale — the next
+            // export simply starts a fresh one.
+            Instant requestNow = Instant.now();
+            Duration span = Duration.between(cursor.windowSince(), cursor.windowEnd());
+            if (span.isNegative()
+                    || span.compareTo(Duration.ofDays(MAX_DAYS)) > 0
+                    || cursor.windowEnd().isAfter(requestNow.plus(CLOCK_SKEW))
+                    || cursor.windowEnd().isBefore(requestNow.minus(MAX_WALK_AGE))) {
+                throw new IllegalArgumentException("Malformed export cursor");
+            }
             // The window comes from the token, not from the clock: the caller
             // may have started the walk minutes ago, and the rows it counted
             // then are the rows this slice must still reach.
@@ -695,6 +752,13 @@ public class TeamActivityService {
      * one row; quoting follows the same rules as before this export moved
      * server-side — escape what breaks a table, because a payload is one
      * comma away from breaking it.
+     *
+     * <p>The payloads are externally supplied text, so a cell is also
+     * neutralized against spreadsheet formula injection: a value starting
+     * with {@code =}, {@code +}, {@code -}, {@code @}, a tab or a carriage
+     * return is prefixed with an apostrophe, the marker Excel and LibreOffice
+     * read as "this cell is text". Quoting alone would not do it — a quoted
+     * {@code =SUM(A1)} still evaluates on open.
      */
     private String csvCell(Object value) {
         if (value == null) return "";
@@ -710,6 +774,9 @@ public class TeamActivityService {
                 // says, keep the data rather than dropping the row.
                 text = String.valueOf(value);
             }
+        }
+        if (!text.isEmpty() && "=+-@\t\r".indexOf(text.charAt(0)) >= 0) {
+            text = "'" + text;
         }
         return (text.contains(",") || text.contains("\"") || text.contains("\n") || text.contains("\r"))
             ? "\"" + text.replace("\"", "\"\"") + "\""

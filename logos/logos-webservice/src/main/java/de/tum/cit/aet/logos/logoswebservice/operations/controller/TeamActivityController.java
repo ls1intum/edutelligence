@@ -99,11 +99,12 @@ public class TeamActivityController {
      * A window that outruns one file continues rather than truncating into
      * silence: the body may carry {@code cursor}, the opaque token an
      * earlier download handed back as {@code X-Logos-Export-Next-Cursor}
-     * (window and slice tail in one), and the answer then holds the next,
-     * older slice over the very window the walk started in — its headers
-     * and, in the JSON file, {@code next_cursor} describing the rest the
-     * same way. A token the service never issued is a 400: answering it
-     * would re-cut the first slice and read as duplicated rows.
+     * (window, slice tail, team and requester in one), and the answer then
+     * holds the next, older slice over the very window the walk started in
+     * — its headers and, in the JSON file, {@code next_cursor} describing
+     * the rest the same way. A token the service never issued, or one that
+     * names a window beyond the limits a fresh export obeys, is a 400:
+     * answering it would re-cut the first slice and read as duplicated rows.
      */
     @PostMapping("/logosdb/teams/{teamId}/activity/export")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")

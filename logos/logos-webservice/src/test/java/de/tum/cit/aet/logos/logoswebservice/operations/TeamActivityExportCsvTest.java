@@ -12,6 +12,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -98,6 +99,32 @@ class TeamActivityExportCsvTest {
         String billingLine = lines[2];
         assertTrue(billingLine.startsWith("req-ddd-444,"));
         assertTrue(billingLine.endsWith(",,,"));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = "/sql/seed-operations-export-csv-formula.sql",
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void formulaLikeCellsComeOutAsTextNotFormulas() throws Exception {
+        // The seed row's stored error message is a spreadsheet formula. The
+        // file is meant to be opened in Excel or LibreOffice, so the cell
+        // must not come back as something to evaluate: the text marker goes
+        // in front of it, the row itself stays intact.
+        String body = mvc.perform(post("/logosdb/teams/2001/activity/export")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"format\": \"csv\"}"))
+           .andExpect(status().isOk())
+           .andExpect(header().string("X-Logos-Export-Total", "5"))
+           .andReturn()
+           .getResponse()
+           .getContentAsString(StandardCharsets.UTF_8);
+
+        assertTrue(body.contains("req-csv-046"), "the formula row must be in the file: " + body);
+        assertTrue(body.contains("'=SUM(A1:A5)"),
+                   "a formula-like cell must go out with the text marker: " + body);
+        assertTrue(!body.contains(",=SUM("),
+                   "the formula must not sit unmarked at the start of a cell: " + body);
     }
 
     @Test

@@ -200,6 +200,52 @@ class TeamActivityExportTruncationTest {
     }
 
     @Test
+    void aForgedWindowIsRefusedInsteadOfReachingFurtherIntoThePast() throws Exception {
+        // The token is checked, not trusted: a window the service would never
+        // have issued — longer than the offered periods, or a walk started
+        // long before the token arrived, or ending in the future — is a 400,
+        // because answering it would let the caller reach rows no fresh
+        // export could.
+        java.time.Instant end = java.time.Instant.now().minus(java.time.Duration.ofMinutes(1));
+        String tooLongSpan = end.minus(java.time.Duration.ofDays(92)) + "/" + end + "/" + end + "/1//2001";
+        String walkStartedYearsAgo = end.minus(java.time.Duration.ofDays(407)) + "/"
+            + end.minus(java.time.Duration.ofDays(400)) + "/" + end.minus(java.time.Duration.ofDays(400)) + "/1//2001";
+        java.time.Instant futureEnd = java.time.Instant.now().plus(java.time.Duration.ofHours(1));
+        String windowInTheFuture = futureEnd.minus(java.time.Duration.ofDays(7)) + "/" + futureEnd + "/"
+            + futureEnd + "/1//2001";
+
+        for (String forged : java.util.List.of(tooLongSpan, walkStartedYearsAgo, windowInTheFuture)) {
+            mvc.perform(post("/logosdb/teams/2001/activity/export")
+                    .with(TestJwt.adminUser())
+                    .contentType("application/json")
+                    .content(cursorBody(forged)))
+               .andExpect(status().isBadRequest())
+               .andExpect(jsonPath("$.error").value(containsString("Malformed export cursor")));
+        }
+    }
+
+    @Test
+    void aTokenFromAnotherTeamOrRequesterIsRefused() throws Exception {
+        // The token is bound to the walk it continues: the same, perfectly
+        // valid window aimed at a different team's endpoint — or at a
+        // different requester narrowing — is a 400, not a slice of someone
+        // else's walk.
+        java.time.Instant end = java.time.Instant.now().minus(java.time.Duration.ofMinutes(1));
+        String window = end.minus(java.time.Duration.ofDays(7)) + "/" + end;
+        String otherTeam = window + "/" + end + "/1//2002";
+        String otherRequester = window + "/" + end + "/1/1001/2001";
+
+        for (String foreign : java.util.List.of(otherTeam, otherRequester)) {
+            mvc.perform(post("/logosdb/teams/2001/activity/export")
+                    .with(TestJwt.adminUser())
+                    .contentType("application/json")
+                    .content(cursorBody(foreign)))
+               .andExpect(status().isBadRequest())
+               .andExpect(jsonPath("$.error").value(containsString("Malformed export cursor")));
+        }
+    }
+
+    @Test
     void aWindowThatFitsIntoOneExportSaysItIsComplete() throws Exception {
         // The same cap, a team whose window is small enough: nothing is
         // truncated, and the file is the whole answer.
