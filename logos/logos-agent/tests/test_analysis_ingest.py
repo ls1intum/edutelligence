@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -173,4 +174,18 @@ async def test_ingest_rejects_oversized_artifact(tmp_path, monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         await analysis_ingest.ingest_session({"id": 12, "team_repository_id": 1})
     assert "unsafe" in caplog.text or "exceeds" in caplog.text
+    assert any("UPDATE ai_workflow_analyses" in sql for sql, _ in conn.statements)
+
+
+async def test_ingest_rejects_fifo_without_hanging(tmp_path, monkeypatch, caplog):
+    _patch_artifact_root(monkeypatch, tmp_path)
+    session_dir = tmp_path / "13"
+    session_dir.mkdir()
+    fifo = session_dir / "analysis.json"
+    os.mkfifo(fifo)
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    with caplog.at_level("WARNING"):
+        await analysis_ingest.ingest_session({"id": 13, "team_repository_id": 1})
+    assert "unsafe" in caplog.text or "regular file" in caplog.text
     assert any("UPDATE ai_workflow_analyses" in sql for sql, _ in conn.statements)

@@ -103,7 +103,8 @@ public class TeamRepoLinkService {
             return Optional.empty();
         }
         TeamRepoLink link = existing.get();
-        String conflictSlug = link.getRepoSlug();
+        String previousSlug = link.getRepoSlug();
+        String conflictSlug = previousSlug;
         if (body.repoUrl() != null) {
             String url = requireUrl(body.repoUrl());
             String slug = parseGithubSlug(url)
@@ -116,6 +117,12 @@ public class TeamRepoLinkService {
             link.setRepoUrl(canonicalHttpsUrl(slug));
             link.setRepoSlug(slug);
             conflictSlug = slug;
+            // Analyses are keyed by link id; a slug change means they describe
+            // a different repository and must not stay as "latest succeeded"
+            // coverage for the new URL.
+            if (!slug.equals(previousSlug)) {
+                analysisRepository.deleteByTeamRepositoryId(linkId);
+            }
         }
         if (body.branch() != null) {
             link.setBranch(normalizeBranch(body.branch()));

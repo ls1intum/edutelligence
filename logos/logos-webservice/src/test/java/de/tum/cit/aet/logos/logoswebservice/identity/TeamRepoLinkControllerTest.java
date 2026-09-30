@@ -176,6 +176,43 @@ class TeamRepoLinkControllerTest {
            .andExpect(jsonPath("$.paths").value(org.hamcrest.Matchers.nullValue()));
     }
 
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @Test
+    void update_slugChangeInvalidatesPriorAnalyses() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/old-repo\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/old-repo"))
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        jdbc.update("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'abc', 'succeeded', 'heuristic', now())
+            """, linkId);
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ai_workflow_analyses WHERE team_repository_id = ?",
+                Integer.class, linkId)).isEqualTo(1);
+
+        mvc.perform(patch("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/new-repo\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/new-repo"));
+
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ai_workflow_analyses WHERE team_repository_id = ?",
+                Integer.class, linkId)).isZero();
+    }
+
     @Test
     void create_rejectsNonGithubUrl() throws Exception {
         mvc.perform(post("/admin/teams/2001/repositories")

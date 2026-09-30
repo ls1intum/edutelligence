@@ -40,12 +40,15 @@ def read_analysis_artifact(path: Path) -> bytes:
 
     The agent sandbox can create ``analysis.json -> ../other-session/...``.
     Following that would let one session ingest another team's private
-    workflows. ``O_NOFOLLOW`` rejects a final-component symlink; ``fstat``
-    confirms a regular file; the read is byte-capped.
+    workflows. ``O_NOFOLLOW`` rejects a final-component symlink; ``O_NONBLOCK``
+    prevents a named pipe without a writer from hanging the asyncio loop;
+    ``fstat`` confirms a regular file; the read is byte-capped.
     """
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     try:
         fd = os.open(path, flags)
     except FileNotFoundError:
@@ -58,6 +61,9 @@ def read_analysis_artifact(path: Path) -> bytes:
             raise OSError("analysis artifact is not a regular file")
         if st.st_size > MAX_ANALYSIS_BYTES:
             raise OSError(f"analysis artifact exceeds {MAX_ANALYSIS_BYTES} bytes")
+        # Clear non-blocking for the actual read of a verified regular file.
+        if hasattr(os, "set_blocking"):
+            os.set_blocking(fd, True)
         chunks: list[bytes] = []
         total = 0
         while True:

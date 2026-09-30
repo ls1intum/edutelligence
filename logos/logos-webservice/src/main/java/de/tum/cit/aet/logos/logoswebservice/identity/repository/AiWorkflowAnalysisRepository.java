@@ -14,4 +14,6 @@ public interface AiWorkflowAnalysisRepository extends JpaRepository<AiWorkflowAn
         Integer teamRepositoryId, String status);
 
     Optional<AiWorkflowAnalysis> findByIdAndTeamId(Integer id, Integer teamId);
+
+    void deleteByTeamRepositoryId(Integer teamRepositoryId);
 }
