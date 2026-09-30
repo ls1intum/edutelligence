@@ -2025,10 +2025,6 @@ async def _streaming_response(
         )
 
     # ── HTTP executor path ────────────────────────────────────────────────
-    # Preparation succeeded and this is the actual dispatch to the upstream,
-    # so stamp the provider call here (see _sync_response for the reasoning).
-    if request_id:
-        _pipeline.record_provider_call(request_id)
     stream_status = StreamingExecutionStatus()
     chunk_iter = _pipeline.executor.execute_streaming(
         context.forward_url,
@@ -2037,6 +2033,16 @@ async def _streaming_response(
         on_headers=process_headers,
         status=stream_status,
     )
+
+    def _stamp_provider_call():
+        # The executor captures the dispatch instant after its request
+        # preparation (the multipart decode for file uploads) and before the
+        # send, in status.dispatch_at — set once the generator body has run,
+        # i.e. by the peek below. A preparation failure leaves it unset: the
+        # request never reached the provider, so the call stamp stays off and
+        # the stats split falls back to the scheduling-based cut.
+        if request_id and stream_status.dispatch_at is not None:
+            _pipeline.record_provider_call(request_id, at=stream_status.dispatch_at)
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
     # that on_headers fires and – crucially – UpstreamStreamError is raised
@@ -2050,6 +2056,9 @@ async def _streaming_response(
             provider_id,
             exc.status_code,
         )
+        # The provider was called and answered (with an error status) — the
+        # queue figure ends at the dispatch it captured.
+        _stamp_provider_call()
         return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
     except StopAsyncIteration:
         first_chunk = None
@@ -2061,7 +2070,13 @@ async def _streaming_response(
             type(exc).__name__,
             exc,
         )
+        _stamp_provider_call()
         return _pre_stream_error_response(502, {"error": str(exc)}, str(exc))
+
+    # The peek ran the executor's setup, so the dispatch instant it captured
+    # is available — stamp the provider call from it (see _sync_response for
+    # the reasoning).
+    _stamp_provider_call()
 
     # When the first upstream byte (or an immediately-empty stream) was
     # observed. The http_streamer starts its last-byte tracker from this so an
@@ -2494,15 +2509,22 @@ async def _sync_response(
                     headers=None,
                 )
         else:
-            # For a cloud sync the dispatch is the HTTP request itself, so the
-            # stamp goes immediately before it.
-            if request_id:
-                _pipeline.record_provider_call(request_id)
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+            # The executor captured both instants where they belong: the
+            # dispatch after its request preparation (the multipart decode for
+            # file uploads) and the response before its body parsing — both of
+            # which are logos work. A preparation failure leaves dispatch_at
+            # unset — the request never reached the provider, so the call
+            # stamp stays off and the stats split falls back to the
+            # scheduling-based cut.
+            if request_id and exec_result.dispatch_at is not None:
+                _pipeline.record_provider_call(request_id, at=exec_result.dispatch_at)
+            if response_at is None:
+                response_at = exec_result.response_at
         if response_at is None:
-            # The cloud path captures the instant here — nothing runs between
-            # execute_sync and this line. A LogosNode dispatch that raised
-            # before a response arrived also falls back to now.
+            # No captured instant — a LogosNode dispatch that raised before a
+            # response arrived, or a transport failure with no response: the
+            # failure is observed now.
             response_at = datetime.datetime.now(datetime.timezone.utc)
         # The provider's full response has arrived; logos' own post-provider
         # work (rate-limit header handling, the cost lookup) runs from here.

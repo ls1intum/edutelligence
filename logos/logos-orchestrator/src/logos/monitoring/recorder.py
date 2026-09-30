@@ -374,7 +374,7 @@ class MonitoringRecorder:
         """Attach provider_id once it is resolved (after scheduling)."""
         self._buffer(request_id, provider_id=provider_id)
 
-    def record_provider_call(self, request_id: str) -> None:
+    def record_provider_call(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
         """Stamp the instant the request is handed to the upstream provider.
 
         ``timestamp_forwarding`` (``record_scheduled``) is set when the
@@ -385,11 +385,21 @@ class MonitoringRecorder:
         made the request wait for, and the exec figure is the provider's own
         time.
 
+        ``at`` pins the instant the caller observed the dispatch. The executor
+        paths pass the instant captured inside the executor — after its request
+        preparation (the multipart decode for file uploads) and before the
+        send — so that preparation stays out of the provider's window, and a
+        preparation failure (no dispatch) leaves the stamp off. Omitted (or
+        None) stamps ``now()``.
+
         Buffered like the other pre-execution fields: the split only matters
         once the request is finished, so the value rides the completion
         UPDATE rather than costing the hot path its own write.
         """
-        self._buffer(request_id, timestamp_provider_call=datetime.datetime.now(datetime.timezone.utc))
+        self._buffer(
+            request_id,
+            timestamp_provider_call=at if at is not None else datetime.datetime.now(datetime.timezone.utc),
+        )
 
     def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
         """Stamp the instant the upstream provider's response has fully arrived.

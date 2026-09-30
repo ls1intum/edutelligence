@@ -187,11 +187,15 @@ def _make_pipeline(
     release_calls=None,
     sync_payloads=None,
     provider_response_calls=None,
+    provider_call_calls=None,
+    stream_dispatch_stamps=None,
 ):
     completion_calls = completion_calls if completion_calls is not None else []
     release_calls = release_calls if release_calls is not None else []
     sync_payloads = sync_payloads if sync_payloads is not None else []
     provider_response_calls = provider_response_calls if provider_response_calls is not None else []
+    provider_call_calls = provider_call_calls if provider_call_calls is not None else []
+    stream_dispatch_stamps = stream_dispatch_stamps if stream_dispatch_stamps is not None else []
 
     class DummyExecutor:
         async def execute_sync(self, url, headers, payload):  # noqa: ARG002
@@ -206,6 +210,12 @@ def _make_pipeline(
             on_headers=None,
             status=None,
         ):  # noqa: ARG002
+            if status is not None:
+                # Mirror the real executor: the dispatch instant is captured
+                # once the generator body starts (after preparation, before
+                # the send) — i.e. before the response headers fire.
+                status.dispatch_at = main.datetime.datetime.now(main.datetime.timezone.utc)
+                stream_dispatch_stamps.append(status.dispatch_at)
             if on_headers:
                 on_headers(stream_headers or {})
             if stream_error:
@@ -232,8 +242,8 @@ def _make_pipeline(
             completion_calls.append(kwargs)
 
         @staticmethod
-        def record_provider_call(request_id):  # noqa: ARG004
-            return None
+        def record_provider_call(request_id, at=None):  # noqa: ARG004
+            provider_call_calls.append((request_id, at))
 
         @staticmethod
         def record_provider_response(request_id, at=None):  # noqa: ARG004
@@ -533,6 +543,177 @@ async def test_logosnode_sync_stamps_the_response_before_post_provider_processin
     # upper bound here would be flaky under CI scheduler jitter; the ordering
     # against the 20 ms merge is what proves the stamp precedes the merge.
     assert at < merge_state["at"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_stamps_the_instants_the_executor_captured(monkeypatch):
+    """The cloud sync path stamps the call and response from the instants the
+    executor captured — after request preparation and before response
+    parsing — not from the record time. The captured instants are
+    deliberately in the past: if the path stamped now, these exact-value
+    assertions would fail."""
+    provider_call_calls = []
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    t0 = main.datetime.datetime.now(main.datetime.timezone.utc)
+    pipeline, _c, _r = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response={"choices": [{"message": {"content": "hi"}}]},
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers=None,
+            dispatch_at=t0 - main.datetime.timedelta(seconds=1),
+            response_at=t0 - main.datetime.timedelta(seconds=0.5),
+        ),
+        provider_call_calls=provider_call_calls,
+        provider_response_calls=provider_response_calls,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    await main._sync_response(
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-sync-cloud",
+            "provider_type": "cloud",
+            "is_cold_start": False,
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+        },
+    )
+
+    assert provider_call_calls == [("req-sync-cloud", t0 - main.datetime.timedelta(seconds=1))]
+    assert provider_response_calls == [("req-sync-cloud", t0 - main.datetime.timedelta(seconds=0.5))]
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_preparation_failure_stamps_no_call(monkeypatch):
+    """When the executor's request preparation fails, no HTTP dispatch
+    happened: the call stamp stays off (the stats split falls back to the
+    scheduling-based cut), and the response stamp falls back to the record
+    time — the instant the failure was observed."""
+    provider_call_calls = []
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=False,
+            response=None,
+            error="OSError: multipart decode failed",
+            usage={},
+            is_streaming=False,
+            headers=None,
+            dispatch_at=None,
+            response_at=None,
+        ),
+        provider_call_calls=provider_call_calls,
+        provider_response_calls=provider_response_calls,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    before = main.datetime.datetime.now(main.datetime.timezone.utc)
+    await main._sync_response(
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-sync-prep-fail",
+            "provider_type": "cloud",
+            "is_cold_start": False,
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+        },
+    )
+    after = main.datetime.datetime.now(main.datetime.timezone.utc)
+
+    assert provider_call_calls == [], "a preparation failure must not record a provider call"
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-sync-prep-fail"
+    assert isinstance(at, main.datetime.datetime)
+    assert before <= at <= after
+
+
+@pytest.mark.asyncio
+async def test_cloud_streaming_stamps_the_call_from_the_executor_dispatch_instant(monkeypatch):
+    """The cloud streaming call stamp comes from the dispatch instant the
+    executor captured (after request preparation, before the send) — not from
+    the record time."""
+    provider_call_calls = []
+    provider_response_calls = []
+    stream_dispatch_stamps = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(
+        stream_chunks=[b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'],
+        provider_call_calls=provider_call_calls,
+        provider_response_calls=provider_response_calls,
+        stream_dispatch_stamps=stream_dispatch_stamps,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_type="cloud",
+            lane_id=None,
+            model_name="model",
+            forward_url="http://cloud",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-stream-cloud",
+            "provider_type": "cloud",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    await _read_stream_response(response)
+
+    assert len(stream_dispatch_stamps) == 1
+    assert provider_call_calls == [("req-stream-cloud", stream_dispatch_stamps[0])]
 
 
 @pytest.mark.asyncio

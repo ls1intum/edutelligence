@@ -37,6 +37,12 @@ class ExecutionResult:
     status_code: Optional[int] = None
     raw_body: Optional[bytes] = None
     content_type: Optional[str] = None
+    # Captured in execute_sync around the HTTP send so the caller can stamp
+    # the provider window from them: dispatch after logos' request
+    # preparation, response before logos' body parsing. dispatch_at stays
+    # None when preparation fails — the request never reached the provider.
+    dispatch_at: Optional[datetime.datetime] = None
+    response_at: Optional[datetime.datetime] = None
 
 
 @dataclass
@@ -48,6 +54,11 @@ class StreamingExecutionStatus:
     # (upstream) so the response stamp does not wait for a slow client to drain
     # buffered chunks before the failure time is recorded.
     error_at: Optional[datetime.datetime] = None
+    # The instant the request was handed to the upstream, captured after
+    # request preparation (the multipart decode for file uploads) and before
+    # the send. Set once the generator body starts (the first __anext__), so
+    # the caller's call stamp excludes that logos work.
+    dispatch_at: Optional[datetime.datetime] = None
 
 
 class Executor:
@@ -102,6 +113,12 @@ class Executor:
         logger.info(f"Streaming request to {url}")
 
         request_kwargs = self._request_kwargs(payload)
+        if status is not None:
+            # After preparation (the multipart decode for file uploads),
+            # before the send: this is the provider call. The caller stamps
+            # from it once the generator body has run (at the first
+            # __anext__).
+            status.dispatch_at = datetime.datetime.now(datetime.timezone.utc)
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", url, headers=headers, **request_kwargs) as resp:
                 resp_headers = dict(resp.headers)
@@ -178,14 +195,21 @@ class Executor:
 
         logger.info(f"Sync request to {url}")
 
+        # Captured here, not by the caller: the request preparation (the
+        # multipart decode for file uploads) and the response parsing are logos
+        # work and must stay out of the provider's window.
+        dispatch_at = None
         try:
+            request_kwargs = self._request_kwargs(payload)
+            dispatch_at = datetime.datetime.now(datetime.timezone.utc)
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     url,
                     headers=headers,
                     timeout=None,  # No timeout to handle long-running LLM requests and cold starts
-                    **self._request_kwargs(payload),
+                    **request_kwargs,
                 )
+            response_at = datetime.datetime.now(datetime.timezone.utc)
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
@@ -217,6 +241,8 @@ class Executor:
                             is_streaming=False,
                             headers=dict(response.headers),
                             status_code=response.status_code,
+                            dispatch_at=dispatch_at,
+                            response_at=response_at,
                         )
                     else:
                         body = {"error": response.text[:500]}
@@ -239,6 +265,8 @@ class Executor:
                 status_code=response.status_code,
                 raw_body=raw_body,
                 content_type=content_type,
+                dispatch_at=dispatch_at,
+                response_at=response_at,
             )
 
         except Exception as e:
@@ -250,6 +278,9 @@ class Executor:
                 usage={},
                 is_streaming=False,
                 status_code=None,
+                # None when preparation failed before the send: the request
+                # never reached the provider, so no dispatch instant.
+                dispatch_at=dispatch_at,
             )
 
     @staticmethod
