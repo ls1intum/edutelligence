@@ -185,10 +185,12 @@ def _make_pipeline(
     completion_calls=None,
     release_calls=None,
     sync_payloads=None,
+    provider_response_calls=None,
 ):
     completion_calls = completion_calls if completion_calls is not None else []
     release_calls = release_calls if release_calls is not None else []
     sync_payloads = sync_payloads if sync_payloads is not None else []
+    provider_response_calls = provider_response_calls if provider_response_calls is not None else []
 
     class DummyExecutor:
         async def execute_sync(self, url, headers, payload):  # noqa: ARG002
@@ -234,7 +236,7 @@ def _make_pipeline(
 
         @staticmethod
         def record_provider_response(request_id, at=None):  # noqa: ARG004
-            return None
+            provider_response_calls.append((request_id, at))
 
         @staticmethod
         def settle_completion(**kwargs):
@@ -329,6 +331,193 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
         }
     ]
     assert release_calls == [(27, 12, "logosnode", "req-stream")]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_read_to_the_end_stamps_the_last_chunk_arrival(monkeypatch):
+    """A completed stream stamps its response at the last chunk's arrival — a
+    real instant captured off the client's pace — not ``None``."""
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        yield b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(provider_response_calls=provider_response_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-stamp",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    await _read_stream_response(response)
+
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-stamp"
+    assert at is not None, "a completed stream stamps the last chunk's arrival"
+    assert isinstance(at, main.datetime.datetime)
+    assert at.tzinfo == main.datetime.timezone.utc
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk(monkeypatch):
+    """A stream that produced a chunk and then failed stamps the response at
+    the failure instant (``at=None`` -> now), not the earlier chunk's arrival —
+    otherwise the failure interval (e.g. a timeout waiting for ``stream_end``)
+    is omitted from the provider's run figure."""
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        yield b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+        raise RuntimeError("worker stream died mid-stream")
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(provider_response_calls=provider_response_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-stamp-fail",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    with pytest.raises(RuntimeError, match="died mid-stream"):
+        await _read_stream_response(response)
+
+    # The failure is stamped at the failure instant (at=None), not the last
+    # chunk's arrival.
+    assert provider_response_calls == [("req-stamp-fail", None)]
+
+
+@pytest.mark.asyncio
+async def test_logosnode_sync_stamps_the_response_before_post_provider_processing(monkeypatch):
+    """The LogosNode sync response stamp is captured the moment send_command
+    returns — before logos merges the worker's perf trace and decodes the
+    body. A post-provider delay (here a slowed merge_worker) must not appear
+    in the stamp, so ``at`` is both present and earlier than the merge."""
+    import contextlib
+
+    provider_response_calls = []
+    t_send_return: dict = {}
+    merge_state: dict = {}
+
+    class _FakePerfTrace:
+        def phase(self, request_id, name):  # noqa: ARG002
+            return contextlib.nullcontext()
+
+        def merge_worker(self, request_id, perf):  # noqa: ARG002
+            main.time.sleep(0.02)
+            merge_state["at"] = main.datetime.datetime.now(main.datetime.timezone.utc)
+
+    async def fake_send_command(**kwargs):  # noqa: ARG001
+        t_send_return["at"] = main.datetime.datetime.now(main.datetime.timezone.utc)
+        return {"status_code": 200, "body": {"choices": [{"message": {"content": "hi"}}]}, "headers": {}}
+
+    class _FakeWriteQueue:
+        def enqueue(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+    class _FakeWriteQueueFactory:
+        def get_write_queue(self):
+            return _FakeWriteQueue()
+
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=fake_send_command), raising=False)
+    monkeypatch.setattr(main, "perf_trace", _FakePerfTrace(), raising=False)
+    monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
+    pipeline, _c, _r = _make_pipeline(provider_response_calls=provider_response_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    context = SimpleNamespace(
+        provider_type="logosnode",
+        lane_id="lane-1",
+        model_name="model",
+        anthropic_dialect=None,
+        messages_upstream=False,
+        forward_url="http://upstream",
+    )
+    await main._sync_response(
+        context,
+        {"model": "model", "messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-sync",
+            "provider_type": "logosnode",
+            "is_cold_start": False,
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+        },
+    )
+
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-sync"
+    assert at is not None, "the sync path must pin the response instant, not fall back to the record time"
+    # Captured right after send_command returns…
+    assert at <= t_send_return["at"] + main.datetime.timedelta(milliseconds=5)
+    # …and before the (deliberately delayed) post-provider perf merge.
+    assert at < merge_state["at"]
 
 
 @pytest.mark.asyncio

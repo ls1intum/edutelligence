@@ -1910,11 +1910,13 @@ async def _streaming_response(
                             await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
                             continue
                         error_message = str(e)
-                        # The worker stream failed; this is when the provider's
-                        # (error) response ended, before the unwind below. With
-                        # no chunks produced the stamp falls back to now.
+                        # The worker stream failed; stamp the failure instant
+                        # (now), not the last chunk's arrival — a stream that
+                        # produced chunks and then timed out waiting for
+                        # stream_end should count that wait as provider run
+                        # time, which last_chunk_at would omit.
                         if request_id:
-                            _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                            _pipeline.record_provider_response(request_id)
                         raise e
                     # The worker stream completed — the provider's last byte,
                     # stamped at that chunk's arrival (last_chunk_at), before
@@ -2091,20 +2093,21 @@ async def _streaming_response(
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
         _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
-        try:
-            # Yield the already-peeked first chunk
-            if first_chunk:
-                for outgoing_chunk in enriched_chunks(first_chunk):
-                    for client_chunk in client_chunks(outgoing_chunk):
-                        yield client_chunk
-                if not ttft_recorded:
-                    if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
-                    _record_ettft_accuracy(scheduling_stats)
-                    ttft_recorded = True
 
-            async with aclosing(_chunks_with_arrival(chunk_iter)) as wrapped:
+        # The already-peeked first chunk is re-injected at the head of the
+        # source so the arrival pump starts before the first yield to the
+        # client. Yielding it directly (as before) would let a slow client hold
+        # up that yield while the pump is not yet running, so every later
+        # chunk's arrival would be stamped only after the client took chunk
+        # one — inflating the provider's run figure.
+        async def _source():
+            if first_chunk:
+                yield first_chunk
+            async for chunk in chunk_iter:
+                yield chunk
+
+        try:
+            async with aclosing(_chunks_with_arrival(_source())) as wrapped:
                 async for chunk, arrival in wrapped:
                     last_chunk_at = arrival
                     for outgoing_chunk in enriched_chunks(chunk):
@@ -2151,11 +2154,12 @@ async def _streaming_response(
                     yield client_chunk
         except Exception as exc:
             error_message = str(exc)
-            # The upstream failed; this is when the provider's (error) response
-            # ended, before the recovery frames below. last_chunk_at holds the
-            # last byte that did arrive (or the empty-stream instant).
+            # The upstream failed mid-stream; stamp the failure instant (now),
+            # not the last chunk's arrival — the interval between the last good
+            # byte and the observed failure is provider time, and last_chunk_at
+            # would omit it.
             if request_id:
-                _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                _pipeline.record_provider_response(request_id)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2335,6 +2339,13 @@ async def _sync_response(
         timed_out = False
         error_message = None
         status_override = None
+        # The instant the provider's full response arrived. For a LogosNode
+        # sync this is the moment send_command returns — before logos merges
+        # the worker's perf trace and decodes the (possibly large base64) body.
+        # For a cloud sync it is the moment execute_sync returns. Capturing it
+        # at dispatch keeps that logos-side post-response work out of the
+        # provider's run figure.
+        response_at = None
 
         if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = force_non_streaming_payload(prepared_payload)
@@ -2353,6 +2364,11 @@ async def _sync_response(
                         timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
                         on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
                     )
+                # The full response is in hand the moment send_command returns;
+                # capture it before the perf merge and body decoding below,
+                # which are logos work that must stay out of the provider's
+                # run figure.
+                response_at = datetime.datetime.now(datetime.timezone.utc)
                 # The worker returns its own (LOGOS_WORKER_PERF_TRACE-gated)
                 # phase breakdown inside the command result; merge it under
                 # rpc.worker.* so the transport cost is the difference.
@@ -2433,13 +2449,17 @@ async def _sync_response(
             if request_id:
                 _pipeline.record_provider_call(request_id)
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
-        response_at = datetime.datetime.now(datetime.timezone.utc)
+        if response_at is None:
+            # The cloud path captures the instant here — nothing runs between
+            # execute_sync and this line. A LogosNode dispatch that raised
+            # before a response arrived also falls back to now.
+            response_at = datetime.datetime.now(datetime.timezone.utc)
         # The provider's full response has arrived; logos' own post-provider
         # work (rate-limit header handling, the cost lookup) runs from here.
         # Ending the exec figure at this instant keeps that internal time out
         # of the provider's numbers.
         if request_id:
-            _pipeline.record_provider_response(request_id)
+            _pipeline.record_provider_response(request_id, at=response_at)
 
         # Update rate limits from response headers
         if exec_result.headers:
