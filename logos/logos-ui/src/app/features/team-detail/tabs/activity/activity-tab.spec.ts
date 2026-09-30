@@ -767,6 +767,14 @@ describe('ActivityTabComponent trace export', () => {
       headers: new HttpHeaders(exportHeaders),
     });
 
+  /**
+   * The continuation token in the shape the server issues it: the window the
+   * walk started in, and the row behind the slice. Opaque to the view — it
+   * is held and sent back verbatim, never read.
+   */
+  const exportCursorToken =
+    '2026-09-23T12:00:00Z/2026-09-30T12:00:00Z/2026-08-26T12:00:00.000Z/9041';
+
   beforeEach(async () => {
     activityService = {
       getActivity: vi.fn().mockResolvedValue(null),
@@ -889,16 +897,18 @@ describe('ActivityTabComponent trace export', () => {
 
   it('hands the walk to the next, older slice when the file carries a cursor', async () => {
     // The window outruns one file, and the server said where the file ended:
-    // the button keeps the cursor, and the next click sends it back so the
-    // download continues instead of starting over at the rows already held.
+    // the button keeps the token, and the next click sends it back verbatim
+    // so the download continues instead of starting over at the rows already
+    // held — the token also carries the window, so the continuation walks
+    // the same period the first slice was cut from.
     exportHeaders['X-Logos-Export-Total'] = '12000';
     exportHeaders['X-Logos-Export-Truncated'] = 'true';
     exportHeaders['X-Logos-Export-Count'] = '10000';
-    exportHeaders['X-Logos-Export-Next-Cursor'] = '2026-08-26T12:00:00.000Z/9041';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
 
     await component.exportTraces();
 
-    expect(component.exportCursor()).toEqual({ ts: '2026-08-26T12:00:00.000Z', id: 9041 });
+    expect(component.exportCursor()).toBe(exportCursorToken);
     expect(component.exportNotice()).toContain(
       'press export again for the next, older slice',
     );
@@ -910,7 +920,7 @@ describe('ActivityTabComponent trace export', () => {
       7,
       null,
       'json',
-      { ts: '2026-08-26T12:00:00.000Z', id: 9041 },
+      exportCursorToken,
     );
   });
 
@@ -918,7 +928,7 @@ describe('ActivityTabComponent trace export', () => {
     exportHeaders['X-Logos-Export-Total'] = '12000';
     exportHeaders['X-Logos-Export-Truncated'] = 'true';
     exportHeaders['X-Logos-Export-Count'] = '10000';
-    exportHeaders['X-Logos-Export-Next-Cursor'] = '2026-08-26T12:00:00.000Z/9041';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
     await component.exportTraces();
     expect(component.exportCursor()).not.toBeNull();
 
@@ -932,13 +942,16 @@ describe('ActivityTabComponent trace export', () => {
     expect(component.exportNotice()).toBeNull();
   });
 
-  it('falls back to narrowing advice when the cursor token is unreadable', async () => {
-    // A truncated file without a usable continuation must not promise a next
-    // slice the button cannot deliver.
+  it('falls back to narrowing advice when the file carries no continuation', async () => {
+    // A truncated file without a continuation must not promise a next slice
+    // the button cannot deliver. The token is opaque, so the view cannot
+    // reject a malformed one — the only absence it can see is a missing
+    // header, and that is the narrowing case. A token the server never
+    // issued is answered with an error on the next click, not with a
+    // duplicated first slice.
     exportHeaders['X-Logos-Export-Total'] = '12000';
     exportHeaders['X-Logos-Export-Truncated'] = 'true';
     exportHeaders['X-Logos-Export-Count'] = '10000';
-    exportHeaders['X-Logos-Export-Next-Cursor'] = 'not-a-cursor';
 
     await component.exportTraces();
 
@@ -953,7 +966,7 @@ describe('ActivityTabComponent trace export', () => {
     exportHeaders['X-Logos-Export-Total'] = '12000';
     exportHeaders['X-Logos-Export-Truncated'] = 'true';
     exportHeaders['X-Logos-Export-Count'] = '10000';
-    exportHeaders['X-Logos-Export-Next-Cursor'] = '2026-08-26T12:00:00.000Z/9041';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
     let resolveExport: (value: HttpResponse<Blob>) => void = () => {};
     activityService.getTraceExport.mockImplementation(
       () =>

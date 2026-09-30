@@ -46,8 +46,9 @@ export class TeamActivityService {
    * is why this returns the whole response rather than its body.
    *
    * A window that outruns one file is continued, not lost: `cursor` (the
-   * `X-Logos-Export-Next-Cursor` of an earlier slice) makes the server send
-   * the next, older one instead of the newest.
+   * `X-Logos-Export-Next-Cursor` of an earlier slice, sent back verbatim)
+   * makes the server send the next, older slice over the very window the
+   * walk started in, instead of the newest one.
    */
   getTraceExport(
     teamId: number,
@@ -61,8 +62,7 @@ export class TeamActivityService {
         days,
         user_id: userId,
         format,
-        cursor_ts: cursor?.ts ?? null,
-        cursor_id: cursor?.id ?? null,
+        cursor,
       }, { responseType: 'blob', observe: 'response' }),
     );
   }

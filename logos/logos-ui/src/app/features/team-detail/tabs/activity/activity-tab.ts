@@ -284,17 +284,13 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * The server's continuation token is one header value, `timestamp/id` —
-   * back to the two halves the next request sends separately. An empty or
-   * malformed token means the walk cannot continue, and the notice then says
-   * so with the narrowing advice instead of promising a next slice.
+   * The server's continuation token is opaque: the view neither parses nor
+   * builds it, it only decides whether the header holds one at all. An empty
+   * token means the walk cannot continue, and the notice then says so with
+   * the narrowing advice instead of promising a next slice.
    */
   private parseNextCursor(token: string): ExportCursor | null {
-    const sep = token.lastIndexOf('/');
-    if (sep <= 0 || sep === token.length - 1) return null;
-    const id = Number(token.slice(sep + 1));
-    if (!Number.isInteger(id) || id <= 0) return null;
-    return { ts: token.slice(0, sep), id };
+    return token.trim() ? token : null;
   }
 
   async nextPage(): Promise<void> {

@@ -52,12 +52,13 @@ export interface TeamMostAskedQuestion {
 
 /**
  * Where an export slice ends, and the next, older one continues from.
- * Timestamp and id are the keyset the export walks newest first.
+ *
+ * Opaque on purpose: the token is the server's own encoding of the window
+ * the walk started in and the row behind the slice. The view never parses
+ * it — it hands it back, and a token it cannot show as a valid continuation
+ * is simply not shown.
  */
-export interface ExportCursor {
-  ts: string;
-  id: number;
-}
+export type ExportCursor = string;
 
 export interface TeamActivityPayload {
   team_id: number;

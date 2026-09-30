@@ -163,11 +163,9 @@ class TeamActivityExportTruncationTest {
            .andExpect(jsonPath("$.traces[1].request_id").value("req-aaa-111"));
     }
 
-    /** The cursor token the server sent, back in the body's two fields. */
+    /** The cursor token the server sent, back in the body — opaque to the caller. */
     private static String cursorBody(String token) {
-        int sep = token.lastIndexOf('/');
-        return "{\"cursor_ts\": \"" + token.substring(0, sep) + "\", \"cursor_id\": "
-            + token.substring(sep + 1) + "}";
+        return "{\"cursor\": \"" + token + "\"}";
     }
 
     @Test
@@ -185,6 +183,20 @@ class TeamActivityExportTruncationTest {
            .andExpect(jsonPath("$.full_logging_enabled").value(true))
            .andExpect(jsonPath("$.note").value(
                containsString("No request with full logging")));
+    }
+
+    @Test
+    void aCursorTheServerNeverIssuedIsRefusedNotSilentlyIgnored() throws Exception {
+        // A continuation token is opaque: the only valid values are the ones
+        // the service handed out. Ignoring a malformed one would re-cut the
+        // first slice — the same rows a second time, which reads as a
+        // duplicated download — so it is a 400 instead.
+        mvc.perform(post("/logosdb/teams/2001/activity/export")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"cursor\": \"not-a-token-the-service-issued\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value(containsString("Malformed export cursor")));
     }
 
     @Test

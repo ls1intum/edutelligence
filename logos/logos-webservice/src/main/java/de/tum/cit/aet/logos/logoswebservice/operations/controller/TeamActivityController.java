@@ -97,11 +97,13 @@ public class TeamActivityController {
      * same facts in itself for whoever opens it later.
      *
      * A window that outruns one file continues rather than truncating into
-     * silence: the body may carry {@code cursor_ts}/{@code cursor_id} (the
-     * last row an earlier download held, sent back as
-     * {@code X-Logos-Export-Next-Cursor}), and the answer then holds the
-     * next, older slice — its headers and, in the JSON file,
-     * {@code next_cursor} describing the rest the same way.
+     * silence: the body may carry {@code cursor}, the opaque token an
+     * earlier download handed back as {@code X-Logos-Export-Next-Cursor}
+     * (window and slice tail in one), and the answer then holds the next,
+     * older slice over the very window the walk started in — its headers
+     * and, in the JSON file, {@code next_cursor} describing the rest the
+     * same way. A token the service never issued is a 400: answering it
+     * would re-cut the first slice and read as duplicated rows.
      */
     @PostMapping("/logosdb/teams/{teamId}/activity/export")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
@@ -122,14 +124,15 @@ public class TeamActivityController {
         Integer days = payload.get("days") instanceof Number n ? n.intValue() : null;
         Integer userId = payload.get("user_id") instanceof Number n ? n.intValue() : null;
         String format = payload.get("format") instanceof String s ? s : null;
-        String cursorTs = payload.get("cursor_ts") instanceof String s ? s : null;
-        Object cursorIdValue = payload.get("cursor_id");
-        String cursorId = cursorIdValue instanceof Number n
-            ? String.valueOf(n)
-            : (cursorIdValue instanceof String s ? s : null);
+        String cursor = payload.get("cursor") instanceof String s ? s : null;
 
-        TeamActivityService.ExportPrep prep = teamActivityService.prepareExport(
-            teamId, days, userId, format, cursorTs, cursorId);
+        TeamActivityService.ExportPrep prep;
+        try {
+            prep = teamActivityService.prepareExport(teamId, days, userId, format, cursor);
+        } catch (IllegalArgumentException e) {
+            writeJsonError(response, 400, "error", "Malformed export cursor");
+            return;
+        }
         response.setContentType(prep.format() == TeamActivityService.ExportFormat.CSV
             ? "text/csv; charset=utf-8"
             : "application/json");
@@ -137,9 +140,9 @@ public class TeamActivityController {
         response.setHeader("X-Logos-Export-Total", String.valueOf(prep.totalInWindow()));
         response.setHeader("X-Logos-Export-Truncated", String.valueOf(prep.truncated()));
         response.setHeader("X-Logos-Export-Count", String.valueOf(prep.count()));
-        String nextCursor = prep.nextCursor();
-        if (nextCursor != null) {
-            response.setHeader("X-Logos-Export-Next-Cursor", nextCursor);
+        String cursorToken = prep.cursorToken();
+        if (cursorToken != null) {
+            response.setHeader("X-Logos-Export-Next-Cursor", cursorToken);
         }
         try (OutputStream out = response.getOutputStream()) {
             teamActivityService.writeExportFile(prep, out);

@@ -132,6 +132,15 @@ public class TeamActivityService {
     private final ConcurrentHashMap<String, CacheEntry<PeriodAggregates>> aggregatesCache =
         new ConcurrentHashMap<>();
 
+    /**
+     * One monitor per (team, window). A TTL expiry that several open tabs
+     * poll at once must pay the three aggregates once, not once per tab —
+     * the first thread past the TTL loads under the key's lock, the rest
+     * wait on it and read the entry it leaves behind.
+     */
+    private final ConcurrentHashMap<String, Object> aggregateRefreshLocks =
+        new ConcurrentHashMap<>();
+
     public TeamActivityService(LogEntryRepository logEntryRepository,
                                RequestLogService requestLogService,
                                TeamRepository teamRepository,
@@ -231,16 +240,32 @@ public class TeamActivityService {
      * them aggregates the whole window. One entry per (team, window) holds
      * all three so a poll pays at most one lookup and, past the TTL, at most
      * one round of the three queries rather than three lookups of three
-     * single-purpose caches.
+     * single-purpose caches. A refresh is single-flighted per key: the moment
+     * the entry expires, every tab that polls the window wants it at once,
+     * and the lock funnels them through one load so the ninety-day
+     * aggregates run once per expiry, not once per tab.
      */
     private PeriodAggregates periodAggregates(int teamId, int days, Timestamp since) {
         String key = teamId + "|" + days;
-        long now = System.currentTimeMillis();
         CacheEntry<PeriodAggregates> cached = aggregatesCache.get(key);
-        if (cached != null && now - cached.loadedAtMs() < aggregateCacheTtlMillis) {
+        if (cached != null && System.currentTimeMillis() - cached.loadedAtMs() < aggregateCacheTtlMillis) {
             return cached.value();
         }
 
+        synchronized (aggregateRefreshLocks.computeIfAbsent(key, k -> new Object())) {
+            // The thread that held the lock first may have refreshed the very
+            // entry this poll is asking for; trust it before paying the
+            // queries a second time.
+            cached = aggregatesCache.get(key);
+            if (cached != null
+                    && System.currentTimeMillis() - cached.loadedAtMs() < aggregateCacheTtlMillis) {
+                return cached.value();
+            }
+            return loadPeriodAggregates(key, teamId, since);
+        }
+    }
+
+    private PeriodAggregates loadPeriodAggregates(String key, int teamId, Timestamp since) {
         List<Map<String, Object>> keys =
             logEntryRepository.findTeamKeyUsage(teamId, since).stream()
                 .map(TeamActivityService::toKeyUsage)
@@ -260,6 +285,7 @@ public class TeamActivityService {
             .<Map<String, Object>>map(p -> Map.of("question", p.getQuestion(), "count", p.getAskCount()))
             .toList();
 
+        long now = System.currentTimeMillis();
         PeriodAggregates value = new PeriodAggregates(keys, requesters, mostAsked);
         aggregatesCache.put(key, new CacheEntry<>(value, now));
         // The cache is bounded by what is being looked at, not by history:
@@ -267,6 +293,7 @@ public class TeamActivityService {
         // keep entries for windows nobody polls any more.
         if (aggregatesCache.size() > 128) {
             aggregatesCache.entrySet().removeIf(e -> now - e.getValue().loadedAtMs() >= aggregateCacheTtlMillis);
+            aggregateRefreshLocks.keySet().removeIf(k -> !aggregatesCache.containsKey(k));
         }
         return value;
     }
@@ -311,11 +338,51 @@ public class TeamActivityService {
             return "logos-traces-team-" + teamId + "-" + days + "d." + (format == ExportFormat.CSV ? "csv" : "json");
         }
 
-        /** The continuation cursor as one header-safe token, or null. */
-        public String nextCursor() {
+        /**
+         * The continuation as one opaque token, or null when the file is the
+         * whole answer.
+         *
+         * <p>The window travels with the cursor, not just the row behind the
+         * slice: a continued export must walk the same window the first slice
+         * was counted over, so a row near the window's lower edge cannot age
+         * out of a later slice's freshly recomputed window after the first
+         * slice counted it — counted in one export's total, unreachable in
+         * every download. ISO-8601 instants never carry the separator, so
+         * the four parts stay unambiguous.
+         */
+        public String cursorToken() {
             return nextCursorTs != null && nextCursorId != null
-                ? nextCursorTs.toString() + "/" + nextCursorId
+                ? since.toString() + "/" + now.toString() + "/"
+                  + nextCursorTs.toString() + "/" + nextCursorId
                 : null;
+        }
+    }
+
+    /**
+     * One parsed export continuation: the window the walk started in and the
+     * row the next slice begins behind.
+     */
+    public record ExportCursor(Instant windowSince, Instant windowEnd, Instant cursorTs, Integer cursorId) {
+        /**
+         * The token back to facts. A token that is not blank but not parseable
+         * was never issued by this service, and answering it would re-cut the
+         * first slice — a row set that reads as duplicated downloads — so it
+         * is refused rather than ignored.
+         */
+        public static ExportCursor parse(String token) {
+            if (token == null || token.isBlank()) {
+                return null;
+            }
+            String[] parts = token.split("/");
+            if (parts.length != 4) {
+                throw new IllegalArgumentException("Malformed export cursor");
+            }
+            try {
+                return new ExportCursor(Instant.parse(parts[0]), Instant.parse(parts[1]),
+                                        Instant.parse(parts[2]), Integer.parseInt(parts[3]));
+            } catch (DateTimeParseException | NumberFormatException e) {
+                throw new IllegalArgumentException("Malformed export cursor", e);
+            }
         }
     }
 
@@ -340,41 +407,45 @@ public class TeamActivityService {
      * so "full logging is on" never contradicts "this file has no content".
      *
      * <p>A window that outruns the cap is not one the caller has to live
-     * with: {@code cursorTs}/{@code cursorId} (the last row an earlier
-     * download carried, as returned in {@code nextCursor}) continue the
-     * export with the next, older slice, and the returned
-     * {@code totalInWindow} and {@code nextCursor} then describe the rest
-     * and its end.
+     * with: the continuation token a capped export hands back (in
+     * {@code cursorToken}) carries the next, older slice, and the returned
+     * {@code totalInWindow} and {@code cursorToken} then describe the rest
+     * and its end. The token also carries the window the walk started in —
+     * a continued export reuses it rather than recomputing one, because a
+     * fresh window would let rows near the lower edge age out after the
+     * first slice counted them.
      */
     public ExportPrep prepareExport(int teamId, Integer requestedDays, Integer userId, String format,
-                                    String cursorTs, String cursorId) {
-        int days = clampDays(requestedDays);
-        Instant now = Instant.now();
-        Timestamp since = Timestamp.from(now.minus(Duration.ofDays(days)));
+                                    String cursorToken) {
+        ExportCursor cursor = ExportCursor.parse(cursorToken);
+
+        int days;
+        Instant now;
+        Instant sinceInstant;
+        Timestamp cursorTs = null;
+        Integer cursorRowId = null;
+        if (cursor != null) {
+            // The window comes from the token, not from the clock: the caller
+            // may have started the walk minutes ago, and the rows it counted
+            // then are the rows this slice must still reach.
+            now = cursor.windowEnd();
+            sinceInstant = cursor.windowSince();
+            days = Math.max(1, Math.min(MAX_DAYS,
+                (int) Duration.between(sinceInstant, now).toDays()));
+            cursorTs = Timestamp.from(cursor.cursorTs());
+            cursorRowId = cursor.cursorId();
+        } else {
+            days = clampDays(requestedDays);
+            now = Instant.now();
+            sinceInstant = now.minus(Duration.ofDays(days));
+        }
+        Timestamp since = Timestamp.from(sinceInstant);
         Timestamp end = Timestamp.from(now);
 
         ExportFormat out = "csv".equalsIgnoreCase(format) ? ExportFormat.CSV : ExportFormat.JSON;
 
-        // A half cursor points at a row that does not exist, the same way the
-        // request list sees one — drop the id along with an unparseable
-        // timestamp rather than feed the query one half of a keyset.
-        Timestamp cursor = null;
-        Integer cursorRowId = null;
-        if (cursorTs != null && !cursorTs.isBlank()) {
-            try {
-                Instant at = Instant.parse(cursorTs);
-                if (cursorId != null && !cursorId.isBlank()) {
-                    cursor = Timestamp.from(at);
-                    cursorRowId = Integer.parseInt(cursorId);
-                }
-            } catch (DateTimeParseException | NumberFormatException e) {
-                cursor = null;
-                cursorRowId = null;
-            }
-        }
-
         long totalInWindow = valueOrDefault(
-            logEntryRepository.countTracesForExport(teamId, since, end, userId, cursor, cursorRowId));
+            logEntryRepository.countTracesForExport(teamId, since, end, userId, cursorTs, cursorRowId));
         boolean truncated = totalInWindow > exportMaxRows;
         long count = Math.min(totalInWindow, exportMaxRows);
 
@@ -383,7 +454,7 @@ public class TeamActivityService {
 
         String note = null;
         if (valueOrDefault(logEntryRepository.countConsentedInExportSlice(
-                teamId, since, end, userId, cursor, cursorRowId, exportMaxRows)) == 0) {
+                teamId, since, end, userId, cursorTs, cursorRowId, exportMaxRows)) == 0) {
             // The rows are there but the content is not: name the reason in
             // the file itself, because an administrator opening it later will
             // not remember which keys were consented at export time.
@@ -399,16 +470,16 @@ public class TeamActivityService {
         Integer nextCursorId = null;
         if (truncated) {
             ExportSliceCursorProjection tail = logEntryRepository
-                .findExportSliceTail(teamId, since, end, userId, cursor, cursorRowId, (int) count - 1);
+                .findExportSliceTail(teamId, since, end, userId, cursorTs, cursorRowId, (int) count - 1);
             if (tail != null) {
                 nextCursorTs = tail.getTimestampRequest();
                 nextCursorId = tail.getId();
             }
         }
 
-        return new ExportPrep(teamId, userId, teamName, days, since.toInstant(), now, out,
+        return new ExportPrep(teamId, userId, teamName, days, sinceInstant, now, out,
                               totalInWindow, count, truncated, fullLoggingEnabled, note,
-                              cursor != null ? cursor.toInstant() : null, cursorRowId,
+                              cursorTs != null ? cursorTs.toInstant() : null, cursorRowId,
                               nextCursorTs, nextCursorId);
     }
 
@@ -472,9 +543,9 @@ public class TeamActivityService {
         gen.writeNumberField("total_in_window", prep.totalInWindow());
         // Where to continue: the same token the response header carries, so a
         // file opened later says how to reach the rows it does not hold.
-        String nextCursor = prep.nextCursor();
-        if (nextCursor != null) {
-            gen.writeStringField("next_cursor", nextCursor);
+        String cursorToken = prep.cursorToken();
+        if (cursorToken != null) {
+            gen.writeStringField("next_cursor", cursorToken);
         }
     }
 
