@@ -107,25 +107,57 @@ public class ExportImportService {
                 throw new IllegalArgumentException("Missing table in json: " + table);
             }
         }
-        for (String table : TABLES) {
-            List<?> rows = (List<?>) jsonData.get(table);
-            jdbc.execute("TRUNCATE TABLE " + safeTable(table) + " CASCADE");
-            if (rows != null && !rows.isEmpty()) {
-                try {
-                    String rowsJson = objectMapper.writeValueAsString(rows);
-                    jdbc.update(
-                        "INSERT INTO " + safeTable(table)
-                        + " SELECT * FROM jsonb_populate_recordset(null::" + safeTable(table) + ", ?::jsonb)",
-                        rowsJson
-                    );
-                } catch (JsonProcessingException e) {
-                    throw new IllegalArgumentException(
-                        "Failed to serialize rows for table " + table + ": " + e.getMessage());
+        // agent_sessions.team_repository_id → team_repositories makes
+        // TRUNCATE … CASCADE wipe every agent session/event — including
+        // development sessions with a null repository id. Detach first;
+        // agent tables are not exported and must survive import.
+        detachAgentSessionsFromRepositories();
+        try {
+            for (String table : TABLES) {
+                List<?> rows = (List<?>) jsonData.get(table);
+                jdbc.execute("TRUNCATE TABLE " + safeTable(table) + " CASCADE");
+                if (rows != null && !rows.isEmpty()) {
+                    try {
+                        String rowsJson = objectMapper.writeValueAsString(rows);
+                        jdbc.update(
+                            "INSERT INTO " + safeTable(table)
+                            + " SELECT * FROM jsonb_populate_recordset(null::" + safeTable(table) + ", ?::jsonb)",
+                            rowsJson
+                        );
+                    } catch (JsonProcessingException e) {
+                        throw new IllegalArgumentException(
+                            "Failed to serialize rows for table " + table + ": " + e.getMessage());
+                    }
                 }
             }
+        } finally {
+            restoreAgentSessionsRepositoryFk();
         }
         resetSequences();
         return Map.of("result", "Import successful");
+    }
+
+    private void detachAgentSessionsFromRepositories() {
+        jdbc.update("UPDATE agent_sessions SET team_repository_id = NULL "
+            + "WHERE team_repository_id IS NOT NULL");
+        jdbc.execute("ALTER TABLE agent_sessions DROP CONSTRAINT IF EXISTS "
+            + "agent_sessions_team_repository_id_fkey");
+    }
+
+    private void restoreAgentSessionsRepositoryFk() {
+        jdbc.execute("""
+            DO $$ BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                 WHERE conname = 'agent_sessions_team_repository_id_fkey'
+              ) THEN
+                ALTER TABLE agent_sessions
+                  ADD CONSTRAINT agent_sessions_team_repository_id_fkey
+                  FOREIGN KEY (team_repository_id)
+                  REFERENCES team_repositories(id) ON DELETE SET NULL;
+              END IF;
+            END $$;
+            """);
     }
 
     private void resetSequences() {

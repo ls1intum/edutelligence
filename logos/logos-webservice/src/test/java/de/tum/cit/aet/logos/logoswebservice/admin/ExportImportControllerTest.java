@@ -30,6 +30,9 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
     "logos.auth.roles.app-admin=chair-member",
     "logos.auth.sync-debounce-minutes=5"
 })
+// RepoCredentialCrypto reads LOGOS_REPO_CREDENTIALS_* from the process env;
+// SpringBootTest JVMs inherit the runner env — set DEV_FALLBACK in surefire
+// or export it when running these tests locally.
 @Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql"},
      executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(scripts = {"/sql/cleanup-configuration.sql", "/sql/cleanup-identity.sql"},
@@ -63,6 +66,9 @@ class ExportImportControllerTest {
            .andExpect(jsonPath("$.result.team_repositories").isArray());
     }
 
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @Test
     void importExport_roundtrip() throws Exception {
         mvc.perform(post("/admin/teams/2001/repositories")
@@ -77,6 +83,23 @@ class ExportImportControllerTest {
                     """))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.repo_slug").value("ls1intum/edutelligence"));
+
+        Integer workspaceId = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('export-import-preserve-ws', 'main', 'export-import-preserve-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer sessionId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push
+            ) VALUES (?, 'preserve me across import', 'succeeded', 'test', FALSE, FALSE, '[]'::jsonb, TRUE)
+            RETURNING id
+            """, Integer.class, workspaceId);
+        jdbc.update("""
+            INSERT INTO agent_events (session_id, kind, payload)
+            VALUES (?, 'log', '{"message":"still here"}'::jsonb)
+            """, sessionId);
 
         MvcResult exportResult = mvc.perform(post("/logosdb/export")
                 .with(TestJwt.logosAdmin())
@@ -112,5 +135,12 @@ class ExportImportControllerTest {
            .andExpect(jsonPath("$[0].repo_slug").value("ls1intum/edutelligence"))
            .andExpect(jsonPath("$[0].branch").value("develop"))
            .andExpect(jsonPath("$[0].paths[0]").value("logos"));
+
+        Integer surviving = jdbc.queryForObject(
+            "SELECT count(*) FROM agent_sessions WHERE id = ?", Integer.class, sessionId);
+        org.assertj.core.api.Assertions.assertThat(surviving).isEqualTo(1);
+        Integer survivingEvents = jdbc.queryForObject(
+            "SELECT count(*) FROM agent_events WHERE session_id = ?", Integer.class, sessionId);
+        org.assertj.core.api.Assertions.assertThat(survivingEvents).isEqualTo(1);
     }
 }

@@ -9,11 +9,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationRequestDTO;
@@ -39,6 +42,48 @@ public class AiWorkflowAnalysisService {
     private static final Set<String> VALID_SLAS = Set.of("ux-critical", "ux-high-prio", "ux-background");
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
 
+    /**
+     * Same contract as logos-agent {@code analysis_triggers.ANALYSIS_TASK}.
+     */
+    static final String ANALYSIS_TASK_TEMPLATE = """
+        Analyse this linked application repository for AI / LLM call sites and produce
+        workflow diagrams plus SLA recommendations.
+
+        Write structured results ONLY to `/artifacts/analysis.json` (UTF-8 JSON).
+        Do not push commits, open pull requests, or modify the remote.
+
+        Schema for `/artifacts/analysis.json`:
+        {
+          "commit_sha": "<git HEAD sha of the checkout you analysed>",
+          "workflows": [
+            {
+              "name": "<short workflow group name>",
+              "trigger_summary": "<what starts this flow>",
+              "diagram_mermaid": "flowchart TD\\n  A-->B",
+              "sort_order": 0
+            }
+          ],
+          "recommendations": [
+            {
+              "workflow": "<matching workflows[].name>",
+              "file_path": "path/from/repo/root.py",
+              "start_line": 1,
+              "end_line": 20,
+              "code_url": "optional permalink to the call site, or null",
+              "detected_model": "optional model name or null",
+              "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+              "confidence": 0.0,
+              "justification": "why this SLA",
+              "traffic_flags": {"night_heavy": false}
+            }
+          ]
+        }
+
+        Repository: %s
+        Clone URL: %s
+        Focus paths (empty means whole tree): %s
+        """;
+
     private final TeamMemberRepository teamMemberRepository;
     private final TeamRepository teamRepository;
     private final TeamRepoLinkRepository repoLinkRepository;
@@ -51,6 +96,7 @@ public class AiWorkflowAnalysisService {
     private final RepoWorkflowScanner scanner;
     private final RepoCredentialCrypto crypto;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate requiresNewTx;
 
     public AiWorkflowAnalysisService(TeamMemberRepository teamMemberRepository,
                                      TeamRepository teamRepository,
@@ -63,7 +109,8 @@ public class AiWorkflowAnalysisService {
                                      ApiKeyAdminService apiKeyAdminService,
                                      RepoWorkflowScanner scanner,
                                      RepoCredentialCrypto crypto,
-                                     JdbcTemplate jdbc) {
+                                     JdbcTemplate jdbc,
+                                     PlatformTransactionManager txManager) {
         this.teamMemberRepository = teamMemberRepository;
         this.teamRepository = teamRepository;
         this.repoLinkRepository = repoLinkRepository;
@@ -76,6 +123,9 @@ public class AiWorkflowAnalysisService {
         this.scanner = scanner;
         this.crypto = crypto;
         this.jdbc = jdbc;
+        this.requiresNewTx = new TransactionTemplate(txManager);
+        this.requiresNewTx.setPropagationBehavior(
+            TransactionTemplate.PROPAGATION_REQUIRES_NEW);
     }
 
     public boolean isTeamOwner(int teamId, int userId) {
@@ -129,89 +179,125 @@ public class AiWorkflowAnalysisService {
         return result;
     }
 
-    @Transactional
+    /**
+     * Heuristic scan. Failure records commit in a separate transaction so a
+     * rolled-back scan does not erase the failed analysis row.
+     */
     public Map<String, Object> runHeuristicAnalysis(int teamId, int linkId) {
         TeamRepoLink link = requireLink(teamId, linkId);
-        Instant now = Instant.now();
-        AiWorkflowAnalysis analysis = new AiWorkflowAnalysis();
-        analysis.setTeamId(teamId);
-        analysis.setTeamRepositoryId(link.getId());
-        analysis.setStatus("running");
-        analysis.setSource("heuristic");
-        analysis.setStartedAt(now);
-        analysis = analysisRepository.saveAndFlush(analysis);
+        AiWorkflowAnalysis analysis = requiresNewTx.execute(status -> {
+            AiWorkflowAnalysis row = new AiWorkflowAnalysis();
+            row.setTeamId(teamId);
+            row.setTeamRepositoryId(link.getId());
+            row.setStatus("running");
+            row.setSource("heuristic");
+            row.setStartedAt(Instant.now());
+            return analysisRepository.saveAndFlush(row);
+        });
+        if (analysis == null) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "Failed to create analysis row");
+        }
+        final int analysisId = analysis.getId();
 
         try {
-            RepoWorkflowScanner.ScanResult scan = scanner.scanPublicGithub(
-                link.getRepoSlug(), link.getBranch(), link.getPaths());
-            analysis.setCommitSha(scan.commitSha());
-
-            Map<String, Integer> workflowIdsByName = new LinkedHashMap<>();
-            for (RepoWorkflowScanner.WorkflowGroup group : scan.workflows()) {
-                AiWorkflow workflow = new AiWorkflow();
-                workflow.setAnalysisId(analysis.getId());
-                workflow.setName(group.name());
-                workflow.setTriggerSummary(group.triggerSummary());
-                workflow.setDiagramMermaid(group.diagramMermaid());
-                workflow.setSortOrder(group.sortOrder());
-                workflow = workflowRepository.save(workflow);
-                workflowIdsByName.put(group.name(), workflow.getId());
-            }
-
-            Map<String, Boolean> nightHeavyByModel = nightHeavyModels(teamId);
-            List<AiLlmCallRecommendation> savedRecs = new ArrayList<>();
-            for (RepoWorkflowScanner.DetectedCall call : scan.calls()) {
-                AiLlmCallRecommendation rec = new AiLlmCallRecommendation();
-                rec.setAnalysisId(analysis.getId());
-                String group = workflowGroupName(call.filePath());
-                rec.setWorkflowId(workflowIdsByName.get(group));
-                rec.setTeamId(teamId);
-                rec.setFilePath(call.filePath());
-                rec.setStartLine(call.startLine());
-                rec.setEndLine(call.endLine());
-                rec.setCodeUrl(buildCodeUrl(link, scan.commitSha(), call.filePath(), call.startLine()));
-                rec.setDetectedModel(call.detectedModel());
-                rec.setRecommendedSla(call.recommendedSla());
-                rec.setConfidence(call.confidence());
-                rec.setJustification(call.justification());
-                rec.setReviewStatus("pending");
-
-                Map<String, Object> flags = new LinkedHashMap<>();
-                boolean nightHeavy = false;
-                if ("ux-critical".equals(call.recommendedSla()) && call.detectedModel() != null) {
-                    nightHeavy = Boolean.TRUE.equals(nightHeavyByModel.get(
-                        call.detectedModel().toLowerCase(Locale.ROOT)));
-                }
-                flags.put("night_heavy", nightHeavy);
-                rec.setTrafficFlags(flags);
-                savedRecs.add(recommendationRepository.save(rec));
-            }
-
-            analysis.setStatus("succeeded");
-            analysis.setFinishedAt(Instant.now());
-            analysisRepository.save(analysis);
-
-            Map<String, Object> result = analysisToMap(analysis);
-            result.put("workflows", workflowRepository.findByAnalysisIdOrderBySortOrderAsc(analysis.getId())
-                .stream().map(this::workflowToMap).toList());
-            result.put("recommendations", savedRecs.stream().map(this::recommendationToMap).toList());
-            return result;
+            String deployKeyPem = decryptActiveDeployKey(link.getId());
+            RepoWorkflowScanner.ScanResult scan = scanner.scanGithub(
+                link.getRepoSlug(), link.getBranch(), link.getPaths(), deployKeyPem);
+            return requiresNewTx.execute(status -> persistHeuristicSuccess(analysisId, teamId, link, scan));
         }
         catch (ResponseStatusException e) {
-            analysis.setStatus("failed");
-            analysis.setError(e.getReason());
-            analysis.setFinishedAt(Instant.now());
-            analysisRepository.save(analysis);
+            markAnalysisFailed(analysisId, e.getReason());
             throw e;
         }
         catch (RuntimeException e) {
-            analysis.setStatus("failed");
-            analysis.setError(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-            analysis.setFinishedAt(Instant.now());
-            analysisRepository.save(analysis);
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            markAnalysisFailed(analysisId, msg);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
-                "Heuristic analysis failed: " + analysis.getError(), e);
+                "Heuristic analysis failed: " + msg, e);
         }
+    }
+
+    private Map<String, Object> persistHeuristicSuccess(int analysisId, int teamId, TeamRepoLink link,
+                                                        RepoWorkflowScanner.ScanResult scan) {
+        AiWorkflowAnalysis analysis = analysisRepository.findById(analysisId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "Analysis row missing"));
+        analysis.setCommitSha(scan.commitSha());
+
+        Map<String, Integer> workflowIdsByName = new LinkedHashMap<>();
+        for (RepoWorkflowScanner.WorkflowGroup group : scan.workflows()) {
+            AiWorkflow workflow = new AiWorkflow();
+            workflow.setAnalysisId(analysis.getId());
+            workflow.setName(group.name());
+            workflow.setTriggerSummary(group.triggerSummary());
+            workflow.setDiagramMermaid(group.diagramMermaid());
+            workflow.setSortOrder(group.sortOrder());
+            workflow = workflowRepository.save(workflow);
+            workflowIdsByName.put(group.name(), workflow.getId());
+        }
+
+        Map<String, Boolean> nightHeavyByModel = nightHeavyModels(teamId);
+        List<AiLlmCallRecommendation> savedRecs = new ArrayList<>();
+        for (RepoWorkflowScanner.DetectedCall call : scan.calls()) {
+            AiLlmCallRecommendation rec = new AiLlmCallRecommendation();
+            rec.setAnalysisId(analysis.getId());
+            String group = workflowGroupName(call.filePath());
+            rec.setWorkflowId(workflowIdsByName.get(group));
+            rec.setTeamId(teamId);
+            rec.setFilePath(call.filePath());
+            rec.setStartLine(call.startLine());
+            rec.setEndLine(call.endLine());
+            rec.setCodeUrl(buildCodeUrl(link, scan.commitSha(), call.filePath(), call.startLine()));
+            rec.setDetectedModel(call.detectedModel());
+            rec.setRecommendedSla(call.recommendedSla());
+            rec.setConfidence(call.confidence());
+            rec.setJustification(call.justification());
+            rec.setReviewStatus("pending");
+
+            Map<String, Object> flags = new LinkedHashMap<>();
+            boolean nightHeavy = false;
+            if ("ux-critical".equals(call.recommendedSla()) && call.detectedModel() != null) {
+                nightHeavy = Boolean.TRUE.equals(nightHeavyByModel.get(
+                    call.detectedModel().toLowerCase(Locale.ROOT)));
+            }
+            flags.put("night_heavy", nightHeavy);
+            rec.setTrafficFlags(flags);
+            savedRecs.add(recommendationRepository.save(rec));
+        }
+
+        analysis.setStatus("succeeded");
+        analysis.setFinishedAt(Instant.now());
+        analysisRepository.save(analysis);
+
+        Map<String, Object> result = analysisToMap(analysis);
+        result.put("workflows", workflowRepository.findByAnalysisIdOrderBySortOrderAsc(analysis.getId())
+            .stream().map(this::workflowToMap).toList());
+        result.put("recommendations", savedRecs.stream().map(this::recommendationToMap).toList());
+        return result;
+    }
+
+    private void markAnalysisFailed(int analysisId, String error) {
+        requiresNewTx.executeWithoutResult(status -> {
+            analysisRepository.findById(analysisId).ifPresent(row -> {
+                row.setStatus("failed");
+                row.setError(error);
+                row.setFinishedAt(Instant.now());
+                analysisRepository.save(row);
+            });
+        });
+    }
+
+    private String decryptActiveDeployKey(int linkId) {
+        Optional<TeamRepositoryCredential> cred = credentialRepository.findById(linkId);
+        if (cred.isEmpty() || cred.get().getRevokedAt() != null) {
+            return null;
+        }
+        String encrypted = cred.get().getEncryptedPrivateKey();
+        if (encrypted == null || encrypted.isBlank()) {
+            return null;
+        }
+        return crypto.decrypt(encrypted);
     }
 
     @Transactional
@@ -346,9 +432,11 @@ public class AiWorkflowAnalysisService {
         TeamRepoLink link = requireLink(teamId, linkId);
         int workspaceId = ensureAnalysisWorkspace(teamId, link);
 
-        String task = "Analyse linked repository " + link.getRepoSlug()
-            + " for AI workflow diagrams and SLA recommendations. "
-            + "Write structured results only; do not push commits.";
+        String pathsLabel = formatPaths(link.getPaths());
+        String task = ANALYSIS_TASK_TEMPLATE.formatted(
+            link.getRepoSlug(),
+            link.getRepoUrl(),
+            pathsLabel);
 
         Integer sessionId = jdbc.queryForObject("""
             INSERT INTO agent_sessions (
@@ -387,26 +475,31 @@ public class AiWorkflowAnalysisService {
         return result;
     }
 
+    private static String formatPaths(List<String> paths) {
+        if (paths == null || paths.isEmpty()) {
+            return "(entire repository)";
+        }
+        return paths.stream().filter(p -> p != null && !p.isBlank()).collect(Collectors.joining(", "));
+    }
+
     private int ensureAnalysisWorkspace(int teamId, TeamRepoLink link) {
         String name = "analysis-team-" + teamId + "-repo-" + link.getId();
-        List<Integer> existing = jdbc.query(
-            "SELECT id FROM agent_workspaces WHERE name = ? AND archived_at IS NULL LIMIT 1",
-            (rs, rowNum) -> rs.getInt(1),
-            name);
-        if (!existing.isEmpty()) {
-            return existing.getFirst();
-        }
+        String branch = link.getBranch() != null ? link.getBranch() : "main";
         String volume = "logos-analysis-t" + teamId + "-r" + link.getId();
-        Integer created = jdbc.queryForObject("""
+        Integer id = jdbc.queryForObject("""
             INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
             VALUES (?, ?, ?, ?, TRUE)
+            ON CONFLICT (name) DO UPDATE
+               SET archived_at = NULL,
+                   base_branch = EXCLUDED.base_branch,
+                   ephemeral = EXCLUDED.ephemeral
             RETURNING id
             """, Integer.class,
             name,
-            link.getBranch() != null ? link.getBranch() : "main",
+            branch,
             volume,
             "team-" + teamId);
-        return created;
+        return id;
     }
 
     private TeamRepoLink requireLink(int teamId, int linkId) {
@@ -418,10 +511,6 @@ public class AiWorkflowAnalysisService {
                 "Repository link not found"));
     }
 
-    /**
-     * For each model used by the team, true when night hours (00–05 UTC) carry
-     * a majority of request volume in {@code log_entry_hourly_stats}.
-     */
     private Map<String, Boolean> nightHeavyModels(int teamId) {
         Map<String, Boolean> result = new HashMap<>();
         try {

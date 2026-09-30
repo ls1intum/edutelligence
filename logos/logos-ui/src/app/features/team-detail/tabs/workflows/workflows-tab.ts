@@ -2,8 +2,10 @@ import {
   AfterViewChecked,
   ChangeDetectionStrategy,
   Component,
+  EventEmitter,
   Input,
   OnChanges,
+  Output,
   inject,
   signal,
 } from '@angular/core';
@@ -39,6 +41,8 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   @Input() teamId!: number;
   @Input() canEdit = false;
   @Input() apiKeys: TeamApiKey[] = [];
+  /** Fired when a review updates an application key's SLA priority. */
+  @Output() keysChanged = new EventEmitter<void>();
 
   private teamService = inject(TeamManagementService);
   private diagramsDirty = false;
@@ -161,6 +165,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     try {
       await this.teamService.reviewRecommendation(this.teamId, rec.id, payload);
       await this.load();
+      if (
+        (payload.action === 'accept' || payload.action === 'override') &&
+        payload.api_key_id != null
+      ) {
+        this.keysChanged.emit();
+      }
     } catch (err: unknown) {
       const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
       this.actionError.set(

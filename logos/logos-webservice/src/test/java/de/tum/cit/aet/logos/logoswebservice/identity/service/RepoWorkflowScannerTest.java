@@ -93,14 +93,6 @@ class RepoWorkflowScannerTest {
     }
 
     @Test
-    void guessCommitSha_fromZipRootName() {
-        assertThat(RepoWorkflowScanner.guessCommitSha("edutelligence-abcdef0123456789"))
-            .isEqualTo("abcdef0123456789");
-        assertThat(RepoWorkflowScanner.guessCommitSha("edutelligence-main"))
-            .isEqualTo("unknown");
-    }
-
-    @Test
     void recommendSla_defaultsToHighPrio() {
         assertThat(RepoWorkflowScanner.recommendSla("services/worker.py\nclient = OpenAI()\n"))
             .isEqualTo("ux-high-prio");

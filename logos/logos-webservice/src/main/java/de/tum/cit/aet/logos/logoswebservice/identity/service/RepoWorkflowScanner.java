@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -14,14 +15,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -32,13 +36,21 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 /**
  * Heuristic scan of a GitHub repository for LLM call sites and coarse SLA
- * recommendations. Public repos are fetched as a zipball; tests use
+ * recommendations. Public repos are fetched as a commit-pinned zipball; private
+ * repos use a per-link deploy-key PEM via {@code git} over SSH. Tests use
  * {@link #scanDirectory(Path, List)}.
  */
 @Service
 public class RepoWorkflowScanner {
+
+    static final long MAX_DOWNLOAD_BYTES = 80L * 1024 * 1024;
+    static final long MAX_EXTRACTED_BYTES = 200L * 1024 * 1024;
+    static final int MAX_ZIP_ENTRIES = 50_000;
 
     private static final Set<String> TEXT_EXTENSIONS = Set.of(
         ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".kt", ".go", ".rs",
@@ -81,38 +93,56 @@ public class RepoWorkflowScanner {
             + "|schedule\\.every|BackgroundTask|@async_to_sync"
             + "|nightly|off[-_]?peak|queue\\.delay|apply_async");
 
-    private static final Pattern COMMIT_SHA = Pattern.compile("^[0-9a-f]{7,40}$");
-
     private final HttpClient httpClient;
+    private final ObjectMapper objectMapper;
 
     public RepoWorkflowScanner() {
-        this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build());
+        this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build(),
+            new ObjectMapper());
     }
 
     RepoWorkflowScanner(HttpClient httpClient) {
-        this.httpClient = httpClient;
+        this(httpClient, new ObjectMapper());
     }
 
+    RepoWorkflowScanner(HttpClient httpClient, ObjectMapper objectMapper) {
+        this.httpClient = httpClient;
+        this.objectMapper = objectMapper;
+    }
+
+    /** Public zipball scan (no deploy key). */
     public ScanResult scanPublicGithub(String repoSlug, String branch, List<String> pathFilters) {
+        return scanGithub(repoSlug, branch, pathFilters, null);
+    }
+
+    /**
+     * Scan a GitHub repository. When {@code deployKeyPem} is non-null, clones
+     * over SSH with that key; otherwise resolves the branch to a commit SHA and
+     * downloads the public zipball pinned to that SHA.
+     */
+    public ScanResult scanGithub(String repoSlug, String branch, List<String> pathFilters,
+                                 String deployKeyPem) {
         if (repoSlug == null || repoSlug.isBlank() || !repoSlug.contains("/")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "repo_slug is invalid");
         }
         String safeBranch = (branch == null || branch.isBlank()) ? "main" : branch.trim();
-        String url = "https://codeload.github.com/" + repoSlug.trim()
-            + "/zip/refs/heads/" + safeBranch;
         Path tempRoot = null;
         try {
             tempRoot = Files.createTempDirectory("logos-repo-scan-");
+            if (deployKeyPem != null && !deployKeyPem.isBlank()) {
+                return scanViaDeployKey(tempRoot, repoSlug.trim(), safeBranch, pathFilters, deployKeyPem);
+            }
+            String commitSha = resolveCommitSha(repoSlug.trim(), safeBranch);
             Path zipPath = tempRoot.resolve("repo.zip");
-            download(url, zipPath);
+            String url = "https://codeload.github.com/" + repoSlug.trim() + "/zip/" + commitSha;
+            downloadBounded(url, zipPath);
             Path extracted = tempRoot.resolve("extracted");
             Files.createDirectories(extracted);
-            unzip(zipPath, extracted);
+            unzipBounded(zipPath, extracted);
             Path contentRoot = firstChildDir(extracted);
             if (contentRoot == null) {
                 contentRoot = extracted;
             }
-            String commitSha = guessCommitSha(contentRoot.getFileName().toString());
             ScanResult scanned = scanDirectory(contentRoot, pathFilters);
             return new ScanResult(commitSha, scanned.workflows(), scanned.calls());
         }
@@ -122,7 +152,7 @@ public class RepoWorkflowScanner {
         catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                "Interrupted while downloading repository zipball");
+                "Interrupted while downloading repository");
         }
         catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
@@ -132,6 +162,60 @@ public class RepoWorkflowScanner {
             if (tempRoot != null) {
                 deleteRecursivelyQuietly(tempRoot);
             }
+        }
+    }
+
+    private ScanResult scanViaDeployKey(Path tempRoot, String repoSlug, String branch,
+                                        List<String> pathFilters, String deployKeyPem)
+        throws IOException, InterruptedException {
+        Path keyFile = tempRoot.resolve("deploy_key");
+        Files.writeString(keyFile, deployKeyPem.endsWith("\n") ? deployKeyPem : deployKeyPem + "\n");
+        try {
+            Files.setPosixFilePermissions(keyFile, EnumSet.of(
+                PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+        }
+        catch (UnsupportedOperationException ignored) {
+            // non-POSIX temp FS (e.g. some CI runners)
+        }
+        Path cloneDir = tempRoot.resolve("clone");
+        String sshCmd = "ssh -i " + keyFile.toAbsolutePath()
+            + " -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
+        String sshUrl = "git@github.com:" + repoSlug + ".git";
+        runGit(tempRoot, sshCmd, "clone", "--depth", "1", "--branch", branch, sshUrl,
+            cloneDir.toAbsolutePath().toString());
+        String commitSha = runGitCapture(cloneDir, sshCmd, "rev-parse", "HEAD").trim();
+        ScanResult scanned = scanDirectory(cloneDir, pathFilters);
+        return new ScanResult(commitSha, scanned.workflows(), scanned.calls());
+    }
+
+    private String resolveCommitSha(String repoSlug, String branch)
+        throws IOException, InterruptedException {
+        String url = "https://api.github.com/repos/" + repoSlug + "/commits/"
+            + java.net.URLEncoder.encode(branch, StandardCharsets.UTF_8).replace("+", "%20");
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+            .timeout(Duration.ofSeconds(30))
+            .header("User-Agent", "logos-webservice-repo-scanner")
+            .header("Accept", "application/vnd.github+json")
+            .GET()
+            .build();
+        HttpResponse<InputStream> response = httpClient.send(
+            request, HttpResponse.BodyHandlers.ofInputStream());
+        try (InputStream body = response.body()) {
+            if (response.statusCode() == 404) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "Repository or branch not found");
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "GitHub commit lookup failed with HTTP " + response.statusCode());
+            }
+            JsonNode root = objectMapper.readTree(body);
+            String sha = root.path("sha").asText(null);
+            if (sha == null || sha.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "GitHub commit lookup returned no sha");
+            }
+            return sha;
         }
     }
 
@@ -198,30 +282,50 @@ public class RepoWorkflowScanner {
         return new ScanResult("unknown", workflows, calls);
     }
 
-    private void download(String url, Path dest) throws IOException, InterruptedException {
+    private void downloadBounded(String url, Path dest) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
             .timeout(Duration.ofMinutes(2))
             .header("User-Agent", "logos-webservice-repo-scanner")
             .GET()
             .build();
-        HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        if (response.statusCode() == 404) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                "Repository or branch not found (public zipball 404)");
-        }
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                "GitHub zipball download failed with HTTP " + response.statusCode());
-        }
+        HttpResponse<InputStream> response = httpClient.send(
+            request, HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream in = response.body()) {
-            Files.copy(in, dest);
+            if (response.statusCode() == 404) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "Repository or commit not found (zipball 404)");
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "GitHub zipball download failed with HTTP " + response.statusCode());
+            }
+            long copied = 0;
+            byte[] buf = new byte[64 * 1024];
+            try (OutputStream out = Files.newOutputStream(dest)) {
+                int n;
+                while ((n = in.read(buf)) >= 0) {
+                    copied += n;
+                    if (copied > MAX_DOWNLOAD_BYTES) {
+                        throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                            "Repository archive exceeds " + MAX_DOWNLOAD_BYTES + " bytes");
+                    }
+                    out.write(buf, 0, n);
+                }
+            }
         }
     }
 
-    private static void unzip(Path zipPath, Path destDir) throws IOException {
+    static void unzipBounded(Path zipPath, Path destDir) throws IOException {
+        long extracted = 0;
+        int entries = 0;
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipPath))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
+                entries++;
+                if (entries > MAX_ZIP_ENTRIES) {
+                    throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                        "Repository archive has too many entries");
+                }
                 Path out = destDir.resolve(entry.getName()).normalize();
                 if (!out.startsWith(destDir)) {
                     throw new IOException("Zip entry escapes destination: " + entry.getName());
@@ -231,7 +335,31 @@ public class RepoWorkflowScanner {
                 }
                 else {
                     Files.createDirectories(out.getParent());
-                    Files.copy(zis, out);
+                    long size = entry.getSize();
+                    if (size > 0) {
+                        extracted += size;
+                        if (extracted > MAX_EXTRACTED_BYTES) {
+                            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                                "Extracted repository exceeds size limit");
+                        }
+                    }
+                    try (OutputStream os = Files.newOutputStream(out)) {
+                        byte[] buf = new byte[64 * 1024];
+                        int n;
+                        long written = 0;
+                        while ((n = zis.read(buf)) >= 0) {
+                            written += n;
+                            extracted += n;
+                            if (extracted > MAX_EXTRACTED_BYTES) {
+                                throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                                    "Extracted repository exceeds size limit");
+                            }
+                            os.write(buf, 0, n);
+                        }
+                        if (size < 0) {
+                            // already counted in extracted via written
+                        }
+                    }
                 }
             }
         }
@@ -243,19 +371,33 @@ public class RepoWorkflowScanner {
         }
     }
 
-    static String guessCommitSha(String rootFolderName) {
-        if (rootFolderName == null || rootFolderName.isBlank()) {
-            return "unknown";
+    private static void runGit(Path cwd, String sshCmd, String... args)
+        throws IOException, InterruptedException {
+        runGitCapture(cwd, sshCmd, args);
+    }
+
+    private static String runGitCapture(Path cwd, String sshCmd, String... args)
+        throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        cmd.addAll(List.of(args));
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.directory(cwd.toFile());
+        pb.redirectErrorStream(true);
+        Map<String, String> env = pb.environment();
+        env.put("GIT_SSH_COMMAND", sshCmd);
+        env.put("GIT_TERMINAL_PROMPT", "0");
+        Process p = pb.start();
+        String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        if (!p.waitFor(3, TimeUnit.MINUTES)) {
+            p.destroyForcibly();
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "git timed out");
         }
-        int dash = rootFolderName.lastIndexOf('-');
-        if (dash < 0 || dash == rootFolderName.length() - 1) {
-            return "unknown";
+        if (p.exitValue() != 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "git failed: " + output.strip().lines().findFirst().orElse("exit " + p.exitValue()));
         }
-        String suffix = rootFolderName.substring(dash + 1).toLowerCase(Locale.ROOT);
-        if (COMMIT_SHA.matcher(suffix).matches()) {
-            return suffix;
-        }
-        return "unknown";
+        return output;
     }
 
     private static List<Path> listTextFiles(Path root, List<String> pathFilters) throws IOException {

@@ -21,7 +21,7 @@ from sqlalchemy import text
 
 from . import controls, db, model_policy
 from .config import settings
-from .schemas import ACTIVE_STATUSES
+from .schemas import ACTIVE_STATUSES, SessionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,7 @@ class AnalysisPoller:
     async def poll_once(self) -> list[int]:
         """Queue analysis for links that still need it. Returns session ids."""
         now = datetime.now(timezone.utc)
+        await self._reconcile_stale_analyses()
         control = await controls.current()
         blocked = control.admission_block()
         if blocked:
@@ -146,6 +147,51 @@ class AnalysisPoller:
             except Exception as exc:
                 logger.info("scheduler nudge after analysis queue failed: %s", exc)
         return queued
+
+    async def _reconcile_stale_analyses(self) -> None:
+        """Mark queued/running analyses failed when their session is terminal."""
+        terminal = [
+            SessionStatus.FAILED.value,
+            SessionStatus.CANCELLED.value,
+            SessionStatus.SUCCEEDED.value,
+        ]
+        async with db.sessionmaker()() as conn:
+            await conn.execute(
+                text("""
+                    UPDATE ai_workflow_analyses a
+                       SET status = 'failed',
+                           error = COALESCE(a.error, 'agent session ended without ingest'),
+                           finished_at = COALESCE(a.finished_at, :now)
+                      FROM agent_sessions s
+                     WHERE a.agent_session_id = s.id
+                       AND a.status IN ('queued', 'running')
+                       AND s.status = ANY(:terminal)
+                       AND NOT EXISTS (
+                             SELECT 1 FROM ai_workflow_analyses ok
+                              WHERE ok.agent_session_id = s.id
+                                AND ok.status = 'succeeded'
+                           )
+                    """),
+                {"now": datetime.now(timezone.utc), "terminal": terminal},
+            )
+            # Succeeded sessions that never produced a succeeded analysis row
+            # (ingest skipped / failed) are covered above. Also clear orphaned
+            # queued rows whose session row is gone.
+            await conn.execute(
+                text("""
+                    UPDATE ai_workflow_analyses a
+                       SET status = 'failed',
+                           error = COALESCE(a.error, 'agent session missing'),
+                           finished_at = COALESCE(a.finished_at, :now)
+                     WHERE a.status IN ('queued', 'running')
+                       AND a.agent_session_id IS NOT NULL
+                       AND NOT EXISTS (
+                             SELECT 1 FROM agent_sessions s WHERE s.id = a.agent_session_id
+                           )
+                    """),
+                {"now": datetime.now(timezone.utc)},
+            )
+            await conn.commit()
 
     async def _links_needing_analysis(self) -> list[dict[str, Any]]:
         """Team repos with no succeeded analysis, and nothing already in flight.
@@ -245,11 +291,8 @@ class AnalysisPoller:
 
     async def _ensure_workspace(self, team_id: int, link_id: int, branch: str) -> int | None:
         name = f"analysis-team-{team_id}-repo-{link_id}"
-        workspaces = await db.list_workspaces()
-        for workspace in workspaces:
-            if str(workspace.get("name") or "") == name:
-                return int(workspace["id"])
         try:
+            # Upsert always so a reused / revived workspace picks up branch edits.
             created = await db.create_workspace(
                 name=name,
                 base_branch=branch,
@@ -257,9 +300,29 @@ class AnalysisPoller:
                 ephemeral=True,
             )
             return int(created["id"])
-        except ValueError as exc:
-            logger.info("analysis workspace %s unavailable: %s", name, exc)
-            return None
+        except ValueError:
+            # Live workspace of the same name: update base_branch in place.
+            async with db.sessionmaker()() as conn:
+                row = (
+                    (
+                        await conn.execute(
+                            text("""
+                            UPDATE agent_workspaces
+                               SET base_branch = :branch
+                             WHERE name = :name AND archived_at IS NULL
+                         RETURNING id
+                            """),
+                            {"name": name, "branch": branch},
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                await conn.commit()
+            if row is None:
+                logger.info("analysis workspace %s unavailable", name)
+                return None
+            return int(row["id"])
 
     async def _insert_queued_analysis(self, team_id: int, link_id: int, session_id: int) -> None:
         async with db.sessionmaker()() as conn:

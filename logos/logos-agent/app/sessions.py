@@ -1509,6 +1509,31 @@ class SessionManager:
         }
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token
+
+        # Per-link deploy keys stay on the host (artifact dir) for the
+        # checkout helper — never injected into the agent sandbox.
+        team_repo_id = session.get("team_repository_id")
+        if team_repo_id is not None:
+            from . import repo_credentials
+
+            pem = await repo_credentials.load_deploy_key_pem(int(team_repo_id))
+            if pem:
+                key_host = Path(artifact_host_path) / "deploy_key"
+                repo_credentials.write_deploy_key_file(pem, key_host)
+                # Helper mounts artifact_host_path at /artifacts.
+                key_in_helper = "/artifacts/deploy_key"
+                slug = session.get("repo_slug") or settings.repo_slug
+                env["LOGOS_REPO_URL"] = f"git@github.com:{slug}.git"
+                env["GIT_SSH_COMMAND"] = (
+                    f"ssh -i {key_in_helper} -o IdentitiesOnly=yes "
+                    f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+                )
+                logger.info(
+                    "session %s checkout uses deploy key for team_repository %s",
+                    session["id"],
+                    team_repo_id,
+                )
+
         code = await self._run_helper(
             phase="prepare",
             session_id=session["id"],

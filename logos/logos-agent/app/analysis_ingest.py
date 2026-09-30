@@ -32,27 +32,31 @@ def artifact_analysis_path(session_id: int) -> Path:
 
 
 async def ingest_session(session: dict[str, Any]) -> None:
-    """Load analysis.json for ``session`` and upsert results, or no-op."""
+    """Load analysis.json for ``session`` and upsert results, or mark failed."""
     session_id = int(session["id"])
     path = artifact_analysis_path(session_id)
     if not path.is_file():
         logger.info(
-            "analysis session %s left no %s; skipping ingest",
+            "analysis session %s left no %s; marking analysis failed",
             session_id,
             ANALYSIS_FILE,
         )
+        await mark_analysis_failed(session_id, f"missing {ANALYSIS_FILE}")
         return
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("could not read analysis.json for session %s: %s", session_id, exc)
+        await mark_analysis_failed(session_id, f"invalid analysis.json: {exc}")
         return
     if not isinstance(payload, dict):
         logger.warning("analysis.json for session %s is not an object; skipping", session_id)
+        await mark_analysis_failed(session_id, "analysis.json is not an object")
         return
     team_repository_id = session.get("team_repository_id")
     if team_repository_id is None:
         logger.warning("analysis session %s has no team_repository_id; skipping ingest", session_id)
+        await mark_analysis_failed(session_id, "session has no team_repository_id")
         return
     try:
         await upsert_analysis(
@@ -62,6 +66,28 @@ async def ingest_session(session: dict[str, Any]) -> None:
         )
     except Exception as exc:
         logger.warning("analysis ingest for session %s failed: %s", session_id, exc)
+        await mark_analysis_failed(session_id, str(exc))
+
+
+async def mark_analysis_failed(session_id: int, error: str) -> None:
+    """Persist a failed terminal state for the analysis linked to ``session_id``."""
+    async with db.sessionmaker()() as conn:
+        await conn.execute(
+            text("""
+                UPDATE ai_workflow_analyses
+                   SET status = 'failed',
+                       error = :error,
+                       finished_at = :now
+                 WHERE agent_session_id = :session_id
+                   AND status IN ('queued', 'running')
+                """),
+            {
+                "session_id": session_id,
+                "error": (error or "analysis failed")[:2000],
+                "now": datetime.now(timezone.utc),
+            },
+        )
+        await conn.commit()
 
 
 async def upsert_analysis(
@@ -185,11 +211,9 @@ async def upsert_analysis(
                 sla = "ux-high-prio"
             workflow_name = str(raw.get("workflow") or raw.get("workflow_name") or "").strip()
             workflow_id = workflow_ids.get(workflow_name) if workflow_name else None
-            if workflow_id is None and raw.get("workflow_id") is not None:
-                try:
-                    workflow_id = int(raw["workflow_id"])
-                except (TypeError, ValueError):
-                    workflow_id = None
+            # Never trust a numeric workflow_id from the artifact — it could
+            # point at another analysis/team. Resolve only via names created
+            # for this ingest.
             flags = raw.get("traffic_flags")
             flags_json = json.dumps(flags if isinstance(flags, dict) else {})
             confidence = raw.get("confidence")

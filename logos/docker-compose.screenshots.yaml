@@ -118,6 +118,7 @@ services:
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-doks-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "logos-local-internal-secret"
+      LOGOS_REPO_CREDENTIALS_DEV_FALLBACK: "true"
       LOGOS_RATE_LIMITING_ENABLED: "true"
       LOGOS_RATE_LIMIT_PUBLIC_RPM: "60"
       LOGOS_RATE_LIMIT_AUTH_FAILURE_RPM: "20"

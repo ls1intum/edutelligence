@@ -87,6 +87,7 @@
           [teamId]="teamId()"
           [canEdit]="canEdit()"
           [apiKeys]="apiKeys()"
+          (keysChanged)="refresh()"
         />
       }
 

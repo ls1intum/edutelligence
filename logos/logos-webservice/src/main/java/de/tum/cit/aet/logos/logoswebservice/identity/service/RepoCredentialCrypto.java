@@ -21,19 +21,21 @@ import org.springframework.stereotype.Component;
  * AES-GCM helpers for deploy-key PEMs stored in {@code team_repository_credentials}.
  *
  * <p>Key material comes from {@code LOGOS_REPO_CREDENTIALS_KEY} (URL-safe or
- * standard Base64 of exactly 32 bytes). When unset, a documented development
- * default string is hashed with SHA-256 and a one-time warning is logged.
+ * standard Base64 of exactly 32 bytes). A development fallback is only used when
+ * {@code LOGOS_REPO_CREDENTIALS_DEV_FALLBACK=true} is set explicitly — never by
+ * default, including in production.
  */
 @Component
 public class RepoCredentialCrypto {
 
     private static final Logger log = LoggerFactory.getLogger(RepoCredentialCrypto.class);
 
-    /** Documented development fallback — never use in production. */
+    /** Documented development fallback — only with DEV_FALLBACK=true. */
     static final String DEV_DEFAULT_PASSPHRASE =
         "logos-dev-repo-credentials-key-do-not-use-in-prod";
 
     private static final String ENV_KEY = "LOGOS_REPO_CREDENTIALS_KEY";
+    private static final String ENV_DEV_FALLBACK = "LOGOS_REPO_CREDENTIALS_DEV_FALLBACK";
     private static final int KEY_BYTES = 32;
     private static final int IV_BYTES = 12;
     private static final int TAG_BITS = 128;
@@ -108,7 +110,7 @@ public class RepoCredentialCrypto {
         }
     }
 
-    private static SecretKey resolveKey() {
+    static SecretKey resolveKey() {
         String env = System.getenv(ENV_KEY);
         if (env != null && !env.isBlank()) {
             byte[] raw;
@@ -124,11 +126,18 @@ public class RepoCredentialCrypto {
             }
             return new SecretKeySpec(raw, "AES");
         }
+        String allowDev = System.getenv(ENV_DEV_FALLBACK);
+        if (allowDev == null || !allowDev.equalsIgnoreCase("true")) {
+            throw new IllegalStateException(
+                ENV_KEY + " must be set (Base64 of 32 random bytes) before storing "
+                    + "repository credentials. For local development only, set "
+                    + ENV_DEV_FALLBACK + "=true to use the documented fallback key.");
+        }
         if (DEV_WARNED.compareAndSet(false, true)) {
             log.warn(
-                "{} is unset; deriving AES key from the documented development default. "
-                    + "Set {} (Base64 of 32 random bytes) before storing real deploy keys.",
-                ENV_KEY, ENV_KEY);
+                "{} is unset and {}=true; deriving AES key from the documented development "
+                    + "default. Do not use this for real deploy keys.",
+                ENV_KEY, ENV_DEV_FALLBACK);
         }
         try {
             byte[] raw = MessageDigest.getInstance("SHA-256")

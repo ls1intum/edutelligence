@@ -62,12 +62,17 @@ def _patch_artifact_root(monkeypatch, tmp_path: Path) -> None:
     )
 
 
-async def test_ingest_session_noops_when_file_missing(tmp_path, monkeypatch, caplog):
+async def test_ingest_session_marks_failed_when_file_missing(tmp_path, monkeypatch, caplog):
     _patch_artifact_root(monkeypatch, tmp_path)
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
     session = {"id": 3, "team_repository_id": 11}
     with caplog.at_level("INFO"):
         await analysis_ingest.ingest_session(session)
-    assert "skipping ingest" in caplog.text or "left no" in caplog.text
+    assert "left no" in caplog.text or "missing" in caplog.text
+    assert any(
+        "UPDATE ai_workflow_analyses" in sql and params.get("session_id") == 3 for sql, params in conn.statements
+    )
 
 
 async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
@@ -127,9 +132,12 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
 
 async def test_ingest_rejects_non_object_json(tmp_path, monkeypatch, caplog):
     _patch_artifact_root(monkeypatch, tmp_path)
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
     path = Path(tmp_path) / "8"
     path.mkdir()
     (path / "analysis.json").write_text("[1,2,3]", encoding="utf-8")
     with caplog.at_level("WARNING"):
         await analysis_ingest.ingest_session({"id": 8, "team_repository_id": 1})
     assert "not an object" in caplog.text
+    assert any("UPDATE ai_workflow_analyses" in sql for sql, _ in conn.statements)

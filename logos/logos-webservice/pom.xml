@@ -158,6 +158,9 @@
                     <systemPropertyVariables>
                         <api.version>1.44</api.version>
                     </systemPropertyVariables>
+                    <environmentVariables>
+                        <LOGOS_REPO_CREDENTIALS_DEV_FALLBACK>true</LOGOS_REPO_CREDENTIALS_DEV_FALLBACK>
+                    </environmentVariables>
                 </configuration>
             </plugin>
         </plugins>
