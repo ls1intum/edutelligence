@@ -3214,7 +3214,10 @@ class SessionManager:
                 # the record has done its work either way.
                 self._launches.pop(session_id, None)
         task = self._supervisors.pop(session_id, None)
-        if task:
+        # A supervisor that detected cancel_requested calls cancel() itself;
+        # cancelling that same task would raise CancelledError before
+        # remove_container below, leaving the stopped container on the volume.
+        if task is not None and task is not asyncio.current_task():
             task.cancel()
         if container_id:
             try:

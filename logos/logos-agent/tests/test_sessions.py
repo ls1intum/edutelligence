@@ -6386,3 +6386,52 @@ async def test_honor_cancel_requests_invokes_runner_cancel(monkeypatch):
 
     await sessions.manager._honor_cancel_requests()
     assert cancelled == [42]
+
+
+@pytest.mark.asyncio
+async def test_cancel_from_supervisor_task_still_removes_container(monkeypatch):
+    """Supervisor-initiated cancel must not CancelledError itself before remove."""
+    import asyncio
+
+    from app import sessions
+    from app.schemas import SessionStatus
+
+    removed: list[str] = []
+    session = {
+        "id": 9,
+        "status": SessionStatus.RUNNING.value,
+        "container_id": "ctr-9",
+        "error": "cancel_requested: repository link removed or retargeted",
+    }
+
+    async def get_session(sid):
+        return dict(session) if sid == 9 else None
+
+    async def transition(sid, target, **fields):
+        session["status"] = target.value
+        return True
+
+    async def noop(*_a, **_k):
+        return None
+
+    async def remove(cid):
+        removed.append(cid)
+
+    monkeypatch.setattr(sessions.db, "get_session", get_session)
+    monkeypatch.setattr(sessions.db, "transition_session", transition)
+    monkeypatch.setattr(sessions.db, "add_event", noop)
+    monkeypatch.setattr(sessions.docker_engine, "unpause_container", noop)
+    monkeypatch.setattr(sessions.docker_engine, "stop_container", noop)
+    monkeypatch.setattr(sessions.docker_engine, "remove_container", remove)
+
+    outcome: dict[str, object] = {}
+
+    async def as_supervisor():
+        sessions.manager._supervisors[9] = asyncio.current_task()
+        outcome["ok"] = await sessions.manager.cancel(9)
+        outcome["removed"] = list(removed)
+
+    await asyncio.create_task(as_supervisor())
+    assert outcome["ok"] is True
+    assert outcome["removed"] == ["ctr-9"]
+    assert 9 not in sessions.manager._supervisors
