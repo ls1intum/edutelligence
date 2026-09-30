@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Application source repositories linked to a team.
+
+         Logos needs to know which codebases belong to an application so a
+         later analysis pass can find LLM call sites and recommend SLAs. The
+         link is team-scoped: one team owns one application (or several
+         related ones), and its repositories describe that codebase. Per-key
+         links and private-repo credentials stay out of this table — this
+         change only stores public URLs an owner can point at.
+
+         repo_slug is the canonical owner/name form derived from repo_url, so
+         the same repository cannot be linked twice under differently shaped
+         URLs. paths is an optional list of subtrees that contain LLM calls;
+         NULL / empty means the whole tree. -->
+    <changeSet id="045-team-repositories" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="team_repositories"/></not>
+        </preConditions>
+        <createTable tableName="team_repositories">
+            <column name="id" type="INTEGER" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_team_repositories"/>
+            </column>
+            <column name="team_id" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+            <column name="repo_url" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="repo_slug" type="TEXT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="branch" type="TEXT" defaultValue="main">
+                <constraints nullable="false"/>
+            </column>
+            <column name="paths" type="JSONB"/>
+            <column name="created_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="team_repositories"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="042-team-repositories-indexes" author="wasnertobias">
+        <sql><![CDATA[
+            ALTER TABLE team_repositories
+                ADD CONSTRAINT fk_team_repositories_team
+                FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE;
+
+            -- One link per repository per team; the slug is what later
+            -- analysis sessions resolve, so two rows for the same slug would
+            -- leave that resolution ambiguous.
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_team_repositories_team_slug
+                ON team_repositories(team_id, repo_slug);
+
+            CREATE INDEX IF NOT EXISTS idx_team_repositories_team
+                ON team_repositories(team_id);
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP INDEX IF EXISTS idx_team_repositories_team;
+                DROP INDEX IF EXISTS uq_team_repositories_team_slug;
+                ALTER TABLE team_repositories
+                    DROP CONSTRAINT IF EXISTS fk_team_repositories_team;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

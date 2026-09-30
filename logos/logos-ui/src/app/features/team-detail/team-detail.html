@@ -75,6 +75,13 @@
         />
       }
 
+      @if (activeTab() === 'repositories') {
+        <app-repositories-tab
+          [teamId]="teamId()"
+          [canEdit]="canEdit()"
+        />
+      }
+
       @if (activeTab() === 'providers') {
         <app-providers-tab [teamId]="teamId()" [canEdit]="canEdit()" />
       }

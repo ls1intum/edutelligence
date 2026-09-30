@@ -131,6 +131,24 @@ export interface TeamLimitsPayload {
   default_local_tpm_limit?: number | null;
 }
 
+/** GitHub repository linked to a team for later AI-workflow / SLA analysis. */
+export interface TeamRepository {
+  id: number;
+  team_id: number;
+  repo_url: string;
+  repo_slug: string;
+  branch: string;
+  paths: string[] | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TeamRepositoryPayload {
+  repo_url: string;
+  branch?: string;
+  paths?: string[] | null;
+}
+
 export interface MyTeam {
   id: number;
   name: string;

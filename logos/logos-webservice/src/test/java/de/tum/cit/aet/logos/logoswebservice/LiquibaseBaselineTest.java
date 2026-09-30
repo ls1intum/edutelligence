@@ -49,6 +49,19 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration045_teamRepositoriesExist() {
+        assertThat(tableExists("team_repositories")).isTrue();
+        assertThat(columnExists("team_repositories", "repo_url")).isTrue();
+        assertThat(columnExists("team_repositories", "repo_slug")).isTrue();
+        assertThat(columnExists("team_repositories", "branch")).isTrue();
+        assertThat(columnExists("team_repositories", "paths")).isTrue();
+        Integer uniqueIndex = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "uq_team_repositories_team_slug");
+        assertThat(uniqueIndex).isEqualTo(1);
+    }
+
+    @Test
     void migration001_keycloakColumnsExist() {
         assertThat(columnExists("users", "keycloak_id")).isTrue();
         assertThat(columnExists("users", "last_synced_at")).isTrue();

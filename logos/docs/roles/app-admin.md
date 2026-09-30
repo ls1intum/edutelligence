@@ -61,6 +61,13 @@ and set per-key limits / model permissions.
 
 ![Team detail — Application Keys](/img/roles/team-detail-application-keys.png)
 
+### Repositories
+
+Public GitHub repositories this team's applications live in. Owners link a
+repository URL, branch, and optional path filters so Logos can later map AI
+workflows and recommend SLAs. Linking does not start analysis and stores no
+credentials.
+
 ### Models {#team-models}
 
 Which catalogue models this team may use.

@@ -1,0 +1,163 @@
+<div class="repositories-tab">
+  <div class="section-header">
+    <div class="section-title">
+      Repositories
+      <span class="section-count">{{ repositories().length }}</span>
+    </div>
+    @if (canEdit) {
+      <button type="button" class="btn-primary" (click)="openCreate()">
+        <i class="pi pi-plus" aria-hidden="true"></i> Link repository
+      </button>
+    }
+  </div>
+
+  <p class="section-hint">
+    Public GitHub repositories this team's applications live in. Logos will use
+    them later to map AI workflows and recommend SLAs — linking does not start
+    analysis yet, and no credentials are stored.
+  </p>
+
+  @if (loadError()) {
+    <app-error-message variant="banner" [message]="loadError()" />
+  }
+  @if (actionError()) {
+    <app-error-message variant="banner" [message]="actionError()" />
+  }
+
+  @if (loading()) {
+    <div class="loading-state">
+      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      <span>Loading repositories…</span>
+    </div>
+  } @else {
+    <app-data-table
+      [columns]="['Repository', 'Branch', 'Paths', '']"
+      [gridCols]="gridCols"
+      [empty]="repositories().length === 0"
+      emptyMessage="No repositories linked yet."
+    >
+      @for (repo of repositories(); track repo.id) {
+        <div class="table-row" role="row">
+          <div class="cell-repo" role="cell" data-label="Repository">
+            <i class="pi pi-github" aria-hidden="true"></i>
+            <div class="repo-text">
+              <a class="repo-slug" [href]="repo.repo_url" target="_blank" rel="noopener noreferrer">
+                {{ repo.repo_slug }}
+              </a>
+              <span class="repo-url">{{ repo.repo_url }}</span>
+            </div>
+          </div>
+          <div class="cell-branch" role="cell" data-label="Branch">
+            <span class="branch-badge">{{ repo.branch }}</span>
+          </div>
+          <div class="cell-paths" role="cell" data-label="Paths">
+            {{ pathsLabel(repo) }}
+          </div>
+          <div class="cell-actions" role="cell" data-label="">
+            @if (canEdit) {
+              <button
+                type="button"
+                class="btn-icon"
+                title="Edit repository link"
+                aria-label="Edit repository link"
+                (click)="openEdit(repo)"
+              >
+                <i class="pi pi-pencil" aria-hidden="true"></i>
+              </button>
+              <button
+                type="button"
+                class="btn-icon btn-icon--danger"
+                title="Remove repository link"
+                aria-label="Remove repository link"
+                (click)="askDelete(repo)"
+              >
+                <i class="pi pi-trash" aria-hidden="true"></i>
+              </button>
+            }
+          </div>
+        </div>
+      }
+    </app-data-table>
+  }
+</div>
+
+<app-modal-form
+  [visible]="formOpen()"
+  (visibleChange)="$event || closeForm()"
+  [title]="formEditing() ? 'Edit repository link' : 'Link repository'"
+>
+  <div class="dialog-body">
+    <div class="form-field">
+      <label class="field-label" for="repo-url">
+        Repository URL <span class="required">*</span>
+      </label>
+      <input
+        id="repo-url"
+        class="field-input"
+        type="url"
+        autocomplete="off"
+        placeholder="https://github.com/owner/repo"
+        [value]="formUrl()"
+        (input)="formUrl.set($any($event.target).value)"
+        [disabled]="formLoading()"
+      />
+      <p class="field-hint">GitHub HTTPS or SSH clone URL. Private-repo access comes later.</p>
+    </div>
+    <div class="form-field">
+      <label class="field-label" for="repo-branch">Branch</label>
+      <input
+        id="repo-branch"
+        class="field-input"
+        type="text"
+        autocomplete="off"
+        placeholder="main"
+        [value]="formBranch()"
+        (input)="formBranch.set($any($event.target).value)"
+        [disabled]="formLoading()"
+      />
+    </div>
+    <div class="form-field">
+      <label class="field-label" for="repo-paths">Paths (optional)</label>
+      <input
+        id="repo-paths"
+        class="field-input"
+        type="text"
+        autocomplete="off"
+        placeholder="e.g. src/ai, services/llm"
+        [value]="formPaths()"
+        (input)="formPaths.set($any($event.target).value)"
+        [disabled]="formLoading()"
+      />
+      <p class="field-hint">Comma-separated subtrees that contain LLM calls. Leave blank for the whole repository.</p>
+    </div>
+    @if (formError()) {
+      <app-error-message [message]="formError()" />
+    }
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-secondary" type="button" [disabled]="formLoading()" (click)="closeForm()">Cancel</button>
+    <button
+      class="btn-primary"
+      type="button"
+      [disabled]="!formUrl().trim() || formLoading()"
+      (click)="submitForm()"
+    >
+      @if (formLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+      {{ formEditing() ? 'Save' : 'Link' }}
+    </button>
+  </div>
+</app-modal-form>
+
+<app-modal-confirm
+  [visible]="deleteOpen()"
+  (visibleChange)="$event || deleteOpen.set(false)"
+  [title]="'Unlink \'' + (deleteTarget()?.repo_slug ?? '') + '\'?'"
+  message="This only removes the link in Logos. The GitHub repository itself is unchanged."
+  confirmLabel="Unlink"
+  [loading]="deleteLoading()"
+  (confirmed)="confirmDelete()"
+>
+  @if (deleteError()) {
+    <app-error-message modal-error message="Failed to unlink repository, please try again." />
+  }
+</app-modal-confirm>

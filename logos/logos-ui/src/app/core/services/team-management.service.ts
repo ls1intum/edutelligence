@@ -4,7 +4,8 @@ import { firstValueFrom } from 'rxjs';
 import {
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
-  ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam,
+  ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
+  TeamRepositoryPayload,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -53,6 +54,32 @@ export class TeamManagementService {
 
   getTeamApiKeys(teamId: number): Promise<TeamApiKey[]> {
     return firstValueFrom(this.http.get<TeamApiKey[]>(`/api/admin/teams/${teamId}/api-keys`));
+  }
+
+  getTeamRepositories(teamId: number): Promise<TeamRepository[]> {
+    return firstValueFrom(this.http.get<TeamRepository[]>(`/api/admin/teams/${teamId}/repositories`));
+  }
+
+  createTeamRepository(teamId: number, payload: TeamRepositoryPayload): Promise<TeamRepository> {
+    return firstValueFrom(
+      this.http.post<TeamRepository>(`/api/admin/teams/${teamId}/repositories`, payload),
+    );
+  }
+
+  updateTeamRepository(
+    teamId: number,
+    linkId: number,
+    payload: Partial<TeamRepositoryPayload>,
+  ): Promise<TeamRepository> {
+    return firstValueFrom(
+      this.http.patch<TeamRepository>(`/api/admin/teams/${teamId}/repositories/${linkId}`, payload),
+    );
+  }
+
+  deleteTeamRepository(teamId: number, linkId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/repositories/${linkId}`),
+    );
   }
 
   getTeamModelPermissions(teamId: number): Promise<number[]> {
