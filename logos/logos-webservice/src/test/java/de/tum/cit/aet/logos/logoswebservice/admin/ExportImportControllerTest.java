@@ -89,13 +89,16 @@ class ExportImportControllerTest {
             VALUES ('export-import-preserve-ws', 'main', 'export-import-preserve-vol', 'test', FALSE)
             RETURNING id
             """, Integer.class);
+        Integer repoLinkId = jdbc.queryForObject(
+            "SELECT id FROM team_repositories WHERE team_id = 2001 AND repo_slug = 'ls1intum/edutelligence'",
+            Integer.class);
         Integer sessionId = jdbc.queryForObject("""
             INSERT INTO agent_sessions (
                 workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
-                screenshot_paths, no_push
-            ) VALUES (?, 'preserve me across import', 'succeeded', 'test', FALSE, FALSE, '[]'::jsonb, TRUE)
+                screenshot_paths, no_push, team_repository_id, trigger_kind
+            ) VALUES (?, 'preserve me across import', 'queued', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis')
             RETURNING id
-            """, Integer.class, workspaceId);
+            """, Integer.class, workspaceId, repoLinkId);
         jdbc.update("""
             INSERT INTO agent_events (session_id, kind, payload)
             VALUES (?, 'log', '{"message":"still here"}'::jsonb)
@@ -142,5 +145,11 @@ class ExportImportControllerTest {
         Integer survivingEvents = jdbc.queryForObject(
             "SELECT count(*) FROM agent_events WHERE session_id = ?", Integer.class, sessionId);
         org.assertj.core.api.Assertions.assertThat(survivingEvents).isEqualTo(1);
+        Integer restoredLink = jdbc.queryForObject(
+            "SELECT team_repository_id FROM agent_sessions WHERE id = ?", Integer.class, sessionId);
+        org.assertj.core.api.Assertions.assertThat(restoredLink).isNotNull();
+        String restoredSlug = jdbc.queryForObject(
+            "SELECT repo_slug FROM team_repositories WHERE id = ?", String.class, restoredLink);
+        org.assertj.core.api.Assertions.assertThat(restoredSlug).isEqualTo("ls1intum/edutelligence");
     }
 }

@@ -107,10 +107,13 @@ public class ExportImportService {
                 throw new IllegalArgumentException("Missing table in json: " + table);
             }
         }
-        // agent_sessions.team_repository_id → team_repositories makes
-        // TRUNCATE … CASCADE wipe every agent session/event — including
-        // development sessions with a null repository id. Detach first;
-        // agent tables are not exported and must survive import.
+        // Snapshot (session_id → team_id + repo_slug) so linked analysis
+        // sessions can be reattached after truncate replaces repository rows.
+        List<Map<String, Object>> sessionLinks = jdbc.queryForList("""
+            SELECT s.id AS session_id, tr.team_id, tr.repo_slug
+              FROM agent_sessions s
+              JOIN team_repositories tr ON tr.id = s.team_repository_id
+            """);
         detachAgentSessionsFromRepositories();
         try {
             for (String table : TABLES) {
@@ -133,6 +136,7 @@ public class ExportImportService {
         } finally {
             restoreAgentSessionsRepositoryFk();
         }
+        restoreAgentSessionRepositoryLinks(sessionLinks);
         resetSequences();
         return Map.of("result", "Import successful");
     }
@@ -158,6 +162,25 @@ public class ExportImportService {
               END IF;
             END $$;
             """);
+    }
+
+    private void restoreAgentSessionRepositoryLinks(List<Map<String, Object>> sessionLinks) {
+        for (Map<String, Object> link : sessionLinks) {
+            Number sessionId = (Number) link.get("session_id");
+            Number teamId = (Number) link.get("team_id");
+            String repoSlug = (String) link.get("repo_slug");
+            if (sessionId == null || teamId == null || repoSlug == null) {
+                continue;
+            }
+            jdbc.update("""
+                UPDATE agent_sessions s
+                   SET team_repository_id = tr.id
+                  FROM team_repositories tr
+                 WHERE s.id = ?
+                   AND tr.team_id = ?
+                   AND tr.repo_slug = ?
+                """, sessionId.intValue(), teamId.intValue(), repoSlug);
+        }
     }
 
     private void resetSequences() {

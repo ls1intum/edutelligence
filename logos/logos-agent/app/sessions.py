@@ -1510,23 +1510,24 @@ class SessionManager:
         if settings.session_github_token:
             env["GITHUB_TOKEN"] = settings.session_github_token
 
-        # Per-link deploy keys stay on the host (artifact dir) for the
-        # checkout helper — never injected into the agent sandbox.
+        # Per-link deploy keys: write via the runner-mounted artifact root
+        # (same volume the helper binds at /artifacts). Never write through
+        # the Docker-daemon host path — that lands in the runner's own FS.
         team_repo_id = session.get("team_repository_id")
+        key_runner_path: Path | None = None
         if team_repo_id is not None:
             from . import repo_credentials
 
             pem = await repo_credentials.load_deploy_key_pem(int(team_repo_id))
             if pem:
-                key_host = Path(artifact_host_path) / "deploy_key"
-                repo_credentials.write_deploy_key_file(pem, key_host)
-                # Helper mounts artifact_host_path at /artifacts.
-                key_in_helper = "/artifacts/deploy_key"
+                key_runner_path = artifact_dir(int(session["id"])) / "deploy_key"
+                repo_credentials.write_deploy_key_file(pem, key_runner_path)
+                _give_to_session_user(key_runner_path)
                 slug = session.get("repo_slug") or settings.repo_slug
                 env["LOGOS_REPO_URL"] = f"git@github.com:{slug}.git"
                 env["GIT_SSH_COMMAND"] = (
-                    f"ssh -i {key_in_helper} -o IdentitiesOnly=yes "
-                    f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+                    "ssh -i /artifacts/deploy_key -o IdentitiesOnly=yes "
+                    "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
                 )
                 logger.info(
                     "session %s checkout uses deploy key for team_repository %s",
@@ -1534,13 +1535,20 @@ class SessionManager:
                     team_repo_id,
                 )
 
-        code = await self._run_helper(
-            phase="prepare",
-            session_id=session["id"],
-            env=env,
-            workspace_volume=workspace["volume_name"],
-            artifact_host_path=artifact_host_path,
-        )
+        try:
+            code = await self._run_helper(
+                phase="prepare",
+                session_id=session["id"],
+                env=env,
+                workspace_volume=workspace["volume_name"],
+                artifact_host_path=artifact_host_path,
+            )
+        finally:
+            if key_runner_path is not None:
+                try:
+                    key_runner_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("could not remove deploy key for session %s: %s", session["id"], exc)
         if code != 0:
             said = self._last_helper_output.pop(session["id"], "")
             raise RuntimeError(f"checkout preparation failed (exit {code}){f': {said}' if said else ''}")

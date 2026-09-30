@@ -181,8 +181,9 @@ public class RepoWorkflowScanner {
         String sshCmd = "ssh -i " + keyFile.toAbsolutePath()
             + " -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
         String sshUrl = "git@github.com:" + repoSlug + ".git";
-        runGit(tempRoot, sshCmd, "clone", "--depth", "1", "--branch", branch, sshUrl,
+        runGitBounded(tempRoot, cloneDir, sshCmd, "clone", "--depth", "1", "--branch", branch, sshUrl,
             cloneDir.toAbsolutePath().toString());
+        enforceDirSizeLimit(cloneDir);
         String commitSha = runGitCapture(cloneDir, sshCmd, "rev-parse", "HEAD").trim();
         ScanResult scanned = scanDirectory(cloneDir, pathFilters);
         return new ScanResult(commitSha, scanned.workflows(), scanned.calls());
@@ -335,29 +336,21 @@ public class RepoWorkflowScanner {
                 }
                 else {
                     Files.createDirectories(out.getParent());
-                    long size = entry.getSize();
-                    if (size > 0) {
-                        extracted += size;
-                        if (extracted > MAX_EXTRACTED_BYTES) {
-                            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
-                                "Extracted repository exceeds size limit");
-                        }
+                    long declared = entry.getSize();
+                    if (declared > 0 && extracted + declared > MAX_EXTRACTED_BYTES) {
+                        throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                            "Extracted repository exceeds size limit");
                     }
                     try (OutputStream os = Files.newOutputStream(out)) {
                         byte[] buf = new byte[64 * 1024];
                         int n;
-                        long written = 0;
                         while ((n = zis.read(buf)) >= 0) {
-                            written += n;
                             extracted += n;
                             if (extracted > MAX_EXTRACTED_BYTES) {
                                 throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
                                     "Extracted repository exceeds size limit");
                             }
                             os.write(buf, 0, n);
-                        }
-                        if (size < 0) {
-                            // already counted in extracted via written
                         }
                     }
                 }
@@ -371,9 +364,108 @@ public class RepoWorkflowScanner {
         }
     }
 
-    private static void runGit(Path cwd, String sshCmd, String... args)
+    /** Clone under a live directory-size watch so private checkouts share the extract budget. */
+    private static void runGitBounded(Path cwd, Path watchDir, String sshCmd, String... args)
         throws IOException, InterruptedException {
-        runGitCapture(cwd, sshCmd, args);
+        List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        cmd.addAll(List.of(args));
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.directory(cwd.toFile());
+        pb.redirectErrorStream(true);
+        Map<String, String> env = pb.environment();
+        env.put("GIT_SSH_COMMAND", sshCmd);
+        env.put("GIT_TERMINAL_PROMPT", "0");
+        Process p = pb.start();
+        java.util.concurrent.atomic.AtomicBoolean overflow =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+        Thread watcher = Thread.ofVirtual().start(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted() && p.isAlive()) {
+                    if (Files.exists(watchDir) && directorySize(watchDir) > MAX_EXTRACTED_BYTES) {
+                        overflow.set(true);
+                        p.destroyForcibly();
+                        return;
+                    }
+                    Thread.sleep(250);
+                }
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            catch (IOException ignored) {
+                // main path surfaces git failures
+            }
+        });
+        StringBuilder output = new StringBuilder();
+        Thread reader = Thread.ofVirtual().start(() -> {
+            try (InputStream in = p.getInputStream()) {
+                byte[] buf = new byte[8 * 1024];
+                int n;
+                long total = 0;
+                while ((n = in.read(buf)) >= 0) {
+                    total += n;
+                    if (total <= 1_000_000) {
+                        output.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                    }
+                }
+            }
+            catch (IOException ignored) {
+                // process ended
+            }
+        });
+        try {
+            if (!p.waitFor(3, TimeUnit.MINUTES)) {
+                p.destroyForcibly();
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "git timed out");
+            }
+        }
+        catch (InterruptedException e) {
+            p.destroyForcibly();
+            Thread.currentThread().interrupt();
+            throw e;
+        }
+        finally {
+            watcher.interrupt();
+            reader.interrupt();
+            try {
+                watcher.join(1000);
+                reader.join(1000);
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (overflow.get()) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                "Cloned repository exceeds size limit");
+        }
+        if (p.exitValue() != 0) {
+            String msg = output.toString().strip();
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "git failed: " + (msg.isEmpty() ? "exit " + p.exitValue()
+                    : msg.lines().findFirst().orElse(msg)));
+        }
+        enforceDirSizeLimit(watchDir);
+    }
+
+    private static void enforceDirSizeLimit(Path dir) throws IOException {
+        if (Files.exists(dir) && directorySize(dir) > MAX_EXTRACTED_BYTES) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,
+                "Cloned repository exceeds size limit");
+        }
+    }
+
+    private static long directorySize(Path root) throws IOException {
+        final long[] total = {0L};
+        Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                total[0] += attrs.size();
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return total[0];
     }
 
     private static String runGitCapture(Path cwd, String sshCmd, String... args)
@@ -388,16 +480,50 @@ public class RepoWorkflowScanner {
         env.put("GIT_SSH_COMMAND", sshCmd);
         env.put("GIT_TERMINAL_PROMPT", "0");
         Process p = pb.start();
-        String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        if (!p.waitFor(3, TimeUnit.MINUTES)) {
+        StringBuilder output = new StringBuilder();
+        Thread reader = Thread.ofVirtual().start(() -> {
+            try (InputStream in = p.getInputStream()) {
+                byte[] buf = new byte[8 * 1024];
+                int n;
+                long total = 0;
+                while ((n = in.read(buf)) >= 0) {
+                    total += n;
+                    if (total <= 1_000_000) {
+                        output.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                    }
+                }
+            }
+            catch (IOException ignored) {
+                // process ended
+            }
+        });
+        try {
+            if (!p.waitFor(3, TimeUnit.MINUTES)) {
+                p.destroyForcibly();
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "git timed out");
+            }
+        }
+        catch (InterruptedException e) {
             p.destroyForcibly();
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "git timed out");
+            Thread.currentThread().interrupt();
+            throw e;
+        }
+        finally {
+            reader.interrupt();
+            try {
+                reader.join(1000);
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
         if (p.exitValue() != 0) {
+            String msg = output.toString().strip();
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
-                "git failed: " + output.strip().lines().findFirst().orElse("exit " + p.exitValue()));
+                "git failed: " + (msg.isEmpty() ? "exit " + p.exitValue()
+                    : msg.lines().findFirst().orElse(msg)));
         }
-        return output;
+        return output.toString();
     }
 
     private static List<Path> listTextFiles(Path root, List<String> pathFilters) throws IOException {

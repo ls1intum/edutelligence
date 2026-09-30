@@ -30,8 +30,10 @@ IV_BYTES = 12
 def _aes_key() -> bytes | None:
     raw_env = os.environ.get(ENV_KEY, "").strip()
     if raw_env:
+        # Strict standard alphabet first — b64decode without validate=True
+        # silently strips URL-safe -/_ and can accept truncated keys.
         try:
-            key = base64.b64decode(raw_env)
+            key = base64.b64decode(raw_env, validate=True)
         except Exception:
             key = base64.urlsafe_b64decode(raw_env)
         if len(key) != 32:
