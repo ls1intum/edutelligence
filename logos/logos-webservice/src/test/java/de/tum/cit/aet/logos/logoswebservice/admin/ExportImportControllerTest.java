@@ -152,4 +152,122 @@ class ExportImportControllerTest {
             "SELECT repo_slug FROM team_repositories WHERE id = ?", String.class, restoredLink);
         org.assertj.core.api.Assertions.assertThat(restoredSlug).isEqualTo("ls1intum/edutelligence");
     }
+
+    @Test
+    void import_clearsCollidingAnalysisSessionIdsAcrossRepositories() throws Exception {
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "repo_url": "https://github.com/acme/repo-a.git",
+                      "branch": "main",
+                      "paths": ["src"]
+                    }
+                    """))
+           .andExpect(status().isOk());
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "repo_url": "https://github.com/acme/repo-b.git",
+                      "branch": "main",
+                      "paths": ["src"]
+                    }
+                    """))
+           .andExpect(status().isOk());
+
+        Integer repoA = jdbc.queryForObject(
+            "SELECT id FROM team_repositories WHERE team_id = 2001 AND repo_slug = 'acme/repo-a'",
+            Integer.class);
+        Integer repoB = jdbc.queryForObject(
+            "SELECT id FROM team_repositories WHERE team_id = 2001 AND repo_slug = 'acme/repo-b'",
+            Integer.class);
+
+        Integer workspaceId = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('export-import-collision-ws', 'main', 'export-import-collision-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        // Local preserved session targets repo B.
+        Integer sessionId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, team_repository_id, trigger_kind
+            ) VALUES (?, 'analyze B', 'queued', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis')
+            RETURNING id
+            """, Integer.class, workspaceId, repoB);
+
+        MvcResult exportResult = mvc.perform(post("/logosdb/export")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andReturn();
+
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> exportEnvelope =
+            objectMapper.readValue(exportResult.getResponse().getContentAsString(), java.util.Map.class);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> tableData =
+            (java.util.Map<String, Object>) exportEnvelope.get("result");
+
+        // Imported analysis for repo A reuses the local session id that still
+        // analyzes repo B — must be cleared on import.
+        @SuppressWarnings("unchecked")
+        java.util.List<java.util.Map<String, Object>> analyses =
+            (java.util.List<java.util.Map<String, Object>>) tableData.get("ai_workflow_analyses");
+        analyses.add(new java.util.LinkedHashMap<>(java.util.Map.of(
+            "id", 9001,
+            "team_id", 2001,
+            "team_repository_id", repoA,
+            "commit_sha", "deadbeef",
+            "status", "queued",
+            "source", "agent",
+            "agent_session_id", sessionId,
+            "started_at", "2026-01-01T00:00:00Z"
+        )));
+        analyses.get(analyses.size() - 1).put("error", null);
+        analyses.get(analyses.size() - 1).put("finished_at", null);
+        // Matching association (same session + repo B) must survive.
+        analyses.add(new java.util.LinkedHashMap<>(java.util.Map.of(
+            "id", 9002,
+            "team_id", 2001,
+            "team_repository_id", repoB,
+            "commit_sha", "cafebabe",
+            "status", "queued",
+            "source", "agent",
+            "agent_session_id", sessionId,
+            "started_at", "2026-01-01T00:00:00Z"
+        )));
+        analyses.get(analyses.size() - 1).put("error", null);
+        analyses.get(analyses.size() - 1).put("finished_at", null);
+
+        String importBody = objectMapper.writeValueAsString(
+            java.util.Map.of("json_data", tableData));
+        mvc.perform(post("/logosdb/import")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content(importBody))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Import successful"));
+
+        Integer restoredB = jdbc.queryForObject(
+            "SELECT team_repository_id FROM agent_sessions WHERE id = ?", Integer.class, sessionId);
+        org.assertj.core.api.Assertions.assertThat(restoredB).isEqualTo(repoB);
+
+        java.util.Map<String, Object> mismatched = jdbc.queryForMap(
+            "SELECT agent_session_id, status, error FROM ai_workflow_analyses WHERE id = 9001");
+        org.assertj.core.api.Assertions.assertThat(mismatched.get("agent_session_id")).isNull();
+        org.assertj.core.api.Assertions.assertThat(mismatched.get("status")).isEqualTo("failed");
+        org.assertj.core.api.Assertions.assertThat((String) mismatched.get("error"))
+            .contains("imported session association cleared");
+
+        java.util.Map<String, Object> matched = jdbc.queryForMap(
+            "SELECT agent_session_id, status FROM ai_workflow_analyses WHERE id = 9002");
+        org.assertj.core.api.Assertions.assertThat(matched.get("agent_session_id"))
+            .isEqualTo(sessionId);
+        org.assertj.core.api.Assertions.assertThat(matched.get("status")).isEqualTo("queued");
+    }
 }

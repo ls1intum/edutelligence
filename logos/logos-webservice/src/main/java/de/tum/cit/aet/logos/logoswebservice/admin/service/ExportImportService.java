@@ -137,6 +137,7 @@ public class ExportImportService {
             restoreAgentSessionsRepositoryFk();
         }
         restoreAgentSessionRepositoryLinks(sessionLinks);
+        sanitizeImportedAnalysisSessionLinks();
         resetSequences();
         return Map.of("result", "Import successful");
     }
@@ -181,6 +182,41 @@ public class ExportImportService {
                    AND tr.repo_slug = ?
                 """, sessionId.intValue(), teamId.intValue(), repoSlug);
         }
+    }
+
+    /**
+     * Imported analyses may reuse {@code agent_session_id} values that still
+     * belong to preserved local sessions for a different team/repository.
+     * Clear those associations so a finishing local session cannot overwrite
+     * another repository's imported analysis via session-id upsert.
+     */
+    void sanitizeImportedAnalysisSessionLinks() {
+        jdbc.update("""
+            UPDATE ai_workflow_analyses a
+               SET agent_session_id = NULL,
+                   status = CASE
+                       WHEN a.status IN ('queued', 'running') THEN 'failed'
+                       ELSE a.status
+                   END,
+                   error = CASE
+                       WHEN a.status IN ('queued', 'running') THEN
+                           'imported session association cleared: local session targets a different repository'
+                       ELSE a.error
+                   END,
+                   finished_at = CASE
+                       WHEN a.status IN ('queued', 'running') THEN CURRENT_TIMESTAMP
+                       ELSE a.finished_at
+                   END
+             WHERE a.agent_session_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM agent_sessions s
+                     JOIN team_repositories tr ON tr.id = s.team_repository_id
+                    WHERE s.id = a.agent_session_id
+                      AND s.team_repository_id = a.team_repository_id
+                      AND tr.team_id = a.team_id
+               )
+            """);
     }
 
     private void resetSequences() {
