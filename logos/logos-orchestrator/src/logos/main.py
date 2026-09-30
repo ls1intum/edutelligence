@@ -1634,38 +1634,65 @@ def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
 
 _STREAM_END = object()
 
+# Upper bound on pulled-but-undelivered chunks buffered for a slow client. The
+# pump decouples arrival capture from client delivery, but an unbounded buffer
+# would let a pathologically slow client accumulate the whole provider response
+# in memory. Once the buffer is full the pump waits (backpressure) instead of
+# growing without limit; normal clients never fill it, so their arrivals stay
+# captured off the client's pace.
+_STREAM_BUFFER_MAX_CHUNKS = 512
+
+# Attribute the arrival pump attaches to a source exception with the instant
+# the failure was observed upstream, so a response stamp can use it without
+# waiting for a slow client to drain buffered chunks.
+_STREAM_FAILURE_AT = "logos_stream_failure_at"
+
 
 async def _chunks_with_arrival(source):
     """Yield ``(chunk, arrival)`` pairs with arrival decoupled from delivery.
 
     A background task pulls from ``source`` as fast as data arrives and records
-    each chunk's arrival instant. The consumer reads from a queue, so a slow
-    client's backpressure at the ``yield`` no longer delays the recorded
-    arrival — it reflects when the provider sent the byte, not when the client
-    was ready to take it. That is what the statistics page's exec figure needs:
-    the provider's own time, without logos' client-delivery wait.
+    each chunk's arrival instant, buffering it for the consumer, which yields at
+    the client's own pace. The recorded arrival therefore reflects when the
+    provider sent the byte, not when the client was ready to take it — what the
+    statistics page's exec figure needs: the provider's own time, without logos'
+    client-delivery wait.
+
+    The buffer is bounded (``_STREAM_BUFFER_MAX_CHUNKS``): a slow client cannot
+    accumulate unbounded provider output. When it fills, the pump waits for
+    room (backpressure) rather than growing memory.
 
     The source is closed and the pump cancelled when this generator ends,
     including on a client disconnect (GeneratorExit at the ``yield``). A source
-    exception is re-raised to the consumer once the in-flight chunks are
-    drained. The caller must close this generator (e.g. via ``aclosing``) so the
-    cleanup in the finally runs.
+    exception is re-raised to the consumer (annotated with the upstream failure
+    instant) once the in-flight chunks are drained. The caller must close this
+    generator (e.g. via ``aclosing``) so the cleanup in the finally runs.
     """
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=_STREAM_BUFFER_MAX_CHUNKS)
 
     async def _pump() -> None:
         try:
-            # The only suspension point is __anext__, so on cancellation the
-            # cancelled __anext__ runs the source's own cleanup (the worker
-            # cancellation, the httpx close) deterministically — no explicit
-            # aclose from this task, which would race the in-flight iteration.
+            # The pump pulls as fast as data arrives. The put is bounded, so a
+            # slow client applies backpressure (the put blocks) once the buffer
+            # is full instead of accumulating the response without limit.
             async for chunk in source:
                 await queue.put((chunk, datetime.datetime.now(datetime.timezone.utc)))
         except asyncio.CancelledError:
-            # Cancelled (client disconnect): the source is already cleaned up by
-            # the cancelled __anext__ and the consumer is gone, so queue nothing.
+            # Client disconnect. The source may be closing already (cancelled
+            # __anext__) or still open (the pump was waiting for buffer room),
+            # so close it unless a concurrent close is in flight.
+            with suppress(RuntimeError):
+                await source.aclose()
             raise
         except BaseException as exc:  # noqa: BLE001 - re-raised by the consumer
+            # Stamp the failure where it is observed, upstream, not when the
+            # (possibly slow) client finishes draining buffered chunks.
+            try:
+                setattr(exc, _STREAM_FAILURE_AT, datetime.datetime.now(datetime.timezone.utc))
+            except AttributeError:
+                pass  # exception type does not accept attributes
+            with suppress(RuntimeError):
+                await source.aclose()
             await queue.put(exc)
         await queue.put(_STREAM_END)
 
@@ -1910,13 +1937,14 @@ async def _streaming_response(
                             await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
                             continue
                         error_message = str(e)
-                        # The worker stream failed; stamp the failure instant
-                        # (now), not the last chunk's arrival — a stream that
-                        # produced chunks and then timed out waiting for
-                        # stream_end should count that wait as provider run
-                        # time, which last_chunk_at would omit.
+                        # The worker stream failed; stamp the failure instant the
+                        # arrival pump recorded upstream (annotated on the
+                        # exception), not the last chunk's arrival — a stream that
+                        # produced chunks and then timed out waiting for stream_end
+                        # should count that wait as provider run time, which
+                        # last_chunk_at would omit.
                         if request_id:
-                            _pipeline.record_provider_response(request_id)
+                            _pipeline.record_provider_response(request_id, at=getattr(e, _STREAM_FAILURE_AT, None))
                         raise e
                     # The worker stream completed — the provider's last byte,
                     # stamped at that chunk's arrival (last_chunk_at), before
@@ -2076,9 +2104,22 @@ async def _streaming_response(
         # delivery, both of which are logos work that must stay out of the
         # provider's window.
         last_chunk_at = stream_first_byte_at
+        # The first chunk was already observed at the peek (stream_first_byte_at),
+        # before StreamingResponse started. Re-injecting it into the pump would
+        # re-stamp it at pump start, which for a delayed response start inflates
+        # a one-chunk stream's run figure — so keep the peek instant for it and
+        # the pump's recorded arrival for every later chunk.
+        first_chunk_pending = bool(first_chunk)
 
-        def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
-            return cost_enricher.feed(chunk) if cost_enricher else [chunk]
+        async def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
+            if cost_enricher is None:
+                return [chunk]
+            # A settled usage frame triggers a synchronous pricing DB lookup; run
+            # the enrichment off the event loop so the arrival pump (a separate
+            # task on this loop) keeps recording chunk arrivals while billing
+            # runs. feed() is awaited sequentially, so its buffer sees one call
+            # at a time and is safe from the worker thread.
+            return await asyncio.to_thread(cost_enricher.feed, chunk)
 
         def client_chunks(chunk: bytes | str) -> list[bytes | str]:
             """Record one upstream chunk and return what the client receives.
@@ -2109,8 +2150,11 @@ async def _streaming_response(
         try:
             async with aclosing(_chunks_with_arrival(_source())) as wrapped:
                 async for chunk, arrival in wrapped:
-                    last_chunk_at = arrival
-                    for outgoing_chunk in enriched_chunks(chunk):
+                    # The re-injected first chunk keeps its peek instant; later
+                    # chunks use the pump's recorded arrival.
+                    last_chunk_at = stream_first_byte_at if first_chunk_pending else arrival
+                    first_chunk_pending = False
+                    for outgoing_chunk in await enriched_chunks(chunk):
                         for client_chunk in client_chunks(outgoing_chunk):
                             yield client_chunk
                     _live_streams.update(request_id, stream_log.streamed_tokens())
@@ -2120,13 +2164,18 @@ async def _streaming_response(
                                 db.set_time_at_first_token(log_id)
                         _record_ettft_accuracy(scheduling_stats)
                         ttft_recorded = True
-            # The upstream stream is exhausted — the provider's last byte,
-            # stamped at that chunk's arrival (last_chunk_at), before any
-            # enrichment (the cost lookup for cloud SSE) or terminal-frame
-            # delivery. Ending the exec figure here keeps that logos-side work
-            # out of the provider's numbers.
+            # The upstream stream is exhausted. When the executor recovered from
+            # a mid-stream transport failure it set stream_status.error (and
+            # error_at) and ended the iterator without raising — so end the exec
+            # figure at that failure instant, not the last good chunk's arrival.
+            # Otherwise the provider's last byte is the last chunk's arrival
+            # (last_chunk_at), stamped before any enrichment or terminal-frame
+            # delivery keeps that logos-side work out of the provider's numbers.
             if request_id:
-                _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                if stream_status.error is not None:
+                    _pipeline.record_provider_response(request_id, at=stream_status.error_at)
+                else:
+                    _pipeline.record_provider_response(request_id, at=last_chunk_at)
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2154,12 +2203,13 @@ async def _streaming_response(
                     yield client_chunk
         except Exception as exc:
             error_message = str(exc)
-            # The upstream failed mid-stream; stamp the failure instant (now),
-            # not the last chunk's arrival — the interval between the last good
-            # byte and the observed failure is provider time, and last_chunk_at
-            # would omit it.
+            # The upstream failed mid-stream; stamp the failure instant the
+            # arrival pump recorded upstream (annotated on the exception), not
+            # the last chunk's arrival — the interval between the last good byte
+            # and the observed failure is provider time, and last_chunk_at would
+            # omit it.
             if request_id:
-                _pipeline.record_provider_response(request_id)
+                _pipeline.record_provider_response(request_id, at=getattr(exc, _STREAM_FAILURE_AT, None))
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):

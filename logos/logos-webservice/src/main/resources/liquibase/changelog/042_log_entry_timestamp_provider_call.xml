@@ -226,6 +226,23 @@
                 END;
                 $$;
             ]]></sql>
+            <!-- Recompute every closed hour under the restored 035 definition:
+                 the forward's backfill ran those hours under the new provider
+                 split, so without this they would keep serving the new-definition
+                 averages while the incremental pass (which calls this function)
+                 uses the old one. -->
+            <sql splitStatements="false"><![CDATA[
+                SELECT logos_stats_rollup_apply(ARRAY(
+                    SELECT DISTINCT date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                le.timestamp_request,
+                                                                le.timestamp_response))
+                    FROM log_entry le
+                    WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
+                          < date_trunc('hour', now())
+                ));
+
+                ANALYZE log_entry_hourly_stats;
+            ]]></sql>
         </rollback>
     </changeSet>
 

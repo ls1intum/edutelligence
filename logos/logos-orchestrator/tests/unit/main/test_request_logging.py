@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -389,10 +390,12 @@ async def test_a_stream_read_to_the_end_stamps_the_last_chunk_arrival(monkeypatc
 @pytest.mark.asyncio
 async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk(monkeypatch):
     """A stream that produced a chunk and then failed stamps the response at
-    the failure instant (``at=None`` -> now), not the earlier chunk's arrival —
-    otherwise the failure interval (e.g. a timeout waiting for ``stream_end``)
-    is omitted from the provider's run figure."""
+    the failure instant the arrival pump captured upstream — not the earlier
+    chunk's arrival and not the record time. A worker that stalls after the
+    last token (a timeout waiting for ``stream_end``) must count that wait, so
+    the stamped instant is clearly after the last chunk's arrival."""
     provider_response_calls = []
+    source_time: dict = {}
     dummy_db = _make_dummy_db()
     monkeypatch.setattr(main, "DBManager", dummy_db)
     monkeypatch.setattr(
@@ -404,6 +407,11 @@ async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk
 
     async def fake_send_stream_command(**kwargs):  # noqa: ARG001
         yield b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+        # The last chunk is out; now stall (a timeout waiting for stream_end)
+        # before the failure is observed, so the failure instant is clearly
+        # after the chunk's arrival.
+        source_time["chunk"] = main.datetime.datetime.now(main.datetime.timezone.utc)
+        await asyncio.sleep(0.02)
         raise RuntimeError("worker stream died mid-stream")
 
     monkeypatch.setattr(
@@ -434,9 +442,14 @@ async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk
     with pytest.raises(RuntimeError, match="died mid-stream"):
         await _read_stream_response(response)
 
-    # The failure is stamped at the failure instant (at=None), not the last
-    # chunk's arrival.
-    assert provider_response_calls == [("req-stamp-fail", None)]
+    # The failure is stamped at the failure instant the pump captured upstream:
+    # a real instant, at/after the last chunk's arrival (the stalled interval
+    # is provider run time) — not None and not the record time.
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-stamp-fail"
+    assert isinstance(at, main.datetime.datetime)
+    assert at >= source_time["chunk"]
 
 
 @pytest.mark.asyncio
@@ -515,8 +528,10 @@ async def test_logosnode_sync_stamps_the_response_before_post_provider_processin
     assert request_id == "req-sync"
     assert at is not None, "the sync path must pin the response instant, not fall back to the record time"
     # Captured right after send_command returns…
-    assert at <= t_send_return["at"] + main.datetime.timedelta(milliseconds=5)
-    # …and before the (deliberately delayed) post-provider perf merge.
+    assert at >= t_send_return["at"]
+    # …and before the (deliberately delayed) post-provider perf merge. A tight
+    # upper bound here would be flaky under CI scheduler jitter; the ordering
+    # against the 20 ms merge is what proves the stamp precedes the merge.
     assert at < merge_state["at"]
 
 

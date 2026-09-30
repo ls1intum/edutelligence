@@ -5,6 +5,7 @@ Backend execution - makes HTTP calls to AI providers.
 The Executor is a pure HTTP client that makes streaming or synchronous requests.
 """
 
+import datetime
 import json
 import logging
 from dataclasses import dataclass
@@ -43,6 +44,10 @@ class StreamingExecutionStatus:
     """Mutable terminal status shared with a streaming response consumer."""
 
     error: Optional[str] = None
+    # The instant the mid-stream transport failure was observed, captured here
+    # (upstream) so the response stamp does not wait for a slow client to drain
+    # buffered chunks before the failure time is recorded.
+    error_at: Optional[datetime.datetime] = None
 
 
 class Executor:
@@ -140,6 +145,7 @@ class Executor:
                         raise
                     if status is not None:
                         status.error = str(exc)
+                        status.error_at = datetime.datetime.now(datetime.timezone.utc)
                     if not is_sse:
                         return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})
