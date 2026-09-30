@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -102,6 +103,14 @@ class GatewayCloudRateLimiterTest {
             .isInstanceOf(ResponseStatusException.class)
             .satisfies(e -> assertThatStatus((ResponseStatusException) e, HttpStatus.TOO_MANY_REQUESTS))
             .hasMessageContaining("RPM limit reached");
+    }
+
+    @Test
+    void rpmOnly_doesNotRecordTpmClaims() {
+        GatewayKey key = seedKey(10, null);
+        assertThatCode(() -> rateLimiter.enforce(key, BODY)).doesNotThrowAnyException();
+        assertThat(redis.opsForZSet().zCard("gw:tpm:" + key.id())).isZero();
+        assertThat(redis.opsForValue().get("gw:tpm:sum:" + key.id())).isNull();
     }
 
     @Test

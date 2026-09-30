@@ -89,13 +89,15 @@ public class GatewayCloudRateLimiter {
         end
 
         redis.call('ZADD', rpm_key, now, member)
-        redis.call('ZADD', tpm_key, now, member .. ':' .. tokens)
+        -- Record TPM claims only when also updating the running sum; otherwise
+        -- enabling TPM mid-window would prune claims that never entered the sum.
         if tpm_limit > 0 then
+          redis.call('ZADD', tpm_key, now, member .. ':' .. tokens)
           redis.call('INCRBY', tpm_sum_key, tokens)
           redis.call('PEXPIRE', tpm_sum_key, window_ms)
+          redis.call('PEXPIRE', tpm_key, window_ms)
         end
         redis.call('PEXPIRE', rpm_key, window_ms)
-        redis.call('PEXPIRE', tpm_key, window_ms)
         return 1
         """;
 
