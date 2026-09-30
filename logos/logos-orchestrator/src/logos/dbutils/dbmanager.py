@@ -25,6 +25,12 @@ from logos.dbutils.types import (
     infer_cloud_provider_type,
     normalize_provider_type,
 )
+from logos.model_profile_store import (
+    CALIBRATION_FIELDS,
+    SYNC_METADATA_FIELDS,
+    base_residency_agrees,
+    calibration_snapshot,
+)
 
 # Backwards-compatible re-export (temporary; remove once all imports are migrated)
 __all__ = [
@@ -245,6 +251,35 @@ def derived_reported_context_length(profile: Any) -> int:
             if isinstance(item, dict):
                 native = max(native, _as_len(item.get("max_model_len")))
     return native
+
+
+def _epoch_to_datetime(epoch: Any) -> Optional[datetime.datetime]:
+    try:
+        value = float(epoch)
+    except (TypeError, ValueError):
+        return None
+    return datetime.datetime.fromtimestamp(value, tz=datetime.timezone.utc) if value > 0 else None
+
+
+def _model_profile_column_params(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Bind values for the typed model_profiles columns of one profile dict."""
+    return {
+        "base_residency_mb": data.get("base_residency_mb"),
+        "loaded_vram_mb": data.get("loaded_vram_mb"),
+        "sleeping_residual_mb": data.get("sleeping_residual_mb"),
+        "kv_budget_mb": data.get("kv_budget_mb"),
+        "disk_size_bytes": data.get("disk_size_bytes"),
+        "engine": data.get("engine"),
+        "tensor_parallel_size": data.get("tensor_parallel_size"),
+        "kv_per_token_bytes": data.get("kv_per_token_bytes"),
+        "max_context_length": data.get("max_context_length"),
+        "max_reported_context_length": derived_reported_context_length(data),
+        "residency_source": data.get("residency_source"),
+        "measurement_count": int(data.get("measurement_count", 0) or 0),
+        "last_measured_at": _epoch_to_datetime(data.get("last_measured_epoch")),
+        "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
+        "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
+    }
 
 
 # Snapshot the settled cost of a finalised request into log_entry so a later
@@ -1723,35 +1758,377 @@ class DBManager:
         for model_name, data in profiles.items():
             if not isinstance(data, dict):
                 continue
-            epoch = data.get("last_measured_epoch")
-            last_measured_at = (
-                datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc) if epoch and float(epoch) > 0 else None
-            )
             self.session.execute(
                 sql,
-                {
-                    "provider_id": provider_id,
-                    "model_name": str(model_name),
-                    "base_residency_mb": data.get("base_residency_mb"),
-                    "loaded_vram_mb": data.get("loaded_vram_mb"),
-                    "sleeping_residual_mb": data.get("sleeping_residual_mb"),
-                    "kv_budget_mb": data.get("kv_budget_mb"),
-                    "disk_size_bytes": data.get("disk_size_bytes"),
-                    "engine": data.get("engine"),
-                    "tensor_parallel_size": data.get("tensor_parallel_size"),
-                    "kv_per_token_bytes": data.get("kv_per_token_bytes"),
-                    "max_context_length": data.get("max_context_length"),
-                    "max_reported_context_length": derived_reported_context_length(data),
-                    "residency_source": data.get("residency_source"),
-                    "measurement_count": int(data.get("measurement_count", 0) or 0),
-                    "last_measured_at": last_measured_at,
-                    "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
-                    "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
-                },
+                {"provider_id": provider_id, "model_name": str(model_name), **_model_profile_column_params(data)},
             )
             count += 1
         self.session.commit()
         return count
+
+    def persist_central_model_profile(
+        self,
+        provider_id: int,
+        model_name: str,
+        profile: Dict[str, Any],
+        sync_revision: int,
+        calibration_key_hash: Optional[str],
+    ) -> bool:
+        """Store a worker's echoed profile unless a central change is newer.
+
+        False when the echo predates the stored ``sync_revision``.
+        """
+        sql = text("""
+            INSERT INTO model_profiles (
+                provider_id, model_name,
+                base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
+                kv_budget_mb, disk_size_bytes, engine,
+                tensor_parallel_size, kv_per_token_bytes, max_context_length,
+                max_reported_context_length,
+                residency_source, measurement_count, last_measured_at,
+                observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
+                profile, calibration_key_hash, sync_revision, updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
+                :kv_budget_mb, :disk_size_bytes, :engine,
+                :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
+                :max_reported_context_length,
+                :residency_source, :measurement_count, :last_measured_at,
+                :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
+                CAST(:profile AS jsonb), :calibration_key_hash, :sync_revision, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                base_residency_mb = EXCLUDED.base_residency_mb,
+                loaded_vram_mb = EXCLUDED.loaded_vram_mb,
+                sleeping_residual_mb = EXCLUDED.sleeping_residual_mb,
+                kv_budget_mb = EXCLUDED.kv_budget_mb,
+                disk_size_bytes = EXCLUDED.disk_size_bytes,
+                engine = EXCLUDED.engine,
+                tensor_parallel_size = EXCLUDED.tensor_parallel_size,
+                kv_per_token_bytes = EXCLUDED.kv_per_token_bytes,
+                max_context_length = EXCLUDED.max_context_length,
+                max_reported_context_length = GREATEST(
+                    COALESCE(model_profiles.max_reported_context_length, 0),
+                    EXCLUDED.max_reported_context_length
+                ),
+                residency_source = EXCLUDED.residency_source,
+                measurement_count = EXCLUDED.measurement_count,
+                last_measured_at = EXCLUDED.last_measured_at,
+                observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
+                min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
+                profile = EXCLUDED.profile,
+                calibration_key_hash = EXCLUDED.calibration_key_hash,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE model_profiles.sync_revision = EXCLUDED.sync_revision
+        """)
+        result = self.session.execute(
+            sql,
+            {
+                "provider_id": provider_id,
+                "model_name": model_name,
+                **_model_profile_column_params(profile),
+                "profile": _json_for_jsonb(profile),
+                "calibration_key_hash": calibration_key_hash,
+                "sync_revision": int(sync_revision),
+            },
+        )
+        self.session.commit()
+        return bool(result.rowcount)
+
+    def record_model_calibration(
+        self,
+        provider_id: int,
+        model_name: str,
+        snapshot: Dict[str, Any],
+        calibration_key: Optional[Dict[str, Any]],
+        calibration_key_hash: Optional[str],
+        calibrated_at: datetime.datetime,
+    ) -> Optional[int]:
+        """Snapshot a calibration and link the node's profile row to it.
+
+        Idempotent per (model, provider, calibrated_at). Returns the row's
+        new ``sync_revision``, or None when it already linked this snapshot.
+        """
+        key = calibration_key if isinstance(calibration_key, dict) else {}
+        inserted = self.session.execute(
+            text("""
+                INSERT INTO model_calibrations (
+                    model_name, calibration_key_hash, calibration_key,
+                    backend, gpu_name, vllm_version, tensor_parallel_size,
+                    profile, source_provider_id, calibrated_at
+                ) VALUES (
+                    :model_name, :key_hash, CAST(:key AS jsonb),
+                    :backend, :gpu_name, :vllm_version, :tp,
+                    CAST(:profile AS jsonb), :provider_id, :calibrated_at
+                )
+                ON CONFLICT (model_name, source_provider_id, calibrated_at) DO NOTHING
+                RETURNING id
+            """),
+            {
+                "model_name": model_name,
+                "key_hash": calibration_key_hash,
+                "key": _json_for_jsonb(key) if key else None,
+                "backend": key.get("backend"),
+                "gpu_name": key.get("gpu_name"),
+                "vllm_version": key.get("vllm_version"),
+                "tp": snapshot.get("tensor_parallel_size"),
+                "profile": _json_for_jsonb(snapshot),
+                "provider_id": provider_id,
+                "calibrated_at": calibrated_at,
+            },
+        ).fetchone()
+        if inserted is not None:
+            calibration_id = int(inserted.id)
+            if calibration_key_hash:
+                self._count_calibration_agreement(model_name, calibration_key_hash, calibration_id, snapshot)
+        else:
+            calibration_id = int(
+                self.session.execute(
+                    text("""
+                        SELECT id FROM model_calibrations
+                        WHERE model_name = :model_name
+                          AND source_provider_id = :provider_id
+                          AND calibrated_at = :calibrated_at
+                    """),
+                    {"model_name": model_name, "provider_id": provider_id, "calibrated_at": calibrated_at},
+                ).scalar_one()
+            )
+        linked = self.session.execute(
+            text("""
+                UPDATE model_profiles
+                SET calibration_id = :calibration_id,
+                    sync_revision = sync_revision + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE provider_id = :provider_id
+                  AND model_name = :model_name
+                  AND calibration_id IS DISTINCT FROM :calibration_id
+                RETURNING sync_revision
+            """),
+            {"calibration_id": calibration_id, "provider_id": provider_id, "model_name": model_name},
+        ).fetchone()
+        self.session.commit()
+        return int(linked.sync_revision) if linked is not None else None
+
+    def _count_calibration_agreement(
+        self,
+        model_name: str,
+        calibration_key_hash: str,
+        calibration_id: int,
+        snapshot: Dict[str, Any],
+    ) -> None:
+        """Score a new calibration against the previous one of the same key."""
+        previous = self.session.execute(
+            text("""
+                SELECT id, profile->>'base_residency_mb' AS base_residency_mb
+                FROM model_calibrations
+                WHERE model_name = :model_name
+                  AND calibration_key_hash = :key_hash
+                  AND id <> :calibration_id
+                  AND invalidated_at IS NULL
+                ORDER BY calibrated_at DESC
+                LIMIT 1
+            """),
+            {"model_name": model_name, "key_hash": calibration_key_hash, "calibration_id": calibration_id},
+        ).fetchone()
+        if previous is None:
+            return
+        agrees = base_residency_agrees(previous.base_residency_mb, snapshot.get("base_residency_mb"))
+        if agrees is None:
+            return
+        column = "confirmations" if agrees else "divergences"
+        self.session.execute(
+            text(f"UPDATE model_calibrations SET {column} = {column} + 1 WHERE id = :id"),
+            {"id": int(previous.id)},
+        )
+
+    def get_central_model_profiles(
+        self,
+        provider_id: int,
+        model_names: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """One node's stored profiles, each joined with its calibration."""
+        sql = """
+            SELECT mp.model_name, mp.profile, mp.sync_revision, mp.calibration_key_hash,
+                   mc.id AS cal_id, mc.calibration_key_hash AS cal_key_hash,
+                   mc.source_provider_id AS cal_source_provider_id,
+                   mc.invalidated_at AS cal_invalidated_at
+            FROM model_profiles mp
+            LEFT JOIN model_calibrations mc ON mc.id = mp.calibration_id
+            WHERE mp.provider_id = :provider_id
+              AND mp.profile <> '{}'::jsonb
+        """
+        params: Dict[str, Any] = {"provider_id": provider_id}
+        if model_names is not None:
+            sql += " AND mp.model_name = ANY(:model_names)"
+            params["model_names"] = list(model_names)
+        rows = self.session.execute(text(sql), params).fetchall()
+        results = []
+        for row in rows:
+            entry = dict(row._mapping)
+            if isinstance(entry.get("profile"), str):
+                entry["profile"] = json.loads(entry["profile"])
+            results.append(entry)
+        return results
+
+    def has_central_model_profiles(self, provider_id: int) -> bool:
+        row = self.session.execute(
+            text("SELECT 1 FROM model_profiles WHERE provider_id = :provider_id AND profile <> '{}'::jsonb LIMIT 1"),
+            {"provider_id": provider_id},
+        ).fetchone()
+        return row is not None
+
+    def update_reported_calibration_keys(self, provider_id: int, key_hashes: Dict[str, str]) -> None:
+        """Record the calibration key each model has on the node right now."""
+        for model_name, key_hash in key_hashes.items():
+            self.session.execute(
+                text("""
+                    UPDATE model_profiles SET calibration_key_hash = :key_hash
+                    WHERE provider_id = :provider_id AND model_name = :model_name
+                      AND calibration_key_hash IS DISTINCT FROM :key_hash
+                """),
+                {"provider_id": provider_id, "model_name": model_name, "key_hash": key_hash},
+            )
+        self.session.commit()
+
+    def import_legacy_model_profiles(
+        self,
+        provider_id: int,
+        profiles: Dict[str, Dict[str, Any]],
+        unsupported: Dict[str, str],
+    ) -> int:
+        """Take over a worker's local profile file on its first central start.
+
+        Imported calibrations have no key, so they serve but count as stale
+        until the next calibration window re-measures them.
+        """
+        if self.has_central_model_profiles(provider_id):
+            return 0
+        merged: Dict[str, Dict[str, Any]] = {}
+        for model_name, data in profiles.items():
+            if isinstance(data, dict):
+                merged[str(model_name)] = {k: v for k, v in data.items() if k not in SYNC_METADATA_FIELDS}
+        for model_name, reason in unsupported.items():
+            entry = merged.setdefault(str(model_name), {})
+            entry["calibration_unsupported"] = True
+            entry["calibration_unsupported_reason"] = reason
+        upsert = text("""
+            INSERT INTO model_profiles (
+                provider_id, model_name,
+                base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
+                kv_budget_mb, disk_size_bytes, engine,
+                tensor_parallel_size, kv_per_token_bytes, max_context_length,
+                max_reported_context_length,
+                residency_source, measurement_count, last_measured_at,
+                observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
+                profile, sync_revision, updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
+                :kv_budget_mb, :disk_size_bytes, :engine,
+                :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
+                :max_reported_context_length,
+                :residency_source, :measurement_count, :last_measured_at,
+                :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
+                CAST(:profile AS jsonb), 1, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                profile = EXCLUDED.profile,
+                max_reported_context_length = GREATEST(
+                    COALESCE(model_profiles.max_reported_context_length, 0),
+                    EXCLUDED.max_reported_context_length
+                ),
+                sync_revision = model_profiles.sync_revision + 1,
+                updated_at = CURRENT_TIMESTAMP
+        """)
+        for model_name, data in merged.items():
+            self.session.execute(
+                upsert,
+                {
+                    "provider_id": provider_id,
+                    "model_name": model_name,
+                    **_model_profile_column_params(data),
+                    "profile": _json_for_jsonb(data),
+                },
+            )
+            calibrated_at = _epoch_to_datetime(data.get("last_measured_epoch"))
+            if data.get("residency_source") != "calibrated" or calibrated_at is None:
+                continue
+            snapshot_row = self.session.execute(
+                text("""
+                    INSERT INTO model_calibrations (
+                        model_name, tensor_parallel_size, profile, source_provider_id, calibrated_at
+                    ) VALUES (:model_name, :tp, CAST(:profile AS jsonb), :provider_id, :calibrated_at)
+                    ON CONFLICT (model_name, source_provider_id, calibrated_at) DO UPDATE
+                        SET profile = model_calibrations.profile
+                    RETURNING id
+                """),
+                {
+                    "model_name": model_name,
+                    "tp": data.get("tensor_parallel_size"),
+                    "profile": _json_for_jsonb(calibration_snapshot(data)),
+                    "provider_id": provider_id,
+                    "calibrated_at": calibrated_at,
+                },
+            ).fetchone()
+            self.session.execute(
+                text("""
+                    UPDATE model_profiles SET calibration_id = :calibration_id
+                    WHERE provider_id = :provider_id AND model_name = :model_name
+                """),
+                {"calibration_id": int(snapshot_row.id), "provider_id": provider_id, "model_name": model_name},
+            )
+        self.session.commit()
+        return len(merged)
+
+    def clear_calibration_unsupported(self, provider_id: int, model_name: str) -> Optional[int]:
+        """Drop a node's unsupported verdict; returns the new sync_revision."""
+        row = self.session.execute(
+            text("""
+                UPDATE model_profiles
+                SET profile = profile - 'calibration_unsupported' - 'calibration_unsupported_reason',
+                    sync_revision = sync_revision + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE provider_id = :provider_id AND model_name = :model_name
+                  AND (profile->>'calibration_unsupported') IS NOT NULL
+                RETURNING sync_revision
+            """),
+            {"provider_id": provider_id, "model_name": model_name},
+        ).fetchone()
+        self.session.commit()
+        return int(row.sync_revision) if row is not None else None
+
+    def invalidate_model_calibration(self, calibration_id: int, reason: str) -> List[Tuple[int, str]]:
+        """Stop trusting a calibration and strip it from every node using it.
+
+        Returns the (provider_id, model_name) rows that lost it.
+        """
+        marked = self.session.execute(
+            text("""
+                UPDATE model_calibrations
+                SET invalidated_at = CURRENT_TIMESTAMP, invalidation_reason = :reason
+                WHERE id = :calibration_id AND invalidated_at IS NULL
+                RETURNING id
+            """),
+            {"calibration_id": calibration_id, "reason": reason[:1000]},
+        ).fetchone()
+        if marked is None:
+            self.session.commit()
+            return []
+        rows = self.session.execute(
+            text("""
+                UPDATE model_profiles
+                SET profile = profile - CAST(:fields AS text[]),
+                    calibration_id = NULL,
+                    sync_revision = sync_revision + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE calibration_id = :calibration_id
+                RETURNING provider_id, model_name
+            """),
+            {"calibration_id": calibration_id, "fields": sorted(CALIBRATION_FIELDS)},
+        ).fetchall()
+        self.session.commit()
+        return [(int(r.provider_id), str(r.model_name)) for r in rows]
 
     def get_historic_max_context_by_model(self) -> Dict[str, int]:
         """Model name -> widest context ever reported for it, across providers.

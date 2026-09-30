@@ -45,5 +45,6 @@
     <include file="liquibase/changelog/039_api_key_priority_unset.xml"/>
     <include file="liquibase/changelog/040_reclassify_timeout_errors.xml"/>
     <include file="liquibase/changelog/041_calibration_probe_logs_observed_reason.xml"/>
+    <include file="liquibase/changelog/042_central_model_profiles.xml"/>
 
 </databaseChangeLog>

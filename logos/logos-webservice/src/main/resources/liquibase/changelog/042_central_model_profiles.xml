@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Immutable calibration snapshots. A NULL calibration_key_hash marks
+         an import without a known hardware/vLLM key; those are never
+         shared. Rows outlive their provider (ON DELETE SET NULL). -->
+    <changeSet id="042-model-calibrations" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="model_calibrations"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE model_calibrations (
+                id BIGSERIAL PRIMARY KEY,
+                model_name TEXT NOT NULL,
+                calibration_key_hash TEXT,
+                calibration_key JSONB,
+                backend TEXT,
+                gpu_name TEXT,
+                vllm_version TEXT,
+                tensor_parallel_size INTEGER,
+                profile JSONB NOT NULL,
+                source_provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL,
+                calibrated_at TIMESTAMPTZ NOT NULL,
+                confirmations INTEGER NOT NULL DEFAULT 0,
+                divergences INTEGER NOT NULL DEFAULT 0,
+                adoptions INTEGER NOT NULL DEFAULT 0,
+                invalidated_at TIMESTAMPTZ,
+                invalidation_reason TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX idx_model_calibrations_lookup
+                ON model_calibrations (model_name, calibration_key_hash, calibrated_at DESC)
+                WHERE invalidated_at IS NULL;
+
+            CREATE UNIQUE INDEX uq_model_calibrations_source_run
+                ON model_calibrations (model_name, source_provider_id, calibrated_at);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS model_calibrations CASCADE;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Authoritative per-node profiles. sync_revision is bumped on every
+         central change, so an older worker echo cannot overwrite it. -->
+    <changeSet id="042-model-profiles-central-state" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="model_profiles" columnName="sync_revision"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE model_profiles
+                ADD COLUMN profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+                ADD COLUMN calibration_id BIGINT REFERENCES model_calibrations(id) ON DELETE SET NULL,
+                ADD COLUMN calibration_key_hash TEXT,
+                ADD COLUMN sync_revision BIGINT NOT NULL DEFAULT 0;
+        ]]></sql>
+        <rollback>
+            <sql>
+                ALTER TABLE model_profiles
+                    DROP COLUMN IF EXISTS sync_revision,
+                    DROP COLUMN IF EXISTS calibration_key_hash,
+                    DROP COLUMN IF EXISTS calibration_id,
+                    DROP COLUMN IF EXISTS profile;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

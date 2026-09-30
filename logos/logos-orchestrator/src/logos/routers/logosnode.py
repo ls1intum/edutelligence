@@ -1,6 +1,7 @@
 """Worker (LogosWorkerNode) provider endpoints under /logosdb/providers/logosnode."""
 
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -15,7 +16,10 @@ from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import (
     LogosNodeApplyLanesRequest,
     LogosNodeAuthRequest,
+    LogosNodeClearUnsupportedRequest,
     LogosNodeDeleteLaneRequest,
+    LogosNodeInvalidateCalibrationRequest,
+    LogosNodeModelProfilesRequest,
     LogosNodeReconfigureLaneRequest,
     LogosNodeRegisterRequest,
     LogosNodeSleepLaneRequest,
@@ -36,6 +40,16 @@ from logos.main import (
     _normalize_provider_type,
     _resolve_provider_name,
 )
+from logos.model_profile_store import (
+    SYNC_MODEL_PROFILES_ACTION,
+    ProfileWriteCache,
+    calibration_snapshot,
+    effective_profile,
+    is_central_profile_payload,
+    is_new_local_calibration,
+    persistable_profile,
+    profile_digest,
+)
 from logos.role_auth import require_logos_admin_key
 
 logger = logging.getLogger("LogosLogger")
@@ -47,6 +61,10 @@ router = APIRouter()
 # per-worker payload so a misbehaving or compromised worker can't inflate the
 # orchestrator's own /metrics scrape with an unbounded blob.
 _MAX_VLLM_METRICS_BYTES = 4 * 1024 * 1024
+
+_profile_write_cache = ProfileWriteCache()
+# (provider_id, model) -> last_measured_epoch already snapshotted
+_recorded_calibrations: dict[tuple[int, str], float] = {}
 
 
 def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
@@ -146,7 +164,9 @@ def _capture_logosnode_provider_snapshot(
                 model_profiles = runtime_payload.get("model_profiles")
                 if isinstance(model_profiles, dict) and model_profiles:
                     try:
-                        db.upsert_model_profiles(provider_id, model_profiles)
+                        changed_models = _persist_model_profiles(db, provider_id, model_profiles)
+                        if changed_models:
+                            _schedule_model_profile_push(provider_id, changed_models)
                     except Exception:
                         db.session.rollback()
                         logger.warning(
@@ -177,6 +197,104 @@ def _capture_logosnode_provider_snapshot(
     task = asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
+
+
+def _persist_model_profiles(db: DBManager, provider_id: int, model_profiles: Dict[str, Any]) -> list[str]:
+    """Store a worker's echoed profiles; returns models to push back to it.
+
+    Workers with a local profile file are only mirrored. A fresh calibration
+    is snapshotted, which bumps the revision the worker must adopt.
+    """
+    if not is_central_profile_payload(model_profiles):
+        db.upsert_model_profiles(provider_id, model_profiles)
+        return []
+    changed: list[str] = []
+    for model_name, echoed in model_profiles.items():
+        if not isinstance(echoed, dict):
+            continue
+        try:
+            revision = int(echoed.get("sync_revision") or 0)
+        except (TypeError, ValueError):
+            continue
+        stored = persistable_profile(echoed)
+        key_hash = echoed.get("calibration_key_hash") or None
+        digest = profile_digest(revision, {"profile": stored, "calibration_key_hash": key_hash})
+        if not _profile_write_cache.unchanged(provider_id, model_name, digest):
+            if not db.persist_central_model_profile(provider_id, model_name, stored, revision, key_hash):
+                continue
+            _profile_write_cache.remember(provider_id, model_name, digest)
+        if not is_new_local_calibration(echoed):
+            continue
+        epoch = float(echoed["last_measured_epoch"])
+        if _recorded_calibrations.get((provider_id, model_name)) == epoch:
+            continue
+        new_revision = db.record_model_calibration(
+            provider_id,
+            model_name,
+            calibration_snapshot(stored),
+            echoed.get("calibration_key") if isinstance(echoed.get("calibration_key"), dict) else None,
+            key_hash,
+            datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc),
+        )
+        _recorded_calibrations[(provider_id, model_name)] = epoch
+        if new_revision is not None:
+            _profile_write_cache.forget(provider_id, model_name)
+            changed.append(model_name)
+    return changed
+
+
+def _load_effective_profiles(provider_id: int, model_names: list[str] | None = None) -> Dict[str, Dict[str, Any]]:
+    with DBManager() as db:
+        rows = db.get_central_model_profiles(provider_id, model_names)
+    return {str(row["model_name"]): effective_profile(provider_id, row) for row in rows}
+
+
+async def _push_model_profiles(
+    provider_id: int,
+    model_names: list[str] | None = None,
+    calibration_key_hashes: Dict[str, str] | None = None,
+) -> None:
+    """Send the stored profiles to a worker that syncs with the database."""
+    if not _main._logosnode_registry.supports_action(provider_id, SYNC_MODEL_PROFILES_ACTION):
+        return
+    try:
+        if calibration_key_hashes:
+            await asyncio.to_thread(_update_reported_calibration_keys, provider_id, calibration_key_hashes)
+        profiles = await asyncio.to_thread(_load_effective_profiles, provider_id, model_names)
+        await _main._logosnode_registry.send_command(
+            provider_id,
+            SYNC_MODEL_PROFILES_ACTION,
+            params={"profiles": profiles, "complete": model_names is None},
+            timeout_seconds=30,
+        )
+    except Exception:
+        # The worker keeps its current profiles; the next hello pushes again.
+        logger.warning(
+            "Failed to push model profiles to provider %s",
+            _resolve_provider_name(provider_id),
+            exc_info=True,
+        )
+
+
+def _update_reported_calibration_keys(provider_id: int, calibration_key_hashes: Dict[str, str]) -> None:
+    with DBManager() as db:
+        db.update_reported_calibration_keys(provider_id, calibration_key_hashes)
+
+
+def _schedule_model_profile_push(
+    provider_id: int,
+    model_names: list[str] | None = None,
+    calibration_key_hashes: Dict[str, str] | None = None,
+) -> None:
+    task = asyncio.create_task(_push_model_profiles(provider_id, model_names, calibration_key_hashes))
+    _main._background_tasks.add(task)
+    task.add_done_callback(_main._background_tasks.discard)
+
+
+def _string_map(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items() if isinstance(v, str) and v}
 
 
 def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> None:
@@ -317,6 +435,18 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
     }
 
 
+def _logosnode_provider_for_key(shared_key: str) -> Dict[str, Any]:
+    with DBManager() as db:
+        provider = db.get_logosnode_provider_by_api_key(shared_key)
+
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found for this API key")
+    provider_type = _normalize_provider_type(provider.get("provider_type"))
+    if provider_type != "logosnode":
+        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
+    return provider
+
+
 @router.post("/logosdb/providers/logosnode/auth", tags=["logosnode"])
 async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     """
@@ -326,14 +456,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     to know or send a provider_id.
     """
     _require_tls_request(request)
-    with DBManager() as db:
-        provider = db.get_logosnode_provider_by_api_key(data.shared_key)
-
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found for this API key")
-    provider_type = _normalize_provider_type(provider.get("provider_type"))
-    if provider_type != "logosnode":
-        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
+    provider = _logosnode_provider_for_key(data.shared_key)
 
     provider_id = provider["id"]
     worker_id = provider.get("name") or f"worker-{provider_id}"
@@ -364,6 +487,39 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         "expires_in_seconds": 60,
         "hf_token": _central_hf_token(),
     }
+
+
+@router.post("/logosdb/providers/logosnode/model-profiles", tags=["logosnode"])
+async def logosnode_model_profiles(data: LogosNodeModelProfilesRequest, request: Request):
+    """Profiles a worker starts with, before it starts any lane.
+
+    ``legacy_import`` is the worker's former local file, used only once.
+    """
+    _require_tls_request(request)
+    provider = _logosnode_provider_for_key(data.shared_key)
+    provider_id = int(provider["id"])
+
+    def _load() -> Dict[str, Dict[str, Any]]:
+        with DBManager() as db:
+            if data.legacy_import is not None:
+                imported = db.import_legacy_model_profiles(
+                    provider_id,
+                    data.legacy_import.model_profiles,
+                    data.legacy_import.unsupported_models,
+                )
+                if imported:
+                    logger.info(
+                        "Imported %d model profile(s) from the local file of provider %s",
+                        imported,
+                        _resolve_provider_name(provider_id),
+                    )
+            if data.calibration_key_hashes:
+                db.update_reported_calibration_keys(provider_id, data.calibration_key_hashes)
+        return _load_effective_profiles(provider_id)
+
+    _profile_write_cache.forget(provider_id)
+    profiles = await asyncio.to_thread(_load)
+    return {"profiles": profiles}
 
 
 @router.websocket("/logosdb/providers/logosnode/session")
@@ -410,6 +566,10 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
                     actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
+                )
+                _schedule_model_profile_push(
+                    ticket.provider_id,
+                    calibration_key_hashes=_string_map(payload.get("calibration_key_hashes")),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -656,3 +816,45 @@ async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
             "current_model": current_model,
         }
     )
+
+
+@router.post("/logosdb/providers/logosnode/model-profiles/clear-unsupported", tags=["logosnode"])
+async def logosnode_clear_unsupported(data: LogosNodeClearUnsupportedRequest):
+    """Let calibration retry a model a node marked permanently unsupported."""
+    _require_root_access(data.logos_key)
+
+    def _clear() -> int | None:
+        with DBManager() as db:
+            return db.clear_calibration_unsupported(data.provider_id, data.model_name)
+
+    revision = await asyncio.to_thread(_clear)
+    if revision is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"{data.model_name} is not marked unsupported on provider {data.provider_id}"},
+        )
+    _profile_write_cache.forget(data.provider_id, data.model_name)
+    await _push_model_profiles(data.provider_id, [data.model_name])
+    return {"provider_id": data.provider_id, "model_name": data.model_name, "sync_revision": revision}
+
+
+@router.post("/logosdb/providers/logosnode/model-calibrations/invalidate", tags=["logosnode"])
+async def logosnode_invalidate_calibration(data: LogosNodeInvalidateCalibrationRequest):
+    """Stop trusting a calibration; nodes using it re-calibrate the model."""
+    _require_root_access(data.logos_key)
+
+    def _invalidate() -> list[tuple[int, str]]:
+        with DBManager() as db:
+            return db.invalidate_model_calibration(data.calibration_id, data.reason)
+
+    affected = await asyncio.to_thread(_invalidate)
+    by_provider: Dict[int, list[str]] = {}
+    for provider_id, model_name in affected:
+        _profile_write_cache.forget(provider_id, model_name)
+        by_provider.setdefault(provider_id, []).append(model_name)
+    for provider_id, model_names in by_provider.items():
+        await _push_model_profiles(provider_id, model_names)
+    return {
+        "calibration_id": data.calibration_id,
+        "affected": [{"provider_id": pid, "model_name": name} for pid, name in affected],
+    }

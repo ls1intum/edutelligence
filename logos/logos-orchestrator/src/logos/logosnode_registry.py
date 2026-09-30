@@ -1446,6 +1446,11 @@ class LogosNodeRuntimeRegistry:
             return None
         return session.worker_id, session.latest_vllm_metrics_text
 
+    def supports_action(self, provider_id: int, action: str) -> bool:
+        """Whether the connected worker listed ``action`` in its hello."""
+        session = self._sessions.get(int(provider_id))
+        return session is not None and action in session.actions
+
     def has_received_first_status(self, provider_id: int) -> bool:
         """Check if a provider has sent at least one status update since connecting."""
         session = self._sessions.get(int(provider_id))

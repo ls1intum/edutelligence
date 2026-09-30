@@ -447,6 +447,7 @@ class CalibrationOrchestrator:
                     and not profile.kv_cache_to_max_model_len_pairs
                 )
                 or collapsed_envelope
+                or bool(profile is not None and profile.calibration_stale)
             )
             if needs_calib:
                 return True
