@@ -25,6 +25,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberReposi
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepoLinkRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepositoryCredentialRepository;
+import jakarta.persistence.EntityManager;
 
 @Service
 public class TeamRepoLinkService {
@@ -44,17 +45,20 @@ public class TeamRepoLinkService {
     private final TeamMemberRepository teamMemberRepository;
     private final TeamRepositoryCredentialRepository credentialRepository;
     private final AiWorkflowAnalysisRepository analysisRepository;
+    private final EntityManager entityManager;
 
     public TeamRepoLinkService(TeamRepoLinkRepository repoLinkRepository,
                                TeamRepository teamRepository,
                                TeamMemberRepository teamMemberRepository,
                                TeamRepositoryCredentialRepository credentialRepository,
-                               AiWorkflowAnalysisRepository analysisRepository) {
+                               AiWorkflowAnalysisRepository analysisRepository,
+                               EntityManager entityManager) {
         this.repoLinkRepository = repoLinkRepository;
         this.teamRepository = teamRepository;
         this.teamMemberRepository = teamMemberRepository;
         this.credentialRepository = credentialRepository;
         this.analysisRepository = analysisRepository;
+        this.entityManager = entityManager;
     }
 
     public boolean isTeamOwner(int teamId, int userId) {
@@ -98,7 +102,9 @@ public class TeamRepoLinkService {
 
     @Transactional
     public Optional<Map<String, Object>> update(int teamId, int linkId, UpdateTeamRepoLinkRequestDTO body) {
-        Optional<TeamRepoLink> existing = repoLinkRepository.findByIdAndTeamId(linkId, teamId);
+        // Lock before invalidating analyses so concurrent ingest cannot insert
+        // a succeeded row against the old slug after our delete selection.
+        Optional<TeamRepoLink> existing = repoLinkRepository.findByIdAndTeamIdForUpdate(linkId, teamId);
         if (existing.isEmpty()) {
             return Optional.empty();
         }
@@ -122,6 +128,7 @@ public class TeamRepoLinkService {
             // coverage for the new URL.
             if (!slug.equals(previousSlug)) {
                 analysisRepository.deleteByTeamRepositoryId(linkId);
+                cancelOrphanedAnalysisSessions(linkId);
             }
         }
         if (body.branch() != null) {
@@ -136,12 +143,33 @@ public class TeamRepoLinkService {
 
     @Transactional
     public boolean delete(int teamId, int linkId) {
-        Optional<TeamRepoLink> existing = repoLinkRepository.findByIdAndTeamId(linkId, teamId);
+        Optional<TeamRepoLink> existing = repoLinkRepository.findByIdAndTeamIdForUpdate(linkId, teamId);
         if (existing.isEmpty()) {
             return false;
         }
+        // Cancel before ON DELETE SET NULL so we still match on the link id.
+        cancelOrphanedAnalysisSessions(linkId);
         repoLinkRepository.delete(existing.get());
         return true;
+    }
+
+    /**
+     * Queued/running analysis sessions keep {@code repo_url}/{@code repo_slug}
+     * after unlink ({@code team_repository_id} becomes null). Cancel them so
+     * they cannot check out with the shared bot token for a caller-chosen URL.
+     */
+    private void cancelOrphanedAnalysisSessions(int linkId) {
+        entityManager.createNativeQuery("""
+            UPDATE agent_sessions
+               SET status = 'cancelled',
+                   error = 'repository link removed or retargeted',
+                   finished_at = CURRENT_TIMESTAMP
+             WHERE team_repository_id = :linkId
+               AND trigger_kind = 'analysis'
+               AND status IN ('queued', 'starting', 'running', 'paused', 'finalizing')
+            """)
+            .setParameter("linkId", linkId)
+            .executeUpdate();
     }
 
     /**

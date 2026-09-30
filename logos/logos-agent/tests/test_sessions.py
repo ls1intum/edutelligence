@@ -6249,3 +6249,38 @@ class TestAFailureThatSaysWhy:
         # the reason is, and the rest is noise.
         assert "line 39" in str(failure.value)
         assert "line 0" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_orphaned_analysis_prepare_omits_shared_github_token(monkeypatch, tmp_path):
+    """Unlinked analysis sessions must not fall back to the bot token."""
+    from dataclasses import replace
+
+    from app import sessions
+
+    captured = {}
+
+    async def fake_run_helper(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(sessions.manager, "_run_helper", fake_run_helper)
+    monkeypatch.setattr(
+        sessions,
+        "settings",
+        replace(sessions.settings, artifact_root=str(tmp_path), session_github_token="ghp-secret"),
+    )
+
+    await sessions.manager._prepare_checkout(
+        {
+            "id": 99,
+            "trigger_kind": "analysis",
+            "team_repository_id": None,
+            "repo_url": "https://github.com/acme/private.git",
+            "repo_slug": "acme/private",
+        },
+        {"base_branch": "main", "volume_name": "vol"},
+        "logos/agent/x",
+        str(tmp_path / "99"),
+    )
+    assert "GITHUB_TOKEN" not in captured["env"]

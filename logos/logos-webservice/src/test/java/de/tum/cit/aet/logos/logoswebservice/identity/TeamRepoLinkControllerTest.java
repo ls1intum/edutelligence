@@ -262,6 +262,43 @@ class TeamRepoLinkControllerTest {
     }
 
     @Test
+    void delete_cancelsQueuedAnalysisSessionsForLink() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/acme/unlink-me\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        Integer workspaceId = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('unlink-cancel-ws', 'main', 'unlink-cancel-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer sessionId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, team_repository_id, trigger_kind,
+                repo_url, repo_slug
+            ) VALUES (?, 'analyze', 'queued', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis',
+                      'https://github.com/acme/unlink-me.git', 'acme/unlink-me')
+            RETURNING id
+            """, Integer.class, workspaceId, linkId);
+
+        mvc.perform(delete("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+
+        java.util.Map<String, Object> row = jdbc.queryForMap(
+            "SELECT status, error, team_repository_id FROM agent_sessions WHERE id = ?", sessionId);
+        org.assertj.core.api.Assertions.assertThat(row.get("status")).isEqualTo("cancelled");
+        org.assertj.core.api.Assertions.assertThat(row.get("team_repository_id")).isNull();
+        org.assertj.core.api.Assertions.assertThat((String) row.get("error"))
+            .contains("repository link");
+    }
+
+    @Test
     void delete_missingLinkReturns404() throws Exception {
         mvc.perform(delete("/admin/teams/2001/repositories/99999")
                 .with(TestJwt.logosAdmin()))

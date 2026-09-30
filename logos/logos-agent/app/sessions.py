@@ -1507,20 +1507,20 @@ class SessionManager:
             # the token turns out to be somebody else's.
             "LOGOS_AGENT_GITHUB_LOGIN": settings.github_login,
         }
-        # Linked application analysis must not inherit the shared bot token:
-        # an APP_ADMIN could otherwise point a link at any private slug the
-        # bot can read. Only an active per-link deploy key authenticates
-        # private checkout; otherwise the helper uses anonymous HTTPS.
+        # Application analysis must not inherit the shared bot token — even
+        # after unlink nulls team_repository_id while repo_url/repo_slug remain.
+        # Only an active per-link deploy key authenticates private checkout;
+        # otherwise the helper uses anonymous HTTPS.
+        is_analysis = str(session.get("trigger_kind") or "") == "analysis"
         team_repo_id = session.get("team_repository_id")
-        is_linked_analysis = team_repo_id is not None
-        if settings.session_github_token and not is_linked_analysis:
+        if settings.session_github_token and not is_analysis:
             env["GITHUB_TOKEN"] = settings.session_github_token
 
         # Per-link deploy keys: write via the runner-mounted artifact root
         # (same volume the helper binds at /artifacts). Never write through
         # the Docker-daemon host path — that lands in the runner's own FS.
         key_runner_path: Path | None = None
-        if is_linked_analysis:
+        if is_analysis and team_repo_id is not None:
             from . import repo_credentials
 
             pem = await repo_credentials.load_deploy_key_pem(int(team_repo_id))
@@ -1544,6 +1544,11 @@ class SessionManager:
                     "session %s linked analysis has no active deploy key; " "anonymous public checkout only",
                     session["id"],
                 )
+        elif is_analysis:
+            logger.info(
+                "session %s analysis has no team_repository_id; anonymous public checkout only",
+                session["id"],
+            )
 
         try:
             code = await self._run_helper(
