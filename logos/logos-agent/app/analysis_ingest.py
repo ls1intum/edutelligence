@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,17 +27,59 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_FILE = "analysis.json"
 VALID_SLAS = frozenset({"ux-critical", "ux-high-prio", "ux-background"})
+# Cap memory: an agent-written artifact must not exhaust the runner.
+MAX_ANALYSIS_BYTES = 2 * 1024 * 1024
 
 
 def artifact_analysis_path(session_id: int) -> Path:
     return Path(settings.artifact_root) / str(session_id) / ANALYSIS_FILE
 
 
+def read_analysis_artifact(path: Path) -> bytes:
+    """Read ``analysis.json`` without following symlinks, as a regular file only.
+
+    The agent sandbox can create ``analysis.json -> ../other-session/...``.
+    Following that would let one session ingest another team's private
+    workflows. ``O_NOFOLLOW`` rejects a final-component symlink; ``fstat``
+    confirms a regular file; the read is byte-capped.
+    """
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise OSError(f"unsafe or unreadable analysis artifact: {exc}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError("analysis artifact is not a regular file")
+        if st.st_size > MAX_ANALYSIS_BYTES:
+            raise OSError(f"analysis artifact exceeds {MAX_ANALYSIS_BYTES} bytes")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_ANALYSIS_BYTES:
+                raise OSError(f"analysis artifact exceeds {MAX_ANALYSIS_BYTES} bytes")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
 async def ingest_session(session: dict[str, Any]) -> None:
     """Load analysis.json for ``session`` and upsert results, or mark failed."""
     session_id = int(session["id"])
     path = artifact_analysis_path(session_id)
-    if not path.is_file():
+    try:
+        raw = read_analysis_artifact(path)
+    except FileNotFoundError:
         logger.info(
             "analysis session %s left no %s; marking analysis failed",
             session_id,
@@ -43,10 +87,14 @@ async def ingest_session(session: dict[str, Any]) -> None:
         )
         await mark_analysis_failed(session_id, f"missing {ANALYSIS_FILE}")
         return
+    except OSError as exc:
+        logger.warning("could not safely read analysis.json for session %s: %s", session_id, exc)
+        await mark_analysis_failed(session_id, f"unsafe analysis.json: {exc}")
+        return
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("could not read analysis.json for session %s: %s", session_id, exc)
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning("could not parse analysis.json for session %s: %s", session_id, exc)
         await mark_analysis_failed(session_id, f"invalid analysis.json: {exc}")
         return
     if not isinstance(payload, dict):

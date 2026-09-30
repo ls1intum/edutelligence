@@ -141,3 +141,36 @@ async def test_ingest_rejects_non_object_json(tmp_path, monkeypatch, caplog):
         await analysis_ingest.ingest_session({"id": 8, "team_repository_id": 1})
     assert "not an object" in caplog.text
     assert any("UPDATE ai_workflow_analyses" in sql for sql, _ in conn.statements)
+
+
+async def test_ingest_rejects_sibling_session_symlink(tmp_path, monkeypatch, caplog):
+    _patch_artifact_root(monkeypatch, tmp_path)
+    victim = tmp_path / "10"
+    attacker = tmp_path / "11"
+    victim.mkdir()
+    attacker.mkdir()
+    secret = {"commit_sha": "deadbeef", "workflows": [], "recommendations": []}
+    (victim / "analysis.json").write_text(json.dumps(secret), encoding="utf-8")
+    (attacker / "analysis.json").symlink_to(victim / "analysis.json")
+
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    with caplog.at_level("WARNING"):
+        await analysis_ingest.ingest_session({"id": 11, "team_repository_id": 99})
+    assert "unsafe" in caplog.text or "symlink" in caplog.text.lower() or "analysis.json" in caplog.text
+    assert not any("INSERT INTO ai_workflows" in sql for sql, _ in conn.statements)
+    assert any("UPDATE ai_workflow_analyses" in sql for sql, _ in conn.statements)
+
+
+async def test_ingest_rejects_oversized_artifact(tmp_path, monkeypatch, caplog):
+    _patch_artifact_root(monkeypatch, tmp_path)
+    session_dir = tmp_path / "12"
+    session_dir.mkdir()
+    huge = b"{" + b'"x":"' + (b"a" * (analysis_ingest.MAX_ANALYSIS_BYTES + 10)) + b'"}'
+    (session_dir / "analysis.json").write_bytes(huge)
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    with caplog.at_level("WARNING"):
+        await analysis_ingest.ingest_session({"id": 12, "team_repository_id": 1})
+    assert "unsafe" in caplog.text or "exceeds" in caplog.text
+    assert any("UPDATE ai_workflow_analyses" in sql for sql, _ in conn.statements)
