@@ -78,8 +78,20 @@ describe('RepositoriesTabComponent', () => {
     expect(updateTeamRepository).toHaveBeenCalledWith(7, 11, {
       repo_url: sample.repo_url,
       branch: 'release',
-      paths: null,
+      paths: [],
     });
+  });
+
+  it('clears stored path filters when the paths field is emptied', async () => {
+    const component = setup();
+    component.openEdit(sample);
+    component.formPaths.set('   ');
+    await component.submitForm();
+    expect(updateTeamRepository).toHaveBeenCalledWith(
+      7,
+      11,
+      expect.objectContaining({ paths: [] }),
+    );
   });
 
   it('unlinks a repository after confirm', async () => {

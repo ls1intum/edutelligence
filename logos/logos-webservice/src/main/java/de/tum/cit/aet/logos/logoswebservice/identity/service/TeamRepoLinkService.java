@@ -4,11 +4,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +33,8 @@ public class TeamRepoLinkService {
     private static final Pattern GITHUB_SSH = Pattern.compile(
         "^git@github\\.com:([^/\\s]+)/([^/\\s#?]+?)(?:\\.git)?/?$",
         Pattern.CASE_INSENSITIVE);
+
+    private static final String UNIQUE_TEAM_SLUG = "uq_team_repositories_team_slug";
 
     private final TeamRepoLinkRepository repoLinkRepository;
     private final TeamRepository teamRepository;
@@ -69,8 +73,7 @@ public class TeamRepoLinkService {
                 HttpStatus.BAD_REQUEST,
                 "repo_url must be a GitHub repository URL (https://github.com/owner/repo or git@github.com:owner/repo.git)"));
         if (repoLinkRepository.existsByTeamIdAndRepoSlug(teamId, slug)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "This team already links repository '" + slug + "'");
+            throw duplicateSlug(slug);
         }
         Instant now = Instant.now();
         TeamRepoLink link = new TeamRepoLink();
@@ -81,7 +84,7 @@ public class TeamRepoLinkService {
         link.setPaths(normalizePaths(body.paths()));
         link.setCreatedAt(now);
         link.setUpdatedAt(now);
-        return toMap(repoLinkRepository.save(link));
+        return toMap(saveLink(link, slug));
     }
 
     @Transactional
@@ -91,6 +94,7 @@ public class TeamRepoLinkService {
             return Optional.empty();
         }
         TeamRepoLink link = existing.get();
+        String conflictSlug = link.getRepoSlug();
         if (body.repoUrl() != null) {
             String url = requireUrl(body.repoUrl());
             String slug = parseGithubSlug(url)
@@ -98,11 +102,11 @@ public class TeamRepoLinkService {
                     HttpStatus.BAD_REQUEST,
                     "repo_url must be a GitHub repository URL (https://github.com/owner/repo or git@github.com:owner/repo.git)"));
             if (repoLinkRepository.existsByTeamIdAndRepoSlugAndIdNot(teamId, slug, linkId)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "This team already links repository '" + slug + "'");
+                throw duplicateSlug(slug);
             }
             link.setRepoUrl(canonicalHttpsUrl(slug));
             link.setRepoSlug(slug);
+            conflictSlug = slug;
         }
         if (body.branch() != null) {
             link.setBranch(normalizeBranch(body.branch()));
@@ -111,7 +115,7 @@ public class TeamRepoLinkService {
             link.setPaths(normalizePaths(body.paths()));
         }
         link.setUpdatedAt(Instant.now());
-        return Optional.of(toMap(repoLinkRepository.save(link)));
+        return Optional.of(toMap(saveLink(link, conflictSlug)));
     }
 
     @Transactional
@@ -127,6 +131,8 @@ public class TeamRepoLinkService {
     /**
      * Derives {@code owner/repo} from a GitHub HTTPS or SSH clone URL.
      * Returns empty when the URL is not a single-repository GitHub address.
+     * The slug is lowercased: GitHub repository identity is case-insensitive,
+     * and the unique index compares TEXT literally.
      */
     static Optional<String> parseGithubSlug(String rawUrl) {
         if (rawUrl == null) {
@@ -135,13 +141,17 @@ public class TeamRepoLinkService {
         String url = rawUrl.trim();
         Matcher https = GITHUB_HTTPS.matcher(url);
         if (https.matches()) {
-            return Optional.of(https.group(1) + "/" + stripGitSuffix(https.group(2)));
+            return Optional.of(normalizeSlug(https.group(1), https.group(2)));
         }
         Matcher ssh = GITHUB_SSH.matcher(url);
         if (ssh.matches()) {
-            return Optional.of(ssh.group(1) + "/" + stripGitSuffix(ssh.group(2)));
+            return Optional.of(normalizeSlug(ssh.group(1), ssh.group(2)));
         }
         return Optional.empty();
+    }
+
+    private static String normalizeSlug(String owner, String repo) {
+        return (owner + "/" + stripGitSuffix(repo)).toLowerCase(Locale.ROOT);
     }
 
     private static String stripGitSuffix(String name) {
@@ -188,6 +198,34 @@ public class TeamRepoLinkService {
             }
         }
         return cleaned.isEmpty() ? null : List.copyOf(cleaned);
+    }
+
+    private TeamRepoLink saveLink(TeamRepoLink link, String slug) {
+        try {
+            return repoLinkRepository.saveAndFlush(link);
+        } catch (DataIntegrityViolationException e) {
+            if (isTeamSlugUniqueViolation(e)) {
+                throw duplicateSlug(slug);
+            }
+            throw e;
+        }
+    }
+
+    private static boolean isTeamSlugUniqueViolation(DataIntegrityViolationException e) {
+        Throwable cursor = e;
+        while (cursor != null) {
+            String message = cursor.getMessage();
+            if (message != null && message.contains(UNIQUE_TEAM_SLUG)) {
+                return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
+    }
+
+    private static ResponseStatusException duplicateSlug(String slug) {
+        return new ResponseStatusException(HttpStatus.CONFLICT,
+            "This team already links repository '" + slug + "'");
     }
 
     private Map<String, Object> toMap(TeamRepoLink link) {

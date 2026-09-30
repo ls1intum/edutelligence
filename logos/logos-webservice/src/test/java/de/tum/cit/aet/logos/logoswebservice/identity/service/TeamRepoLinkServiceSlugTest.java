@@ -15,9 +15,10 @@ class TeamRepoLinkServiceSlugTest {
         "https://github.com/ls1intum/edutelligence, ls1intum/edutelligence",
         "https://github.com/ls1intum/edutelligence.git, ls1intum/edutelligence",
         "https://www.github.com/ls1intum/edutelligence/, ls1intum/edutelligence",
-        "http://github.com/Owner/Repo.git, Owner/Repo",
+        "http://github.com/Owner/Repo.git, owner/repo",
+        "https://github.com/LS1INTUM/Artemis, ls1intum/artemis",
         "git@github.com:ls1intum/edutelligence.git, ls1intum/edutelligence",
-        "git@github.com:ls1intum/edutelligence, ls1intum/edutelligence",
+        "git@github.com:LS1INTUM/EduTelligence, ls1intum/edutelligence",
     })
     void parseGithubSlug_acceptsCommonForms(String url, String expected) {
         assertThat(TeamRepoLinkService.parseGithubSlug(url)).isEqualTo(Optional.of(expected));

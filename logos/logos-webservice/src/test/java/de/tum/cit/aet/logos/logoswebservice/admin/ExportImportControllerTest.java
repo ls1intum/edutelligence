@@ -59,16 +59,31 @@ class ExportImportControllerTest {
            .andExpect(jsonPath("$.result").isMap())
            .andExpect(jsonPath("$.result.users").isArray())
            .andExpect(jsonPath("$.result.models").isArray())
-           .andExpect(jsonPath("$.result.providers").isArray());
+           .andExpect(jsonPath("$.result.providers").isArray())
+           .andExpect(jsonPath("$.result.team_repositories").isArray());
     }
 
     @Test
     void importExport_roundtrip() throws Exception {
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "repo_url": "https://github.com/ls1intum/edutelligence.git",
+                      "branch": "develop",
+                      "paths": ["logos"]
+                    }
+                    """))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/edutelligence"));
+
         MvcResult exportResult = mvc.perform(post("/logosdb/export")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result.team_repositories.length()").value(1))
            .andReturn();
 
         String exportBody = exportResult.getResponse().getContentAsString();
@@ -86,5 +101,14 @@ class ExportImportControllerTest {
                 .content(importBody))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.result").value("Import successful"));
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .get("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(1))
+           .andExpect(jsonPath("$[0].repo_slug").value("ls1intum/edutelligence"))
+           .andExpect(jsonPath("$[0].branch").value("develop"))
+           .andExpect(jsonPath("$[0].paths[0]").value("logos"));
     }
 }

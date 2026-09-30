@@ -16,7 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class ExportImportService {
 
     private static final List<String> TABLES = List.of(
-        "users", "teams", "team_members", "api_keys", "providers", "models",
+        "users", "teams", "team_repositories", "team_members", "api_keys", "providers", "models",
         "model_provider", "team_model_permissions", "api_key_model_permissions",
         "team_provider_permissions", "api_key_provider_permissions", "policies",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
@@ -24,7 +24,7 @@ public class ExportImportService {
     private static final Set<String> TABLE_WHITELIST = Set.copyOf(TABLES);
 
     private static final List<String> SEQUENCE_TABLES = List.of(
-        "users", "teams", "api_keys", "providers", "models",
+        "users", "teams", "team_repositories", "api_keys", "providers", "models",
         "model_provider", "policies", "log_entry",
         "token_types", "usage_tokens", "token_prices", "jobs"
     );

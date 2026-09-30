@@ -132,7 +132,48 @@ class TeamRepoLinkControllerTest {
                 .contentType("application/json")
                 .content("{\"repo_url\":\"https://github.com/ls1intum/Artemis\"}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.repo_slug").value("ls1intum/Artemis"));
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/artemis"));
+    }
+
+    @Test
+    void create_rejectsCaseVariantDuplicate() throws Exception {
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/Artemis\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/artemis"));
+
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/LS1INTUM/artemis.git\"}"))
+           .andExpect(status().isConflict())
+           .andExpect(jsonPath("$.detail", containsString("ls1intum/artemis")));
+    }
+
+    @Test
+    void update_clearsPathFiltersWithEmptyArray() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "repo_url": "https://github.com/ls1intum/path-clear",
+                      "paths": ["logos"]
+                    }
+                    """))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.paths[0]").value("logos"))
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        mvc.perform(patch("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"paths\":[]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.paths").value(org.hamcrest.Matchers.nullValue()));
     }
 
     @Test
@@ -143,6 +184,44 @@ class TeamRepoLinkControllerTest {
                 .content("{\"repo_url\":\"https://gitlab.com/ls1intum/edutelligence\"}"))
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.detail", containsString("GitHub")));
+    }
+
+    @Test
+    void create_concurrentDuplicateReturnsConflict() throws Exception {
+        // Two writers can both pass the precheck; the unique index must still
+        // surface as 409 rather than an unhandled 500.
+        var ready = new java.util.concurrent.CountDownLatch(2);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var outcomes = new java.util.concurrent.ConcurrentLinkedQueue<Integer>();
+
+        Runnable postOnce = () -> {
+            try {
+                ready.countDown();
+                start.await();
+                int status = mvc.perform(post("/admin/teams/2001/repositories")
+                        .with(TestJwt.logosAdmin())
+                        .contentType("application/json")
+                        .content("{\"repo_url\":\"https://github.com/ls1intum/race-repo\"}"))
+                    .andReturn()
+                    .getResponse()
+                    .getStatus();
+                outcomes.add(status);
+            } catch (Exception e) {
+                outcomes.add(-1);
+            }
+        };
+
+        Thread a = new Thread(postOnce);
+        Thread b = new Thread(postOnce);
+        a.start();
+        b.start();
+        ready.await();
+        start.countDown();
+        a.join();
+        b.join();
+
+        org.assertj.core.api.Assertions.assertThat(outcomes)
+            .containsExactlyInAnyOrder(200, 409);
     }
 
     @Test

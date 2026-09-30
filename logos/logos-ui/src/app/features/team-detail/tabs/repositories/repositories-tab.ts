@@ -120,7 +120,9 @@ export class RepositoriesTabComponent implements OnChanges {
         await this.teamService.updateTeamRepository(this.teamId, editing.id, {
           repo_url: url,
           branch,
-          paths,
+          // Empty must be [] so the service clears stored filters; null means
+          // "leave paths alone" on the PATCH contract.
+          paths: paths ?? [],
         });
       } else {
         await this.teamService.createTeamRepository(this.teamId, {
