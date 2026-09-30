@@ -299,6 +299,61 @@ class TeamRepoLinkControllerTest {
     }
 
     @Test
+    void delete_requestsRunnerCancelForRunningAndPausedAnalysis() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/acme/unlink-active\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        Integer wsRun = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('unlink-run-ws', 'main', 'unlink-run-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer wsPaused = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('unlink-paused-ws', 'main', 'unlink-paused-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer runningId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, team_repository_id, trigger_kind,
+                repo_url, repo_slug, container_id
+            ) VALUES (?, 'analyze', 'running', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis',
+                      'https://github.com/acme/unlink-active.git', 'acme/unlink-active', 'ctr-run')
+            RETURNING id
+            """, Integer.class, wsRun, linkId);
+        Integer pausedId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, team_repository_id, trigger_kind,
+                repo_url, repo_slug, container_id
+            ) VALUES (?, 'analyze', 'paused', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis',
+                      'https://github.com/acme/unlink-active.git', 'acme/unlink-active', 'ctr-paused')
+            RETURNING id
+            """, Integer.class, wsPaused, linkId);
+
+        mvc.perform(delete("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+
+        for (Integer sessionId : java.util.List.of(runningId, pausedId)) {
+            java.util.Map<String, Object> row = jdbc.queryForMap(
+                "SELECT status, error, team_repository_id FROM agent_sessions WHERE id = ?", sessionId);
+            // Still occupying until the agent runner honors cancel_requested.
+            org.assertj.core.api.Assertions.assertThat(row.get("status"))
+                .isIn("running", "paused");
+            org.assertj.core.api.Assertions.assertThat(row.get("team_repository_id")).isNull();
+            org.assertj.core.api.Assertions.assertThat((String) row.get("error"))
+                .startsWith("cancel_requested:");
+        }
+    }
+
+    @Test
     void delete_missingLinkReturns404() throws Exception {
         mvc.perform(delete("/admin/teams/2001/repositories/99999")
                 .with(TestJwt.logosAdmin()))

@@ -154,9 +154,10 @@ public class TeamRepoLinkService {
     }
 
     /**
-     * Queued/running analysis sessions keep {@code repo_url}/{@code repo_slug}
-     * after unlink ({@code team_repository_id} becomes null). Cancel them so
-     * they cannot check out with the shared bot token for a caller-chosen URL.
+     * Queued analysis can be cancelled in-database (no container yet). Active
+     * sessions must keep occupying their workspace until the agent runner
+     * honors {@code cancel_requested:} via {@code SessionManager.cancel},
+     * which stops helpers and agent containers before freeing occupancy.
      */
     private void cancelOrphanedAnalysisSessions(int linkId) {
         entityManager.createNativeQuery("""
@@ -166,7 +167,17 @@ public class TeamRepoLinkService {
                    finished_at = CURRENT_TIMESTAMP
              WHERE team_repository_id = :linkId
                AND trigger_kind = 'analysis'
-               AND status IN ('queued', 'starting', 'running', 'paused', 'finalizing')
+               AND status = 'queued'
+            """)
+            .setParameter("linkId", linkId)
+            .executeUpdate();
+        entityManager.createNativeQuery("""
+            UPDATE agent_sessions
+               SET error = 'cancel_requested: repository link removed or retargeted'
+             WHERE team_repository_id = :linkId
+               AND trigger_kind = 'analysis'
+               AND status IN ('starting', 'running', 'paused', 'finalizing')
+               AND (error IS NULL OR error NOT LIKE 'cancel_requested:%')
             """)
             .setParameter("linkId", linkId)
             .executeUpdate();

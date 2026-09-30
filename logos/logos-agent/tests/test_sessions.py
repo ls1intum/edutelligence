@@ -6284,3 +6284,105 @@ async def test_orphaned_analysis_prepare_omits_shared_github_token(monkeypatch, 
         str(tmp_path / "99"),
     )
     assert "GITHUB_TOKEN" not in captured["env"]
+
+
+@pytest.mark.asyncio
+async def test_analysis_launch_skips_attachment_collection(monkeypatch, tmp_path):
+    """Analysis tasks must not call authenticated attachment collection."""
+    from dataclasses import replace
+
+    from app import sessions
+
+    collected = []
+
+    async def spy_collect(session_id, task):
+        collected.append((session_id, task))
+        return []
+
+    async def fake_volume_mountpoint(_name):
+        return str(tmp_path)
+
+    async def fake_still_ours(_sid):
+        return False
+
+    async def fake_get_workspace(_wid):
+        return {"id": 1, "name": "ws", "base_branch": "main", "volume_name": "vol"}
+
+    async def noop(*_a, **_k):
+        return None
+
+    class _AllowAll:
+        def allows(self, _model):
+            return True
+
+        def resolve(self, model):
+            return model or "local"
+
+    monkeypatch.setattr(sessions.manager, "_collect_attachments", spy_collect)
+    monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", fake_volume_mountpoint)
+    monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+    monkeypatch.setattr(sessions.manager, "_still_ours", fake_still_ours)
+
+    async def _async_true():
+        return True
+
+    monkeypatch.setattr(sessions.manager, "_workspace_image_present", _async_true)
+    monkeypatch.setattr(sessions.db, "get_workspace", fake_get_workspace)
+    monkeypatch.setattr(sessions.model_policy, "current", lambda: _AllowAll())
+    monkeypatch.setattr(
+        sessions,
+        "settings",
+        replace(
+            sessions.settings,
+            artifact_root=str(tmp_path),
+            github_token="ghp-bot",
+            branch_prefix="logos/agent/",
+            protected_branches=frozenset({"main", "master"}),
+        ),
+    )
+
+    session = {
+        "id": 77,
+        "status": "starting",
+        "workspace_id": 1,
+        "task": "paths: ![img](https://github.com/other-team/private/assets/1)",
+        "trigger_kind": "analysis",
+        "team_repository_id": 5,
+        "repo_url": "https://github.com/acme/app.git",
+        "repo_slug": "acme/app",
+        "no_push": True,
+        "model": None,
+        "branch_name": None,
+    }
+
+    await sessions.manager._launch(session)
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_honor_cancel_requests_invokes_runner_cancel(monkeypatch):
+    from app import sessions
+    from app.schemas import SessionStatus
+
+    cancelled = []
+
+    async def fake_sessions_in_status(status):
+        if status is SessionStatus.RUNNING:
+            return [
+                {
+                    "id": 42,
+                    "status": "running",
+                    "error": "cancel_requested: repository link removed or retargeted",
+                }
+            ]
+        return []
+
+    async def fake_cancel(session_id):
+        cancelled.append(session_id)
+        return True
+
+    monkeypatch.setattr(sessions.db, "sessions_in_status", fake_sessions_in_status)
+    monkeypatch.setattr(sessions.manager, "cancel", fake_cancel)
+
+    await sessions.manager._honor_cancel_requests()
+    assert cancelled == [42]

@@ -615,6 +615,31 @@ class SessionManager:
 
     # --- scheduling -------------------------------------------------------
 
+    async def _honor_cancel_requests(self) -> None:
+        """Apply DB-flagged cancels through the runner-owned cancel path.
+
+        Webservice unlink/retarget cannot stop Docker; it stamps
+        ``error`` with ``cancel_requested:`` while leaving active sessions
+        occupying their workspace. Honoring that here runs the same
+        helper/container cleanup as the cancel API before occupancy frees.
+        """
+        for status in (
+            SessionStatus.STARTING,
+            SessionStatus.RUNNING,
+            SessionStatus.PAUSED,
+            SessionStatus.FINALIZING,
+        ):
+            for session in await db.sessions_in_status(status):
+                error = str(session.get("error") or "")
+                if not error.startswith("cancel_requested:"):
+                    continue
+                sid = int(session["id"])
+                logger.info("honoring cancel request for session %s", sid)
+                try:
+                    await self.cancel(sid)
+                except Exception:
+                    logger.exception("could not honor cancel request for session %s", sid)
+
     @property
     def last_reading(self) -> capacity.Reading:
         return self._last_reading
@@ -677,6 +702,10 @@ class SessionManager:
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
         control = await controls.current()
+
+        # External cancel requests (e.g. repository unlink) keep the row
+        # occupying its workspace until this runner stops helpers/containers.
+        await self._honor_cancel_requests()
 
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
@@ -1098,8 +1127,13 @@ class SessionManager:
                 logger.info("could not create the state directory for session %s: %s", sid, exc)
             # The pictures a request carries, fetched by the side that has a
             # token and a network. An issue whose whole description is a
-            # screenshot is unreadable to the sandbox otherwise.
-            images = await self._collect_attachments(sid, str(session.get("task") or ""))
+            # screenshot is unreadable to the sandbox otherwise. Analysis
+            # tasks embed owner-controlled path text and must not trigger
+            # authenticated fetches against the shared bot identity.
+            if str(session.get("trigger_kind") or "") == "analysis":
+                images: list[str] = []
+            else:
+                images = await self._collect_attachments(sid, str(session.get("task") or ""))
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
             # The child's state bind source is the state volume's mountpoint on
             # the daemon host, not `state_dir(sid)` — that is a path inside the
@@ -1717,6 +1751,27 @@ class SessionManager:
                 if state == "exited":
                     exit_code = code
                     break
+                # External cancel (e.g. repo unlink) may stamp the row while
+                # we wait on Docker; stop here so occupancy can free cleanly.
+                row = await db.get_session(session_id)
+                if row is not None:
+                    status_now = str(row.get("status") or "")
+                    err_now = str(row.get("error") or "")
+                    if status_now == SessionStatus.CANCELLED.value or err_now.startswith("cancel_requested:"):
+                        try:
+                            await docker_engine.unpause_container(container_id)
+                        except Exception:
+                            pass
+                        try:
+                            await docker_engine.stop_container(container_id, timeout_s=5)
+                        except Exception:
+                            logger.warning(
+                                "could not stop container of externally cancelled session %s",
+                                session_id,
+                            )
+                        if status_now != SessionStatus.CANCELLED.value:
+                            await self.cancel(session_id)
+                        return
                 # A paused container never exits; poll rather than block on
                 # /wait so the pause/resume cycle stays observable.
                 await asyncio.sleep(5.0 if remaining is None else min(5.0, max(1.0, remaining)))
