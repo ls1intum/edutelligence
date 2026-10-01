@@ -649,6 +649,18 @@ export const extractProviderHostRamMb = (
   };
 };
 
+/**
+ * Whether a provider's device reports a single unified memory pool — Apple
+ * Silicon (Metal) has no separate VRAM at all, GPU and CPU draw from the same
+ * bytes. The statistics page must not show such a worker a "VRAM" pie next to
+ * a "RAM" pie: the two charts would describe the same pool twice, and the
+ * VRAM total is a wired-down budget heuristic rather than a real pool. Gated
+ * on device_mode because it is the flag the worker sets for exactly this
+ * hardware; the page then shows one "Unified memory" chart instead.
+ */
+export const isUnifiedMemoryProvider = (sample: VramV2Sample | null | undefined): boolean =>
+  sample?.scheduler_signals?.provider?.device_mode === 'metal';
+
 export const buildVramSignature = (
   providers: VramProviderPayload[]
 ): string =>

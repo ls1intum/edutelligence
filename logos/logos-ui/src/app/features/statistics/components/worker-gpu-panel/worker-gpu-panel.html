@@ -80,15 +80,21 @@
             </div>
 
             <div class="gpu-bars">
-              <div class="bar-section">
-                <div class="bar-header">
-                  <span class="bar-label">Memory</span>
-                  <span class="bar-value">{{ formatMb(device.memory_used_mb) }} / {{ formatMb(device.memory_total_mb) }} ({{ usedPct(device) | number: '1.0-0' }}%)</span>
+              <!-- Unified-memory workers already show the single pool in the
+                   Unified memory pie; the device Memory bar is a wired-down
+                   budget that usually disagrees with physical RAM (e.g. 28 GB
+                   here vs 36 GB there). Hide it so only one total is shown. -->
+              @if (!isUnifiedMemory) {
+                <div class="bar-section">
+                  <div class="bar-header">
+                    <span class="bar-label">Memory</span>
+                    <span class="bar-value">{{ formatMb(device.memory_used_mb) }} / {{ formatMb(device.memory_total_mb) }} ({{ usedPct(device) | number: '1.0-0' }}%)</span>
+                  </div>
+                  <div class="bar-track">
+                    <div class="bar-fill bar-fill--mem" [style.width.%]="usedPct(device)"></div>
+                  </div>
                 </div>
-                <div class="bar-track">
-                  <div class="bar-fill bar-fill--mem" [style.width.%]="usedPct(device)"></div>
-                </div>
-              </div>
+              }
 
               @if (device.utilization_percent != null) {
                 <div class="bar-section">
@@ -104,8 +110,9 @@
             </div>
           </div>
         }
-      } @else {
-        <!-- Synthetic aggregate card -->
+      } @else if (!isUnifiedMemory) {
+        <!-- Synthetic aggregate card — skipped on Metal: same pool as the
+             Unified memory pie, and the aggregate figure is the wired budget. -->
         <div class="gpu-card">
           <div class="synthetic-title">GPU Memory (aggregate)</div>
           <div class="bar-section">
