@@ -175,6 +175,9 @@ public class TeamService {
             teamMap.put("default_cloud_tpm_limit", team.getDefaultCloudTpmLimit());
             teamMap.put("default_local_rpm_limit", team.getDefaultLocalRpmLimit());
             teamMap.put("default_local_tpm_limit", team.getDefaultLocalTpmLimit());
+            // Same field as the teams list: needed so the application-keys SLA
+            // column can show what an unset (inherited) key is actually served as.
+            teamMap.put("priority", team.getPriority());
 
             List<Map<String, Object>> members = memberRepository.findActiveById_TeamId(teamId).stream()
                 .flatMap(m -> userRepository.findById(m.getId().getUserId()).stream().map(user -> {

@@ -1,3 +1,5 @@
+@use 'styles/glass' as *;
+
 .app-keys {
   padding-top: 4px;
 }
@@ -30,6 +32,28 @@
   color: rgb(var(--color-text-accent));
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
+}
+
+// Sits in the `.form-field` flex column, which already provides the gap.
+.field-hint {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  line-height: 1.35;
+}
+
+.section-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+
+  i {
+    flex-shrink: 0;
+    font-size: var(--font-size-xs);
+    color: rgb(var(--color-typography-700));
+  }
 }
 
 .cell-name {
@@ -415,5 +439,179 @@
   .expand-inner {
     padding-left: 16px;
     padding-right: 16px;
+  }
+}
+
+// ── SLA tier & drag-and-drop ordering ─────────────────────────────────────
+// Each row plus its expanded permissions panel is wrapped in one draggable
+// element, so the row is no longer the table card's own last child and has to
+// carry its separator itself.
+.key-drag {
+  border-bottom: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  .table-row {
+    border-bottom: none;
+  }
+}
+
+// First row of an SLA tier: a stronger rule marks the group boundary.
+.table-row--tier-start {
+  border-top: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
+}
+
+.key-drag:first-child .table-row--tier-start {
+  border-top: none;
+}
+
+.col-drag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.table-row > .col-drag {
+  padding: 0 4px;
+}
+
+.btn-drag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  font-size: var(--font-size-sm);
+  cursor: grab;
+  transition: color 0.12s ease;
+
+  &:hover {
+    color: rgb(var(--color-text-accent));
+  }
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.cell-sla {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sla-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+
+  &--critical {
+    background: rgb(var(--color-error));
+  }
+
+  &--high-prio {
+    background: rgb(var(--color-primary-500));
+  }
+
+  &--background {
+    background: rgb(var(--color-typography-700));
+  }
+
+  // Unset keys follow the team/policy tier for colour, but as a hollow ring
+  // so the promise reads as inherited rather than pinned on the key.
+  &--inherited {
+    background: transparent;
+
+    &.sla-dot--critical {
+      border: 2px solid rgb(var(--color-error));
+    }
+
+    &.sla-dot--high-prio {
+      border: 2px solid rgb(var(--color-primary-500));
+    }
+
+    &.sla-dot--background {
+      border: 2px solid rgb(var(--color-typography-700));
+    }
+  }
+}
+
+.sla-select {
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.sla-static {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// Gap left behind while a row is dragged. The default placeholder is a clone
+// of the row, so it keeps the right height in both the table and the card
+// layout without a hardcoded one.
+.cdk-drag-placeholder {
+  opacity: 0.4;
+}
+
+// The preview is a clone CDK moves to <body>, outside the app-data-table host
+// that publishes --data-table-grid. Each row repeats the variable so the
+// clone's grid keeps its columns instead of collapsing to a single stacked
+// one; the rules below only restate the surface the row loses along with its
+// table card.
+.cdk-drag-preview {
+  @include glass-surface;
+  box-sizing: border-box;
+  border-radius: 12px;
+  opacity: 0.95;
+
+  .table-row {
+    border: none;
+  }
+
+  .expand-row {
+    display: none;
+  }
+}
+
+.cdk-drag-animating,
+.cdk-drop-list-dragging .key-drag:not(.cdk-drag-placeholder) {
+  transition: transform 220ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+@media (max-width: 768px) {
+  // The card layout already puts the chevron in the flex flow next to the
+  // key name (`position: static` above). Keep the drag handle in that same
+  // flow — before the chevron — instead of absolutely overlaying it. An
+  // absolute handle with `left: 42px` on a static chevron was a no-op and
+  // the two controls overlapped.
+  .col-drag {
+    position: static;
+    order: -2;
+    flex: 0 0 auto;
+    padding: 0;
+    margin-right: 2px;
+    align-self: center;
+  }
+
+  .key-drag {
+    border-bottom: none;
+  }
+
+  .table-row--tier-start {
+    border-top: none;
   }
 }
