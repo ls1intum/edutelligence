@@ -38,6 +38,11 @@ services:
       retries: 30
     networks: [e2e]
 
+  logos-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [e2e]
+
   # One-shot: bring the schema up to the same revision the webservice would.
   migrate:
     image: liquibase/liquibase:4.31
@@ -228,12 +233,16 @@ services:
         condition: service_completed_successfully
       keycloak:
         condition: service_healthy
+      logos-redis:
+        condition: service_started
     environment:
       DB_HOST: logos-db
       DB_PORT: 5432
       DB_NAME: logosdb
       DB_USER: postgres
       DB_PASSWORD: root
+      REDIS_HOST: logos-redis
+      REDIS_PORT: 6379
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "logos-e2e-internal-secret"
       LOGOS_GATEWAY_ENABLED: "true"

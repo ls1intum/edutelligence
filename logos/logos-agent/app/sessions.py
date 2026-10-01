@@ -615,6 +615,31 @@ class SessionManager:
 
     # --- scheduling -------------------------------------------------------
 
+    async def _honor_cancel_requests(self) -> None:
+        """Apply DB-flagged cancels through the runner-owned cancel path.
+
+        Webservice unlink/retarget cannot stop Docker; it stamps
+        ``error`` with ``cancel_requested:`` while leaving active sessions
+        occupying their workspace. Honoring that here runs the same
+        helper/container cleanup as the cancel API before occupancy frees.
+        """
+        for status in (
+            SessionStatus.STARTING,
+            SessionStatus.RUNNING,
+            SessionStatus.PAUSED,
+            SessionStatus.FINALIZING,
+        ):
+            for session in await db.sessions_in_status(status):
+                error = str(session.get("error") or "")
+                if not error.startswith("cancel_requested:"):
+                    continue
+                sid = int(session["id"])
+                logger.info("honoring cancel request for session %s", sid)
+                try:
+                    await self.cancel(sid)
+                except Exception:
+                    logger.exception("could not honor cancel request for session %s", sid)
+
     @property
     def last_reading(self) -> capacity.Reading:
         return self._last_reading
@@ -677,6 +702,10 @@ class SessionManager:
         # What an operator has asked for right now — the kill switch and the
         # ceiling they set — read before anything is decided.
         control = await controls.current()
+
+        # External cancel requests (e.g. repository unlink) keep the row
+        # occupying its workspace until this runner stops helpers/containers.
+        await self._honor_cancel_requests()
 
         running = await db.sessions_in_status(SessionStatus.RUNNING)
         paused = await db.sessions_in_status(SessionStatus.PAUSED)
@@ -1098,8 +1127,13 @@ class SessionManager:
                 logger.info("could not create the state directory for session %s: %s", sid, exc)
             # The pictures a request carries, fetched by the side that has a
             # token and a network. An issue whose whole description is a
-            # screenshot is unreadable to the sandbox otherwise.
-            images = await self._collect_attachments(sid, str(session.get("task") or ""))
+            # screenshot is unreadable to the sandbox otherwise. Analysis
+            # tasks embed owner-controlled path text and must not trigger
+            # authenticated fetches against the shared bot identity.
+            if str(session.get("trigger_kind") or "") == "analysis":
+                images: list[str] = []
+            else:
+                images = await self._collect_attachments(sid, str(session.get("task") or ""))
             artifact_host_path = str(Path(await docker_engine.volume_mountpoint(settings.artifact_volume)) / str(sid))
             # The child's state bind source is the state volume's mountpoint on
             # the daemon host, not `state_dir(sid)` — that is a path inside the
@@ -1499,22 +1533,71 @@ class SessionManager:
             "LOGOS_SESSION_ID": str(session["id"]),
             "LOGOS_SESSION_BRANCH": branch,
             "LOGOS_SESSION_BASE_BRANCH": workspace["base_branch"],
-            "LOGOS_REPO_URL": settings.repo_url,
+            "LOGOS_REPO_URL": session.get("repo_url") or settings.repo_url,
+            "LOGOS_REPO_SLUG": session.get("repo_slug") or settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
             # The account the session's commits belong to. The helper
             # configures git with it, and the finalizer refuses to push if
             # the token turns out to be somebody else's.
             "LOGOS_AGENT_GITHUB_LOGIN": settings.github_login,
         }
-        if settings.session_github_token:
+        # Application analysis must not inherit the shared bot token — even
+        # after unlink nulls team_repository_id while repo_url/repo_slug remain.
+        # Only an active per-link deploy key authenticates private checkout;
+        # otherwise the helper uses anonymous HTTPS.
+        is_analysis = str(session.get("trigger_kind") or "") == "analysis"
+        team_repo_id = session.get("team_repository_id")
+        if settings.session_github_token and not is_analysis:
             env["GITHUB_TOKEN"] = settings.session_github_token
-        code = await self._run_helper(
-            phase="prepare",
-            session_id=session["id"],
-            env=env,
-            workspace_volume=workspace["volume_name"],
-            artifact_host_path=artifact_host_path,
-        )
+
+        # Per-link deploy keys: write via the runner-mounted artifact root
+        # (same volume the helper binds at /artifacts). Never write through
+        # the Docker-daemon host path — that lands in the runner's own FS.
+        key_runner_path: Path | None = None
+        if is_analysis and team_repo_id is not None:
+            from . import repo_credentials
+
+            pem = await repo_credentials.load_deploy_key_pem(int(team_repo_id))
+            if pem:
+                key_runner_path = artifact_dir(int(session["id"])) / "deploy_key"
+                repo_credentials.write_deploy_key_file(pem, key_runner_path)
+                _give_to_session_user(key_runner_path)
+                slug = session.get("repo_slug") or settings.repo_slug
+                env["LOGOS_REPO_URL"] = f"git@github.com:{slug}.git"
+                env["GIT_SSH_COMMAND"] = (
+                    "ssh -i /artifacts/deploy_key -o IdentitiesOnly=yes "
+                    "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+                )
+                logger.info(
+                    "session %s checkout uses deploy key for team_repository %s",
+                    session["id"],
+                    team_repo_id,
+                )
+            else:
+                logger.info(
+                    "session %s linked analysis has no active deploy key; " "anonymous public checkout only",
+                    session["id"],
+                )
+        elif is_analysis:
+            logger.info(
+                "session %s analysis has no team_repository_id; anonymous public checkout only",
+                session["id"],
+            )
+
+        try:
+            code = await self._run_helper(
+                phase="prepare",
+                session_id=session["id"],
+                env=env,
+                workspace_volume=workspace["volume_name"],
+                artifact_host_path=artifact_host_path,
+            )
+        finally:
+            if key_runner_path is not None:
+                try:
+                    key_runner_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("could not remove deploy key for session %s: %s", session["id"], exc)
         if code != 0:
             said = self._last_helper_output.pop(session["id"], "")
             raise RuntimeError(f"checkout preparation failed (exit {code}){f': {said}' if said else ''}")
@@ -1543,6 +1626,10 @@ class SessionManager:
             # without a push. "The work reached the repository" is true by
             # construction: there is nothing to land.
             logger.info("session %s is read-only; leaving the remote alone", session_id)
+            if str(session.get("trigger_kind") or "") == "analysis":
+                from . import analysis_ingest
+
+                await analysis_ingest.ingest_session(session)
             return True
         if not session.get("branch_name"):
             logger.warning("no branch recorded for session %s; cannot finalize", session_id)
@@ -1574,8 +1661,8 @@ class SessionManager:
             # request. The finalizer reads it rather than the task, for the
             # same reason it reads no_push and open_pull_request from the row.
             "LOGOS_SESSION_CLOSES": closes,
-            "LOGOS_REPO_URL": settings.repo_url,
-            "LOGOS_REPO_SLUG": settings.repo_slug,
+            "LOGOS_REPO_URL": session.get("repo_url") or settings.repo_url,
+            "LOGOS_REPO_SLUG": session.get("repo_slug") or settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
             "LOGOS_AGENT_GITHUB_LOGIN": settings.github_login,
             # Whether this session's work may include CI workflow files. With
@@ -1664,6 +1751,27 @@ class SessionManager:
                 if state == "exited":
                     exit_code = code
                     break
+                # External cancel (e.g. repo unlink) may stamp the row while
+                # we wait on Docker; stop here so occupancy can free cleanly.
+                row = await db.get_session(session_id)
+                if row is not None:
+                    status_now = str(row.get("status") or "")
+                    err_now = str(row.get("error") or "")
+                    if status_now == SessionStatus.CANCELLED.value or err_now.startswith("cancel_requested:"):
+                        try:
+                            await docker_engine.unpause_container(container_id)
+                        except Exception:
+                            pass
+                        try:
+                            await docker_engine.stop_container(container_id, timeout_s=5)
+                        except Exception:
+                            logger.warning(
+                                "could not stop container of externally cancelled session %s",
+                                session_id,
+                            )
+                        if status_now != SessionStatus.CANCELLED.value:
+                            await self.cancel(session_id)
+                        return
                 # A paused container never exits; poll rather than block on
                 # /wait so the pause/resume cycle stays observable.
                 await asyncio.sleep(5.0 if remaining is None else min(5.0, max(1.0, remaining)))
@@ -1979,6 +2087,9 @@ class SessionManager:
                 reaction_target=session.get("reaction_target"),
                 priority=int(session.get("priority") or 50),
                 priority_reason=session.get("priority_reason"),
+                repo_url=session.get("repo_url"),
+                repo_slug=session.get("repo_slug"),
+                team_repository_id=session.get("team_repository_id"),
             )
         except Exception as exc:
             logger.warning("could not take session %s up again: %s", session.get("id"), exc)
@@ -3103,7 +3214,10 @@ class SessionManager:
                 # the record has done its work either way.
                 self._launches.pop(session_id, None)
         task = self._supervisors.pop(session_id, None)
-        if task:
+        # A supervisor that detected cancel_requested calls cancel() itself;
+        # cancelling that same task would raise CancelledError before
+        # remove_container below, leaving the stopped container on the volume.
+        if task is not None and task is not asyncio.current_task():
             task.cancel()
         if container_id:
             try:

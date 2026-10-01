@@ -5239,9 +5239,20 @@ class CapacityPlanner:
                     # released by the driver yet.  Wait up to 60 s for the driver
                     # to free memory before giving up — the worker will re-report
                     # fresh VRAM numbers on each heartbeat cycle.
+                    #
+                    # Metal/MLX is excluded: with unified memory the
+                    # total-minus-free figure is the systemwide wired baseline
+                    # (kernel, window server, …), which is permanent. There is
+                    # no driver context to wait for, so the wait can only add
+                    # 60 s of latency before the same refusal.
                     total_vram = float(getattr(capacity, "total_vram_mb", 0) or 0)
                     phantom_mb = total_vram - available
-                    if not lanes and total_vram > 0 and phantom_mb > needed * 0.5:
+                    if (
+                        not lanes
+                        and total_vram > 0
+                        and phantom_mb > needed * 0.5
+                        and not self._provider_is_metal(provider_id)
+                    ):
                         if _phantom_wait_started is None:
                             _phantom_wait_started = time.monotonic()
                             logger.info(
@@ -6123,8 +6134,10 @@ class CapacityPlanner:
     def _provider_is_metal(self, provider_id: Optional[int]) -> bool:
         """True when this provider's devices report the Metal backend.
 
-        Metal/MLX workers can't be calibrated (no nvidia-smi/proc-meminfo),
-        so they run on operator-provided overrides instead.
+        Metal/MLX providers run on unified memory: the "device" VRAM figure is
+        a wired-memory budget of the host RAM, and their host memory is
+        reported with a different source than /proc/meminfo — both of which
+        the capacity gates below key off.
         """
         if provider_id is None or self._registry is None:
             return False

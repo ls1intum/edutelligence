@@ -164,3 +164,10 @@
   flex-shrink: 0;
 }
 
+// Marker for a series whose model has been deleted — muted, it annotates the
+// label rather than competing with the color dot.
+.rvc-legend__trash {
+  font-size: 0.85em;
+  color: rgb(var(--color-typography-500) / var(--opacity-muted));
+}
+

@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Private-repo access for a linked application repository.
+         Public links need nothing here. A deploy-key PEM (or GitHub App
+         installation id) is stored per link and deleted on revoke — the
+         agent/analyzer never gets write access to application repos. -->
+    <changeSet id="046-team-repository-credentials" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="team_repository_credentials"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE team_repository_credentials (
+                team_repository_id INTEGER PRIMARY KEY
+                    REFERENCES team_repositories(id) ON DELETE CASCADE,
+                access_type TEXT NOT NULL DEFAULT 'deploy_key'
+                    CHECK (access_type IN ('deploy_key', 'github_app')),
+                encrypted_private_key TEXT,
+                public_key_fingerprint TEXT,
+                github_app_installation_id BIGINT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                revoked_at TIMESTAMPTZ
+            );
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS team_repository_credentials;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Per-session repository target so LogosOSSAgent can analyse application
+         repos without rewriting the global LOGOS_AGENT_REPO_* settings used
+         for Logos development work. NULL keeps the previous single-repo path. -->
+    <changeSet id="046-agent-session-repo-target" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="repo_url"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions
+                ADD COLUMN repo_url TEXT,
+                ADD COLUMN repo_slug TEXT,
+                ADD COLUMN team_repository_id INTEGER
+                    REFERENCES team_repositories(id) ON DELETE SET NULL;
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_team_repository
+                ON agent_sessions(team_repository_id);
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP INDEX IF EXISTS idx_agent_sessions_team_repository;
+                ALTER TABLE agent_sessions
+                    DROP COLUMN IF EXISTS team_repository_id,
+                    DROP COLUMN IF EXISTS repo_slug,
+                    DROP COLUMN IF EXISTS repo_url;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <!-- AI workflow analysis results produced from linked repositories.
+         Recommendations never affect the scheduler until a human confirms
+         them (then api_keys.default_priority is updated). -->
+    <changeSet id="046-ai-workflow-analyses" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="ai_workflow_analyses"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE ai_workflow_analyses (
+                id SERIAL PRIMARY KEY,
+                team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                team_repository_id INTEGER NOT NULL
+                    REFERENCES team_repositories(id) ON DELETE CASCADE,
+                commit_sha TEXT,
+                status TEXT NOT NULL DEFAULT 'running'
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                source TEXT NOT NULL DEFAULT 'heuristic'
+                    CHECK (source IN ('heuristic', 'agent')),
+                agent_session_id INTEGER,
+                error TEXT,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMPTZ
+            );
+            CREATE INDEX idx_ai_workflow_analyses_team
+                ON ai_workflow_analyses(team_id, finished_at DESC NULLS LAST);
+            CREATE INDEX idx_ai_workflow_analyses_repo
+                ON ai_workflow_analyses(team_repository_id, finished_at DESC NULLS LAST);
+
+            CREATE TABLE ai_workflows (
+                id SERIAL PRIMARY KEY,
+                analysis_id INTEGER NOT NULL
+                    REFERENCES ai_workflow_analyses(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                trigger_summary TEXT,
+                diagram_mermaid TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_ai_workflows_analysis
+                ON ai_workflows(analysis_id, sort_order);
+
+            CREATE TABLE ai_llm_call_recommendations (
+                id SERIAL PRIMARY KEY,
+                analysis_id INTEGER NOT NULL
+                    REFERENCES ai_workflow_analyses(id) ON DELETE CASCADE,
+                workflow_id INTEGER REFERENCES ai_workflows(id) ON DELETE CASCADE,
+                team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                file_path TEXT NOT NULL,
+                start_line INTEGER,
+                end_line INTEGER,
+                code_url TEXT,
+                detected_model TEXT,
+                api_key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+                recommended_sla TEXT NOT NULL
+                    CHECK (recommended_sla IN ('ux-critical', 'ux-high-prio', 'ux-background')),
+                confidence REAL NOT NULL DEFAULT 0.5,
+                justification TEXT NOT NULL DEFAULT '',
+                traffic_flags JSONB,
+                review_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (review_status IN ('pending', 'accepted', 'overridden', 'rejected')),
+                confirmed_sla TEXT
+                    CHECK (confirmed_sla IS NULL OR confirmed_sla IN
+                        ('ux-critical', 'ux-high-prio', 'ux-background')),
+                reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                reviewed_at TIMESTAMPTZ
+            );
+            CREATE INDEX idx_ai_llm_recs_team_status
+                ON ai_llm_call_recommendations(team_id, review_status);
+            CREATE INDEX idx_ai_llm_recs_analysis
+                ON ai_llm_call_recommendations(analysis_id);
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP TABLE IF EXISTS ai_llm_call_recommendations;
+                DROP TABLE IF EXISTS ai_workflows;
+                DROP TABLE IF EXISTS ai_workflow_analyses;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

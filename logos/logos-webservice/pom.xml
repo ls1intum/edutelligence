@@ -74,6 +74,10 @@
               <scope>runtime</scope>
           </dependency>
           <dependency>
+              <groupId>org.springframework.boot</groupId>
+              <artifactId>spring-boot-starter-data-redis</artifactId>
+          </dependency>
+          <dependency>
               <groupId>com.fasterxml.jackson.core</groupId>
               <artifactId>jackson-databind</artifactId>
           </dependency>
@@ -120,6 +124,12 @@
               <artifactId>postgresql</artifactId>
               <scope>test</scope>
           </dependency>
+          <!-- redis module ships GenericContainer helpers; image pinned in tests -->
+          <dependency>
+              <groupId>org.testcontainers</groupId>
+              <artifactId>testcontainers</artifactId>
+              <scope>test</scope>
+          </dependency>
           <dependency>
               <groupId>org.springframework.boot</groupId>
               <artifactId>spring-boot-starter-websocket</artifactId>
@@ -148,6 +158,9 @@
                     <systemPropertyVariables>
                         <api.version>1.44</api.version>
                     </systemPropertyVariables>
+                    <environmentVariables>
+                        <LOGOS_REPO_CREDENTIALS_DEV_FALLBACK>true</LOGOS_REPO_CREDENTIALS_DEV_FALLBACK>
+                    </environmentVariables>
                 </configuration>
             </plugin>
         </plugins>

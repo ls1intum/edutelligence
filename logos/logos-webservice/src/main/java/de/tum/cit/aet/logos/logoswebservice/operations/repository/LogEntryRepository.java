@@ -202,7 +202,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT le.request_id AS requestId,
-               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS modelName,
                COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
                p.provider_type::text AS providerType,
                le.result_status::text AS resultStatus,
@@ -413,7 +413,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT le.request_id AS requestId,
-               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS modelName,
                COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
                le.result_status::text AS resultStatus,
                le.timestamp_request AS enqueueTs,
@@ -451,7 +451,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         LEFT JOIN token_types tt ON tt.id = ut.type_id
         WHERE (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
           AND le.request_id IN (:requestIds)
-        GROUP BY le.request_id, m.name, le.model_id, p.name, le.provider_id,
+        GROUP BY le.request_id, m.name, le.model_name, le.model_id, p.name, le.provider_id,
                  le.result_status, le.timestamp_request, le.timestamp_forwarding,
                  le.timestamp_response, le.time_at_first_token, le.was_cold_start,
                  le.queue_depth_at_arrival, le.utilization_at_arrival,
@@ -490,7 +490,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                le.timestamp_response AS timestampResponse,
                le.time_at_first_token AS timeAtFirstToken,
                le.privacy_level::text AS privacyLevel,
-               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS modelName,
                p.provider_type::text AS providerType,
                le.environment AS environment,
                k.id AS apiKeyId,
@@ -560,6 +560,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         ), request_metrics AS (
             SELECT le.provider_id,
                    le.model_id,
+                   le.model_name,
                    le.result_status::text AS result_status,
                    le.was_cold_start,
                    CASE WHEN le.result_status::text = 'success'
@@ -583,7 +584,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             FROM log_entry le
             LEFT JOIN completion_token_counts ctc ON ctc.log_entry_id = le.id
             WHERE le.provider_id IS NOT NULL
-              AND le.model_id IS NOT NULL
+              AND (le.model_id IS NOT NULL OR le.model_name IS NOT NULL)
               AND le.timestamp_request >= :fromTs
               AND le.timestamp_request < :toTs
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
@@ -592,7 +593,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         SELECT rm.provider_id AS providerId,
                p.name AS providerName,
                rm.model_id AS modelId,
-               m.name AS modelName,
+               COALESCE(m.name, rm.model_name) AS modelName,
                COUNT(*) AS requestCount,
                COUNT(*) FILTER (WHERE rm.result_status = 'success') AS successfulRequestCount,
                COUNT(*) FILTER (WHERE rm.was_cold_start IS TRUE) AS coldStartCount,
@@ -617,9 +618,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                MAX(rm.ttlt_ms) AS ttltP100Ms
         FROM request_metrics rm
         JOIN providers p ON p.id = rm.provider_id
-        JOIN models m ON m.id = rm.model_id
-        GROUP BY rm.provider_id, p.name, rm.model_id, m.name
-        ORDER BY p.name, m.name, rm.provider_id, rm.model_id
+        LEFT JOIN models m ON m.id = rm.model_id
+        GROUP BY rm.provider_id, p.name, rm.model_id, rm.model_name, m.name
+        ORDER BY p.name, COALESCE(m.name, rm.model_name), rm.provider_id, rm.model_id
         """, nativeQuery = true)
     List<ProviderPerformanceProjection> findProviderPerformance(
         @Param("fromTs") Timestamp fromTs,
@@ -630,7 +631,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT le.request_id AS requestId,
-               COALESCE(m.name, 'Model ' || le.model_id) AS modelName,
+               COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS modelName,
                COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
                le.result_status::text AS resultStatus,
                le.timestamp_request AS enqueueTs,
@@ -668,7 +669,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         LEFT JOIN token_types tt ON tt.id = ut.type_id
         WHERE le.api_key_id IN (SELECT id FROM api_keys WHERE user_id = :userId)
           AND le.request_id IN (:requestIds)
-        GROUP BY le.request_id, m.name, le.model_id, p.name, le.provider_id,
+        GROUP BY le.request_id, m.name, le.model_name, le.model_id, p.name, le.provider_id,
                  le.result_status, le.timestamp_request, le.timestamp_forwarding,
                  le.timestamp_response, le.time_at_first_token, le.was_cold_start,
                  le.queue_depth_at_arrival, le.utilization_at_arrival,
@@ -829,16 +830,19 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     @Query(value = """
         WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, TRUE)),
         parts AS (
-            SELECT s.model_id, s.provider_id, s.was_cold_start, s.requests, s.error_count,
+            SELECT s.model_id, s.model_name, s.provider_id, s.was_cold_start, s.requests, s.error_count,
                    s.queue_seconds_sum, s.queue_seconds_count, s.run_seconds_sum, s.run_seconds_count
             FROM log_entry_hourly_stats s
             WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
+              -- Orphans (model deleted) carry the captured name instead; rows
+              -- with neither never resolved to a model and stay out, as before.
+              AND (s.model_id IS NOT NULL OR s.model_name IS NOT NULL)
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR s.provider_id = CAST(:providerId AS INTEGER))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
-            SELECT le.model_id, le.provider_id, COALESCE(le.was_cold_start, FALSE), 1::bigint,
+            SELECT le.model_id, le.model_name, le.provider_id, COALESCE(le.was_cold_start, FALSE), 1::bigint,
                    (le.result_status IS DISTINCT FROM 'success'
                     OR (le.error_message IS NOT NULL AND le.error_message <> ''))::int::bigint,
                    CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
@@ -851,13 +855,16 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
               AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
                 OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
+              -- Orphans (model deleted) carry the captured name instead; rows
+              -- with neither never resolved to a model and stay out, as before.
+              AND (le.model_id IS NOT NULL OR le.model_name IS NOT NULL)
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
         SELECT pt.model_id AS modelId,
-               COALESCE(m.name, 'Model ' || pt.model_id) AS modelName,
+               COALESCE(m.name, pt.model_name, 'Model ' || pt.model_id) AS modelName,
                SUM(pt.requests)::bigint AS requestCount,
                (SUM(pt.queue_seconds_sum) / NULLIF(SUM(pt.queue_seconds_count), 0))::double precision AS avgQueueSeconds,
                (SUM(pt.run_seconds_sum)   / NULLIF(SUM(pt.run_seconds_count), 0))::double precision   AS avgRunSeconds,
@@ -870,7 +877,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         FROM parts pt
         LEFT JOIN models m ON m.id = pt.model_id
         LEFT JOIN providers p ON p.id = pt.provider_id
-        GROUP BY pt.model_id, modelName
+        GROUP BY pt.model_id, pt.model_name, modelName
         ORDER BY requestCount DESC
         """, nativeQuery = true)
     List<ModelBreakdownProjection> findModelBreakdown(
@@ -956,22 +963,26 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, :useRollup)),
         parts AS (
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM s.bucket_hour) / :bucketSec) * :bucketSec) AS bucket_ts,
-                   s.model_id, s.requests
+                   s.model_id, s.model_name, s.requests
             FROM log_entry_hourly_stats s
             WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
-              AND s.model_id IS NOT NULL
+              -- Orphans (model deleted) carry the captured name instead; rows
+              -- with neither never resolved to a model and stay out, as before.
+              AND (s.model_id IS NOT NULL OR s.model_name IS NOT NULL)
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR s.provider_id = CAST(:providerId AS INTEGER))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)) / :bucketSec) * :bucketSec),
-                   le.model_id, 1::bigint
+                   le.model_id, le.model_name, 1::bigint
             FROM log_entry le
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
               AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
                 OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
-              AND le.model_id IS NOT NULL
+              -- Orphans (model deleted) carry the captured name instead; rows
+              -- with neither never resolved to a model and stay out, as before.
+              AND (le.model_id IS NOT NULL OR le.model_name IS NOT NULL)
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
@@ -979,11 +990,11 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         )
         SELECT EXTRACT(EPOCH FROM pt.bucket_ts)::double precision AS bucketTs,
                pt.model_id AS modelId,
-               COALESCE(m.name, 'Model ' || pt.model_id) AS modelName,
+               COALESCE(m.name, pt.model_name, 'Model ' || pt.model_id) AS modelName,
                SUM(pt.requests)::bigint AS count
         FROM parts pt
         LEFT JOIN models m ON m.id = pt.model_id
-        GROUP BY 1, pt.model_id, m.name
+        GROUP BY 1, pt.model_id, pt.model_name, m.name
         ORDER BY 1, modelName
         """, nativeQuery = true)
     List<ModelTimeSeriesProjection> findModelTimeSeries(
