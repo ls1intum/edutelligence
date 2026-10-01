@@ -3780,11 +3780,7 @@ async def handle_sync_request(path: str, request: Request):
         # content type. Model-free resource-mode requests also stay sync: the
         # model is chosen later, and committing SSE here would mis-label a
         # Whisper answer selected by classification.
-        if (
-            body.get("model")
-            and payload_requests_streaming(body)
-            and not _resolves_to_whisper(body, path, auth)
-        ):
+        if body.get("model") and payload_requests_streaming(body) and not _resolves_to_whisper(body, path, auth):
             response = await _keepalive_streaming_response(request, **execute_kwargs)
             return response
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
