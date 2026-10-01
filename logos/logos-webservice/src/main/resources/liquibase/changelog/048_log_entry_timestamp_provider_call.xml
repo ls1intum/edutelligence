@@ -87,7 +87,7 @@
                  WHERE s.bucket_hour = ANY (p_hours);
 
                 INSERT INTO log_entry_hourly_stats (
-                    bucket_hour, model_id, provider_id, team_id, user_id,
+                    bucket_hour, model_id, model_name, provider_id, team_id, user_id,
                     result_status, was_cold_start, requests,
                     queue_seconds_sum, queue_seconds_count,
                     run_seconds_sum, run_seconds_count,
@@ -97,6 +97,9 @@
                                                 le.timestamp_request,
                                                 le.timestamp_response)),
                     le.model_id,
+                    -- Keep 042's orphan-name grain: two deleted models must not
+                    -- collapse into one anonymous (NULL, NULL) bucket.
+                    CASE WHEN le.model_id IS NULL THEN le.model_name END,
                     le.provider_id,
                     le.team_id,
                     le.user_id,
@@ -134,7 +137,7 @@
                 WHERE date_trunc('hour', COALESCE(le.timestamp_forwarding,
                                                   le.timestamp_request,
                                                   le.timestamp_response)) = ANY (p_hours)
-                GROUP BY 1, 2, 3, 4, 5, 6, 7;
+                GROUP BY 1, 2, 3, 4, 5, 6, 7, 8;
 
                 GET DIAGNOSTICS affected = ROW_COUNT;
                 RETURN affected;
@@ -153,9 +156,10 @@
 
             ANALYZE log_entry_hourly_stats;
         ]]></sql>
-        <!-- Restore the 035 definition: the pass calls this function on every
-             run, so dropping it would fail the rollup on every minute and push
-             the page back onto full live reads for no benefit. -->
+        <!-- Restore the 042 definition (orphan model_name grain + the old
+             forwarding/response timing split): the pass calls this function
+             on every run, so dropping it would fail the rollup on every
+             minute and push the page back onto full live reads for no benefit. -->
         <rollback>
             <sql splitStatements="false"><![CDATA[
                 CREATE OR REPLACE FUNCTION logos_stats_rollup_apply(p_hours timestamptz[])
@@ -173,8 +177,10 @@
                     DELETE FROM log_entry_hourly_stats s
                      WHERE s.bucket_hour = ANY (p_hours);
 
+                    <!-- Rollback restores 042's grain + the pre-048 timing
+                         split (forwarding/response), not the bare 035 shape. -->
                     INSERT INTO log_entry_hourly_stats (
-                        bucket_hour, model_id, provider_id, team_id, user_id,
+                        bucket_hour, model_id, model_name, provider_id, team_id, user_id,
                         result_status, was_cold_start, requests,
                         queue_seconds_sum, queue_seconds_count,
                         run_seconds_sum, run_seconds_count,
@@ -184,6 +190,7 @@
                                                     le.timestamp_request,
                                                     le.timestamp_response)),
                         le.model_id,
+                        CASE WHEN le.model_id IS NULL THEN le.model_name END,
                         le.provider_id,
                         le.team_id,
                         le.user_id,
@@ -219,7 +226,7 @@
                     WHERE date_trunc('hour', COALESCE(le.timestamp_forwarding,
                                                       le.timestamp_request,
                                                       le.timestamp_response)) = ANY (p_hours)
-                    GROUP BY 1, 2, 3, 4, 5, 6, 7;
+                    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8;
 
                     GET DIAGNOSTICS affected = ROW_COUNT;
                     RETURN affected;
