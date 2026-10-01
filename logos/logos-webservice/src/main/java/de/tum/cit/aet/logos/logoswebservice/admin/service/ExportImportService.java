@@ -13,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
+
 @Service
 public class ExportImportService {
 
@@ -119,9 +121,10 @@ public class ExportImportService {
             for (String table : TABLES) {
                 List<?> rows = (List<?>) jsonData.get(table);
                 jdbc.execute("TRUNCATE TABLE " + safeTable(table) + " CASCADE");
-                if (rows != null && !rows.isEmpty()) {
+                List<Map<String, Object>> normalized = normalizeImportRows(table, rows);
+                if (!normalized.isEmpty()) {
                     try {
-                        String rowsJson = objectMapper.writeValueAsString(rows);
+                        String rowsJson = objectMapper.writeValueAsString(normalized);
                         jdbc.update(
                             "INSERT INTO " + safeTable(table)
                             + " SELECT * FROM jsonb_populate_recordset(null::" + safeTable(table) + ", ?::jsonb)",
@@ -140,6 +143,42 @@ public class ExportImportService {
         sanitizeImportedAnalysisSessionLinks();
         resetSequences();
         return Map.of("result", "Import successful");
+    }
+
+    /**
+     * Backfill NOT NULL JSONB columns added after older exports were taken.
+     * {@code jsonb_populate_recordset} turns omitted keys into explicit NULL,
+     * which rejects the column default — so pre-044 dumps must be normalized.
+     */
+    List<Map<String, Object>> normalizeImportRows(String table, List<?> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>(rows.size());
+        for (Object item : rows) {
+            if (!(item instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : raw.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+                copy.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+            if ("models".equals(table) && copy.get("profile_ratings") == null) {
+                copy.put("profile_ratings", Map.of());
+            }
+            if ("ai_llm_call_recommendations".equals(table)
+                    && copy.get("objective_priority") == null) {
+                Object sla = copy.get("recommended_sla");
+                copy.put(
+                    "objective_priority",
+                    ObjectivePriority.forSla(sla == null ? null : String.valueOf(sla)));
+            }
+            out.add(copy);
+        }
+        return out;
     }
 
     private void detachAgentSessionsFromRepositories() {
