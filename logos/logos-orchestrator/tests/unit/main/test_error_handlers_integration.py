@@ -111,10 +111,15 @@ def _stub_db(monkeypatch):
             return [(1, "test-model")]
 
         def get_deployments_for_api_key(self, api_key_id):
-            return [{"model_id": 1, "provider_id": 1, "type": "openai"}]
+            return [{"model_id": 1, "provider_id": 1, "type": "openai", "model_name": "test-model"}]
 
         def get_model(self, model_id):
             return {"id": model_id, "name": "test-model"}
+
+        def resolve_proxy_model(self, api_key_id, requested_name):
+            if str(requested_name or "").strip() == "test-model":
+                return (1, "test-model")
+            return None
 
         def get_provider_deployment_info(self, mid, pid):
             return {
@@ -134,13 +139,16 @@ def _stub_request_setup(monkeypatch):
     monkeypatch.setattr(
         main,
         "request_setup",
-        lambda headers, api_key_id, db=None: ([{"model_id": 1, "provider_id": 1, "type": "openai"}], [1]),
+        lambda headers, api_key_id, db=None: (
+            [{"model_id": 1, "provider_id": 1, "type": "openai", "model_name": "test-model"}],
+            [1],
+        ),
         raising=False,
     )
     monkeypatch.setattr(
         main,
         "_filter_logosnode_deployments",
-        AsyncMock(return_value=[{"model_id": 1, "provider_id": 1, "type": "openai"}]),
+        AsyncMock(return_value=[{"model_id": 1, "provider_id": 1, "type": "openai", "model_name": "test-model"}]),
         raising=False,
     )
 
@@ -481,7 +489,11 @@ class TestStreamingErrors:
 
         resp = client.post(
             "/v1/chat/completions",
-            json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
             headers={"logos_key": "test-key"},
         )
 
