@@ -182,13 +182,59 @@
   }
 }
 
-.rr-card__error-snippet {
+.rr-card__error {
+  flex: 0 0 100%;
+  min-width: 0;
   font-size: var(--font-size-sm);
   color: rgb(var(--color-error));
+
+  &[open] .rr-card__error-summary .pi {
+    transform: rotate(90deg);
+  }
+
+  &[open] .rr-card__error-snippet {
+    display: none;
+  }
+}
+
+.rr-card__error-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgb(var(--color-primary-500));
+    outline-offset: 2px;
+  }
+
+  .pi {
+    flex-shrink: 0;
+    font-size: var(--font-size-xs);
+  }
+}
+
+.rr-card__error-snippet {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-top: 2px;
+}
+
+.rr-card__error-action {
+  flex-shrink: 0;
+}
+
+.rr-card__error-message {
+  padding-top: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .rr-card__right {

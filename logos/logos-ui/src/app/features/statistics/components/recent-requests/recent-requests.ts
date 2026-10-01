@@ -649,11 +649,6 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return formatElapsed((this.now() - new Date(item.scheduled_ts).getTime()) / 1000);
   }
 
-  errorSnippet(msg: string | null): string {
-    if (!msg) return '';
-    return msg.length > 60 ? msg.slice(0, 60) + '...' : msg;
-  }
-
   formatCount(v: number): string {
     return v.toLocaleString();
   }
