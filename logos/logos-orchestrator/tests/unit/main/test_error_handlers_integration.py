@@ -7,6 +7,8 @@ responses per the OpenAI error spec.
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import json
 from types import SimpleNamespace
 from typing import AsyncIterator
@@ -20,6 +22,25 @@ from logos import ExecutionResult
 from logos.errors import UpstreamStreamError
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _keepalive_testclient_safe(monkeypatch):
+    """Keep TestClient away from the real disconnect probe on streaming paths.
+
+    Starlette's TestClient shares one portal thread between the ASGI app and the
+    test. The keepalive wrapper's disconnect watcher calls
+    ``request.is_disconnected()``, which can block that portal while
+    ``client.post`` waits for the body — a deadlock. These tests do not assert
+    disconnect behaviour, so the watcher is a cancellable idle wait instead.
+    """
+    monkeypatch.setattr(main, "_KEEPALIVE_INTERVAL_S", 0.05)
+    monkeypatch.setattr(main, "_CLIENT_DISCONNECT_POLL_SECONDS", 0.001)
+
+    async def _idle_until_cancelled(_request):
+        await asyncio.Future()
+
+    monkeypatch.setattr(main, "_wait_for_client_disconnect", _idle_until_cancelled)
 
 
 @pytest.fixture(autouse=True)
@@ -43,16 +64,15 @@ def _stub_auth(monkeypatch):
     def fake_authenticate(headers, client_ip=None):
         return fake_auth
 
-    monkeypatch.setattr("logos.auth.authenticate_api_key", fake_authenticate)
+    # ``import logos`` is logos.main after package swap; attach the real auth
+    # submodule so string-based monkeypatches can traverse ``logos.auth``.
+    auth_mod = importlib.import_module("logos.auth")
+    main.auth = auth_mod
+    monkeypatch.setattr(auth_mod, "authenticate_api_key", fake_authenticate)
     monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate, raising=False)
-
     monkeypatch.setattr(main, "authenticate_logos_key", lambda h: ("test-key", 1), raising=False)
 
-    with patch(
-        "logos.auth.authenticate_with_profile",
-        create=True,
-        side_effect=fake_authenticate,
-    ):
+    with patch.object(auth_mod, "authenticate_with_profile", create=True, side_effect=fake_authenticate):
         yield fake_auth
 
 
