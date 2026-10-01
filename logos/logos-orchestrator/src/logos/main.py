@@ -1886,6 +1886,11 @@ async def _streaming_response(
             # the last chunk's arrival — not the moment the loop ends, which
             # under backpressure would be after the client already took it.
             last_chunk_at = None
+            # Closing the generator at the terminal-frame yield (GuideLLM and
+            # similar close after [DONE]) raises GeneratorExit and skips the
+            # post-loop stamp. Track whether we stamped so finally can persist
+            # the captured arrival before record_completion when needed.
+            provider_response_stamped = False
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
@@ -1945,12 +1950,14 @@ async def _streaming_response(
                         # last_chunk_at would omit.
                         if request_id:
                             _pipeline.record_provider_response(request_id, at=getattr(e, _STREAM_FAILURE_AT, None))
+                            provider_response_stamped = True
                         raise e
                     # The worker stream completed — the provider's last byte,
                     # stamped at that chunk's arrival (last_chunk_at), before
                     # the finally's billing/persistence runs.
                     if request_id:
                         _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                        provider_response_stamped = True
                     stream_completed = True
                     break  # stream completed without raising
             finally:
@@ -1966,6 +1973,16 @@ async def _streaming_response(
                 # as a success.
                 if error_message is None and stream_log.upstream_error:
                     error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
+                # Client close after [DONE] jumps here via GeneratorExit before
+                # the post-loop stamp. Persist the captured terminal arrival so
+                # statistics do not fall back to completion time (billing delay).
+                if (
+                    request_id
+                    and not provider_response_stamped
+                    and stream_log.terminal_event_received
+                    and last_chunk_at is not None
+                ):
+                    _pipeline.record_provider_response(request_id, at=last_chunk_at)
                 billable = stream_completed and stream_log.upstream_error is None
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(
@@ -2125,6 +2142,9 @@ async def _streaming_response(
         # a one-chunk stream's run figure — so keep the peek instant for it and
         # the pump's recorded arrival for every later chunk.
         first_chunk_pending = bool(first_chunk)
+        # Closing at the terminal-frame yield skips the post-loop stamp via
+        # GeneratorExit; finally uses this to persist the captured arrival.
+        provider_response_stamped = False
 
         async def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
             if cost_enricher is None:
@@ -2191,6 +2211,7 @@ async def _streaming_response(
                     _pipeline.record_provider_response(request_id, at=stream_status.error_at)
                 else:
                     _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                provider_response_stamped = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2225,6 +2246,7 @@ async def _streaming_response(
             # omit it.
             if request_id:
                 _pipeline.record_provider_response(request_id, at=getattr(exc, _STREAM_FAILURE_AT, None))
+                provider_response_stamped = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2254,6 +2276,11 @@ async def _streaming_response(
                 error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             stream_log.finish()
+            # Client close after [DONE] jumps here via GeneratorExit before the
+            # post-loop stamp. Persist the captured terminal arrival so the
+            # exec figure does not fall back to completion (billing) time.
+            if request_id and not provider_response_stamped and stream_log.terminal_event_received:
+                _pipeline.record_provider_response(request_id, at=last_chunk_at)
             response_payload = stream_log.response_payload()
             usage_tokens = _usage_tokens_from_payload(
                 response_payload,

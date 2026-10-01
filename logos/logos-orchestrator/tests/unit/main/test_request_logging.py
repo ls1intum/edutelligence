@@ -717,6 +717,67 @@ async def test_cloud_streaming_stamps_the_call_from_the_executor_dispatch_instan
 
 
 @pytest.mark.asyncio
+async def test_cloud_streaming_closing_after_done_preserves_the_response_stamp(monkeypatch):
+    """Clients that close at the [DONE] yield must still get a provider-response
+    stamp. Without it, finalization records success but statistics fall back to
+    completion time and include post-provider billing delay."""
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, completion_calls, _ = _make_pipeline(
+        stream_chunks=[
+            b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ],
+        provider_response_calls=provider_response_calls,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_type="cloud",
+            lane_id=None,
+            model_name="model",
+            forward_url="http://cloud",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-close-after-done",
+            "provider_type": "cloud",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    body = response.body_iterator
+    # Drain both upstream frames, then close — the GeneratorExit path that
+    # used to skip the post-loop stamp.
+    await body.__anext__()
+    await body.__anext__()
+    await body.aclose()
+
+    assert completion_calls[-1]["result_status"] == "success"
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-close-after-done"
+    assert at is not None, "closing after [DONE] must preserve the response stamp"
+    assert isinstance(at, main.datetime.datetime)
+
+
+@pytest.mark.asyncio
 async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     # vLLM lanes report usage.prompt_tokens_details.cached_tokens (the worker
     # starts them with --enable-prompt-tokens-details); the orchestrator must

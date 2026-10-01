@@ -453,7 +453,13 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
 # ---------------------------------------------------------------------------
 
 
-async def _run_streamer(monkeypatch, *, abandon_after: int | None, chunks: list[bytes] | None = None):
+async def _run_streamer(
+    monkeypatch,
+    *,
+    abandon_after: int | None,
+    chunks: list[bytes] | None = None,
+    provider_response_calls: list | None = None,
+):
     from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
     import logos as main
@@ -483,7 +489,10 @@ async def _run_streamer(monkeypatch, *, abandon_after: int | None, chunks: list[
         raising=False,
     )
     completion_calls: list[dict] = []
-    pipeline, _c, _r = _make_pipeline(completion_calls=completion_calls)
+    pipeline, _c, _r = _make_pipeline(
+        completion_calls=completion_calls,
+        provider_response_calls=provider_response_calls,
+    )
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
@@ -530,10 +539,24 @@ async def test_a_stream_the_client_walked_away_from_is_not(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_closing_after_done_is_a_success(monkeypatch):
-    """GuideLLM closes after [DONE]; that is completion, not a disconnect."""
-    calls = await _run_streamer(monkeypatch, abandon_after=3)
+    """GuideLLM closes after [DONE]; that is completion, not a disconnect.
+
+    Closing the generator at the terminal-frame yield must still persist the
+    provider-response stamp (the captured last-chunk arrival), or statistics
+    fall back to completion time and include post-provider billing delay.
+    """
+    provider_response_calls: list = []
+    calls = await _run_streamer(
+        monkeypatch,
+        abandon_after=3,
+        provider_response_calls=provider_response_calls,
+    )
     assert calls[-1]["result_status"] == "success"
     assert calls[-1]["error_message"] is None
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-stream"
+    assert at is not None, "closing after [DONE] must preserve the response stamp"
 
 
 @pytest.mark.asyncio
