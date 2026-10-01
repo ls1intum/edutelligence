@@ -49,6 +49,7 @@ from logos.model_profile_store import (
     is_new_local_calibration,
     persistable_profile,
     profile_digest,
+    reported_profile,
 )
 from logos.role_auth import require_logos_admin_key
 
@@ -202,11 +203,11 @@ def _capture_logosnode_provider_snapshot(
 def _persist_model_profiles(db: DBManager, provider_id: int, model_profiles: Dict[str, Any]) -> list[str]:
     """Store a worker's echoed profiles; returns models to push back to it.
 
-    Workers with a local profile file are only mirrored. A fresh calibration
-    is snapshotted, which bumps the revision the worker must adopt.
+    Profiles a worker echoes unchanged are not written again. A fresh
+    calibration is snapshotted, which bumps the revision the worker adopts.
     """
     if not is_central_profile_payload(model_profiles):
-        db.upsert_model_profiles(provider_id, model_profiles)
+        _mirror_local_profiles(db, provider_id, model_profiles)
         return []
     changed: list[str] = []
     for model_name, echoed in model_profiles.items():
@@ -218,9 +219,11 @@ def _persist_model_profiles(db: DBManager, provider_id: int, model_profiles: Dic
             continue
         stored = persistable_profile(echoed)
         key_hash = echoed.get("calibration_key_hash") or None
-        digest = profile_digest(revision, {"profile": stored, "calibration_key_hash": key_hash})
+        digest = profile_digest(revision, echoed)
         if not _profile_write_cache.unchanged(provider_id, model_name, digest):
-            if not db.persist_central_model_profile(provider_id, model_name, stored, revision, key_hash):
+            if not db.persist_central_model_profile(
+                provider_id, model_name, stored, reported_profile(echoed), revision, key_hash
+            ):
                 continue
             _profile_write_cache.remember(provider_id, model_name, digest)
         if not is_new_local_calibration(echoed):
@@ -241,6 +244,25 @@ def _persist_model_profiles(db: DBManager, provider_id: int, model_profiles: Dic
             _profile_write_cache.forget(provider_id, model_name)
             changed.append(model_name)
     return changed
+
+
+def _mirror_local_profiles(db: DBManager, provider_id: int, model_profiles: Dict[str, Any]) -> None:
+    """Mirror a worker that still keeps its own profile file."""
+    pending = {
+        model_name: (data, profile_digest(0, data))
+        for model_name, data in model_profiles.items()
+        if isinstance(data, dict)
+    }
+    pending = {
+        model_name: entry
+        for model_name, entry in pending.items()
+        if not _profile_write_cache.unchanged(provider_id, model_name, entry[1])
+    }
+    if not pending:
+        return
+    db.upsert_model_profiles(provider_id, {model_name: data for model_name, (data, _) in pending.items()})
+    for model_name, (_, digest) in pending.items():
+        _profile_write_cache.remember(provider_id, model_name, digest)
 
 
 def _load_effective_profiles(provider_id: int, model_names: list[str] | None = None) -> Dict[str, Dict[str, Any]]:
@@ -500,21 +522,21 @@ async def logosnode_model_profiles(data: LogosNodeModelProfilesRequest, request:
     provider_id = int(provider["id"])
 
     def _load() -> Dict[str, Dict[str, Any]]:
-        with DBManager() as db:
-            if data.legacy_import is not None:
+        if data.legacy_import is not None:
+            with DBManager() as db:
                 imported = db.import_legacy_model_profiles(
                     provider_id,
                     data.legacy_import.model_profiles,
                     data.legacy_import.unsupported_models,
                 )
-                if imported:
-                    logger.info(
-                        "Imported %d model profile(s) from the local file of provider %s",
-                        imported,
-                        _resolve_provider_name(provider_id),
-                    )
-            if data.calibration_key_hashes:
-                db.update_reported_calibration_keys(provider_id, data.calibration_key_hashes)
+            if imported:
+                logger.info(
+                    "Imported %d model profile(s) from the local file of provider %s",
+                    imported,
+                    _resolve_provider_name(provider_id),
+                )
+        if data.calibration_key_hashes:
+            _update_reported_calibration_keys(provider_id, data.calibration_key_hashes)
         return _load_effective_profiles(provider_id)
 
     _profile_write_cache.forget(provider_id)

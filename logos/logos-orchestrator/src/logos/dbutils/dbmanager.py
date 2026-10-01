@@ -282,6 +282,50 @@ def _model_profile_column_params(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Typed model_profiles columns that only a calibration fills; cleared when a
+# calibration is invalidated. max_reported_context_length is a high-water mark
+# and survives on purpose.
+_CALIBRATED_PROFILE_COLUMNS = (
+    "base_residency_mb",
+    "loaded_vram_mb",
+    "sleeping_residual_mb",
+    "kv_budget_mb",
+    "engine",
+    "tensor_parallel_size",
+    "residency_source",
+    "last_measured_at",
+)
+
+
+def _upsert_model_profile_sql(
+    extra: Optional[Dict[str, str]] = None,
+    conflict_set: Optional[Dict[str, str]] = None,
+    where: str = "",
+) -> str:
+    """INSERT ... ON CONFLICT for one model_profiles row.
+
+    ``extra`` maps further columns to value expressions. COALESCE keeps rows
+    that predate max_reported_context_length from staying NULL under GREATEST.
+    """
+    typed = list(_model_profile_column_params({}))
+    extra = extra or {}
+    columns = ["provider_id", "model_name", *typed, *extra, "updated_at"]
+    values = [f":{column}" for column in ["provider_id", "model_name", *typed]]
+    values += [*extra.values(), "CURRENT_TIMESTAMP"]
+    assignments = {column: f"EXCLUDED.{column}" for column in typed}
+    assignments["max_reported_context_length"] = (
+        "GREATEST(COALESCE(model_profiles.max_reported_context_length, 0), " "EXCLUDED.max_reported_context_length)"
+    )
+    assignments.update(conflict_set or {})
+    assignments["updated_at"] = "CURRENT_TIMESTAMP"
+    sql = (
+        f"INSERT INTO model_profiles ({', '.join(columns)}) VALUES ({', '.join(values)}) "
+        "ON CONFLICT (provider_id, model_name) DO UPDATE SET "
+        + ", ".join(f"{column} = {value}" for column, value in assignments.items())
+    )
+    return f"{sql} WHERE {where}" if where else sql
+
+
 # Snapshot the settled cost of a finalised request into log_entry so a later
 # catalogue refresh cannot rewrite completed budget history. Deliberately carries
 # no ``settled_cost_micro_cents IS NULL`` guard: finalisation is retryable, and a
@@ -1691,16 +1735,11 @@ class DBManager:
     ) -> int:
         """Upsert model profiles from worker runtime into the model_profiles table.
 
-        ``max_reported_context_length`` is maintained as the historic maximum:
-        the ON CONFLICT clause keeps the larger of the stored value and the
-        freshly derived one, so a later calibration that reports a narrower
-        window (e.g. on a node with less VRAM) cannot shrink the widest window
-        this model has ever been reported at. That high-water mark is what the
-        orchestrator falls back to for a model's context when every workernode
-        is offline. Rows created before the column existed hold NULL, and
-        GREATEST with a NULL argument returns NULL in Postgres — hence the
-        COALESCE, so one upsert after the migration settles the mark instead
-        of leaving it NULL forever.
+        ``max_reported_context_length`` is maintained as the historic maximum
+        (see ``_upsert_model_profile_sql``): a later calibration that reports
+        a narrower window cannot shrink the widest window this model has ever
+        been reported at. That high-water mark is what the orchestrator falls
+        back to for a model's context when every workernode is offline.
 
         Args:
             provider_id: Provider ID (FK to providers.id)
@@ -1712,48 +1751,7 @@ class DBManager:
         if not profiles:
             return 0
 
-        sql = text("""
-            INSERT INTO model_profiles (
-                provider_id, model_name,
-                base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
-                kv_budget_mb, disk_size_bytes, engine,
-                tensor_parallel_size, kv_per_token_bytes, max_context_length,
-                max_reported_context_length,
-                residency_source, measurement_count, last_measured_at,
-                observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
-                updated_at
-            ) VALUES (
-                :provider_id, :model_name,
-                :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
-                :kv_budget_mb, :disk_size_bytes, :engine,
-                :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
-                :max_reported_context_length,
-                :residency_source, :measurement_count, :last_measured_at,
-                :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
-                CURRENT_TIMESTAMP
-            )
-            ON CONFLICT (provider_id, model_name) DO UPDATE SET
-                base_residency_mb = EXCLUDED.base_residency_mb,
-                loaded_vram_mb = EXCLUDED.loaded_vram_mb,
-                sleeping_residual_mb = EXCLUDED.sleeping_residual_mb,
-                kv_budget_mb = EXCLUDED.kv_budget_mb,
-                disk_size_bytes = EXCLUDED.disk_size_bytes,
-                engine = EXCLUDED.engine,
-                tensor_parallel_size = EXCLUDED.tensor_parallel_size,
-                kv_per_token_bytes = EXCLUDED.kv_per_token_bytes,
-                max_context_length = EXCLUDED.max_context_length,
-                max_reported_context_length = GREATEST(
-                    COALESCE(model_profiles.max_reported_context_length, 0),
-                    EXCLUDED.max_reported_context_length
-                ),
-                residency_source = EXCLUDED.residency_source,
-                measurement_count = EXCLUDED.measurement_count,
-                last_measured_at = EXCLUDED.last_measured_at,
-                observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
-                min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
-                updated_at = CURRENT_TIMESTAMP
-        """)
-
+        sql = text(_upsert_model_profile_sql())
         count = 0
         for model_name, data in profiles.items():
             if not isinstance(data, dict):
@@ -1771,63 +1769,35 @@ class DBManager:
         provider_id: int,
         model_name: str,
         profile: Dict[str, Any],
+        reported: Dict[str, Any],
         sync_revision: int,
         calibration_key_hash: Optional[str],
     ) -> bool:
         """Store a worker's echoed profile unless a central change is newer.
 
-        False when the echo predates the stored ``sync_revision``.
+        ``profile`` excludes operator overrides; the typed columns mirror
+        ``reported``, what the node runs with. False on an outdated echo.
         """
-        sql = text("""
-            INSERT INTO model_profiles (
-                provider_id, model_name,
-                base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
-                kv_budget_mb, disk_size_bytes, engine,
-                tensor_parallel_size, kv_per_token_bytes, max_context_length,
-                max_reported_context_length,
-                residency_source, measurement_count, last_measured_at,
-                observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
-                profile, calibration_key_hash, sync_revision, updated_at
-            ) VALUES (
-                :provider_id, :model_name,
-                :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
-                :kv_budget_mb, :disk_size_bytes, :engine,
-                :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
-                :max_reported_context_length,
-                :residency_source, :measurement_count, :last_measured_at,
-                :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
-                CAST(:profile AS jsonb), :calibration_key_hash, :sync_revision, CURRENT_TIMESTAMP
+        sql = text(
+            _upsert_model_profile_sql(
+                extra={
+                    "profile": "CAST(:profile AS jsonb)",
+                    "calibration_key_hash": ":calibration_key_hash",
+                    "sync_revision": ":sync_revision",
+                },
+                conflict_set={
+                    "profile": "EXCLUDED.profile",
+                    "calibration_key_hash": "EXCLUDED.calibration_key_hash",
+                },
+                where="model_profiles.sync_revision = EXCLUDED.sync_revision",
             )
-            ON CONFLICT (provider_id, model_name) DO UPDATE SET
-                base_residency_mb = EXCLUDED.base_residency_mb,
-                loaded_vram_mb = EXCLUDED.loaded_vram_mb,
-                sleeping_residual_mb = EXCLUDED.sleeping_residual_mb,
-                kv_budget_mb = EXCLUDED.kv_budget_mb,
-                disk_size_bytes = EXCLUDED.disk_size_bytes,
-                engine = EXCLUDED.engine,
-                tensor_parallel_size = EXCLUDED.tensor_parallel_size,
-                kv_per_token_bytes = EXCLUDED.kv_per_token_bytes,
-                max_context_length = EXCLUDED.max_context_length,
-                max_reported_context_length = GREATEST(
-                    COALESCE(model_profiles.max_reported_context_length, 0),
-                    EXCLUDED.max_reported_context_length
-                ),
-                residency_source = EXCLUDED.residency_source,
-                measurement_count = EXCLUDED.measurement_count,
-                last_measured_at = EXCLUDED.last_measured_at,
-                observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
-                min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
-                profile = EXCLUDED.profile,
-                calibration_key_hash = EXCLUDED.calibration_key_hash,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE model_profiles.sync_revision = EXCLUDED.sync_revision
-        """)
+        )
         result = self.session.execute(
             sql,
             {
                 "provider_id": provider_id,
                 "model_name": model_name,
-                **_model_profile_column_params(profile),
+                **_model_profile_column_params(reported),
                 "profile": _json_for_jsonb(profile),
                 "calibration_key_hash": calibration_key_hash,
                 "sync_revision": int(sync_revision),
@@ -1847,53 +1817,63 @@ class DBManager:
     ) -> Optional[int]:
         """Snapshot a calibration and link the node's profile row to it.
 
-        Idempotent per (model, provider, calibrated_at). Returns the row's
+        Idempotent per (provider, model, calibrated_at). Returns the row's
         new ``sync_revision``, or None when it already linked this snapshot.
         """
-        key = calibration_key if isinstance(calibration_key, dict) else {}
+        calibration_id, inserted = self._insert_calibration_snapshot(
+            provider_id, model_name, snapshot, calibration_key, calibration_key_hash, calibrated_at
+        )
+        if inserted and calibration_key_hash:
+            self._count_calibration_agreement(model_name, calibration_key_hash, calibration_id, snapshot)
+        revision = self._link_calibration(provider_id, model_name, calibration_id)
+        self.session.commit()
+        return revision
+
+    def _insert_calibration_snapshot(
+        self,
+        provider_id: int,
+        model_name: str,
+        snapshot: Dict[str, Any],
+        calibration_key: Optional[Dict[str, Any]],
+        calibration_key_hash: Optional[str],
+        calibrated_at: datetime.datetime,
+    ) -> Tuple[int, bool]:
+        """Id of the snapshot for this run, and whether it was just created."""
+        params = {"provider_id": provider_id, "model_name": model_name, "calibrated_at": calibrated_at}
         inserted = self.session.execute(
             text("""
                 INSERT INTO model_calibrations (
                     model_name, calibration_key_hash, calibration_key,
-                    backend, gpu_name, vllm_version, tensor_parallel_size,
                     profile, source_provider_id, calibrated_at
                 ) VALUES (
                     :model_name, :key_hash, CAST(:key AS jsonb),
-                    :backend, :gpu_name, :vllm_version, :tp,
                     CAST(:profile AS jsonb), :provider_id, :calibrated_at
                 )
-                ON CONFLICT (model_name, source_provider_id, calibrated_at) DO NOTHING
+                ON CONFLICT (source_provider_id, model_name, calibrated_at) DO NOTHING
                 RETURNING id
             """),
             {
-                "model_name": model_name,
+                **params,
                 "key_hash": calibration_key_hash,
-                "key": _json_for_jsonb(key) if key else None,
-                "backend": key.get("backend"),
-                "gpu_name": key.get("gpu_name"),
-                "vllm_version": key.get("vllm_version"),
-                "tp": snapshot.get("tensor_parallel_size"),
+                "key": _json_for_jsonb(calibration_key) if calibration_key else None,
                 "profile": _json_for_jsonb(snapshot),
-                "provider_id": provider_id,
-                "calibrated_at": calibrated_at,
             },
         ).fetchone()
         if inserted is not None:
-            calibration_id = int(inserted.id)
-            if calibration_key_hash:
-                self._count_calibration_agreement(model_name, calibration_key_hash, calibration_id, snapshot)
-        else:
-            calibration_id = int(
-                self.session.execute(
-                    text("""
-                        SELECT id FROM model_calibrations
-                        WHERE model_name = :model_name
-                          AND source_provider_id = :provider_id
-                          AND calibrated_at = :calibrated_at
-                    """),
-                    {"model_name": model_name, "provider_id": provider_id, "calibrated_at": calibrated_at},
-                ).scalar_one()
-            )
+            return int(inserted.id), True
+        existing = self.session.execute(
+            text("""
+                SELECT id FROM model_calibrations
+                WHERE source_provider_id = :provider_id
+                  AND model_name = :model_name
+                  AND calibrated_at = :calibrated_at
+            """),
+            params,
+        ).scalar_one()
+        return int(existing), False
+
+    def _link_calibration(self, provider_id: int, model_name: str, calibration_id: int) -> Optional[int]:
+        """Point a node's profile row at a snapshot; new sync_revision or None."""
         linked = self.session.execute(
             text("""
                 UPDATE model_profiles
@@ -1907,7 +1887,6 @@ class DBManager:
             """),
             {"calibration_id": calibration_id, "provider_id": provider_id, "model_name": model_name},
         ).fetchone()
-        self.session.commit()
         return int(linked.sync_revision) if linked is not None else None
 
     def _count_calibration_agreement(
@@ -1971,13 +1950,6 @@ class DBManager:
             results.append(entry)
         return results
 
-    def has_central_model_profiles(self, provider_id: int) -> bool:
-        row = self.session.execute(
-            text("SELECT 1 FROM model_profiles WHERE provider_id = :provider_id AND profile <> '{}'::jsonb LIMIT 1"),
-            {"provider_id": provider_id},
-        ).fetchone()
-        return row is not None
-
     def update_reported_calibration_keys(self, provider_id: int, key_hashes: Dict[str, str]) -> None:
         """Record the calibration key each model has on the node right now."""
         for model_name, key_hash in key_hashes.items():
@@ -2002,7 +1974,11 @@ class DBManager:
         Imported calibrations have no key, so they serve but count as stale
         until the next calibration window re-measures them.
         """
-        if self.has_central_model_profiles(provider_id):
+        already_central = self.session.execute(
+            text("SELECT 1 FROM model_profiles WHERE provider_id = :provider_id AND profile <> '{}'::jsonb LIMIT 1"),
+            {"provider_id": provider_id},
+        ).fetchone()
+        if already_central is not None:
             return 0
         merged: Dict[str, Dict[str, Any]] = {}
         for model_name, data in profiles.items():
@@ -2012,35 +1988,12 @@ class DBManager:
             entry = merged.setdefault(str(model_name), {})
             entry["calibration_unsupported"] = True
             entry["calibration_unsupported_reason"] = reason
-        upsert = text("""
-            INSERT INTO model_profiles (
-                provider_id, model_name,
-                base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
-                kv_budget_mb, disk_size_bytes, engine,
-                tensor_parallel_size, kv_per_token_bytes, max_context_length,
-                max_reported_context_length,
-                residency_source, measurement_count, last_measured_at,
-                observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
-                profile, sync_revision, updated_at
-            ) VALUES (
-                :provider_id, :model_name,
-                :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
-                :kv_budget_mb, :disk_size_bytes, :engine,
-                :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
-                :max_reported_context_length,
-                :residency_source, :measurement_count, :last_measured_at,
-                :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
-                CAST(:profile AS jsonb), 1, CURRENT_TIMESTAMP
+        upsert = text(
+            _upsert_model_profile_sql(
+                extra={"profile": "CAST(:profile AS jsonb)"},
+                conflict_set={"profile": "EXCLUDED.profile"},
             )
-            ON CONFLICT (provider_id, model_name) DO UPDATE SET
-                profile = EXCLUDED.profile,
-                max_reported_context_length = GREATEST(
-                    COALESCE(model_profiles.max_reported_context_length, 0),
-                    EXCLUDED.max_reported_context_length
-                ),
-                sync_revision = model_profiles.sync_revision + 1,
-                updated_at = CURRENT_TIMESTAMP
-        """)
+        )
         for model_name, data in merged.items():
             self.session.execute(
                 upsert,
@@ -2054,30 +2007,10 @@ class DBManager:
             calibrated_at = _epoch_to_datetime(data.get("last_measured_epoch"))
             if data.get("residency_source") != "calibrated" or calibrated_at is None:
                 continue
-            snapshot_row = self.session.execute(
-                text("""
-                    INSERT INTO model_calibrations (
-                        model_name, tensor_parallel_size, profile, source_provider_id, calibrated_at
-                    ) VALUES (:model_name, :tp, CAST(:profile AS jsonb), :provider_id, :calibrated_at)
-                    ON CONFLICT (model_name, source_provider_id, calibrated_at) DO UPDATE
-                        SET profile = model_calibrations.profile
-                    RETURNING id
-                """),
-                {
-                    "model_name": model_name,
-                    "tp": data.get("tensor_parallel_size"),
-                    "profile": _json_for_jsonb(calibration_snapshot(data)),
-                    "provider_id": provider_id,
-                    "calibrated_at": calibrated_at,
-                },
-            ).fetchone()
-            self.session.execute(
-                text("""
-                    UPDATE model_profiles SET calibration_id = :calibration_id
-                    WHERE provider_id = :provider_id AND model_name = :model_name
-                """),
-                {"calibration_id": int(snapshot_row.id), "provider_id": provider_id, "model_name": model_name},
+            calibration_id, _ = self._insert_calibration_snapshot(
+                provider_id, model_name, calibration_snapshot(data), None, None, calibrated_at
             )
+            self._link_calibration(provider_id, model_name, calibration_id)
         self.session.commit()
         return len(merged)
 
@@ -2115,10 +2048,12 @@ class DBManager:
         if marked is None:
             self.session.commit()
             return []
+        cleared_columns = ", ".join(f"{column} = NULL" for column in _CALIBRATED_PROFILE_COLUMNS)
         rows = self.session.execute(
-            text("""
+            text(f"""
                 UPDATE model_profiles
                 SET profile = profile - CAST(:fields AS text[]),
+                    {cleared_columns},
                     calibration_id = NULL,
                     sync_revision = sync_revision + 1,
                     updated_at = CURRENT_TIMESTAMP

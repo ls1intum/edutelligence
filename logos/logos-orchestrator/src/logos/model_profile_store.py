@@ -57,16 +57,19 @@ def is_central_profile_payload(profiles: Mapping[str, Any]) -> bool:
     return any(isinstance(p, dict) and "sync_revision" in p for p in profiles.values())
 
 
+def reported_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """What the node runs with, operator overrides included."""
+    return {key: value for key, value in profile.items() if key not in SYNC_METADATA_FIELDS}
+
+
 def persistable_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     """The part of a worker echo that belongs in ``model_profiles.profile``.
 
     Overrides come from the worker's config.yml and are no measurement.
     """
     overridden = profile.get("overridden_fields")
-    skip = set(SYNC_METADATA_FIELDS)
-    if isinstance(overridden, list):
-        skip.update(str(field) for field in overridden)
-    return {key: value for key, value in profile.items() if key not in skip}
+    skip = {str(field) for field in overridden} if isinstance(overridden, list) else set()
+    return {key: value for key, value in reported_profile(profile).items() if key not in skip}
 
 
 def calibration_snapshot(profile: Mapping[str, Any]) -> dict[str, Any]:

@@ -452,10 +452,9 @@ class ModelProfile:
     # orchestrator takes the max of this across every provider's profile for
     # the model to decide which nodes are still worth attempting.
     metal_capacity_floor_mb: Optional[float] = None
-    # Set by the central profile store: "local", "shared" or "legacy". A
-    # stale calibration keeps serving but was measured under a different
-    # hardware/vLLM/config key, so the next window re-calibrates it.
-    calibration_origin: Optional[str] = None
+    # Set by the central profile store: the calibration keeps serving but was
+    # measured under a different hardware/vLLM/config key, so the next window
+    # re-calibrates it.
     calibration_stale: Optional[bool] = None
 
     def estimate_vram_mb(self) -> float:

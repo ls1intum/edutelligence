@@ -11,6 +11,7 @@ from logos.model_profile_store import (
     is_new_local_calibration,
     persistable_profile,
     profile_digest,
+    reported_profile,
 )
 
 
@@ -46,6 +47,11 @@ def test_persistable_profile_drops_sync_metadata_and_overrides():
         "overridden_fields": ["max_context_length"],
     }
     assert persistable_profile(echoed) == {"base_residency_mb": 15000.0}
+
+
+def test_reported_profile_keeps_overrides_but_drops_sync_metadata():
+    echoed = {"max_context_length": 32768, "sync_revision": 1, "overridden_fields": ["max_context_length"]}
+    assert reported_profile(echoed) == {"max_context_length": 32768}
 
 
 def test_calibration_snapshot_keeps_only_calibration_fields():

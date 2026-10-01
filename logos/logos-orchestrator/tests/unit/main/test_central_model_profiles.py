@@ -47,8 +47,9 @@ class _FakeDB:
     def upsert_model_profiles(self, provider_id, profiles):
         self.legacy_upserts.append((provider_id, profiles))
 
-    def persist_central_model_profile(self, provider_id, model_name, profile, revision, key_hash):
+    def persist_central_model_profile(self, provider_id, model_name, profile, reported, revision, key_hash):
         self.persisted.append((provider_id, model_name, profile, revision, key_hash))
+        self.reported = reported
         return self.accept
 
     def record_model_calibration(self, provider_id, model_name, snapshot, key, key_hash, calibrated_at):
@@ -110,6 +111,28 @@ def test_profiles_from_a_worker_with_a_local_file_are_only_mirrored():
     assert changed == []
     assert db.legacy_upserts == [(1, {"org/model": {"base_residency_mb": 1.0}})]
     assert db.persisted == []
+
+
+def test_mirror_writes_only_profiles_that_changed():
+    db = _FakeDB()
+    first = {"a": {"base_residency_mb": 1.0}, "b": {"base_residency_mb": 2.0}}
+    logosnode_mod._persist_model_profiles(db, 1, first)
+    logosnode_mod._persist_model_profiles(db, 1, {"a": {"base_residency_mb": 1.0}, "b": {"base_residency_mb": 3.0}})
+    logosnode_mod._persist_model_profiles(db, 1, {"a": {"base_residency_mb": 1.0}, "b": {"base_residency_mb": 3.0}})
+    assert db.legacy_upserts == [(1, first), (1, {"b": {"base_residency_mb": 3.0}})]
+
+
+def test_overrides_reach_the_typed_columns_but_not_the_stored_profile():
+    db = _FakeDB()
+    echoed = {
+        "base_residency_mb": 1.0,
+        "max_context_length": 131072,
+        "overridden_fields": ["max_context_length"],
+        "sync_revision": 0,
+    }
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": echoed})
+    assert db.persisted[0][2] == {"base_residency_mb": 1.0}
+    assert db.reported == {"base_residency_mb": 1.0, "max_context_length": 131072}
 
 
 def test_central_echo_is_stored_without_sync_metadata():
