@@ -11,11 +11,12 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
+import { HttpResponse } from '@angular/common/http';
 import { AppSelectOption, SelectComponent } from '../../../../shared/components/select/select';
 import { RequestItem } from '../../../statistics/statistics.models';
 import { deriveStage, formatTimeAgo, formatTokenCount } from '../../../statistics/statistics.utils';
 import { TeamActivityService } from './activity-tab.service';
-import { RequestCursor, TeamActivityPayload, TraceExport, TraceExportItem } from './activity-tab.models';
+import { ExportCursor, RequestCursor, TeamActivityPayload } from './activity-tab.models';
 import { MostAskedQuestions } from './most-asked-questions';
 
 /** How often the live counts are refreshed while the tab is open. */
@@ -64,6 +65,18 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   readonly exportFormat = signal<'json' | 'csv'>('json');
   readonly exporting = signal(false);
   readonly exportError = signal<string | null>(null);
+  /**
+   * What the last download covered: the server caps one export, so a file
+   * that holds fewer requests than the window did must say so — a capped
+   * download that reads as a complete one is a data-loss story waiting to
+   * happen.
+   */
+  readonly exportNotice = signal<string | null>(null);
+  /**
+   * Where the last download's slice ended: a capped export hands the button
+   * over to the next, older slice instead of leaving its rows unreachable.
+   */
+  readonly exportCursor = signal<ExportCursor | null>(null);
 
   readonly exportFormatOptions: AppSelectOption[] = [
     { value: 'json', label: 'JSON' },
@@ -71,6 +84,19 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   ];
 
   readonly selectedExportFormatValue = computed(() => this.exportFormat());
+
+  /**
+   * The export button doubles as the continuation once a slice was capped,
+   * so its label says which of the two it is doing.
+   */
+  readonly exportButtonTitle = computed(() =>
+    this.exportCursor()
+      ? "Download the next, older slice of this team's requests"
+      : "Download this team's requests — the full-logging ones carry their stored content",
+  );
+  readonly exportButtonLabel = computed(() =>
+    this.exportCursor() ? 'Export the next older request traces' : 'Export request traces',
+  );
 
   /**
    * Cursor of each page already visited. Page 0 is always null (start at the
@@ -198,9 +224,14 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   /**
    * Download the team's request traces as the picked file format: every
    * request of the selected window, and for the consented (FULL-logging)
-   * ones the stored request and response content with it. The server answers
-   * the JSON envelope; the CSV is cut from it here, the same way the import
-   * credentials file is cut from the upload result.
+   * ones the stored request and response content with it. Both formats are
+   * cut on the application server and arrive as a file — the view only names
+   * it, saves it, and says what it holds.
+   *
+   * A window the cap outruns is not a dead end: the first download carries
+   * the newest slice and the cursor behind it, and every following click
+   * carries the cursor back so the server sends the next, older slice —
+   * until a file arrives uncapped, which ends the walk.
    */
   async exportTraces(): Promise<void> {
     if (!this.teamId || this.exporting()) return;
@@ -209,25 +240,73 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     // mid-flight, and relabeling one team's data under another's id would be
     // worse than a stale number.
     const teamId = this.teamId;
+    const days = this.days();
+    const userId = this.filterUserId();
+    const format = this.exportFormat();
+    const cursor = this.exportCursor();
     this.exporting.set(true);
     this.exportError.set(null);
     try {
-      const payload = await this.activityService.getTraceExport(
-        teamId,
-        this.days(),
-        this.filterUserId(),
+      const response = await this.activityService.getTraceExport(teamId, days, userId, format, cursor);
+      this.downloadFile(response, `logos-traces-team-${teamId}-${days}d.${format}`);
+      // The scope may have moved while the download was out — the change
+      // already cleared the last notice and the cursor it belonged to, and a
+      // late answer must not put either back for a selection that is no
+      // longer on screen. The file itself still gets saved: it is a complete
+      // answer for the scope it was started with.
+      if (this.teamId !== teamId || this.days() !== days || this.filterUserId() !== userId) {
+        this.exportNotice.set(null);
+        this.exportCursor.set(null);
+        return;
+      }
+      // The headers are set before the first byte, so they are the same facts
+      // the file carries — and the only ones the view can read back.
+      const total = Number(response.headers.get('X-Logos-Export-Total') ?? '0');
+      const count = Number(response.headers.get('X-Logos-Export-Count') ?? '0');
+      if (response.headers.get('X-Logos-Export-Truncated') !== 'true') {
+        this.exportCursor.set(null);
+        this.exportNotice.set(null);
+        return;
+      }
+      const next = this.parseNextCursor(response.headers.get('X-Logos-Export-Next-Cursor') ?? '');
+      this.exportCursor.set(next);
+      this.exportNotice.set(
+        next
+          ? `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — press export again for the next, older slice.`
+          : `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — narrow the period or the requester filter for the rest.`,
       );
-      const format = this.exportFormat();
-      this.downloadFile(
-        `logos-traces-team-${teamId}-${payload.days}d.${format}`,
-        format === 'csv' ? tracesToCsv(payload) : JSON.stringify(payload, null, 2),
-        format === 'csv' ? 'text/csv' : 'application/json',
-      );
-    } catch {
-      this.exportError.set('Could not export the traces.');
+    } catch (err: unknown) {
+      // A continuation the server refuses (expired walk / malformed token) is
+      // a 400. Keeping that cursor would make every following click resend the
+      // same rejected token; clear it so the next press starts a fresh export.
+      // Network / 5xx failures keep the cursor so a retry can resume.
+      const status =
+        err && typeof err === 'object' && 'status' in err
+          ? Number((err as { status: unknown }).status)
+          : NaN;
+      if (cursor != null && status === 400) {
+        this.exportCursor.set(null);
+        this.exportError.set(
+          'The previous export continuation expired — press export again to start a fresh download.',
+        );
+        this.exportNotice.set(null);
+      } else {
+        this.exportError.set('Could not export the traces.');
+        this.exportNotice.set(null);
+      }
     } finally {
       this.exporting.set(false);
     }
+  }
+
+  /**
+   * The server's continuation token is opaque: the view neither parses nor
+   * builds it, it only decides whether the header holds one at all. An empty
+   * token means the walk cannot continue, and the notice then says so with
+   * the narrowing advice instead of promising a next slice.
+   */
+  private parseNextCursor(token: string): ExportCursor | null {
+    return token.trim() ? token : null;
   }
 
   async nextPage(): Promise<void> {
@@ -310,6 +389,12 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
   private resetToFirstPage(): void {
     this.pageIndex.set(0);
     this.cursorForPage = [null];
+    // A notice about the last download describes the window and filter it
+    // was cut from; a new scope would leave it describing something that is
+    // not on screen anymore. The export cursor belongs to the same scope — a
+    // continuation started under one window must not fire under another.
+    this.exportNotice.set(null);
+    this.exportCursor.set(null);
   }
 
   private async load(): Promise<void> {
@@ -345,79 +430,25 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
     }
   }
 
-  private downloadFile(filename: string, content: string, mimeType: string): void {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
+  private downloadFile(response: HttpResponse<Blob>, fallbackName: string): void {
+    const body = response.body;
+    if (!body) return;
+    const url = URL.createObjectURL(body);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = this.fileNameFrom(response, fallbackName);
     a.click();
     URL.revokeObjectURL(url);
   }
-}
 
-// ── Trace export helpers  ────────────────────────────────────────
-
-/** Column order of the CSV export; the JSON envelope is the reference. */
-export const TRACE_CSV_COLUMNS: (keyof TraceExportItem)[] = [
-  'request_id',
-  'timestamp_request',
-  'timestamp_forwarding',
-  'timestamp_response',
-  'time_at_first_token',
-  'privacy_level',
-  'model_name',
-  'provider_type',
-  'environment',
-  'api_key_id',
-  'api_key_name',
-  'username',
-  'full_name',
-  'team_name',
-  'client_ip',
-  'status',
-  'error_message',
-  'priority',
-  'initial_priority',
-  'priority_when_scheduled',
-  'queue_depth_at_enqueue',
-  'queue_depth_at_schedule',
-  'queue_depth_at_arrival',
-  'timeout_s',
-  'utilization_at_arrival',
-  'queue_wait_ms',
-  'was_cold_start',
-  'load_duration_ms',
-  'available_vram_mb',
-  'prompt_tokens',
-  'completion_tokens',
-  'total_tokens',
-  'cost_microcents',
-  'classification_statistics',
-  'input_payload',
-  'headers',
-  'response_payload',
-];
-
-/**
- * The CSV version of a trace export. Structured fields go out as compact
- * JSON so a trace stays one row; quoting follows the same rules as the import
- * credentials file — escape what breaks a table, because a payload is one
- * comma away from breaking it.
- */
-export function tracesToCsv(payload: TraceExport): string {
-  const rows = payload.traces.map((trace) =>
-    TRACE_CSV_COLUMNS.map((column) => traceCsvCell(trace[column])).join(','),
-  );
-  return [TRACE_CSV_COLUMNS.join(','), ...rows].join('\n');
-}
-
-export function traceCsvCell(value: unknown): string {
-  const text =
-    value === null || value === undefined
-      ? ''
-      : typeof value === 'string'
-        ? value
-        : JSON.stringify(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  /**
+   * The file name the server picked for the download, out of the
+   * Content-Disposition header — the header is the file's own name, and the
+   * fallback keeps a download that lost its headers under a sane one.
+   */
+  private fileNameFrom(response: HttpResponse<Blob>, fallback: string): string {
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const named = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+    return named?.[1] ?? fallback;
+  }
 }
