@@ -1,6 +1,6 @@
 """The executor captures the dispatch and response instants around the HTTP
-send so the statistics split excludes logos' request preparation and response
-parsing from the provider's window."""
+send so the statistics split excludes logos' request preparation, HTTP client
+lifecycle, and response parsing from the provider's window."""
 
 import asyncio
 import datetime
@@ -26,13 +26,21 @@ class _FakeSyncResponse:
 
 
 class _FakeAsyncClient:
-    def __init__(self, times):
+    def __init__(self, times, *, setup_delay=0.0, teardown_delay=0.0):
         self._times = times
+        self._setup_delay = setup_delay
+        self._teardown_delay = teardown_delay
 
     async def __aenter__(self):
+        if self._setup_delay:
+            await asyncio.sleep(self._setup_delay)
+        self._times["enter_end"] = datetime.datetime.now(datetime.timezone.utc)
         return self
 
     async def __aexit__(self, *_args):
+        self._times["exit_start"] = datetime.datetime.now(datetime.timezone.utc)
+        if self._teardown_delay:
+            await asyncio.sleep(self._teardown_delay)
         return None
 
     async def post(self, url, *, headers, timeout, json):  # noqa: ARG002
@@ -48,18 +56,30 @@ def _fail_preparation(payload):  # noqa: ARG001
 
 @pytest.mark.asyncio
 async def test_execute_sync_captures_the_instants_around_the_http_send(monkeypatch):
-    """dispatch_at is captured after request preparation (before the send)
-    and response_at after the response arrived (before body parsing), so both
-    logos work items stay out of the provider's window."""
+    """dispatch_at is captured after request preparation and client setup
+    (immediately before the send) and response_at after the response arrived
+    (before client teardown and body parsing), so logos work stays out of the
+    provider's window."""
     times = {}
-    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **_kwargs: _FakeAsyncClient(times))
+    monkeypatch.setattr(
+        executor_module.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _FakeAsyncClient(times, setup_delay=0.02, teardown_delay=0.02),
+    )
 
     result = await Executor().execute_sync(URL, {}, {"model": "m", "messages": []})
 
     assert result.success
     assert result.dispatch_at is not None
+    assert result.response_at is not None
+    # Client setup finished before the dispatch stamp…
+    assert times["enter_end"] <= result.dispatch_at
+    # …dispatch precedes the HTTP send…
     assert result.dispatch_at <= times["send_start"], "the dispatch instant must precede the HTTP send"
+    # …response follows the HTTP response…
     assert times["send_end"] <= result.response_at, "the response instant must follow the HTTP response"
+    # …and precedes client teardown.
+    assert result.response_at <= times["exit_start"], "the response instant must precede client teardown"
     assert result.dispatch_at < result.response_at
 
 
@@ -73,6 +93,25 @@ async def test_execute_sync_preparation_failure_captures_no_instants(monkeypatch
 
     assert not result.success
     assert "multipart decode failed" in result.error
+    assert result.dispatch_at is None
+    assert result.response_at is None
+
+
+@pytest.mark.asyncio
+async def test_execute_sync_client_init_failure_captures_no_dispatch(monkeypatch):
+    """A client that fails to open never sent anything: dispatch_at stays None
+    even though preparation succeeded."""
+
+    class _FailingClient:
+        def __init__(self, **_kwargs):
+            raise OSError("client init failed")
+
+    monkeypatch.setattr(executor_module.httpx, "AsyncClient", _FailingClient)
+
+    result = await Executor().execute_sync(URL, {}, {"model": "m", "messages": []})
+
+    assert not result.success
+    assert "client init failed" in result.error
     assert result.dispatch_at is None
     assert result.response_at is None
 
@@ -94,10 +133,14 @@ class _FakeStreamResponse:
 
 
 class _FakeStreamingClient:
-    def __init__(self, times):
+    def __init__(self, times, *, setup_delay=0.0):
         self._times = times
+        self._setup_delay = setup_delay
 
     async def __aenter__(self):
+        if self._setup_delay:
+            await asyncio.sleep(self._setup_delay)
+        self._times["enter_end"] = datetime.datetime.now(datetime.timezone.utc)
         return self
 
     async def __aexit__(self, *_args):
@@ -110,10 +153,14 @@ class _FakeStreamingClient:
 
 @pytest.mark.asyncio
 async def test_execute_streaming_captures_the_dispatch_instant_before_the_send(monkeypatch):
-    """The streaming dispatch instant is captured on the status object once
-    the generator body starts — after preparation, before the send."""
+    """The streaming dispatch instant is captured inside the entered client
+    context immediately before the send — after preparation and client setup."""
     times = {}
-    monkeypatch.setattr(executor_module.httpx, "AsyncClient", lambda **_kwargs: _FakeStreamingClient(times))
+    monkeypatch.setattr(
+        executor_module.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _FakeStreamingClient(times, setup_delay=0.02),
+    )
     status = StreamingExecutionStatus()
 
     async def _drain():
@@ -123,6 +170,7 @@ async def test_execute_streaming_captures_the_dispatch_instant_before_the_send(m
     await _drain()
 
     assert status.dispatch_at is not None
+    assert times["enter_end"] <= status.dispatch_at, "client setup must finish before the dispatch stamp"
     assert status.dispatch_at <= times["send_start"], "the dispatch instant must precede the HTTP send"
 
 
@@ -135,6 +183,28 @@ async def test_execute_streaming_preparation_failure_captures_no_dispatch(monkey
 
     async def _drain():
         with pytest.raises(ValueError, match="multipart decode failed"):
+            async for _chunk in Executor().execute_streaming(URL, {}, {"model": "m", "messages": []}, status=status):
+                pass
+
+    await _drain()
+
+    assert status.dispatch_at is None
+
+
+@pytest.mark.asyncio
+async def test_execute_streaming_client_init_failure_captures_no_dispatch(monkeypatch):
+    """A streaming client that fails to open never sent anything: dispatch_at
+    stays unset."""
+
+    class _FailingClient:
+        def __init__(self, **_kwargs):
+            raise OSError("client init failed")
+
+    monkeypatch.setattr(executor_module.httpx, "AsyncClient", _FailingClient)
+    status = StreamingExecutionStatus()
+
+    async def _drain():
+        with pytest.raises(OSError, match="client init failed"):
             async for _chunk in Executor().execute_streaming(URL, {}, {"model": "m", "messages": []}, status=status):
                 pass
 

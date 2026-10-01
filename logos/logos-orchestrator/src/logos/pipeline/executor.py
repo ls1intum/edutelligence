@@ -38,9 +38,10 @@ class ExecutionResult:
     raw_body: Optional[bytes] = None
     content_type: Optional[str] = None
     # Captured in execute_sync around the HTTP send so the caller can stamp
-    # the provider window from them: dispatch after logos' request
-    # preparation, response before logos' body parsing. dispatch_at stays
-    # None when preparation fails — the request never reached the provider.
+    # the provider window from them: dispatch after logos' request preparation
+    # *and* HTTP client setup, response before client teardown and body
+    # parsing. dispatch_at stays None when preparation or client init fails —
+    # the request never reached the provider.
     dispatch_at: Optional[datetime.datetime] = None
     response_at: Optional[datetime.datetime] = None
 
@@ -54,10 +55,10 @@ class StreamingExecutionStatus:
     # (upstream) so the response stamp does not wait for a slow client to drain
     # buffered chunks before the failure time is recorded.
     error_at: Optional[datetime.datetime] = None
-    # The instant the request was handed to the upstream, captured after
-    # request preparation (the multipart decode for file uploads) and before
-    # the send. Set once the generator body starts (the first __anext__), so
-    # the caller's call stamp excludes that logos work.
+    # The instant the request was handed to the upstream, captured inside the
+    # entered HTTP client context immediately before the stream send — so
+    # client construction/setup stays out of the provider window, and a client
+    # init failure leaves this unset (no send happened).
     dispatch_at: Optional[datetime.datetime] = None
 
 
@@ -113,13 +114,12 @@ class Executor:
         logger.info(f"Streaming request to {url}")
 
         request_kwargs = self._request_kwargs(payload)
-        if status is not None:
-            # After preparation (the multipart decode for file uploads),
-            # before the send: this is the provider call. The caller stamps
-            # from it once the generator body has run (at the first
-            # __anext__).
-            status.dispatch_at = datetime.datetime.now(datetime.timezone.utc)
         async with httpx.AsyncClient(timeout=None) as client:
+            if status is not None:
+                # Inside the entered client, immediately before the send: client
+                # construction/setup is logos work, and a client that fails to
+                # open never reaches this stamp.
+                status.dispatch_at = datetime.datetime.now(datetime.timezone.utc)
             async with client.stream("POST", url, headers=headers, **request_kwargs) as resp:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
@@ -196,20 +196,25 @@ class Executor:
         logger.info(f"Sync request to {url}")
 
         # Captured here, not by the caller: the request preparation (the
-        # multipart decode for file uploads) and the response parsing are logos
-        # work and must stay out of the provider's window.
+        # multipart decode for file uploads), HTTP client setup/teardown, and
+        # the response parsing are logos work and must stay out of the
+        # provider's window.
         dispatch_at = None
+        response_at = None
         try:
             request_kwargs = self._request_kwargs(payload)
-            dispatch_at = datetime.datetime.now(datetime.timezone.utc)
             async with httpx.AsyncClient() as client:
+                # Inside the entered client, immediately before/after the send:
+                # a client that fails to open leaves dispatch_at unset, and
+                # teardown after response_at stays out of the provider window.
+                dispatch_at = datetime.datetime.now(datetime.timezone.utc)
                 response = await client.post(
                     url,
                     headers=headers,
                     timeout=None,  # No timeout to handle long-running LLM requests and cold starts
                     **request_kwargs,
                 )
-            response_at = datetime.datetime.now(datetime.timezone.utc)
+                response_at = datetime.datetime.now(datetime.timezone.utc)
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
@@ -278,9 +283,10 @@ class Executor:
                 usage={},
                 is_streaming=False,
                 status_code=None,
-                # None when preparation failed before the send: the request
-                # never reached the provider, so no dispatch instant.
+                # None when preparation or client init failed before the send:
+                # the request never reached the provider, so no dispatch instant.
                 dispatch_at=dispatch_at,
+                response_at=response_at,
             )
 
     @staticmethod
