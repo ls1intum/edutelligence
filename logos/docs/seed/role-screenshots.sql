@@ -269,6 +269,15 @@ FROM (VALUES
 ) AS v(name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
 WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = v.name);
 
+UPDATE models SET profile_ratings = v.ratings::jsonb
+FROM (VALUES
+    ('llama-3.1-8b-instruct', '{"latency":5,"quality":3,"price":4}'),
+    ('qwen-2.5-72b-instruct', '{"latency":2,"quality":5,"price":2}'),
+    ('mistral-small-3.2-24b', '{"latency":4,"quality":3,"price":5}')
+) AS v(name, ratings)
+WHERE models.name = v.name
+  AND (models.profile_ratings IS NULL OR models.profile_ratings = '{}'::jsonb);
+
 -- Retired demo model: created here, given usage below, then deleted at the
 -- end of the seed. The delete trigger stamps its name onto the usage rows,
 -- so the statistics page shows the usage as a trash-marked deleted-model
@@ -643,23 +652,24 @@ WHERE a.commit_sha = 'abc123docsrolescreenshots'
 
 INSERT INTO ai_llm_call_recommendations (
     analysis_id, workflow_id, team_id, file_path, start_line, end_line,
-    detected_model, recommended_sla, confidence, justification, review_status
+    detected_model, recommended_sla, objective_priority, confidence, justification, review_status
 )
 SELECT a.id, w.id, a.team_id, r.file_path, r.start_line, r.end_line,
-       r.detected_model, r.recommended_sla, r.confidence, r.justification, 'pending'
+       r.detected_model, r.recommended_sla, r.objective_priority::jsonb,
+       r.confidence, r.justification, 'pending'
 FROM ai_workflow_analyses a
 JOIN ai_workflows w ON w.analysis_id = a.id
 JOIN (VALUES
     ('logos/logos-agent/app/sessions.py', 1483, 1483, 'claude-opus',
-     'ux-high-prio', 0.72,
+     'ux-high-prio', '["quality","latency","price"]', 0.72,
      'Async agent helper work — user is not blocked on the response.'),
     ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 115, 'claude-opus',
-     'ux-critical', 0.81,
+     'ux-critical', '["latency","quality","price"]', 0.81,
      'Interactive team detail load awaited by the signed-in owner.'),
     ('logos/docs/seed/role-screenshots.sql', 1, 1, 'claude-opus',
-     'ux-background', 0.66,
+     'ux-background', '["price","quality","latency"]', 0.66,
      'Offline seed / batch documentation path.')
-) AS r(file_path, start_line, end_line, detected_model, recommended_sla, confidence, justification)
+) AS r(file_path, start_line, end_line, detected_model, recommended_sla, objective_priority, confidence, justification)
   ON true
 WHERE a.commit_sha = 'abc123docsrolescreenshots'
   AND NOT EXISTS (

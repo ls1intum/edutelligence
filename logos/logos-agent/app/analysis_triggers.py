@@ -59,12 +59,19 @@ Schema for `/artifacts/analysis.json`:
       "code_url": "optional permalink to the call site, or null",
       "detected_model": "optional model name or null",
       "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+      "objective_priority": ["latency" | "quality" | "price", "..."],
       "confidence": 0.0,
-      "justification": "why this SLA",
+      "justification": "why this SLA and objective order",
       "traffic_flags": {{"night_heavy": false}}
     }}
   ]
 }}
+
+`objective_priority` is a full ranking of latency, quality, and price (most
+important first). It complements SLA: SLA is urgency/interactivity; the ranking
+says what to optimize for when choosing a model. If omitted, defaults are:
+ux-critical → [latency, quality, price]; ux-high-prio → [quality, latency, price];
+ux-background → [price, quality, latency].
 
 Repository: {repo_slug}
 Clone URL: {repo_url}

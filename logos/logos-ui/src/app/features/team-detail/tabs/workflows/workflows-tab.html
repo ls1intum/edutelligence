@@ -21,9 +21,11 @@
   </div>
 
   <p class="section-hint">
-    Activity diagrams and SLA recommendations from the latest succeeded analysis
-    of each linked repository. Confirmations can update an application key's
-    priority; recommendations never take effect until you review them.
+    Activity diagrams plus SLA and objective-priority recommendations from the
+    latest succeeded analysis of each linked repository. Objective priority is
+    an ordered list of latency, quality, and price (most important first).
+    Confirmations can update an application key's queue priority;
+    recommendations never take effect until you review them.
   </p>
 
   @if (loadError()) {
@@ -109,9 +111,44 @@
                       </span>
                     }
                   </div>
-                  <div role="cell" data-label="Model">{{ rec.detected_model || '—' }}</div>
-                  <div role="cell" data-label="Recommended">
+                  <div class="cell-model" role="cell" data-label="Model">
+                    <span>{{ rec.detected_model || '—' }}</span>
+                    @if (ratingsForDetectedModel(rec.detected_model); as ratings) {
+                      <app-model-profile-radar [ratings]="ratings" [size]="96" />
+                    }
+                  </div>
+                  <div class="cell-recommended" role="cell" data-label="Recommended">
                     <span class="sla-badge">{{ rec.recommended_sla }}</span>
+                    <ol class="priority-list" [attr.aria-label]="'Objective priority for recommendation ' + rec.id">
+                      @for (key of priorityFor(rec); track key; let i = $index) {
+                        <li class="priority-chip">
+                          <span class="priority-rank">{{ i + 1 }}.</span>
+                          {{ key | titlecase }}
+                          @if (canEdit && rec.review_status === 'pending') {
+                            <span class="priority-move">
+                              <button
+                                type="button"
+                                class="btn-icon btn-icon--xs"
+                                [disabled]="i === 0 || reviewingId() === rec.id"
+                                [attr.aria-label]="'Move ' + key + ' up'"
+                                (click)="movePriority(rec.id, i, -1)"
+                              >
+                                <i class="pi pi-arrow-up" aria-hidden="true"></i>
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-icon btn-icon--xs"
+                                [disabled]="i === priorityFor(rec).length - 1 || reviewingId() === rec.id"
+                                [attr.aria-label]="'Move ' + key + ' down'"
+                                (click)="movePriority(rec.id, i, 1)"
+                              >
+                                <i class="pi pi-arrow-down" aria-hidden="true"></i>
+                              </button>
+                            </span>
+                          }
+                        </li>
+                      }
+                    </ol>
                   </div>
                   <div role="cell" data-label="Confidence">
                     {{ (rec.confidence * 100) | number: '1.0-0' }}%

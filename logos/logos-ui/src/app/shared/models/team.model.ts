@@ -174,6 +174,9 @@ export type RecommendedSla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
 
 export type RecommendationReviewStatus = 'pending' | 'accepted' | 'overridden' | 'rejected';
 
+/** Ordered optimization goals for a call site (most important first). */
+export type ObjectiveKey = 'latency' | 'quality' | 'price';
+
 export interface AiLlmCallRecommendation {
   id: number;
   analysis_id: number;
@@ -186,11 +189,14 @@ export interface AiLlmCallRecommendation {
   detected_model?: string | null;
   api_key_id?: number | null;
   recommended_sla: RecommendedSla;
+  /** Ranking of latency / quality / price (most important first). */
+  objective_priority?: ObjectiveKey[];
   confidence: number;
   justification: string;
   traffic_flags?: Record<string, unknown> | null;
   review_status: RecommendationReviewStatus;
   confirmed_sla?: RecommendedSla | null;
+  confirmed_objective_priority?: ObjectiveKey[] | null;
   reviewed_by?: number | null;
   reviewed_at?: string | null;
 }
@@ -212,6 +218,7 @@ export interface TeamWorkflowsResponse {
 export interface ReviewRecommendationPayload {
   action: 'accept' | 'override' | 'reject';
   confirmed_sla?: RecommendedSla;
+  confirmed_objective_priority?: ObjectiveKey[];
   api_key_id?: number;
 }
 

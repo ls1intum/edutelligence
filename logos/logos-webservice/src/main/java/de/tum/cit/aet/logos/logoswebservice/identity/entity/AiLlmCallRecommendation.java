@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.entity;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import org.hibernate.annotations.JdbcTypeCode;
@@ -51,6 +52,14 @@ public class AiLlmCallRecommendation {
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> trafficFlags;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "objective_priority", columnDefinition = "jsonb", nullable = false)
+    private List<Object> objectivePriority = List.of("latency", "quality", "price");
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "confirmed_objective_priority", columnDefinition = "jsonb")
+    private List<Object> confirmedObjectivePriority;
+
     @Column(nullable = false)
     private String reviewStatus = "pending";
 
@@ -72,6 +81,8 @@ public class AiLlmCallRecommendation {
     public Float getConfidence() { return confidence; }
     public String getJustification() { return justification; }
     public Map<String, Object> getTrafficFlags() { return trafficFlags; }
+    public List<Object> getObjectivePriority() { return objectivePriority; }
+    public List<Object> getConfirmedObjectivePriority() { return confirmedObjectivePriority; }
     public String getReviewStatus() { return reviewStatus; }
     public String getConfirmedSla() { return confirmedSla; }
     public Integer getReviewedBy() { return reviewedBy; }
@@ -90,6 +101,10 @@ public class AiLlmCallRecommendation {
     public void setConfidence(Float confidence) { this.confidence = confidence; }
     public void setJustification(String justification) { this.justification = justification; }
     public void setTrafficFlags(Map<String, Object> trafficFlags) { this.trafficFlags = trafficFlags; }
+    public void setObjectivePriority(List<Object> objectivePriority) { this.objectivePriority = objectivePriority; }
+    public void setConfirmedObjectivePriority(List<Object> confirmedObjectivePriority) {
+        this.confirmedObjectivePriority = confirmedObjectivePriority;
+    }
     public void setReviewStatus(String reviewStatus) { this.reviewStatus = reviewStatus; }
     public void setConfirmedSla(String confirmedSla) { this.confirmedSla = confirmedSla; }
     public void setReviewedBy(Integer reviewedBy) { this.reviewedBy = reviewedBy; }

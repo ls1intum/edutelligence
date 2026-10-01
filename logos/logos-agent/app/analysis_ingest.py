@@ -27,8 +27,36 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_FILE = "analysis.json"
 VALID_SLAS = frozenset({"ux-critical", "ux-high-prio", "ux-background"})
+OBJECTIVE_KEYS = ("latency", "quality", "price")
+DEFAULT_OBJECTIVE_PRIORITY = list(OBJECTIVE_KEYS)
 # Cap memory: an agent-written artifact must not exhaust the runner.
 MAX_ANALYSIS_BYTES = 2 * 1024 * 1024
+
+
+def objective_priority_for_sla(sla: str) -> list[str]:
+    if sla == "ux-critical":
+        return ["latency", "quality", "price"]
+    if sla == "ux-background":
+        return ["price", "quality", "latency"]
+    return ["quality", "latency", "price"]
+
+
+def normalize_objective_priority(raw: object, *, sla: str) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    if isinstance(raw, list):
+        for item in raw:
+            key = str(item or "").strip().lower()
+            if key in OBJECTIVE_KEYS and key not in seen:
+                ordered.append(key)
+                seen.add(key)
+    if not ordered:
+        ordered = objective_priority_for_sla(sla)
+        seen = set(ordered)
+    for key in OBJECTIVE_KEYS:
+        if key not in seen:
+            ordered.append(key)
+    return ordered
 
 
 def artifact_analysis_path(session_id: int) -> Path:
@@ -288,6 +316,7 @@ async def upsert_analysis(
             sla = str(raw.get("recommended_sla") or "").strip()
             if sla not in VALID_SLAS:
                 sla = "ux-high-prio"
+            priority = normalize_objective_priority(raw.get("objective_priority"), sla=sla)
             workflow_name = str(raw.get("workflow") or raw.get("workflow_name") or "").strip()
             workflow_id = workflow_ids.get(workflow_name) if workflow_name else None
             # Never trust a numeric workflow_id from the artifact — it could
@@ -304,12 +333,12 @@ async def upsert_analysis(
                 text("""
                     INSERT INTO ai_llm_call_recommendations
                         (analysis_id, workflow_id, team_id, file_path, start_line, end_line,
-                         code_url, detected_model, recommended_sla, confidence, justification,
-                         traffic_flags, review_status)
+                         code_url, detected_model, recommended_sla, objective_priority,
+                         confidence, justification, traffic_flags, review_status)
                     VALUES
                         (:analysis_id, :workflow_id, :team_id, :file_path, :start_line, :end_line,
-                         :code_url, :detected_model, :sla, :confidence, :justification,
-                         CAST(:flags AS jsonb), 'pending')
+                         :code_url, :detected_model, :sla, CAST(:priority AS jsonb),
+                         :confidence, :justification, CAST(:flags AS jsonb), 'pending')
                     """),
                 {
                     "analysis_id": analysis_id,
@@ -321,6 +350,7 @@ async def upsert_analysis(
                     "code_url": _str_or_none(raw.get("code_url")),
                     "detected_model": _str_or_none(raw.get("detected_model")),
                     "sla": sla,
+                    "priority": json.dumps(priority),
                     "confidence": confidence_f,
                     "justification": str(raw.get("justification") or ""),
                     "flags": flags_json,

@@ -133,6 +133,7 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
     assert rec["workflow_id"] == 100
     assert rec["team_id"] == 7
     assert json.loads(rec["flags"]) == {"night_heavy": False}
+    assert json.loads(rec["priority"]) == ["latency", "quality", "price"]
 
     conn2 = _Conn()
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn2))

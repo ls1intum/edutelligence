@@ -2,6 +2,8 @@
 
 .repositories-tab {
   padding-top: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .section-header {
@@ -9,6 +11,9 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .section-title {

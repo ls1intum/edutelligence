@@ -38,7 +38,7 @@
           role="tab"
           [attr.aria-selected]="activeTab() === tab"
           type="button"
-          (click)="setTab(tab)"
+          (click)="setTab(tab, $event)"
         >{{ tabLabel[tab] }}</button>
       }
     </nav>

@@ -50,5 +50,6 @@
     <include file="liquibase/changelog/044_log_entry_gateway_estimated_tokens.xml"/>
     <include file="liquibase/changelog/045_team_repositories.xml"/>
     <include file="liquibase/changelog/046_ai_workflow_analysis.xml"/>
+    <include file="liquibase/changelog/047_objective_priority_model_ratings.xml"/>
 
 </databaseChangeLog>

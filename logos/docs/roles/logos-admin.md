@@ -24,8 +24,9 @@ recognizable as deleted.
 
 ## Models
 
-The deployment's model catalogue with tags, aliases, capabilities, and
-scheduling weights. Clicking a model opens its **Model Details** view:
+The deployment's model catalogue with tags, aliases, capabilities,
+scheduling weights, and Likert **profile ratings** (latency / quality / price)
+shown as a spider chart. Clicking a model opens its **Model Details** view:
 per-model request history, error reports, and scheduling statistics.
 
 ![Models page](/img/roles/logos-admin-models.png)

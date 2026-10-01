@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 
 import { TeamManagementService } from '../../../../core/services/team-management.service';
+import { ModelManagementService } from '../../../../core/services/model-management.service';
 import {
   AiLlmCallRecommendation,
   TeamApiKey,
@@ -18,6 +19,7 @@ vi.mock('mermaid', () => ({
 describe('WorkflowsTabComponent review actions', () => {
   const getTeamWorkflows = vi.fn();
   const reviewRecommendation = vi.fn();
+  const getModels = vi.fn();
 
   const pending: AiLlmCallRecommendation = {
     id: 55,
@@ -26,7 +28,9 @@ describe('WorkflowsTabComponent review actions', () => {
     file_path: 'src/llm.py',
     start_line: 10,
     end_line: 40,
+    detected_model: 'gpt-fast',
     recommended_sla: 'ux-critical',
+    objective_priority: ['latency', 'quality', 'price'],
     confidence: 0.9,
     justification: 'interactive chat',
     review_status: 'pending',
@@ -79,11 +83,29 @@ describe('WorkflowsTabComponent review actions', () => {
     vi.clearAllMocks();
     getTeamWorkflows.mockResolvedValue(payload);
     reviewRecommendation.mockResolvedValue({ ...pending, review_status: 'accepted' });
+    getModels.mockResolvedValue([
+      {
+        id: 1,
+        name: 'gpt-fast',
+        description: null,
+        tags: null,
+        aliases: null,
+        weight_latency: null,
+        weight_accuracy: null,
+        weight_cost: null,
+        weight_quality: null,
+        profile_ratings: { latency: 5, quality: 3, price: 4 },
+      },
+    ]);
     TestBed.configureTestingModule({
       providers: [
         {
           provide: TeamManagementService,
           useValue: { getTeamWorkflows, reviewRecommendation },
+        },
+        {
+          provide: ModelManagementService,
+          useValue: { getModels },
         },
       ],
     });
@@ -104,13 +126,14 @@ describe('WorkflowsTabComponent review actions', () => {
     expect(component.pendingRecs()).toEqual([pending]);
   });
 
-  it('accepts a recommendation with the stored api_key_id', async () => {
+  it('accepts a recommendation with the stored api_key_id and objective priority', async () => {
     const component = setup();
     await component.load();
     await component.accept(pending);
     expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, {
       action: 'accept',
       api_key_id: 12,
+      confirmed_objective_priority: ['latency', 'quality', 'price'],
     });
   });
 
@@ -122,17 +145,20 @@ describe('WorkflowsTabComponent review actions', () => {
     expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, {
       action: 'accept',
       api_key_id: 12,
+      confirmed_objective_priority: ['latency', 'quality', 'price'],
     });
   });
 
-  it('overrides with the selected SLA', async () => {
+  it('overrides with the selected SLA and reordered priority', async () => {
     const component = setup();
     await component.load();
     component.setOverrideSla(55, 'ux-background');
+    component.movePriority(55, 0, 1);
     await component.override(pending);
     expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, {
       action: 'override',
       confirmed_sla: 'ux-background',
+      confirmed_objective_priority: ['quality', 'latency', 'price'],
       api_key_id: 12,
     });
   });
@@ -142,5 +168,15 @@ describe('WorkflowsTabComponent review actions', () => {
     await component.load();
     await component.reject(pending);
     expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, { action: 'reject' });
+  });
+
+  it('resolves profile ratings for a detected model', async () => {
+    const component = setup();
+    await component.load();
+    expect(component.ratingsForDetectedModel('gpt-fast')).toEqual({
+      latency: 5,
+      quality: 3,
+      price: 4,
+    });
   });
 });

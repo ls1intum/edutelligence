@@ -2,6 +2,8 @@
 
 .workflows-tab {
   padding-top: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .section-header {
@@ -321,6 +323,62 @@
 .btn-danger:hover:not(:disabled) {
   background: rgb(var(--color-error) / var(--opacity-soft));
   color: rgb(var(--color-error));
+}
+
+.cell-model {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cell-recommended {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.priority-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.priority-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgb(var(--nav-item-text) / var(--opacity-faint));
+  color: rgb(var(--color-typography-0));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.priority-rank {
+  color: rgb(var(--color-typography-500));
+  font-weight: var(--font-weight-regular);
+}
+
+.priority-move {
+  display: inline-flex;
+  gap: 0;
+  margin-left: 2px;
+}
+
+.btn-icon--xs {
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  font-size: 0.65rem;
 }
 
 .table-row--pending {

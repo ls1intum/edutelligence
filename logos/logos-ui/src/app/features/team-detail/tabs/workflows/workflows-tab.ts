@@ -9,30 +9,75 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { DecimalPipe, SlicePipe } from '@angular/common';
+import { DecimalPipe, SlicePipe, TitleCasePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
+import { ModelProfileRadarComponent } from '../../../../shared/components/model-profile-radar/model-profile-radar';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
+import { ModelManagementService } from '../../../../core/services/model-management.service';
 import {
   AiLlmCallRecommendation,
   AiWorkflow,
+  ObjectiveKey,
   RecommendedSla,
   TeamApiKey,
   TeamWorkflowsResponse,
 } from '../../../../shared/models/team.model';
+import { Model } from '../../../../shared/models/model.model';
 import { KeySla, SLA_OPTIONS } from '../key-sla';
+
+const OBJECTIVE_KEYS: ObjectiveKey[] = ['latency', 'quality', 'price'];
+
+function defaultPriorityForSla(sla: string | null | undefined): ObjectiveKey[] {
+  switch ((sla ?? '').trim()) {
+    case 'ux-critical':
+      return ['latency', 'quality', 'price'];
+    case 'ux-background':
+      return ['price', 'quality', 'latency'];
+    default:
+      return ['quality', 'latency', 'price'];
+  }
+}
+
+function normalizePriority(raw: string[] | null | undefined, sla?: string): ObjectiveKey[] {
+  const seen = new Set<string>();
+  const ordered: ObjectiveKey[] = [];
+  for (const item of raw ?? []) {
+    const key = String(item).trim().toLowerCase();
+    if ((OBJECTIVE_KEYS as string[]).includes(key) && !seen.has(key)) {
+      ordered.push(key as ObjectiveKey);
+      seen.add(key);
+    }
+  }
+  if (ordered.length === 0) {
+    return defaultPriorityForSla(sla);
+  }
+  for (const key of OBJECTIVE_KEYS) {
+    if (!seen.has(key)) ordered.push(key);
+  }
+  return ordered;
+}
 
 /**
  * Team → Workflows.
  *
  * Latest AI-workflow analyses for linked repositories: Mermaid diagrams and
- * SLA recommendations that owners can accept, override, or reject.
+ * SLA / objective-priority recommendations that owners can accept, override,
+ * or reject.
  */
 @Component({
   selector: 'app-workflows-tab',
   standalone: true,
-  imports: [FormsModule, DecimalPipe, SlicePipe, DataTableComponent, ErrorMessageComponent],
+  imports: [
+    FormsModule,
+    DecimalPipe,
+    SlicePipe,
+    TitleCasePipe,
+    DataTableComponent,
+    ErrorMessageComponent,
+    ModelProfileRadarComponent,
+  ],
   templateUrl: './workflows-tab.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './workflows-tab.scss',
@@ -45,6 +90,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   @Output() keysChanged = new EventEmitter<void>();
 
   private teamService = inject(TeamManagementService);
+  private modelService = inject(ModelManagementService);
   private diagramsDirty = false;
   private mermaidReady: Promise<typeof import('mermaid')> | null = null;
 
@@ -54,7 +100,10 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   data = signal<TeamWorkflowsResponse | null>(null);
   reviewingId = signal<number | null>(null);
   overrideSla = signal<Record<number, KeySla>>({});
+  overridePriority = signal<Record<number, ObjectiveKey[]>>({});
   acceptKeyId = signal<Record<number, number | ''>>({});
+  /** name/alias (lower) → model, for spider charts beside detected models */
+  private modelsByName = signal<Map<string, Model>>(new Map());
 
   readonly slaOptions = SLA_OPTIONS;
   readonly recCols = [
@@ -66,7 +115,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     '',
   ];
   readonly recGrid =
-    'minmax(8rem, 1.4fr) minmax(5rem, 0.8fr) minmax(5rem, 0.7fr) minmax(4rem, 0.5fr) minmax(5rem, 0.6fr) minmax(10rem, auto)';
+    'minmax(8rem, 1.4fr) minmax(7rem, 1fr) minmax(8rem, 1.2fr) minmax(4rem, 0.5fr) minmax(5rem, 0.6fr) minmax(10rem, auto)';
 
   ngOnChanges(): void {
     if (this.teamId) {
@@ -84,7 +133,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     this.loading.set(true);
     this.loadError.set('');
     try {
-      this.data.set(await this.teamService.getTeamWorkflows(this.teamId));
+      const [workflows, models] = await Promise.all([
+        this.teamService.getTeamWorkflows(this.teamId),
+        this.modelService.getModels().catch(() => [] as Model[]),
+      ]);
+      this.data.set(workflows);
+      this.modelsByName.set(this.indexModels(models));
       this.diagramsDirty = true;
     } catch {
       this.loadError.set('Failed to load workflows, please refresh.');
@@ -102,6 +156,33 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return this.data()?.pending_recommendations ?? [];
   }
 
+  priorityFor(rec: AiLlmCallRecommendation): ObjectiveKey[] {
+    const edited = this.overridePriority()[rec.id];
+    if (edited) return edited;
+    if (rec.review_status !== 'pending' && rec.confirmed_objective_priority?.length) {
+      return normalizePriority(rec.confirmed_objective_priority, rec.confirmed_sla ?? rec.recommended_sla);
+    }
+    return normalizePriority(rec.objective_priority, rec.recommended_sla);
+  }
+
+  movePriority(recId: number, index: number, dir: -1 | 1): void {
+    const rec = this.findRec(recId);
+    if (!rec) return;
+    const list = [...this.priorityFor(rec)];
+    const j = index + dir;
+    if (j < 0 || j >= list.length) return;
+    [list[index], list[j]] = [list[j], list[index]];
+    this.overridePriority.update((m) => ({ ...m, [recId]: list }));
+  }
+
+  ratingsForDetectedModel(name: string | null | undefined): Record<string, number> | null {
+    if (!name?.trim()) return null;
+    const model = this.modelsByName().get(name.trim().toLowerCase());
+    const ratings = model?.profile_ratings;
+    if (!ratings || Object.keys(ratings).length === 0) return null;
+    return ratings;
+  }
+
   async accept(rec: AiLlmCallRecommendation): Promise<void> {
     const keyPick = this.acceptKeyId()[rec.id];
     const apiKeyId =
@@ -111,6 +192,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     await this.review(rec, {
       action: 'accept',
       api_key_id: apiKeyId,
+      confirmed_objective_priority: this.priorityFor(rec),
     });
   }
 
@@ -124,6 +206,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     await this.review(rec, {
       action: 'override',
       confirmed_sla: sla,
+      confirmed_objective_priority: this.priorityFor(rec),
       api_key_id: apiKeyId,
     });
   }
@@ -151,11 +234,33 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return rec.api_key_id ?? '';
   }
 
+  private findRec(recId: number): AiLlmCallRecommendation | undefined {
+    const data = this.data();
+    if (!data) return undefined;
+    return (
+      data.pending_recommendations.find((r) => r.id === recId) ??
+      data.repositories.flatMap((r) => r.recommendations).find((r) => r.id === recId)
+    );
+  }
+
+  private indexModels(models: Model[]): Map<string, Model> {
+    const map = new Map<string, Model>();
+    for (const m of models) {
+      map.set(m.name.toLowerCase(), m);
+      for (const alias of (m.aliases ?? '').split(',')) {
+        const a = alias.trim().toLowerCase();
+        if (a) map.set(a, m);
+      }
+    }
+    return map;
+  }
+
   private async review(
     rec: AiLlmCallRecommendation,
     payload: {
       action: 'accept' | 'override' | 'reject';
       confirmed_sla?: RecommendedSla;
+      confirmed_objective_priority?: ObjectiveKey[];
       api_key_id?: number;
     },
   ): Promise<void> {

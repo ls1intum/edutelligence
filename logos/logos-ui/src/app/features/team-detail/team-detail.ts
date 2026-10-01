@@ -126,8 +126,12 @@ export class TeamDetail implements OnInit {
     this.loadAll(id);
   }
 
-  setTab(tab: Tab): void {
+  setTab(tab: Tab, event?: Event): void {
     this.activeTab.set(tab);
+    const btn = event?.currentTarget;
+    if (btn instanceof HTMLElement) {
+      btn.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
+    }
   }
 
   private async loadAll(teamId: number): Promise<void> {

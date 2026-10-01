@@ -73,11 +73,13 @@ a LogosOSSAgent analysis session. Linking alone does not start analysis.
 ### Workflows
 
 Latest AI-workflow analyses for the team's linked repositories: Mermaid
-diagrams of detected flows and per-call SLA recommendations. Owners (and Logos
-Admins) can **Accept** a recommendation (optionally binding an application
-key), **Override** it with another SLA tier, or **Reject** it. Accepting or
-overriding can update that key's queue priority so the orchestrator serves
-traffic accordingly.
+diagrams of detected flows and per-call **SLA** plus **objective priority**
+recommendations (ordered latency / quality / price). Owners (and Logos Admins)
+can **Accept** a recommendation (optionally binding an application key),
+**Override** SLA or priority order, or **Reject** it. Accepting or overriding
+can update that key's queue priority so the orchestrator serves traffic
+accordingly. When a detected model has Likert profile ratings, a spider chart
+is shown beside the recommendation.
 
 ![Team detail — Workflows](/img/roles/team-detail-workflows.png)
 

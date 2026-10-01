@@ -39,6 +39,8 @@ import org.springframework.web.server.ResponseStatusException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
+
 /**
  * Heuristic scan of a GitHub repository for LLM call sites and coarse SLA
  * recommendations. Public repos are fetched as a commit-pinned zipball; private
@@ -272,7 +274,8 @@ public class RepoWorkflowScanner {
                 String kind = classifyCallKind(matcher.group());
                 String justification = buildJustification(sla, kind, relative);
                 calls.add(new DetectedCall(
-                    relative, line, Math.max(line, endLine), model, sla, confidence, justification));
+                    relative, line, Math.max(line, endLine), model, sla,
+                    ObjectivePriority.forSla(sla), confidence, justification));
             }
             if (calls.size() >= MAX_DETECTED_CALLS) {
                 break;
@@ -782,6 +785,7 @@ public class RepoWorkflowScanner {
         int endLine,
         String detectedModel,
         String recommendedSla,
+        java.util.List<String> objectivePriority,
         float confidence,
         String justification
     ) {}

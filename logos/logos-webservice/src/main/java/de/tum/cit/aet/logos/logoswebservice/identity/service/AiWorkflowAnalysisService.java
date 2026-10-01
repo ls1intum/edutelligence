@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
@@ -251,6 +252,7 @@ public class AiWorkflowAnalysisService {
             rec.setCodeUrl(buildCodeUrl(link, scan.commitSha(), call.filePath(), call.startLine()));
             rec.setDetectedModel(call.detectedModel());
             rec.setRecommendedSla(call.recommendedSla());
+            rec.setObjectivePriority(ObjectivePriority.asJsonList(call.objectivePriority()));
             rec.setConfidence(call.confidence());
             rec.setJustification(call.justification());
             rec.setReviewStatus("pending");
@@ -324,16 +326,22 @@ public class AiWorkflowAnalysisService {
         if ("reject".equals(action)) {
             rec.setReviewStatus("rejected");
             rec.setConfirmedSla(null);
+            rec.setConfirmedObjectivePriority(null);
             recommendationRepository.save(rec);
             return recommendationToMap(rec);
         }
 
         String confirmedSla;
+        List<Object> confirmedPriority;
         if ("accept".equals(action)) {
             confirmedSla = rec.getRecommendedSla();
             if (body.confirmedSla() != null && !body.confirmedSla().isBlank()) {
                 confirmedSla = body.confirmedSla().trim();
             }
+            confirmedPriority = ObjectivePriority.asJsonList(
+                body.confirmedObjectivePriority() != null
+                    ? body.confirmedObjectivePriority()
+                    : ObjectivePriority.asStringList(rec.getObjectivePriority()));
             rec.setReviewStatus("accepted");
         }
         else {
@@ -342,6 +350,10 @@ public class AiWorkflowAnalysisService {
                     "confirmed_sla is required for override");
             }
             confirmedSla = body.confirmedSla().trim();
+            confirmedPriority = ObjectivePriority.asJsonList(
+                body.confirmedObjectivePriority() != null
+                    ? body.confirmedObjectivePriority()
+                    : ObjectivePriority.asStringList(rec.getObjectivePriority()));
             rec.setReviewStatus("overridden");
         }
         if (!VALID_SLAS.contains(confirmedSla)) {
@@ -349,6 +361,7 @@ public class AiWorkflowAnalysisService {
                 "confirmed_sla must be ux-critical, ux-high-prio, or ux-background");
         }
         rec.setConfirmedSla(confirmedSla);
+        rec.setConfirmedObjectivePriority(confirmedPriority);
 
         Integer apiKeyId = body.apiKeyId() != null ? body.apiKeyId() : rec.getApiKeyId();
         if (apiKeyId != null) {
@@ -604,11 +617,16 @@ public class AiWorkflowAnalysisService {
         m.put("detected_model", rec.getDetectedModel());
         m.put("api_key_id", rec.getApiKeyId());
         m.put("recommended_sla", rec.getRecommendedSla());
+        m.put("objective_priority", ObjectivePriority.asStringList(rec.getObjectivePriority()));
         m.put("confidence", rec.getConfidence());
         m.put("justification", rec.getJustification());
         m.put("traffic_flags", rec.getTrafficFlags());
         m.put("review_status", rec.getReviewStatus());
         m.put("confirmed_sla", rec.getConfirmedSla());
+        m.put("confirmed_objective_priority",
+            rec.getConfirmedObjectivePriority() != null
+                ? ObjectivePriority.asStringList(rec.getConfirmedObjectivePriority())
+                : null);
         m.put("reviewed_by", rec.getReviewedBy());
         m.put("reviewed_at", rec.getReviewedAt() != null ? rec.getReviewedAt().toString() : null);
         return m;
