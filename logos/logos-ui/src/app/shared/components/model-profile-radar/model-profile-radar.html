@@ -1,0 +1,35 @@
+@if (view(); as v) {
+  <svg
+    class="radar"
+    [attr.width]="v.size"
+    [attr.height]="v.size"
+    [attr.viewBox]="'0 0 ' + v.size + ' ' + v.size"
+    role="img"
+    [attr.aria-label]="v.hasAny ? 'Model profile spider chart' : 'No profile ratings yet'"
+  >
+    @for (ring of v.grid; track $index) {
+      <polygon class="radar__grid" [attr.points]="ring" />
+    }
+    @for (spoke of v.spokes; track $index) {
+      <line
+        class="radar__spoke"
+        [attr.x1]="spoke.x1"
+        [attr.y1]="spoke.y1"
+        [attr.x2]="spoke.x2"
+        [attr.y2]="spoke.y2"
+      />
+    }
+    @if (v.hasAny) {
+      <polygon class="radar__fill" [attr.points]="v.polygon" />
+    }
+    @for (label of v.labels; track label.key) {
+      <text
+        class="radar__label"
+        [attr.x]="label.x"
+        [attr.y]="label.y"
+        text-anchor="middle"
+        dominant-baseline="middle"
+      >{{ label.label }}</text>
+    }
+  </svg>
+}

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+    logicalFilePath="liquibase/changelog/044_objective_priority_model_ratings.xml">
+
+    <!-- Issue #1123: per-call objective priority (latency/quality/price order)
+         alongside SLA, plus extensible Likert profile ratings on models for
+         spider charts. -->
+
+    <changeSet id="047-rec-objective-priority" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="ai_llm_call_recommendations" columnName="objective_priority"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE ai_llm_call_recommendations
+                ADD COLUMN objective_priority JSONB NOT NULL DEFAULT '["latency","quality","price"]'::jsonb,
+                ADD COLUMN confirmed_objective_priority JSONB;
+        ]]></sql>
+        <rollback>
+            <sql>
+                ALTER TABLE ai_llm_call_recommendations
+                    DROP COLUMN IF EXISTS confirmed_objective_priority,
+                    DROP COLUMN IF EXISTS objective_priority;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="047-model-profile-ratings" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="models" columnName="profile_ratings"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE models
+                ADD COLUMN profile_ratings JSONB NOT NULL DEFAULT '{}'::jsonb;
+        ]]></sql>
+        <rollback>
+            <sql>ALTER TABLE models DROP COLUMN IF EXISTS profile_ratings;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

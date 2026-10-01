@@ -348,6 +348,9 @@ services:
       REDIS_PORT: 6379
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      # Deploy-key PEM encryption. Production must set LOGOS_REPO_CREDENTIALS_KEY.
+      LOGOS_REPO_CREDENTIALS_KEY: "${LOGOS_REPO_CREDENTIALS_KEY:-}"
+      LOGOS_REPO_CREDENTIALS_DEV_FALLBACK: "${LOGOS_REPO_CREDENTIALS_DEV_FALLBACK:-}"
       # Inference gateway (Phase 1 of the cloud/local split). When false, the
       # webservice still accepts /v1|/openai|/jobs but proxies every request to
       # the orchestrator after API-key auth.
@@ -537,6 +540,10 @@ services:
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      # Same encryption secret as logos-webservice — needed to decrypt
+      # per-link deploy keys for private analysis checkouts.
+      LOGOS_REPO_CREDENTIALS_KEY: "${LOGOS_REPO_CREDENTIALS_KEY:-}"
+      LOGOS_REPO_CREDENTIALS_DEV_FALLBACK: "${LOGOS_REPO_CREDENTIALS_DEV_FALLBACK:-}"
 
       # Identity: this service is reached from the browser, so it verifies
       # Keycloak tokens itself rather than behind the Spring webservice.
