@@ -2112,6 +2112,9 @@ async def _streaming_response(
         "text/event-stream" if translating else (upstream_content_type or "text/event-stream")
     )
 
+    # Bound before http_streamer so the closure can claim it when the body runs.
+    unconsumed_cleanup = None
+
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
         cost_enricher = (
@@ -2183,6 +2186,11 @@ async def _streaming_response(
                 yield first_chunk
             async for chunk in chunk_iter:
                 yield chunk
+
+        # Discard of a never-started body cannot run this generator's finally;
+        # claim ownership of the prefetched upstream + slot as soon as we run.
+        if unconsumed_cleanup is not None:
+            unconsumed_cleanup.claim_for_streamer()
 
         try:
             async with aclosing(_chunks_with_arrival(_source())) as wrapped:
@@ -2343,10 +2351,13 @@ async def _streaming_response(
             )
             _release()
 
-    return StreamingResponse(
+    unconsumed_cleanup = _UnconsumedStreamCleanup(chunk_iter, _release)
+    response = StreamingResponse(
         http_streamer(),
         headers=response_headers,
     )
+    response._logos_unconsumed_cleanup = unconsumed_cleanup
+    return response
 
 
 def _persist_terminal_response(
@@ -3459,14 +3470,62 @@ async def _settle(task: asyncio.Task) -> Any:
     return None
 
 
+class _UnconsumedStreamCleanup:
+    """Close a prefetched upstream iterator and free its scheduler slot.
+
+    ``_streaming_response`` peeks the first chunk before building the
+    ``StreamingResponse``, so the upstream connection and the booked lane
+    already exist. Closing the never-started ``http_streamer`` body does
+    not run its ``finally``, so discard must tear those down explicitly.
+    Once the streamer starts it claims this object and owns cleanup itself.
+    """
+
+    __slots__ = ("_chunk_iter", "_release", "_claimed")
+
+    def __init__(self, chunk_iter, release) -> None:
+        self._chunk_iter = chunk_iter
+        self._release = release
+        self._claimed = False
+
+    def claim_for_streamer(self) -> None:
+        """The body generator is consuming the upstream; skip discard cleanup."""
+        self._claimed = True
+        self._chunk_iter = None
+        self._release = None
+
+    async def close(self) -> None:
+        if self._claimed:
+            return
+        self._claimed = True
+        chunk_iter = self._chunk_iter
+        release = self._release
+        self._chunk_iter = None
+        self._release = None
+        if chunk_iter is not None:
+            with suppress(Exception):
+                await chunk_iter.aclose()
+        if release is not None:
+            with suppress(Exception):
+                release()
+
+
 async def _discard_response(response: Any) -> None:
     """Close a response nobody is left to read.
 
     ``_streaming_response`` pulls the first chunk before handing the response
-    over, so by then the upstream connection is already open. Closing the body
-    iterator unwinds the executor's stream contexts instead of leaving them to
-    the garbage collector.
+    over, so by then the upstream connection is already open. Closing only
+    the never-started body generator would leave that iterator and the
+    scheduler slot behind — the attached cleanup closes both, then the body
+    iterator is closed for any streamer that did start.
     """
+    if response is None:
+        return
+    cleanup = getattr(response, "_logos_unconsumed_cleanup", None)
+    if cleanup is not None:
+        with suppress(Exception):
+            await cleanup.close()
+        with suppress(Exception):
+            response._logos_unconsumed_cleanup = None
     iterator = getattr(response, "body_iterator", None)
     if iterator is None:
         return

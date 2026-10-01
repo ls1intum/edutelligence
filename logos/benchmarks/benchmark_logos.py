@@ -1014,6 +1014,23 @@ def _raise_fd_limit() -> None:
         print(f"  [fd] could not raise RLIMIT_NOFILE (soft={soft}): {exc}", flush=True)
 
 
+def _error_from_sse_chunk(chunk: dict) -> Optional[str]:
+    """Extract a pipeline error message from one decoded SSE JSON object.
+
+    Logos and OpenAI-compatible servers often report mid-stream failures as
+    HTTP 200 with an error object in the body. Anthropic uses
+    ``{"type":"error","error":{...}}``.
+    """
+    err_obj = chunk.get("error")
+    if isinstance(err_obj, dict):
+        return str(err_obj.get("message") or err_obj.get("type") or err_obj)[:500]
+    if isinstance(err_obj, str) and err_obj.strip():
+        return err_obj.strip()[:500]
+    if chunk.get("type") == "error":
+        return str(chunk.get("message") or chunk)[:500]
+    return None
+
+
 async def _dispatch(
     client: httpx.AsyncClient,
     base_url: str,
@@ -1147,6 +1164,11 @@ async def _dispatch(
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+
+                # Pipeline failures often ride HTTP 200 with an SSE error object.
+                # Without this, the run records success=True and empty error.
+                if error is None:
+                    error = _error_from_sse_chunk(chunk)
 
                 if not model:
                     model = chunk.get("model", "")
