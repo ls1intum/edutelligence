@@ -108,7 +108,7 @@ def _steps(aggregate_ceiling: int) -> List[int]:
     return sorted({max(8, round(aggregate_ceiling * f)) for f in fractions})
 
 
-async def _sample_gateway_peak(target: int, hold_timeout_s: float, fire_task: asyncio.Task) -> Dict[str, Any]:
+async def _sample_gateway_peak(target: int, hold_timeout_s: float, fire_task: asyncio.Future) -> Dict[str, Any]:
     """Poll replica occupancy until the step is fully relayed or time runs out."""
     deadline = time.monotonic() + hold_timeout_s
     best: Dict[str, Any] = {"active": 0, "peak_concurrent_relays": 0, "admitted": 0, "replicas": []}
@@ -139,9 +139,7 @@ async def _run_step(
     """
     await asyncio.to_thread(gw.reset_gateway_relay_stats)
     await gw.arm_upstream_step(client, hold_timeout_s)
-    fire_task = asyncio.create_task(
-        asyncio.gather(*(gw.stream_chat_completion(client, url, headers) for _ in range(n)))
-    )
+    fire_task = asyncio.gather(*(gw.stream_chat_completion(client, url, headers) for _ in range(n)))
     try:
         gateway_stats = await _sample_gateway_peak(n, hold_timeout_s, fire_task)
         upstream_stats = await gw.release_upstream_step(client)
@@ -156,7 +154,9 @@ async def _run_step(
 
     ok = [r for r in results if r.ok]
     failed = [r for r in results if not r.ok]
-    truncated = [r for r in results if r.stream_complete is False and r.status_code is not None]
+    truncated = [
+        r for r in results if r.stream_complete is False and r.status_code is not None and 200 <= r.status_code < 300
+    ]
     fail_rate = len(failed) / n if n else 0.0
     error_samples = sorted({r.error for r in failed if r.error})[:5]
     peak = int(gateway_stats.get("peak_concurrent_relays", 0))
