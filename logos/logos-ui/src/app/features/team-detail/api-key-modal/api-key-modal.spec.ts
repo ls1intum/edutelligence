@@ -79,6 +79,7 @@ describe('ApiKeyModalComponent', () => {
         default_priority: 1,
       };
       component.key = developerKey;
+      component.team = { id: 1, name: 't', priority: 10 } as never;
       component.ngOnChanges({
         visible: new SimpleChange(false, true, false),
         key: new SimpleChange(null, developerKey, false),
@@ -86,6 +87,9 @@ describe('ApiKeyModalComponent', () => {
       await fixture.whenStable();
 
       expect(component.fSla()).toBe('ux-background');
+      // Placeholder must reflect team inheritance (10 → critical), not the
+      // key's current explicit background tier.
+      expect(component.inheritedEffectiveSla()).toBe('ux-critical');
       expect(component.canResetDeveloperSla()).toBe(true);
 
       component.resetDeveloperSlaToInherited();
