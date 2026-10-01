@@ -53,22 +53,21 @@ public class GatewayCloudRateLimiter {
 
         -- Drop expired TPM claims and subtract them from the running total
         -- so admission does not rescan the whole window on every request.
-        if tpm_limit > 0 then
-          local expired = redis.call('ZRANGEBYSCORE', tpm_key, '-inf', cutoff)
-          local expired_sum = 0
-          for _, entry in ipairs(expired) do
-            local sep = string.find(entry, ':', 1, true)
-            if sep then
-              expired_sum = expired_sum + tonumber(string.sub(entry, sep + 1))
-            end
+        -- Always subtract — even when TPM is currently disabled — otherwise
+        -- claims vanish from the set without reducing the sum, and re-enabling
+        -- TPM yields false 429s (accepted requests can also renew that stale TTL).
+        local expired = redis.call('ZRANGEBYSCORE', tpm_key, '-inf', cutoff)
+        local expired_sum = 0
+        for _, entry in ipairs(expired) do
+          local sep = string.find(entry, ':', 1, true)
+          if sep then
+            expired_sum = expired_sum + tonumber(string.sub(entry, sep + 1))
           end
-          if expired_sum > 0 then
-            redis.call('DECRBY', tpm_sum_key, expired_sum)
-          end
-          redis.call('ZREMRANGEBYSCORE', tpm_key, '-inf', cutoff)
-        else
-          redis.call('ZREMRANGEBYSCORE', tpm_key, '-inf', cutoff)
         end
+        if expired_sum > 0 then
+          redis.call('DECRBY', tpm_sum_key, expired_sum)
+        end
+        redis.call('ZREMRANGEBYSCORE', tpm_key, '-inf', cutoff)
 
         if rpm_limit > 0 then
           local rpm = redis.call('ZCARD', rpm_key)

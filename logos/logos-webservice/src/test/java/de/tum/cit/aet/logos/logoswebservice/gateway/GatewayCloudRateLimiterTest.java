@@ -114,6 +114,26 @@ class GatewayCloudRateLimiterTest {
     }
 
     @Test
+    void rpmOnly_prunesExpiredTpmClaimsAndReducesSum() {
+        // Prior TPM-enabled admissions left claims + a running sum. While TPM is
+        // disabled, RPM admissions must still subtract expired claim tokens from
+        // the sum — otherwise re-enabling TPM false-429s on the stale excess.
+        GatewayKey key = seedKey(10, null);
+        String tpmKey = "gw:tpm:" + key.id();
+        String tpmSumKey = "gw:tpm:sum:" + key.id();
+        redis.opsForZSet().add(tpmKey, "stale-a:400", 1.0);
+        redis.opsForZSet().add(tpmKey, "stale-b:100", 2.0);
+        redis.opsForValue().set(tpmSumKey, "500");
+
+        assertThatCode(() -> rateLimiter.enforce(key, BODY)).doesNotThrowAnyException();
+
+        assertThat(redis.opsForZSet().zCard(tpmKey)).isZero();
+        assertThat(redis.opsForValue().get(tpmSumKey)).isEqualTo("0");
+        // RPM-only must not write new TPM claims.
+        assertThat(redis.opsForZSet().range(tpmKey, 0, -1)).isNullOrEmpty();
+    }
+
+    @Test
     void sharedTpm_rejectsWhenEstimatesWouldExceedTheLimit() {
         // BODY estimate is body.length/4; pick a limit that admits two then refuses.
         int estimate = GatewayCloudRateLimiter.estimateTokens(BODY);
