@@ -397,6 +397,8 @@ class DBManager:
             "queue_depth_at_schedule",
             "timeout_s",
             "scheduled_ts",
+            "timestamp_provider_call",
+            "timestamp_provider_response",
             "request_complete_ts",
             "rate_limit_admitted",
             "available_vram_mb",

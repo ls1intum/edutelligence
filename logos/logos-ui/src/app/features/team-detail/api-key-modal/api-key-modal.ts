@@ -145,7 +145,7 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fLocalRpm.set(s.local_rpm_limit && s.local_rpm_limit > 0 ? String(s.local_rpm_limit) : '');
     this.fLocalTpm.set(s.local_tpm_limit && s.local_tpm_limit > 0 ? String(s.local_tpm_limit) : '');
     this.fEnv.set(key.environment ?? '');
-    this.inheritedEffectiveSla.set(effectiveSla(key.default_priority, this.team?.priority));
+    this.inheritedEffectiveSla.set(effectiveSla(0, this.team?.priority));
     if (isUnsetPriority(key.default_priority)) {
       this.initialSla = '';
       this.fSla.set('');

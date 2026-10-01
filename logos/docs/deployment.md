@@ -263,7 +263,11 @@ Public `/v1`, `/openai`, and `/jobs` traffic lands on **logos-webservice**.
 The service has no fixed `container_name`, so Compose can run more than one
 replica; Traefik load-balances them under `logos-webservice-svc`.
 
-Set the desired count in the core node's `.env` and apply it on `up`:
+The deploy workflows (`logos_deploy-{dev,test,prod}.yml`) scale to this count
+automatically on every deploy, defaulting to **1** when `.env` does not set
+`LOGOS_WEBSERVICE_REPLICAS`. Raising it hides crashes and routine deploys from
+the inference gateway — cloud RPM and TPM stay shared across replicas via
+Redis (see the knobs below). Set the desired count in the core node's `.env`:
 
 ```bash
 # in the .env next to docker-compose.yaml
@@ -317,6 +321,38 @@ Optional `.env` knobs:
   gone and is zeroed.
 - `LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS` (default `60`) — how
   often each replica sweeps for such stale reservations.
+
+### Failover verification
+
+Configuring 2 replicas is not the same as proving that killing one is
+harmless for every request. Run `scripts/gateway-failover-demo.sh` against a
+stack already scaled to 2+ webservice replicas — it fires a steady stream of
+short unauthenticated requests at `/v1/models`, kills one replica mid-run with
+`docker kill`, and fails unless every probe returns the webservice's expected
+`401` (no API key). Connection errors (`000`), `5xx`, and other statuses
+(including rate-gateway `429`) count as failures. This check covers new
+requests only; an inference stream held by the killed replica can be lost, and
+the check does not test client recovery. The script restarts the killed
+container on exit.
+
+On the dev compose, first comment out the fixed `127.0.0.1:18082:8081` host
+publish under `logos-webservice: ports:` — a fixed host port cannot be shared
+across scaled replicas (see the comment above it):
+
+```bash
+docker compose -f docker-compose.dev.yaml up -d --build --scale logos-webservice=2
+scripts/gateway-failover-demo.sh http://localhost:18081 30
+```
+
+Re-run it against the core `docker-compose.yaml` stack (or a staging
+deployment) before relying on 2+ replicas in PROD — set `COMPOSE_FILE`
+explicitly so the script does not kill a replica from the default
+dev compose while probing a different URL:
+
+```bash
+COMPOSE_FILE=docker-compose.yaml \
+  scripts/gateway-failover-demo.sh https://logos.example.org 30
+```
 
 ## Environment variables
 
