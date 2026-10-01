@@ -153,7 +153,7 @@ async def test_streaming_requests_take_the_keepalive_path(monkeypatch):
     async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
         auth = MagicMock()
         auth.api_key_id = 88
-        return {}, auth, {"stream": True}, "127.0.0.1", None, [{"model_id": 1}]
+        return {}, auth, {"stream": True, "model": "gpt-4o"}, "127.0.0.1", None, [{"model_id": 1}]
 
     async def fake_filter(deployments, payload=None):
         return deployments
@@ -253,6 +253,39 @@ async def test_audio_upload_stream_requests_keep_the_sync_guard(monkeypatch):
 
     # The audio upload path, not the chat path.
     result = await main.handle_sync_request("audio/transcriptions", _Client(leaves=False))
+
+    assert result == "guarded"
+    assert len(guarded) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_free_stream_requests_keep_the_sync_guard(monkeypatch):
+    """A stream:true request without a model enters resource mode; classification
+    may still pick Whisper later. Keep the sync path so SSE is not committed
+    before the selected model is known."""
+    guarded = []
+
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
+        auth = MagicMock()
+        auth.api_key_id = 88
+        return {}, auth, {"stream": True}, "127.0.0.1", None, [{"model_id": 1}]
+
+    async def fake_filter(deployments, payload=None):
+        return deployments
+
+    async def fake_guard(request, **kwargs):
+        guarded.append(kwargs)
+        return "guarded"
+
+    async def fail_keepalive(request, **kwargs):
+        raise AssertionError("model-free streaming must not commit the keepalive SSE path")
+
+    monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
+    monkeypatch.setattr(main, "_execute_cancelling_on_disconnect", fake_guard)
+    monkeypatch.setattr(main, "_keepalive_streaming_response", fail_keepalive)
+
+    result = await main.handle_sync_request("chat/completions", _Client(leaves=False))
 
     assert result == "guarded"
     assert len(guarded) == 1

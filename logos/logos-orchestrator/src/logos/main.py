@@ -3598,7 +3598,11 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
             response: Optional[Response] = None
             try:
                 while True:
-                    done, _ = await asyncio.wait({work, watcher}, timeout=_KEEPALIVE_INTERVAL_S)
+                    done, _ = await asyncio.wait(
+                        {work, watcher},
+                        timeout=_KEEPALIVE_INTERVAL_S,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
                     # The watcher's probe consumes the http.disconnect message,
                     # so a disconnect that lands in the same tick as a finished
                     # task wins: streaming into a closed socket would be lost
@@ -3633,6 +3637,13 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
             watcher.cancel()
 
             if isinstance(response, StreamingResponse):
+                # Own the upstream stream before yielding anything else: if the
+                # client disconnects while the scheduling comment is sent,
+                # ``finally`` must still cancel the producer / close this
+                # iterator so the worker connection and scheduler slot release.
+                inner_iterator = response.body_iterator
+                queue: "asyncio.Queue" = asyncio.Queue(maxsize=1024)
+                producer = asyncio.create_task(_keepalive_producer(inner_iterator, queue))
                 # The scheduling decision (ETTFT estimate, warmth) was only
                 # known once the pipeline ran — too late for the committed
                 # headers — so it rides in the stream as a comment for the
@@ -3642,9 +3653,6 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
                     yield comment
                 # Phase 2 — the content stream, keepaliving across the
                 # upstream's pre-token silence.
-                inner_iterator = response.body_iterator
-                queue: "asyncio.Queue" = asyncio.Queue(maxsize=1024)
-                producer = asyncio.create_task(_keepalive_producer(inner_iterator, queue))
                 while True:
                     try:
                         item = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_INTERVAL_S)
@@ -3769,8 +3777,14 @@ async def handle_sync_request(path: str, request: Request):
         # proxy's respond timeout (Traefik's default 180 s) 504s the client
         # before the first token. A request the pipeline answers synchronously
         # (Whisper ignores stream) keeps the synchronous path and its upstream
-        # content type.
-        if payload_requests_streaming(body) and not _resolves_to_whisper(body, path, auth):
+        # content type. Model-free resource-mode requests also stay sync: the
+        # model is chosen later, and committing SSE here would mis-label a
+        # Whisper answer selected by classification.
+        if (
+            body.get("model")
+            and payload_requests_streaming(body)
+            and not _resolves_to_whisper(body, path, auth)
+        ):
             response = await _keepalive_streaming_response(request, **execute_kwargs)
             return response
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)

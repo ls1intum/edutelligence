@@ -292,6 +292,78 @@ async def test_disconnect_cancels_the_pipeline_work(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fast_pipeline_does_not_wait_for_keepalive_timeout(monkeypatch):
+    """When the pipeline finishes promptly, content must start without waiting
+    out a full keepalive interval for the disconnect watcher (FIRST_COMPLETED)."""
+
+    async def fast_stream():
+        yield b"data: hello\n\n"
+
+    response_obj = StreamingResponse(fast_stream(), media_type="text/event-stream")
+
+    async def fake_route_and_execute(**kwargs):
+        return response_obj
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+    # A deliberately long interval: without FIRST_COMPLETED the wait would sit
+    # here until timeout even though the pipeline is already done.
+    monkeypatch.setattr(main, "_KEEPALIVE_INTERVAL_S", 30.0)
+
+    response = await main._keepalive_streaming_response(
+        _Client(leaves=False), log_id=1, request_id="req-11", path="chat/completions"
+    )
+    raw = await asyncio.wait_for(_collect(response), timeout=2.0)
+
+    assert b"data: hello" in raw
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_scheduling_comment_closes_upstream(monkeypatch):
+    """If the client leaves while the scheduling comment is yielded, the
+    upstream body iterator must still be closed so the worker slot is released."""
+
+    class _Body:
+        def __init__(self):
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.sleep(30)
+            raise StopAsyncIteration
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    body = _Body()
+    response_obj = StreamingResponse(
+        body,
+        media_type="text/event-stream",
+        headers={"X-Logos-ETTFT-Ms": "50", "X-Logos-Warmth-State": "1"},
+    )
+    # StreamingResponse may wrap the iterator; pin the one the wrapper closes.
+    response_obj.body_iterator = body
+
+    async def fake_route_and_execute(**kwargs):
+        return response_obj
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+
+    response = await main._keepalive_streaming_response(
+        _Client(leaves=False), log_id=1, request_id="req-12", path="chat/completions"
+    )
+
+    agen = response.body_iterator
+    # First chunk is the scheduling comment — cancel before content starts.
+    first = await agen.__anext__()
+    assert b"logos-schedule" in first
+    await agen.aclose()
+
+    assert body.closed, "upstream stream stayed open after disconnect at the comment handoff"
+
+
+@pytest.mark.asyncio
 async def test_no_deployment_still_404s_for_a_streaming_request(monkeypatch):
     """The fast no-deployment 404 is raised before the keepalive branch, so it
     keeps its proper HTTP status instead of becoming an in-stream error."""
