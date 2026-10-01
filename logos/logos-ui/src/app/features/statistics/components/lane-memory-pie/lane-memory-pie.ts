@@ -16,18 +16,19 @@ const STATE_ORDER: Record<string, number> = {
   error: 6,
 };
 
-/** Which of a lane's two memory footprints the donut breaks down. */
-export type LaneMemoryMetric = 'vram' | 'ram';
+/** Which of a lane's memory footprints the donut breaks down. */
+export type LaneMemoryMetric = 'vram' | 'ram' | 'unified';
 
 /**
  * A provider's memory, split by the model occupying it.
  *
- * Serves both GPU memory and host RAM, because they are the same picture drawn
- * from two lane fields: a slice per lane coloured by its runtime state, then
- * whatever of the used total the lanes do not account for, then what is free.
- * Host RAM earns the same view as VRAM — sleeping lanes keep their weights in
- * it and the worker's model cache draws from it, so "which model is holding the
- * host's memory" is as real a question as it is for the GPU.
+ * Serves GPU memory, host RAM, and — for unified-memory hardware (Apple
+ * Silicon), where there is no separate VRAM pool at all — the single pool:
+ * a slice per lane coloured by its runtime state, then whatever of the used
+ * total the lanes do not account for, then what is free. Host RAM earns the
+ * same view as VRAM — sleeping lanes keep their weights in it and the worker's
+ * model cache draws from it, so "which model is holding the host's memory" is
+ * as real a question as it is for the GPU.
  */
 @Component({
   selector: 'app-stats-lane-memory-pie',
@@ -53,11 +54,24 @@ export class LaneMemoryPieComponent {
     if (this.metric === 'ram') {
       return typeof lane.host_ram_mb === 'number' ? lane.host_ram_mb : null;
     }
+    if (this.metric === 'unified') {
+      // On unified-memory hardware the lane's VRAM fields are structurally
+      // zero — there is no discrete GPU to read — so the lane's measured
+      // process-tree host RAM is its actual share of the single pool. A
+      // worker that never reports it falls back to the VRAM figure, which
+      // reads 0 and keeps the lane out of the pie.
+      if (typeof lane.host_ram_mb === 'number' && lane.host_ram_mb > 0) {
+        return lane.host_ram_mb;
+      }
+      return lane.effective_vram_mb ?? null;
+    }
     return lane.effective_vram_mb ?? null;
   }
 
   get emptyMessage(): string {
-    return this.metric === 'ram' ? 'No RAM data available' : 'No VRAM data available';
+    if (this.metric === 'ram') return 'No RAM data available';
+    if (this.metric === 'unified') return 'No memory data available';
+    return 'No VRAM data available';
   }
 
   get slices(): DonutSlice[] {

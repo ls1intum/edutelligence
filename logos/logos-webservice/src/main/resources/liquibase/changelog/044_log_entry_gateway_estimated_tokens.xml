@@ -13,7 +13,7 @@
          This column holds that estimate on each gateway row so every replica
          can SUM it for the last 60 s. NULL for rows that are not gateway
          admissions (orchestrator path) or that predate this migration. -->
-    <changeSet id="043-log-entry-gateway-estimated-tokens" author="logos">
+    <changeSet id="044-log-entry-gateway-estimated-tokens" author="logos">
         <addColumn tableName="log_entry">
             <column name="gateway_estimated_tokens" type="INTEGER">
                 <constraints nullable="true"/>

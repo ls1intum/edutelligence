@@ -150,7 +150,11 @@ capturing.
    providers and three models (capabilities, aliases, prices); policies;
    priced `log_entry` rows (billing + statistics + My Workspace usage bars);
    one `in_progress` and one `completed` batch; agent workspaces/sessions;
-   and team budget / default rate limits for the team-detail overview.
+   and team budget / default rate limits for the team-detail overview. It
+   also creates a fourth, catalog-only model (`gpt-4o-mini`), gives it usage,
+   and deletes it again — the delete trigger keeps that usage under the
+   model's former name, so the statistics shot shows a trash-marked
+   deleted-model entry.
 
 3. If the seed aborts with `required Keycloak users missing`, finish step 1
    and re-run. Do **not** invent alternate usernames — the role guides and
