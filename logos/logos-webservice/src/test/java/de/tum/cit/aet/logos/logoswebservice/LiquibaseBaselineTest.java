@@ -90,6 +90,25 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration042_modelNameColumnsAndOrphanGrainIndexExist() {
+        // Deleting a model captures its name on the usage rows so the per-model
+        // statistics survive; the rollup grain must tell orphans apart by that
+        // name, so the unique grain index carries the column.
+        assertThat(columnExists("log_entry", "model_name")).isTrue();
+        assertThat(columnExists("log_entry_hourly_stats", "model_name")).isTrue();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes"
+            + " WHERE schemaname='public' AND indexname='ux_log_entry_hourly_stats_grain'"
+            + " AND indexdef LIKE '%model_name%'",
+            Integer.class);
+        assertThat(count).isEqualTo(1);
+        // A delete can outlive the rollup pass's write lag, in which case the
+        // updated_at stamp alone is never re-scanned; the delete's queue of
+        // affected hours is what the pass falls back on.
+        assertThat(tableType("log_entry_rollup_dirty_hours")).isEqualTo("BASE TABLE");
+    }
+
+    @Test
     void migration029_providerSnapshotsTableRenamed() {
         // The physical table carries the engine-neutral name now...
         assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");

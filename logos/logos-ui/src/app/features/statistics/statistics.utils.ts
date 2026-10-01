@@ -1,6 +1,29 @@
 import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
 import { cssVar } from './statistics.constants';
 
+/**
+ * The stable identity of a model in the statistics charts.
+ *
+ * Live models are keyed by their database id, so a rename keeps its series.
+ * A deleted model's rows lost that id, so the key falls back to the name the
+ * delete captured. At most one bucket holds that name: the aggregate groups
+ * by (model_id, model_name), and two live models never carry the same name.
+ * Two generations with the same name (delete, re-add under it, delete again)
+ * merge into that one bucket — no finer distinction is left in the data.
+ *
+ * The two shapes carry distinct fixed prefixes. Without them a deleted model
+ * named "42" would share a key with live model id 42 and merge its usage
+ * into the live series, and a raw name could land on an inherited property
+ * of the plain-object maps the chart builds ("constructor", "__proto__", …).
+ */
+export function modelSeriesKey(modelId: number | null | undefined, modelName: string | null | undefined): string {
+  if (modelId != null) return `model-${modelId}`;
+  if (modelName && modelName.trim() !== '') return `deleted-${modelName}`;
+  // Rows with neither id nor name never reach the per-model views (the
+  // queries filter them out); the total key just keeps this function total.
+  return 'deleted-unknown';
+}
+
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
 
 export type RequestStage = 'queued' | 'executing' | 'complete';
