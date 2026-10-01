@@ -1021,4 +1021,19 @@ describe('ActivityTabComponent trace export', () => {
     expect(component.exporting()).toBe(false);
     expect(lastAnchor).toBeNull();
   });
+
+  it('clears an expired continuation cursor so the next click starts fresh', async () => {
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+    await component.exportTraces();
+    expect(component.exportCursor()).toBe(exportCursorToken);
+
+    activityService.getTraceExport.mockRejectedValue({ status: 400, message: 'Malformed export cursor' });
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportError()).toContain('fresh download');
+    expect(component.exportNotice()).toBeNull();
+  });
 });

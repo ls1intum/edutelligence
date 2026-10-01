@@ -275,9 +275,25 @@ export class ActivityTabComponent implements OnChanges, OnDestroy {
           ? `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — press export again for the next, older slice.`
           : `The export carries the ${count.toLocaleString()} newest requests of ${total.toLocaleString()} in the selected period — narrow the period or the requester filter for the rest.`,
       );
-    } catch {
-      this.exportError.set('Could not export the traces.');
-      this.exportNotice.set(null);
+    } catch (err: unknown) {
+      // A continuation the server refuses (expired walk / malformed token) is
+      // a 400. Keeping that cursor would make every following click resend the
+      // same rejected token; clear it so the next press starts a fresh export.
+      // Network / 5xx failures keep the cursor so a retry can resume.
+      const status =
+        err && typeof err === 'object' && 'status' in err
+          ? Number((err as { status: unknown }).status)
+          : NaN;
+      if (cursor != null && status === 400) {
+        this.exportCursor.set(null);
+        this.exportError.set(
+          'The previous export continuation expired — press export again to start a fresh download.',
+        );
+        this.exportNotice.set(null);
+      } else {
+        this.exportError.set('Could not export the traces.');
+        this.exportNotice.set(null);
+      }
     } finally {
       this.exporting.set(false);
     }

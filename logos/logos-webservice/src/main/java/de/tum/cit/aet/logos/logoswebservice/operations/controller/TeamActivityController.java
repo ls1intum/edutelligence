@@ -11,6 +11,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
@@ -37,13 +40,23 @@ public class TeamActivityController {
     private final TeamActivityService teamActivityService;
     private final ApiKeyAdminService apiKeyAdminService;
     private final ObjectMapper objectMapper;
+    /**
+     * Holds prepare + stream in one read-only REPEATABLE_READ snapshot so the
+     * continuation cursor and the emitted rows describe the same slice even
+     * when newer rows commit mid-download.
+     */
+    private final TransactionTemplate exportSnapshotTx;
 
     public TeamActivityController(TeamActivityService teamActivityService,
                                   ApiKeyAdminService apiKeyAdminService,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  PlatformTransactionManager transactionManager) {
         this.teamActivityService = teamActivityService;
         this.apiKeyAdminService = apiKeyAdminService;
         this.objectMapper = objectMapper;
+        this.exportSnapshotTx = new TransactionTemplate(transactionManager);
+        this.exportSnapshotTx.setReadOnly(true);
+        this.exportSnapshotTx.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
     }
 
     /**
@@ -129,30 +142,41 @@ public class TeamActivityController {
 
         TeamActivityService.ExportPrep prep;
         try {
-            prep = teamActivityService.prepareExport(teamId, days, userId, format, cursor);
+            // Preparation (counts, tail cursor) and the streamed chunk reads must
+            // share one database snapshot: otherwise a row that commits between
+            // them can make the cursor name a row the file never emits, and the
+            // next continuation skips it.
+            prep = exportSnapshotTx.execute(status -> {
+                TeamActivityService.ExportPrep built =
+                    teamActivityService.prepareExport(teamId, days, userId, format, cursor);
+                response.setContentType(built.format() == TeamActivityService.ExportFormat.CSV
+                    ? "text/csv; charset=utf-8"
+                    : "application/json");
+                response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                    "attachment; filename=\"" + built.fileName() + "\"");
+                response.setHeader("X-Logos-Export-Total", String.valueOf(built.totalInWindow()));
+                response.setHeader("X-Logos-Export-Truncated", String.valueOf(built.truncated()));
+                response.setHeader("X-Logos-Export-Count", String.valueOf(built.count()));
+                String cursorToken = built.cursorToken();
+                if (cursorToken != null) {
+                    response.setHeader("X-Logos-Export-Next-Cursor", cursorToken);
+                }
+                try (OutputStream out = response.getOutputStream()) {
+                    teamActivityService.writeExportFile(built, out);
+                    out.flush();
+                } catch (IOException e) {
+                    // The download is a stream: once the first bytes are out the
+                    // answer cannot be retracted, so a reader that goes away mid-file
+                    // is logged rather than answered.
+                    log.warn("Trace export for team {} interrupted: {}", teamId, e.toString());
+                }
+                return built;
+            });
+            if (prep == null) {
+                writeJsonError(response, 500, "error", "Export failed");
+            }
         } catch (IllegalArgumentException e) {
             writeJsonError(response, 400, "error", "Malformed export cursor");
-            return;
-        }
-        response.setContentType(prep.format() == TeamActivityService.ExportFormat.CSV
-            ? "text/csv; charset=utf-8"
-            : "application/json");
-        response.setHeader(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + prep.fileName() + "\"");
-        response.setHeader("X-Logos-Export-Total", String.valueOf(prep.totalInWindow()));
-        response.setHeader("X-Logos-Export-Truncated", String.valueOf(prep.truncated()));
-        response.setHeader("X-Logos-Export-Count", String.valueOf(prep.count()));
-        String cursorToken = prep.cursorToken();
-        if (cursorToken != null) {
-            response.setHeader("X-Logos-Export-Next-Cursor", cursorToken);
-        }
-        try (OutputStream out = response.getOutputStream()) {
-            teamActivityService.writeExportFile(prep, out);
-            out.flush();
-        } catch (IOException e) {
-            // The download is a stream: once the first bytes are out the
-            // answer cannot be retracted, so a reader that goes away mid-file
-            // is logged rather than answered.
-            log.warn("Trace export for team {} interrupted: {}", teamId, e.toString());
         }
     }
 
