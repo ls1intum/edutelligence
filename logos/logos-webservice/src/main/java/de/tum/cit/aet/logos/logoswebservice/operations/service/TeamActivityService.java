@@ -168,12 +168,15 @@ public class TeamActivityService {
 
     /**
      * The key's lock, with this poll counted as a holder. The increment
-     * happens inside the map's {@code merge}, so it is atomic with the
-     * eviction's removal: a lock the eviction drops is one nobody holds, and
-     * a lock this returns is the map's current one for as long as the count
-     * says someone is inside. Dropping a held monitor is exactly what must
-     * not happen — the next poll would take a fresh one and repeat the very
-     * load single-flight exists to pay once.
+     * happens inside the map's {@code merge}, which is atomic with the
+     * eviction's per-key {@code computeIfPresent}: a lock the eviction drops
+     * is one nobody holds, and a lock this returns is the map's current one
+     * for as long as the count says someone is inside. A {@code removeIf}
+     * that checked holders and then removed would race acquisition — zero
+     * holders observed, then {@code merge} bumps the same mutable lock, then
+     * removal drops it and the next poll creates a second monitor. Dropping a
+     * held monitor is exactly what must not happen — the next poll would take
+     * a fresh one and repeat the very load single-flight exists to pay once.
      */
     private RefreshLock acquireRefreshLock(String key) {
         return aggregateRefreshLocks.merge(key,
@@ -346,9 +349,15 @@ public class TeamActivityService {
             // The locks go with the entries, except the ones a refresh is
             // still inside: dropping a held monitor would hand the next poll
             // a different one and un-single-flight the very refresh it
-            // serves.
-            aggregateRefreshLocks.entrySet().removeIf(
-                e -> !aggregatesCache.containsKey(e.getKey()) && e.getValue().holders().get() == 0);
+            // serves. Holder check and removal run inside computeIfPresent so
+            // they are atomic with acquireRefreshLock's merge on the same key.
+            aggregateRefreshLocks.forEach((lockKey, ignored) ->
+                aggregateRefreshLocks.computeIfPresent(lockKey, (k, lock) -> {
+                    if (aggregatesCache.containsKey(k) || lock.holders().get() > 0) {
+                        return lock;
+                    }
+                    return null;
+                }));
         }
         return value;
     }
