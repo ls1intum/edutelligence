@@ -382,52 +382,75 @@
 
               <div class="stats-panel-row">
 
-                <app-stats-chart-panel
-                  title="VRAM utilization"
-                  [subtitle]="row.name + (row.modelsLoaded
-                    ? ' · ' + row.modelsLoaded + ' model' + (row.modelsLoaded === 1 ? '' : 's') + ' loaded'
-                    : '')"
-                >
-                  @if (row.hasLanes) {
-                    <app-stats-lane-memory-pie
-                      metric="vram"
-                      [lanes]="row.lanes"
-                      [totalMb]="row.totalVramMb"
-                      [freeMb]="row.freeVramMb"
-                    />
-                  } @else if (!row.fallbackVramPie.length) {
-                    <app-stats-empty-state message="No memory data yet." />
-                  } @else {
-                    <app-stats-vram-donut
-                      [data]="row.fallbackVramPie"
-                      centerTop="used"
-                      [centerMiddle]="row.vramUsedGb.toFixed(1) + ' GB'"
-                      [centerBottom]="'of ' + row.vramTotalGb.toFixed(1) + ' GB'"
-                      valueSuffix=" GB"
-                      [valueDecimals]="2"
-                    />
-                  }
-                </app-stats-chart-panel>
+                @if (row.unifiedMemory) {
+                  <!-- Unified memory (Apple Silicon) has one pool, not two: a
+                       VRAM pie and a RAM pie would describe the same bytes from
+                       two angles. The pool is the host's physical RAM, split by
+                       the lanes' model weights the same way a card's VRAM is
+                       split by its lanes. -->
+                  <app-stats-chart-panel
+                    title="Unified memory"
+                    [subtitle]="row.name + ' · unified memory'"
+                  >
+                    @if (row.unifiedTotalMb > 0) {
+                      <app-stats-lane-memory-pie
+                        metric="unified"
+                        [lanes]="row.lanes"
+                        [totalMb]="row.unifiedTotalMb"
+                        [freeMb]="row.unifiedFreeMb"
+                      />
+                    } @else {
+                      <app-stats-empty-state message="No memory data yet." />
+                    }
+                  </app-stats-chart-panel>
+                } @else {
+                  <app-stats-chart-panel
+                    title="VRAM utilization"
+                    [subtitle]="row.name + (row.modelsLoaded
+                      ? ' · ' + row.modelsLoaded + ' model' + (row.modelsLoaded === 1 ? '' : 's') + ' loaded'
+                      : '')"
+                  >
+                    @if (row.hasLanes) {
+                      <app-stats-lane-memory-pie
+                        metric="vram"
+                        [lanes]="row.lanes"
+                        [totalMb]="row.totalVramMb"
+                        [freeMb]="row.freeVramMb"
+                      />
+                    } @else if (!row.fallbackVramPie.length) {
+                      <app-stats-empty-state message="No memory data yet." />
+                    } @else {
+                      <app-stats-vram-donut
+                        [data]="row.fallbackVramPie"
+                        centerTop="used"
+                        [centerMiddle]="row.vramUsedGb.toFixed(1) + ' GB'"
+                        [centerBottom]="'of ' + row.vramTotalGb.toFixed(1) + ' GB'"
+                        valueSuffix=" GB"
+                        [valueDecimals]="2"
+                      />
+                    }
+                  </app-stats-chart-panel>
 
-                <!-- Host RAM gets the same per-model breakdown as the GPU memory
-                     beside it: sleeping lanes keep their weights in it and the
-                     worker's model cache draws from it, so which model is holding the
-                     host's memory is as real a question as it is for the card. -->
-                <app-stats-chart-panel
-                  title="RAM utilization"
-                  [subtitle]="row.name + ' · host memory'"
-                >
-                  @if (!row.ram.reported) {
-                    <app-stats-empty-state message="This provider does not report host RAM." />
-                  } @else {
-                    <app-stats-lane-memory-pie
-                      metric="ram"
-                      [lanes]="row.hasLaneRam ? row.lanes : {}"
-                      [totalMb]="row.ram.totalMb"
-                      [freeMb]="row.ram.freeMb"
-                    />
-                  }
-                </app-stats-chart-panel>
+                  <!-- Host RAM gets the same per-model breakdown as the GPU memory
+                       beside it: sleeping lanes keep their weights in it and the
+                       worker's model cache draws from it, so which model is holding the
+                       host's memory is as real a question as it is for the card. -->
+                  <app-stats-chart-panel
+                    title="RAM utilization"
+                    [subtitle]="row.name + ' · host memory'"
+                  >
+                    @if (!row.ram.reported) {
+                      <app-stats-empty-state message="This provider does not report host RAM." />
+                    } @else {
+                      <app-stats-lane-memory-pie
+                        metric="ram"
+                        [lanes]="row.hasLaneRam ? row.lanes : {}"
+                        [totalMb]="row.ram.totalMb"
+                        [freeMb]="row.ram.freeMb"
+                      />
+                    }
+                  </app-stats-chart-panel>
+                }
 
                 <app-stats-chart-panel
                   title="Lane health"

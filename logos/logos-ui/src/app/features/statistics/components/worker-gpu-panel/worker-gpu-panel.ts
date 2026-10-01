@@ -167,6 +167,16 @@ export class WorkerGpuPanel implements OnChanges {
     return this.providerSignals?.device_mode ?? null;
   }
 
+  /**
+   * Apple Silicon has one pool; the Unified memory pie already shows it.
+   * The device card's Memory bar would restate a wired-down budget (often
+   * ~75–80% of physical RAM) next to that pie and disagree with it — hide
+   * the bar so only one total is on screen.
+   */
+  get isUnifiedMemory(): boolean {
+    return this.deviceMode === 'metal';
+  }
+
   get isDerived(): boolean {
     return this.deviceMode === 'derived' || !this.nvidiaAvailable;
   }

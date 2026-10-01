@@ -366,3 +366,82 @@ describe('WorkerGpuPanel uptime labels', () => {
     expect(panel.wsUptimeLabel).toBe('30m');
   });
 });
+
+/**
+ * Metal workers share one pool with the Unified memory pie. The Workers &
+ * GPUs device Memory bar would show the wired-down budget (often disagreeing
+ * with physical RAM) — hide that bar so only one total is on screen.
+ */
+describe('WorkerGpuPanel unified-memory memory bars', () => {
+  let fixture: ComponentFixture<WorkerGpuPanel>;
+  let panel: WorkerGpuPanel;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [WorkerGpuPanel],
+      providers: [{ provide: StatisticsService, useValue: {} }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WorkerGpuPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('providerDevices', {
+      'w-a': [
+        {
+          device_id: 'metal0',
+          name: 'Apple M3 Pro',
+          memory_total_mb: 28_672,
+          memory_used_mb: 12_000,
+          memory_free_mb: 16_672,
+        },
+      ],
+    });
+    fixture.componentRef.setInput('providerMeta', { 'w-a': { provider_id: 1 } });
+    fixture.componentRef.setInput('lanesByProvider', {});
+    fixture.componentRef.setInput('activeProvider', 'w-a');
+  });
+
+  it('hides the device Memory bar when device_mode is metal', () => {
+    fixture.componentRef.setInput('providerLatestSamples', {
+      'w-a': {
+        scheduler_signals: {
+          provider: {
+            device_mode: 'metal',
+            host_ram_total_mb: 36_864,
+            host_ram_used_mb: 20_000,
+            host_ram_available_mb: 16_864,
+            total_memory_mb: 28_672,
+            used_memory_mb: 12_000,
+            free_memory_mb: 16_672,
+          },
+        },
+      },
+    });
+    fixture.detectChanges();
+
+    expect(panel.isUnifiedMemory).toBe(true);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Apple M3 Pro');
+    expect(text).not.toContain('28.0 GB');
+    expect(text).not.toContain('Memory');
+  });
+
+  it('keeps the device Memory bar for non-Metal workers', () => {
+    fixture.componentRef.setInput('providerLatestSamples', {
+      'w-a': {
+        scheduler_signals: {
+          provider: {
+            device_mode: 'cuda',
+            total_memory_mb: 28_672,
+            used_memory_mb: 12_000,
+            free_memory_mb: 16_672,
+          },
+        },
+      },
+    });
+    fixture.detectChanges();
+
+    expect(panel.isUnifiedMemory).toBe(false);
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Memory');
+    expect(text).toContain('28.0 GB');
+  });
+});
