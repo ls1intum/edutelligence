@@ -53,7 +53,7 @@
          logos-orchestrator, which keeps writing to this table while
          logos-webservice is redeployed. -->
 
-    <changeSet id="048-log-entry-team-timestamp-request-index" author="logos" runInTransaction="false">
+    <changeSet id="049-log-entry-team-timestamp-request-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_ts_request"/></not>
         </preConditions>
@@ -66,7 +66,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="048-log-entry-team-timestamp-response-index" author="logos" runInTransaction="false">
+    <changeSet id="049-log-entry-team-timestamp-response-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_ts_response"/></not>
         </preConditions>
@@ -79,7 +79,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="048-log-entry-team-in-flight-index" author="logos" runInTransaction="false">
+    <changeSet id="049-log-entry-team-in-flight-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_in_flight"/></not>
         </preConditions>
@@ -93,7 +93,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="048-log-entry-team-effective-ts-index" author="logos" runInTransaction="false">
+    <changeSet id="049-log-entry-team-effective-ts-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_effective_ts"/></not>
         </preConditions>
