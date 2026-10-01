@@ -214,11 +214,18 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                le.priority_when_scheduled AS priorityWhenScheduled,
                le.queue_depth_at_enqueue AS queueDepthAtEnqueue,
                le.error_message AS errorMessage,
-               CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+               -- The exec figure spans the provider's own window: from the
+               -- provider call (after logos' gates, not at scheduling) to the
+               -- provider's full response (before logos' post-provider cost
+               -- lookup). The COALESCEs keep the old split for rows predating
+               -- the columns and for requests that never reached the provider.
+               CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                      AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                            - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)))
                     ELSE NULL END AS runSeconds,
-               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+               CASE WHEN le.timestamp_request IS NOT NULL AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request))
                     ELSE NULL END AS queueSeconds,
                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request))
@@ -425,11 +432,15 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
                     ELSE NULL END AS totalLatencyMs,
-               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000
+               -- Same provider-call split as the recent-requests feed, so a
+               -- detail view and its feed row never disagree.
+               CASE WHEN le.timestamp_request IS NOT NULL AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request)) * 1000
                     ELSE NULL END AS queueWaitMs,
-               CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) * 1000
+               CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                      AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                            - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding))) * 1000
                     ELSE NULL END AS processingMs,
                le.was_cold_start AS coldStart,
                le.queue_depth_at_arrival AS queueDepthAtArrival,
@@ -453,6 +464,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.request_id IN (:requestIds)
         GROUP BY le.request_id, m.name, le.model_name, le.model_id, p.name, le.provider_id,
                  le.result_status, le.timestamp_request, le.timestamp_forwarding,
+                 le.timestamp_provider_call,
+                 le.timestamp_provider_response,
                  le.timestamp_response, le.time_at_first_token, le.was_cold_start,
                  le.queue_depth_at_arrival, le.utilization_at_arrival,
                  le.queue_depth_at_schedule, le.priority_when_scheduled,
@@ -643,11 +656,15 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_response IS NOT NULL
                     THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_request)) * 1000
                     ELSE NULL END AS totalLatencyMs,
-               CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) * 1000
+               -- Same provider-call split as the recent-requests feed, so a
+               -- detail view and its feed row never disagree.
+               CASE WHEN le.timestamp_request IS NOT NULL AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) - le.timestamp_request)) * 1000
                     ELSE NULL END AS queueWaitMs,
-               CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) * 1000
+               CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                      AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                            - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding))) * 1000
                     ELSE NULL END AS processingMs,
                le.was_cold_start AS coldStart,
                le.queue_depth_at_arrival AS queueDepthAtArrival,
@@ -671,6 +688,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.request_id IN (:requestIds)
         GROUP BY le.request_id, m.name, le.model_name, le.model_id, p.name, le.provider_id,
                  le.result_status, le.timestamp_request, le.timestamp_forwarding,
+                 le.timestamp_provider_call,
+                 le.timestamp_provider_response,
                  le.timestamp_response, le.time_at_first_token, le.was_cold_start,
                  le.queue_depth_at_arrival, le.utilization_at_arrival,
                  le.queue_depth_at_schedule, le.priority_when_scheduled,
@@ -732,12 +751,21 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
             SELECT 1::bigint, le.provider_id, COALESCE(le.was_cold_start, FALSE),
-                   CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END,
-                   (le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL)::int::bigint,
-                   CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END,
-                   (le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL)::int::bigint,
+                   -- Same provider-call split as the rollup branch above, so
+                   -- the live tail and the rolled-up hours average the same
+                   -- definition (see logos_stats_rollup_apply).
+                   CASE WHEN le.timestamp_request IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                - le.timestamp_request)) END,
+                   (le.timestamp_request IS NOT NULL
+                    AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL)::int::bigint,
+                   CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                                - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding))) END,
+                   (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                    AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL)::int::bigint,
                    COALESCE(tok.total_tokens, 0)::bigint,
                    COALESCE(lec.cost_micro_cents, 0)::bigint
             FROM log_entry le
@@ -845,12 +873,19 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             SELECT le.model_id, le.model_name, le.provider_id, COALESCE(le.was_cold_start, FALSE), 1::bigint,
                    (le.result_status IS DISTINCT FROM 'success'
                     OR (le.error_message IS NOT NULL AND le.error_message <> ''))::int::bigint,
-                   CASE WHEN le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request)) END,
-                   (le.timestamp_request IS NOT NULL AND le.timestamp_forwarding IS NOT NULL)::int::bigint,
-                   CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END,
-                   (le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL)::int::bigint
+                   -- Same provider-call split as the rollup branch above.
+                   CASE WHEN le.timestamp_request IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                - le.timestamp_request)) END,
+                   (le.timestamp_request IS NOT NULL
+                    AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL)::int::bigint,
+                   CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                                - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding))) END,
+                   (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                    AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL)::int::bigint
             FROM log_entry le
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
               AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
@@ -910,9 +945,13 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             UNION ALL
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)) / :bucketSec) * :bucketSec),
                    le.provider_id, 1::bigint,
-                   CASE WHEN le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL
-                        THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding)) END,
-                   (le.timestamp_forwarding IS NOT NULL AND le.timestamp_response IS NOT NULL)::int::bigint
+                   -- Same provider-call split as the rollup branch above.
+                   CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                                - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding))) END,
+                   (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                    AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL)::int::bigint
             FROM log_entry le
             WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
               AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)

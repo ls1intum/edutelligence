@@ -1,3 +1,4 @@
+import datetime
 from types import SimpleNamespace
 
 from logos import MonitoringRecorder
@@ -386,3 +387,70 @@ def test_record_rate_limit_admission_persists_the_flag_both_ways(monkeypatch):
 
     flags = {call["request_id"]: call["rate_limit_admitted"] for call in calls}
     assert flags == {"req-rl-admitted": True, "req-rl-rejected": False}
+
+
+def test_record_provider_call_rides_the_completion_write(monkeypatch):
+    """The statistics page splits a finished request's wall time at the
+    provider call, not at scheduling — the value must land on the same
+    completion UPDATE that carries the other lifecycle fields, and it must
+    not cost the hot path its own write while the request is still running."""
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    recorder.record_provider_call("req-pc")
+    assert calls == [], "buffered fields must not hit the DB mid-flight"
+
+    recorder.record_complete("req-pc", result_status="success")
+
+    assert len(calls) == 1
+    assert "timestamp_provider_call" in calls[0]
+    assert calls[0]["result_status"] == "success"
+
+
+def test_record_provider_response_rides_the_completion_write(monkeypatch):
+    """The statistics page ends a finished request's exec figure at the
+    provider's response, not at completion — completion is later, after
+    logos' own post-provider cost lookup. Like the provider-call stamp, the
+    value must ride the single completion UPDATE, not the hot path."""
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    recorder.record_provider_call("req-pr")
+    recorder.record_provider_response("req-pr")
+    assert calls == [], "buffered fields must not hit the DB mid-flight"
+
+    recorder.record_complete("req-pr", result_status="success")
+
+    assert len(calls) == 1
+    assert "timestamp_provider_call" in calls[0]
+    assert "timestamp_provider_response" in calls[0]
+    # The exec window is provider-call -> provider-response, both present.
+    assert calls[0]["timestamp_provider_response"] >= calls[0]["timestamp_provider_call"]
+    assert calls[0]["result_status"] == "success"
+
+
+def test_record_provider_response_uses_the_arrival_instant_when_given(monkeypatch):
+    """The streaming paths pass the last chunk's arrival instant, not now():
+    by the time the stamp is recorded the last chunk has already been yielded
+    downstream and (cloud SSE) its terminal frame has run the pricing lookup.
+    A fixed ``at`` must be persisted verbatim, and an omitted/None ``at`` must
+    fall back to now()."""
+    recorder, calls = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+
+    arrival = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)
+    recorder.record_provider_call("req-at")
+    recorder.record_provider_response("req-at", at=arrival)
+    recorder.record_complete("req-at", result_status="success")
+
+    assert len(calls) == 1
+    # The exact arrival instant is persisted, not the (later) record time.
+    assert calls[0]["timestamp_provider_response"] == arrival
+
+    recorder2, calls2 = _make_recorder(monkeypatch, {}, {})
+    _patch_prom(monkeypatch)
+    recorder2.record_provider_call("req-at-none")
+    recorder2.record_provider_response("req-at-none", at=None)
+    recorder2.record_complete("req-at-none", result_status="success")
+    # at=None falls back to now(): a real, current instant.
+    assert calls2[0]["timestamp_provider_response"] >= datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
