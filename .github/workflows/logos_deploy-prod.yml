@@ -163,10 +163,10 @@ jobs:
             # Scale logos-webservice from the node's .env without sourcing it
             # (sourcing would evaluate $(...) / backticks in values).
             ENV_FILE="${{ matrix.base-path }}/.env"
-            # Default 1: cloud TPM is enforced per process, so a key's
-            # effective TPM ceiling scales with the replica count. Nodes that
-            # want gateway failover opt in with LOGOS_WEBSERVICE_REPLICAS in
-            # .env - see docs/deployment.md#inference-gateway-replicas.
+            # Default 1. Cloud RPM/TPM are shared across replicas via Redis;
+            # raising replicas is for crash/deploy failover. Opt in with
+            # LOGOS_WEBSERVICE_REPLICAS in .env — see
+            # docs/deployment.md#inference-gateway-replicas.
             REPLICAS=1
             if [ -f "$ENV_FILE" ]; then
               RAW="$(grep -E '^[[:space:]]*LOGOS_WEBSERVICE_REPLICAS=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '\\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
