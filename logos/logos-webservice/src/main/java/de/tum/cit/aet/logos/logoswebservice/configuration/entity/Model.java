@@ -1,5 +1,10 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.entity;
 
+import java.util.Map;
+
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -25,6 +30,10 @@ public class Model {
     private String tags;
     private String description;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "profile_ratings", columnDefinition = "jsonb", nullable = false)
+    private Map<String, Integer> profileRatings = Map.of();
+
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Integer getWeightLatency() { return weightLatency; }
@@ -33,6 +42,7 @@ public class Model {
     public Integer getWeightQuality() { return weightQuality; }
     public String getTags() { return tags; }
     public String getDescription() { return description; }
+    public Map<String, Integer> getProfileRatings() { return profileRatings; }
 
     public void setName(String name) { this.name = name; }
     public void setWeightLatency(Integer w) { this.weightLatency = w; }
@@ -41,4 +51,7 @@ public class Model {
     public void setWeightQuality(Integer w) { this.weightQuality = w; }
     public void setTags(String tags) { this.tags = tags; }
     public void setDescription(String description) { this.description = description; }
+    public void setProfileRatings(Map<String, Integer> profileRatings) {
+        this.profileRatings = profileRatings != null ? profileRatings : Map.of();
+    }
 }

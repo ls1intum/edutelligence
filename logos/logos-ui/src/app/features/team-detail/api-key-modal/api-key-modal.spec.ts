@@ -72,6 +72,52 @@ describe('ApiKeyModalComponent', () => {
     expect(teamService.setApiKeyModelPermissions).toHaveBeenCalledWith(42, [20]);
   });
 
+  describe('developer SLA inheritance reset', () => {
+    it('offers a reset action that saves default_priority 0 for developer keys', async () => {
+      const developerKey: TeamApiKey = {
+        ...key,
+        default_priority: 1,
+      };
+      component.key = developerKey;
+      component.ngOnChanges({
+        visible: new SimpleChange(false, true, false),
+        key: new SimpleChange(null, developerKey, false),
+      });
+      await fixture.whenStable();
+
+      expect(component.fSla()).toBe('ux-background');
+      expect(component.canResetDeveloperSla()).toBe(true);
+
+      component.resetDeveloperSlaToInherited();
+      expect(component.fSla()).toBe('');
+      expect(component.canResetDeveloperSla()).toBe(false);
+
+      await component.save();
+
+      expect(teamService.updateApiKey).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ default_priority: 0 }),
+      );
+    });
+
+    it('does not offer the reset action for application keys', async () => {
+      const appKey: TeamApiKey = {
+        ...key,
+        key_type: 'application',
+        default_priority: 5,
+      };
+      component.key = appKey;
+      component.ngOnChanges({
+        visible: new SimpleChange(false, true, false),
+        key: new SimpleChange(null, appKey, false),
+      });
+      await fixture.whenStable();
+
+      expect(component.fSla()).toBe('ux-high-prio');
+      expect(component.canResetDeveloperSla()).toBe(false);
+    });
+  });
+
   describe('rotation', () => {
     it('updates the shared key object after a successful rotation', async () => {
       key.key_value = 'lg-old-key-42';

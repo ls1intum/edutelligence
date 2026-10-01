@@ -5,4 +5,6 @@ DELETE FROM providers WHERE id IN (6401);
 -- The rollup still holds the rows deleted above until a pass recomputes their
 -- hours. Left populated it would leak this test's traffic into the next one.
 DELETE FROM log_entry_hourly_stats;
+-- A pass normally consumes the queue, but a failed test may leave entries.
+DELETE FROM log_entry_rollup_dirty_hours;
 UPDATE log_entry_rollup_state SET processed_through = now();

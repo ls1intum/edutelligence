@@ -45,6 +45,12 @@
     <include file="liquibase/changelog/039_api_key_priority_unset.xml"/>
     <include file="liquibase/changelog/040_reclassify_timeout_errors.xml"/>
     <include file="liquibase/changelog/041_calibration_probe_logs_observed_reason.xml"/>
-    <include file="liquibase/changelog/042_team_activity_indexes.xml"/>
+    <include file="liquibase/changelog/042_log_entry_model_name.xml"/>
+    <include file="liquibase/changelog/043_log_entry_gateway_in_flight_index.xml"/>
+    <include file="liquibase/changelog/044_log_entry_gateway_estimated_tokens.xml"/>
+    <include file="liquibase/changelog/045_team_repositories.xml"/>
+    <include file="liquibase/changelog/046_ai_workflow_analysis.xml"/>
+    <include file="liquibase/changelog/047_objective_priority_model_ratings.xml"/>
+    <include file="liquibase/changelog/048_team_activity_indexes.xml"/>
 
 </databaseChangeLog>

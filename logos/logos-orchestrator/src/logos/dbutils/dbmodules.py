@@ -245,6 +245,10 @@ class LogEntry(Base):
     error_message = Column(Text)
     settled_cost_micro_cents = Column(BigInteger)
     cost_finalized = Column(Boolean, nullable=False, default=False)
+    # Admission-time token estimate for the webservice direct-cloud path
+    # (body length / 4). Used to enforce cloud TPM across gateway replicas;
+    # NULL on orchestrator-written rows.
+    gateway_estimated_tokens = Column(Integer, nullable=True)
 
     usage_tokens = relationship("UsageTokens")
     api_key = relationship("ApiKey")

@@ -4,6 +4,8 @@ import {
   formatPercent,
   formatTokenCount,
   formatUptime,
+  isUnifiedMemoryProvider,
+  modelSeriesKey,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -204,6 +206,45 @@ describe('extractProviderHostRamMb', () => {
 });
 
 /**
+ * A provider's memory is a single pool (not a VRAM pool beside a RAM pool)
+ * when its device reports unified memory. The page decides on this alone, so
+ * the answer has to be exactly "Metal", never anything that merely looks
+ * like it.
+ */
+describe('isUnifiedMemoryProvider', () => {
+  it('reads the device mode off the provider signals', () => {
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { device_mode: 'metal' },
+      },
+    };
+    expect(isUnifiedMemoryProvider(sample)).toBe(true);
+  });
+
+  it('is false for every other device mode', () => {
+    for (const mode of ['cuda', 'none', 'unknown', '']) {
+      expect(
+        isUnifiedMemoryProvider({
+          timestamp: 't',
+          scheduler_signals: { provider: { device_mode: mode } },
+        }),
+      ).toBe(false);
+    }
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: { provider: {} } })).toBe(
+      false,
+    );
+  });
+
+  it('is false when the sample or its signals are missing', () => {
+    expect(isUnifiedMemoryProvider({ timestamp: 't' })).toBe(false);
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: {} })).toBe(false);
+    expect(isUnifiedMemoryProvider(null)).toBe(false);
+    expect(isUnifiedMemoryProvider(undefined)).toBe(false);
+  });
+});
+
+/**
  * The share of a part in a total, as the cold-start KPI card shows it.
  *
  * The point is the small end: a share that integer rounding collapses to
@@ -309,5 +350,43 @@ describe('formatBucketRange', () => {
   it('formats a daily bucket as a single calendar day', () => {
     const start = new Date(2026, 8, 1, 0, 0, 0).getTime();
     expect(formatBucketRange(start, 86_400_000)).toBe('Sep 1');
+  });
+});
+
+/**
+ * The per-model chart series are keyed by this, not by the model id alone:
+ * a deleted model's id is gone from the feed, so its usage would otherwise
+ * lose its series (and its legend entry) along with it.
+ */
+describe('modelSeriesKey', () => {
+  it('keys a live model by its id, ignoring the name', () => {
+    expect(modelSeriesKey(42, 'gpt-4')).toBe('model-42');
+  });
+
+  it('keys a deleted model by its captured name', () => {
+    expect(modelSeriesKey(null, 'gpt-4')).toBe('deleted-gpt-4');
+  });
+
+  it('keeps a deleted model that re-took a live id out of the live series', () => {
+    // Without the distinct prefixes a deleted model named "42" would share
+    // its key with live model id 42 and merge into its usage.
+    expect(modelSeriesKey(null, '42')).not.toBe(modelSeriesKey(42, '42'));
+  });
+
+  it('never yields a key that resolves to an inherited object property', () => {
+    // The chart keeps its series in plain objects; a raw name like
+    // "constructor" would read an inherited property instead of the entry.
+    for (const name of ['constructor', '__proto__', 'toString']) {
+      const key = modelSeriesKey(null, name);
+      const map: Record<string, number> = {};
+      map[key] = 1;
+      expect(Object.hasOwn(map, key)).toBe(true);
+      expect(map[key]).toBe(1);
+    }
+  });
+
+  it('falls back to a single shared bucket when neither id nor name survived', () => {
+    expect(modelSeriesKey(null, null)).toBe('deleted-unknown');
+    expect(modelSeriesKey(null, '   ')).toBe('deleted-unknown');
   });
 });

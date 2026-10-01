@@ -11,5 +11,6 @@ public record UpdateModelRequestDTO(
     Integer weightAccuracy,
     Integer weightCost,
     Integer weightQuality,
+    java.util.Map<String, Integer> profileRatings,
     List<String> aliases
 ) {}
