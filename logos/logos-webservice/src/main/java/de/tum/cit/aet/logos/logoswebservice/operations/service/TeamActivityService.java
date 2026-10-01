@@ -592,9 +592,10 @@ public class TeamActivityService {
      *
      * Rows are fetched in chunks and written as they arrive, so the service
      * holds one chunk of the window in memory rather than the capped slice —
-     * a slice of consented rows is a download, not a data structure. The
-     * order and the cap are the prep's: newest first, the newest
-     * {@code exportMaxRows} rows of the window.
+     * a slice of consented rows is a download, not a data structure. Newest
+     * first; a truncated prep's precomputed tail is the inclusive lower
+     * keyset bound of the walk, so each short chunk read stops at that key
+     * rather than counting rows under a held snapshot.
      */
     public void writeExportFile(ExportPrep prep, OutputStream out) throws IOException {
         Timestamp since = Timestamp.from(prep.since());
@@ -675,25 +676,30 @@ public class TeamActivityService {
     /**
      * The shared walk of the export: chunks of rows, newest first, from the
      * start of the window — or past the rows an earlier slice already
-     * carried — down to the cap or the end of it. The row consumer writes one
-     * row; the walk is what knows when to stop.
+     * carried — down to the precomputed slice tail (or the end of the window
+     * when the file is not truncated). Each chunk is its own short read; the
+     * inclusive {@code (timestamp_request, id) >= tail} bound replaces a
+     * row-count cap so a commit mid-download cannot make the continuation
+     * skip a row the cursor still names. The row consumer writes one row;
+     * the walk is what knows when to stop.
      */
     private void streamRows(ExportPrep prep, Timestamp since, Timestamp end, RowWriter rowWriter) throws IOException {
-        long written = 0;
         Timestamp cursorTs = prep.cursorTs() != null ? Timestamp.from(prep.cursorTs()) : null;
         Integer cursorId = prep.cursorId();
-        while (written < exportMaxRows) {
+        // The next-cursor key is the last row this file must still emit: use
+        // it as the inclusive lower bound of a truncated slice. An uncapped
+        // export has no tail and walks until the window ends.
+        Timestamp tailTs = prep.nextCursorTs() != null ? Timestamp.from(prep.nextCursorTs()) : null;
+        Integer tailId = prep.nextCursorId();
+        while (true) {
             List<LogExportProjection> chunk = logEntryRepository.findTracesForExport(
-                prep.teamId(), since, end, prep.userId(), cursorTs, cursorId, EXPORT_CHUNK_SIZE);
+                prep.teamId(), since, end, prep.userId(), cursorTs, cursorId,
+                tailTs, tailId, EXPORT_CHUNK_SIZE);
             if (chunk.isEmpty()) {
                 break;
             }
             for (LogExportProjection row : chunk) {
-                if (written >= exportMaxRows) {
-                    break;
-                }
                 rowWriter.write(row);
-                written++;
                 cursorTs = Timestamp.from(row.getTimestampRequest());
                 cursorId = row.getId();
             }

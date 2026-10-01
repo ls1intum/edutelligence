@@ -520,6 +520,13 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * A null cursor starts at the newest row; the ORDER BY is what
      * idx_log_entry_team_ts_request (042) walks backwards, so a page costs the
      * same at the start of the window as at the cap.
+     *
+     * <p>A non-null {@code tailTs}/{@code tailId} is the inclusive lower
+     * bound of a truncated slice (the precomputed last row):
+     * {@code NOT ((timestamp_request, id) < (tailTs, tailId))} — written
+     * without {@code >=} so Spring Data's query rewriter does not treat
+     * {@code >} as an unclosed quotation. The stream stops at that key
+     * rather than counting rows under a held snapshot.
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -582,6 +589,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
                OR (le.timestamp_request, le.id)
                   < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
+          AND (CAST(:tailTs AS TIMESTAMPTZ) IS NULL
+               OR NOT ((le.timestamp_request, le.id)
+                       < (CAST(:tailTs AS TIMESTAMPTZ), CAST(:tailId AS INTEGER))))
         ORDER BY le.timestamp_request DESC, le.id DESC
         LIMIT :limitN
         """, nativeQuery = true)
@@ -592,6 +602,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") Integer cursorId,
+        @Param("tailTs") Timestamp tailTs,
+        @Param("tailId") Integer tailId,
         @Param("limitN") int limitN);
 
     /**
